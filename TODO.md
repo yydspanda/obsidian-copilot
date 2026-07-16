@@ -2,7 +2,7 @@
 
 ## Session Goal
 
-以 Obsidian Copilot 为技术底座，设计并分阶段实现一套长期个人使用、体验优先的知识操作系统；把助手、笔记和知识引擎连接为可摄入、可审核、可引用、可持续维护的完整闭环。
+以 Windows 上的 Obsidian Copilot 为唯一首期平台，设计并分阶段实现一套长期个人使用、体验优先的知识操作系统；把助手、笔记和知识引擎连接为可摄入、可审核、可引用、可持续维护的完整闭环。
 
 ## Completed Tasks ✅
 
@@ -24,13 +24,14 @@
 - [x] 建立外部实现的 Copy / Port / Reference 复用分类，并记录上游需要修复的缺陷。
 - [x] 编写体验优先的个人知识操作系统 PRD，定义 Knowledge Studio、Golden Flow、验收标准与本地成功指标。
 - [x] 将主技术方案路线图改为端到端体验切片，并补充 manifest、pipeline fingerprint、持久队列、事务和可选时态投影。
+- [x] 将首期平台范围收敛为 Windows Obsidian Desktop，移除 macOS、Linux、iOS、Android 和浏览器适配承诺。
 
 ## Pending Tasks 📋
 
 ### Slice 1A：契约与来源归属
 
 - [ ] 建立 `THIRD_PARTY_NOTICES.md` 和第三方许可证目录，记录首批复制模块的仓库、commit、路径与修改说明。
-- [ ] 建立 Golden Flow 的 Markdown、中文路径、PDF locator、OKF round-trip 和冲突 fixture。
+- [ ] 建立 Golden Flow 的 Markdown、PDF locator、OKF round-trip、CRLF、盘符/反斜杠、大小写碰撞、保留设备名、文件占用和中文路径 fixture。
 - [ ] 实现纯 TypeScript `KnowledgeBundleConfig`、`SourceManifestEntry`、`SourceLocator`、`ClaimCitation`、`KnowledgeIngestJob` 和 discriminated `KnowledgeFileChange`。
 - [ ] 实现 source content hash、pipeline fingerprint、稳定 source identity 和输出存在性校验。
 
@@ -73,6 +74,9 @@
 - `claude-obsidian` 主要提供 hot/index/domain/page、Manifest 与 Ingest/Query/Lint 工作流；不复制 Bash 锁和自动 Git hook。
 - Graphiti 当前只贡献 provenance 和双时态契约；只有真实历史/多跳需求达到门槛后才作为可重建外部投影接入。
 - 外部源码按 Copy / Port / Reference 管理；首次复制时同步提交 attribution、许可证、原 commit/path 和修改说明。
+- 当前唯一产品与验收平台是 Windows Obsidian Desktop；不为 macOS、Linux、iOS、Android 或浏览器增加兼容工作。
+- 允许在 adapter 边缘使用有明确体验收益的 Windows/Node/Electron 能力，但纯知识契约保持 TypeScript 与 I/O 无关。
+- 不因平台收敛直接嵌入 Node 24 CLI；所有依赖仍须兼容 Obsidian 实际捆绑的 Windows Runtime。
 
 ## Testing Checklist
 
@@ -83,6 +87,7 @@
 - [x] 检查新增 PRD、主方案与复用台账之间的链接和决策一致性。
 - [x] 检查 Markdown heading/fence/link 结构并运行 `git diff --check`；仓库没有安装 `node_modules`，未调用 Prettier。
 - [x] 确认没有修改 DeerFlow/SOC 文件或把 `.env.test` 纳入版本控制。
+- [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 
 ## Source Documents
 

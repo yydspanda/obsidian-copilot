@@ -6,6 +6,8 @@ Last updated: 2026-07-16
 
 Primary user: the repository owner as a long-term daily user
 
+Primary platform: Obsidian Desktop on Windows
+
 配套文档：技术架构见 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md)，开源实现复用边界见 [`OPEN_SOURCE_REUSE_PLAN.md`](./OPEN_SOURCE_REUSE_PLAN.md)。
 
 ---
@@ -14,7 +16,7 @@ Primary user: the repository owner as a long-term daily user
 
 要构建的是一套运行在 Obsidian 内的个人知识操作系统，而不是再增加一个聊天机器人。它把助手、笔记和知识引擎连接成同一条日常闭环：用户把文章、文档、网页、笔记或想法放进系统，系统将其编译为可读、可链接、可追溯的 Wiki；用户可以围绕这些知识提问、研究和创作；有价值的答案和新洞察可以经过审核继续沉淀；系统还会持续发现陈旧内容、矛盾、断链和知识缺口。
 
-产品以当前 Obsidian Copilot 为壳，复用现有 Chat、模型 Provider、搜索、文件解析、写入预览、Project 和移动端能力。新增的核心产品表面是全页 `Knowledge Studio`，它负责来源、Wiki、审核、活动、维护和知识图谱；Chat 仍是随时可用的助手入口。Markdown 和原始资料始终属于用户，索引、图谱和模型输出均为可重建的派生层。
+产品以 Windows 上的 Obsidian Copilot 为壳，复用现有 Chat、模型 Provider、搜索、文件解析、写入预览和 Project 能力。新增的核心产品表面是全页 `Knowledge Studio`，它负责来源、Wiki、审核、活动、维护和知识图谱；Chat 仍是随时可用的助手入口。Markdown 和原始资料始终属于用户，索引、图谱和模型输出均为可重建的派生层。
 
 第一条必须跑通的体验不是“搭完所有基础设施”，而是：
 
@@ -51,7 +53,7 @@ Primary user: the repository owner as a long-term daily user
 
 ### 3.1 Primary Persona
 
-一个需要长期管理多领域资料的个人用户：会在桌面端进行深度研究和审核，也会在移动端快速记录、提问和回看；愿意配置自己的模型和知识目录，但不愿维护服务器、数据库或复杂 taxonomy。
+一个在 Windows Obsidian 中长期管理多领域资料的个人用户：进行深度研究、整理、审核、问答和创作；愿意配置自己的模型和知识目录，但不愿为了日常使用维护不必要的服务器、数据库或复杂 taxonomy。
 
 ### 3.2 Core Jobs
 
@@ -71,7 +73,7 @@ Primary user: the repository owner as a long-term daily user
 5. **默认好用，不强迫先设计分类法。** 系统提供合理默认结构，并允许以后调整 Schema 和目录。
 6. **渐进披露。** 默认展示答案、关键来源和下一步；细节、完整 trace、图谱和校验结果按需展开。
 7. **本地优先、模型可替换。** Markdown 是主数据；索引、图谱、队列状态和模型均可替换或重建。
-8. **桌面与移动共享核心闭环。** 核心逻辑不能依赖 Node.js、Python sidecar 或桌面文件系统；重型图谱可在移动端降级。
+8. **Windows-first。** 当前只为 Windows Obsidian Desktop 设计、开发和验收；允许使用真正改善体验的桌面能力，但领域逻辑与 Windows/Obsidian I/O 仍通过 adapter 分离。
 9. **开源复用可追踪。** 可以直接复用优秀代码，但必须锁定 commit、保留许可证和来源，并修复不适合当前项目的假设。
 
 ## 5. Solution Overview
@@ -164,7 +166,7 @@ Knowledge Review Inbox
 - 写入后 Review Inbox 支持矛盾、重复、缺页、过期和研究建议。
 - Lint 区分确定性错误与 LLM 建议，并生成可审核修复 ChangeSet。
 - 监听用户授权目录的变化，支持重命名、删除和 ownership 迁移。
-- 移动端支持捕获、问答、引用跳转、队列状态和基础审核。
+- 支持从 Windows Explorer 拖入来源，并正确处理 CRLF、大小写不敏感路径、保留设备名和文件占用冲突。
 
 ### P2 — Knowledge Exploration
 
@@ -211,7 +213,7 @@ one source
 - [ ] 每个关键 Wiki 主张都能回到 source ID 和 locator；回答引用可以打开对应来源。
 - [ ] 插件重启后 processing 任务恢复为 pending，并等待用户恢复。
 - [ ] 内容和 pipeline fingerprint 未变化时不调用 LLM，且 UI 明确显示已是最新。
-- [ ] 桌面端完成全部流程；移动端至少可以加入 Markdown、查看任务、提问和打开引用。
+- [ ] 在 Windows Obsidian Desktop 完成全部流程，并通过 Windows 路径、CRLF、文件占用和大小写冲突 fixture。
 
 ## 8. Success Metrics
 
@@ -247,7 +249,7 @@ one source
 - 复用当前 LLM Provider、DeepSeek 配置、文件解析、Search v3、Tool Registry 和 ApplyView 能力。
 - 新核心逻辑必须是纯 TypeScript；Vault、模型和 UI 通过 adapter 注入。
 - Obsidian Vault API 没有跨文件原子事务；文件观察者可能短暂看到中间状态，产品只能通过 journal、before-hash、commit marker 和启动恢复保证最终一致且不谎报成功。
-- 当前插件支持移动端，因此不能把 Node 24、`node:fs`、Python、Docker 或 stdio MCP 作为核心前提。
+- 当前只验收 Windows Obsidian Desktop。Node/Electron 或 Windows 本地能力可以通过 adapter 使用，但任何依赖都必须兼容 Obsidian 实际捆绑的 Runtime；“只支持 Windows”不等于可以直接嵌入要求 Node 24 的 CLI。
 - OKF v0.1 是 Draft 互操作契约；内部引用和时态模型要比 OKF 更严格，并支持降级导出。
 - 对直接复制的 MIT、GPL 或 Apache 代码，首次落地前必须增加第三方声明和文件级来源注释。
 - 当前 Search v3 已有 lexical、semantic 和 graph boost，第一阶段不引入 LanceDB、PageIndex 或另一套向量库。
@@ -261,7 +263,7 @@ one source
 | 知识页逐渐污染 | Raw/Wiki 分层、claim-level provenance、before hash、事务、lint 和可撤销记录 |
 | 队列重启后重复扣费 | pipeline fingerprint、持久 job 状态、恢复 backlog 默认等待用户确认 |
 | 图谱变成漂亮但无用的玩具 | 先验证图增强检索和知识缺口任务，再建设完整 Graph UI |
-| 上游代码不适合中文或移动端 | 文件级审计；保留算法，替换 ASCII tokenizer、Node I/O 和全局 window/document |
+| 上游代码不适合中文或 Obsidian Windows Runtime | 文件级审计；保留算法，替换 ASCII tokenizer、独立 CLI 假设和错误的全局 window/document 使用 |
 | 未来难以分享或发布 | 从首次复制开始保存 commit、路径、版权、许可证和修改说明 |
 
 ## 11. Out of Scope
@@ -269,6 +271,7 @@ one source
 第一阶段明确不建设：
 
 - 账号、订阅、支付、许可证服务、团队空间和多租户。
+- macOS、Linux、iOS、iPadOS、Android 和浏览器版的适配与验收。
 - 独立于 Obsidian 的第二套桌面编辑器或 Web SaaS。
 - 无审核整理整个 Vault、自动搬家或自动重写用户笔记。
 - 把 Graphiti、Neo4j、LanceDB、embedding 或模型总结作为唯一事实源。
@@ -281,6 +284,7 @@ one source
 ### Decisions
 
 - 产品仍然是 Obsidian 插件；Chat 是助手入口，Knowledge Studio 是知识工作入口。
+- 当前唯一目标平台是 Windows Obsidian Desktop；其他系统不进入首期需求、测试矩阵或兼容性承诺。
 - 先服务一个长期个人用户，不为商业化削弱体验，也不增加商业系统复杂度。
 - 以端到端体验切片驱动架构，而不是先完成所有底层模块再做 UI。
 - Markdown/Raw Sources 是 canonical data；图数据库和索引均为可选投影。
@@ -292,6 +296,6 @@ one source
 - 哪些 generated Wiki 目录在用户明确授权后可以跳过逐次 diff？
 - PDF citation 在不同解析器间应以页码、文本 quote hash 还是两者共同定位？
 - Knowledge Studio 首页最有价值的是最近活动、待审核、主题入口还是当前项目？
-- 移动端第一版保留哪些审核能力，哪些复杂图谱交互应自动降级？
+- 大批量 PDF、目录监听和未来 Graphiti 是否需要可选 Windows 本地 helper，还是始终保持单插件进程？
 
 这些问题不阻塞首个 vertical slice；用真实 Vault 完成一轮使用后再决定。

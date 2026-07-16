@@ -24,6 +24,8 @@ Snapshot date: 2026-07-16
 
 对本项目的直接建议是：继续使用 Obsidian Copilot 的 TypeScript、React、Vault API、现有搜索和模型 Provider，不把另一个完整产品嵌入进来。优先原生实现编译式 Wiki 的小型、纯 TypeScript 契约；外部项目作为设计与兼容性参考。
 
+当前产品平台已收敛为 Windows Obsidian Desktop。Windows/Node 本地能力因此可以进入 adapter 候选，但这不改变“不整体嵌入另一个 Runtime”的结论：Node 24 CLI、Tauri 壳、Python sidecar、LanceDB 或图数据库仍需先证明其体验收益高于安装、升级、备份和故障恢复成本。
+
 ---
 
 ## 2. 调研口径

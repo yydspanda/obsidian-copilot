@@ -6,6 +6,8 @@ Last updated: 2026-07-16
 
 Primary audience: product review, architecture review, engineering planning
 
+Primary platform: Obsidian Desktop on Windows
+
 本文描述如何以 Copilot for Obsidian 为底座，构建一个本地优先、证据可追溯、可持续积累的个人知识库智能体。方案融合三类外部思想：DeerFlow SOC Agent 的受控 Runtime、Karpathy LLM Wiki 的复利式知识维护，以及 Google Open Knowledge Format（OKF）的可移植知识格式。
 
 本文负责技术架构与治理边界。产品目标、用户体验和验收标准见 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md)，外部项目的 commit、许可证和文件级采用方式见 [`OPEN_SOURCE_REUSE_PLAN.md`](./OPEN_SOURCE_REUSE_PLAN.md)。本文不是 Copilot 全项目架构说明，也不是功能流水账；现有消息与上下文实现分别以 [`MESSAGE_ARCHITECTURE.md`](./MESSAGE_ARCHITECTURE.md) 和 [`CONTEXT_ENGINEERING.md`](./CONTEXT_ENGINEERING.md) 为准。
@@ -138,7 +140,7 @@ OKF 将 LLM Wiki 收敛为非常小的互操作表面：
 | 入口 | 主要用途 | 约束 |
 | --- | --- | --- |
 | Chat | 围绕显式上下文讨论、总结和创作 | 默认只使用当前轮附件与允许的记忆 |
-| Knowledge Studio | 来源、Wiki、审核、队列、维护与图谱 | 使用全页 ItemView；桌面完整、移动端渐进降级 |
+| Knowledge Studio | 来源、Wiki、审核、队列、维护与图谱 | 使用 Windows Obsidian 的全页 ItemView |
 | Vault QA | 跨 Vault 检索和综合回答 | 返回可定位的来源，说明检索不足 |
 | Project | 在项目文件、标签和项目说明范围内持续工作 | 项目范围与聊天历史隔离 |
 | Agent Mode | 多步搜索、读取、整理和动作建议 | 工具受注册表、预算和权限控制 |
@@ -298,6 +300,15 @@ flowchart TB
 ```
 
 近期不必立即创建一个庞大的 `KnowledgeTaskService`。它代表应逐步抽出的共享业务边界，避免把新逻辑继续堆入 UI 或单个 Chain Runner。OKF 解析与校验应保持为无模型依赖的 leaf module；Ingest 编排再通过服务层调用模型、检索和写入工具。
+
+### 5.3 Windows 平台边界
+
+- 产品、性能和交互只验收当前 Obsidian 支持的 Windows Desktop，不为其他操作系统增加兼容分支。
+- Bundle、manifest、citation、queue state machine、ChangeSet 和 lint 继续保持纯 TypeScript，以普通参数和接口测试。
+- Windows 文件系统、Node/Electron、`FileSystemAdapter`、worker 或未来本地 helper 只能位于 adapter 边缘；使用前核对 Obsidian 实际 Runtime，不假定系统安装的 Node 版本等于插件 Runtime。
+- Vault 内部身份始终使用规范化 Vault path；原生盘符、反斜杠和绝对路径不能泄漏进 OKF concept ID。
+- Windows fixture 必须覆盖 CRLF、大小写不敏感碰撞、保留设备名、尾随点/空格、长路径、文件占用和外部编辑器并发修改。
+- 当前 `manifest.json` 暂不因文档决策立即改为 desktop-only；当第一个 Windows-only 模块落地时，再同时加入平台 guard、用户提示和 manifest/文档变更。
 
 ---
 
@@ -770,7 +781,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 支持用户配置的 Markdown Skills，按需披露而非全部注入。
 - 只在单 Agent 基准证明不足后试验 Context Capsule、Planner sidecar 和子 Agent。
 
-完成标准：外部 Agent 或时态图服务可以提升复杂任务，但删除它们后，Markdown 知识、核心 Chat、移动端和写入安全仍完整可用。
+完成标准：外部 Agent 或时态图服务可以提升复杂任务，但删除它们后，Markdown 知识、Windows Obsidian 核心 Chat 和写入安全仍完整可用。
 
 ### 跨阶段可靠性轨道
 
@@ -790,6 +801,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 当前方案明确不做：
 
 - 账号、订阅、支付、团队空间、多租户和商业许可证系统。
+- macOS、Linux、iOS、iPadOS、Android 和浏览器平台适配。
 - 独立于 Obsidian 的第二套 Tauri/桌面编辑器或 Web SaaS。
 - 自动重写、移动或“清理”整个 Vault。
 - 把向量数据库、embedding 或模型总结当作知识源。
@@ -810,6 +822,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 | 决策 | 理由 |
 | --- | --- |
 | Vault Markdown 是知识事实源 | 用户可读、可编辑、可迁移，不依赖模型或服务商 |
+| Windows Obsidian Desktop 是唯一首期平台 | 产品、文件系统、性能、UI 和测试只对 Windows 做承诺，其他平台不占用当前开发范围 |
 | Raw Sources 与 LLM-maintained Wiki 分层 | 既保留来源真实性，又获得持续综合和链接的复利价值 |
 | Chat + 全页 Knowledge Studio | Chat 适合即时助手，摄入、审核、队列、维护和图谱需要完整工作区 |
 | 指定 Wiki Root 采用 OKF v0.1 | 提供最小、开放、可被其他 Agent 消费的文件契约 |
@@ -824,7 +837,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 | 模型输出先是 Synthesis 或 Candidate | 防止流畅回答直接污染长期知识 |
 | 写入默认 preview/diff | 个人知识库最常见的高风险是误写而非网络攻击 |
 | LangChain 与 ACP 使用平行 Runtime | 两者的上下文、工具和会话所有权不同 |
-| Graphiti 仅是可选外部投影 | 时态语义值得预留，但 Markdown/Raw 必须保持 canonical 且移动端不依赖服务 |
+| Graphiti 仅是可选外部投影 | 时态语义值得预留，但 Markdown/Raw 必须保持 canonical，且首个闭环不应依赖额外服务 |
 | 外部实现按 Copy / Port / Reference 管理 | 能快速吸收好代码，同时保留来源、测试、许可证和平台边界 |
 | 暂不引入子 Agent | 当前更需要预算、引用、权限和持久化正确性 |
 | 以 Golden Flow 驱动架构 | 先完成一个来源到可复用知识的完整体验，再逐层增加工作台、图谱与自治 |

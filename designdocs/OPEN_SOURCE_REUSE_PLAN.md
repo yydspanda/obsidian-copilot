@@ -4,7 +4,7 @@ Status: Code-audited baseline
 
 Snapshot date: 2026-07-16
 
-本文把外部项目的优秀实现拆成 `Copy`、`Port` 和 `Reference` 三类，指导个人知识操作系统的二次开发。产品目标见 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md)，总体架构见 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md)。
+本文把外部项目的优秀实现拆成 `Copy`、`Port` 和 `Reference` 三类，指导面向 Windows Obsidian Desktop 的个人知识操作系统二次开发。产品目标见 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md)，总体架构见 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md)。
 
 当前尚未把下列外部源码复制进本仓库。首次复制前必须同时提交第三方声明、来源注释和对应测试。
 
@@ -23,7 +23,7 @@ Snapshot date: 2026-07-16
 ### 1.2 Non-negotiable Rules
 
 1. 不整体 vendoring 另一个产品，也不引入它的桌面壳、Provider、搜索和状态系统来重复当前能力。
-2. 核心路径必须支持 Obsidian Mobile；Node.js、Python、Rust、Docker 和 stdio MCP 只能是可选桌面扩展。
+2. 当前只支持 Windows Obsidian Desktop。Node/Electron、Python、Rust、Docker 和 stdio MCP 可以作为候选能力，但必须证明改善体验，并通过 adapter 与核心知识契约隔离。
 3. 外部模块先以当前项目接口包裹，纯逻辑不能直接读取全局 Settings、Vault、Provider 或 UI store。
 4. 不复制已知缺陷。每个 Port 都先写当前项目的行为测试，再实现适配版本。
 5. 直接复用代码时记录：仓库、commit、原文件、许可证、版权、修改内容和本地目标文件。
@@ -107,10 +107,10 @@ Obsidian Vault API 没有跨文件原子事务，所以 `Vault transaction store
 
 ### 4.5 Why the Package Is Not Embedded
 
-- 要求 Node `>=24`、ESM 和 Node 24 build target；当前插件为 CJS/ES2020 且 `isDesktopOnly: false`。
+- 要求 Node `>=24`、ESM 和 Node 24 build target；当前插件为 CJS/ES2020，Obsidian Windows Runtime 也不能被假定为 Node 24。
 - 核心依赖 `node:fs/path/crypto/async_hooks`、`process.env`、绝对路径、Chokidar 和 stdio。
 - 上游使用 Zod 4、Ajv、js-yaml、较新 OpenAI SDK；当前项目已有 Zod 3、`yaml` 和自己的 Provider 层。
-- PDF、JSDOM、Readability、Claude Agent SDK 等依赖会增加 bundle 并破坏移动端边界。
+- PDF、JSDOM、Readability、Claude Agent SDK 等依赖会显著增加 bundle、启动时间和攻击面，并与当前 Provider/解析能力重复。
 
 ## 5. `nashsu/llm_wiki`: Best Product and UX Source
 
@@ -288,7 +288,7 @@ Graphiti 必须可删、可重建，不参与核心写入事务。用户需显�
 
 ### 8.3 Why It Is Not Phase 1
 
-- 需要 Python 服务和 Neo4j/FalkorDB/Neptune，无法嵌入移动端。
+- 需要额外 Python 服务和 Neo4j/FalkorDB/Neptune，会显著增加 Windows 安装、升级、备份和故障恢复成本。
 - DeepSeek structured output 和 embedding 质量需要独立评测。
 - 官方 MCP queue 只有内存队列，没有持久任务、重试、job ID 或可靠状态。
 - `episode_metadata` 在已审计版本中未完整持久化，不能承担行级引用。
@@ -323,7 +323,7 @@ Graphiti 必须可删、可重建，不参与核心写入事务。用户需显�
 
 1. 先验证 Markdown 时态字段和历史问答任务集。
 2. 达到接入门槛后建立 outbox/projection ledger。
-3. 以可选外部服务接入 Graphiti，并保持核心移动端路径不依赖它。
+3. 以可选 Windows 外部服务接入 Graphiti，并保持核心 Obsidian 知识路径不依赖它。
 
 ## 10. Attribution Workflow Before First Copy
 
@@ -332,7 +332,7 @@ Graphiti 必须可删、可重建，不参与核心写入事务。用户需显�
 1. 新增根目录 `THIRD_PARTY_NOTICES.md`，按项目记录仓库、commit、版权、许可证和本地目标文件。
 2. 在 `third_party/licenses/` 或等价目录保存所需 MIT、GPL-3.0、Apache-2.0 文本。
 3. 在明显复制或派生的源码文件头注明原仓库、commit、路径和修改说明。
-4. 保留上游测试意图，并增加移动端、中文路径、popout window 和 Vault adapter 回归测试。
+4. 保留上游测试意图，并增加 Windows CRLF、盘符/反斜杠、大小写碰撞、保留设备名、文件占用、中文路径、popout window 和 Vault adapter 回归测试。
 5. 在 PR/commit 描述中区分 copied、ported 和 inspired，避免以后无法追溯。
 
 仅复制 `llm_wiki` Viewer/D3 资产时才需要携带其 Viewer 第三方 D3 notice；当前计划不复制该资产。
