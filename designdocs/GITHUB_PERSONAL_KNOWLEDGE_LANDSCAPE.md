@@ -6,7 +6,7 @@ Snapshot date: 2026-07-16
 
 本文回答三个问题：GitHub 上近期受关注的个人知识库与 LLM Wiki 项目有哪些，它们具体如何实现，以及哪些方法适合用于 Obsidian Copilot 的二次开发。
 
-配套产品与技术方案见 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md)。
+配套产品与技术方案见 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 和 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md)。五个核心项目已进一步完成 commit 与文件级代码审计，具体 Copy / Port / Reference 清单见 [`OPEN_SOURCE_REUSE_PLAN.md`](./OPEN_SOURCE_REUSE_PLAN.md)。
 
 ---
 
@@ -59,7 +59,7 @@ GitHub Trending 页面没有稳定的历史排名接口，因此这里的“近�
 - 摄入分为 LLM 分析和页面生成两步，减少“一次调用直接改很多文件”的不可控性。
 - 来源以 SHA-256 建立增量缓存；串行持久化队列支持崩溃恢复和重试。
 - 关系图使用 Graphology、Sigma.js、ForceAtlas2 和 Louvain 社区发现。
-- 检索组合分词检索、可选 LanceDB 语义检索、两跳链接图扩展和 token 预算分配。
+- 检索组合分词检索、可选 LanceDB 语义检索、一跳 seed-neighbor 链接图扩展和 token 预算分配。
 - 外部来源通过 frontmatter 中的 source refs 保持追溯。
 - 提供人工 review、浏览器采集、MCP、本地 HTTP API 和 Agent Skills。
 
@@ -89,7 +89,7 @@ GitHub Trending 页面没有稳定的历史排名接口，因此这里的“近�
 - 文件 advisory lock 和 Git 自动提交降低多个 Agent 同时写 Vault 的风险。
 - 可以通过 Obsidian Local REST API 或文件系统 MCP 工作。
 
-其中 `hot → index → domain → page` 很适合控制上下文预算；文件锁、before-hash 和原子 ChangeSet 则应统一成 Copilot 的写入契约。
+其中 `hot → index → domain → page` 很适合控制上下文预算；文件锁、before-hash 和可恢复 ChangeSet 则应统一成 Copilot 的写入契约。
 
 ### 3.4 `OpenKB`：长文档的另一种检索路线
 
@@ -186,7 +186,7 @@ manifest 至少应记录：
 
 ### 6.2 验证后采用
 
-- BM25/semantic/wikilink 的融合重排与两跳图扩展。
+- BM25/semantic/wikilink 的融合重排与一跳图扩展；两跳只作为后续效果实验。
 - 长文档树状索引。
 - 自动 lint 建议和有限的 generated-only 自动维护。
 - OKF import/export 与外部 MCP/Agent Skills。
@@ -228,12 +228,12 @@ manifest 至少应记录：
 ### Phase 1：原生知识编译闭环
 
 - 实现 config、manifest、OKF document、ChangeSet 和 validator。
-- 完成单来源两阶段 ingest、预览、原子写入、log 和 rollback。
+- 完成单来源两阶段 ingest、持久队列、暂停/取消/重试/重启恢复、预览、journal 写入、log 和 recovery。
 - 查询优先读取 `index.md`/Wiki，必要时回到 Raw Source。
 
 ### Phase 2：可靠性和检索
 
-- 加入持久队列、重试、取消、增量 watch 和 stale 检测。
+- 加入增量 watch、来源生命周期和 stale 检测。
 - 融合现有关键词、语义检索与 wikilink 扩展。
 - 提供 lint 报告、引用覆盖和回归任务集。
 

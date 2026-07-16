@@ -8,7 +8,7 @@ Primary audience: product review, architecture review, engineering planning
 
 本文描述如何以 Copilot for Obsidian 为底座，构建一个本地优先、证据可追溯、可持续积累的个人知识库智能体。方案融合三类外部思想：DeerFlow SOC Agent 的受控 Runtime、Karpathy LLM Wiki 的复利式知识维护，以及 Google Open Knowledge Format（OKF）的可移植知识格式。
 
-本文不是 Copilot 全项目架构说明，也不是功能流水账。现有消息与上下文实现分别以 [`MESSAGE_ARCHITECTURE.md`](./MESSAGE_ARCHITECTURE.md) 和 [`CONTEXT_ENGINEERING.md`](./CONTEXT_ENGINEERING.md) 为准。
+本文负责技术架构与治理边界。产品目标、用户体验和验收标准见 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md)，外部项目的 commit、许可证和文件级采用方式见 [`OPEN_SOURCE_REUSE_PLAN.md`](./OPEN_SOURCE_REUSE_PLAN.md)。本文不是 Copilot 全项目架构说明，也不是功能流水账；现有消息与上下文实现分别以 [`MESSAGE_ARCHITECTURE.md`](./MESSAGE_ARCHITECTURE.md) 和 [`CONTEXT_ENGINEERING.md`](./CONTEXT_ENGINEERING.md) 为准。
 
 ---
 
@@ -16,6 +16,7 @@ Primary audience: product review, architecture review, engineering planning
 
 要构建的不是“能搜索 Obsidian 的聊天框”，也不是“可以任意改动整个 Vault 的全自动 Agent”，而是一个可信的个人知识工作系统：
 
+- Chat 保持为随时可用的助手入口，新增全页 Knowledge Studio 负责来源、Wiki、审核、活动、维护和图谱探索。
 - 用户选定的 Raw Sources 始终是不可被 Agent 静默改写的知识源。
 - LLM 维护一个与 Raw Sources 分离、由 Markdown 页面和链接组成的持久 Wiki。
 - Wiki 可以按 OKF v0.1 输出为可被其他 Agent 消费的标准知识 Bundle。
@@ -26,7 +27,7 @@ Primary audience: product review, architecture review, engineering planning
 - 所有写入默认可预览、可拒绝、可定位来源；索引和缓存可随时重建。
 - Chat、Vault QA、Project、Agent、Composer 等入口复用同一组知识与动作契约。
 
-第一阶段的价值不是“更多自治”，而是让用户能稳定地完成一个闭环：加入来源，形成相互连接的 Wiki，提出问题，获得带来源的答案，把值得保留的结果确认写回，并能在以后准确找回。
+第一阶段的价值不是“更多自治”，而是把一个真实来源完整地变成以后可复用的知识：拖入来源，看到处理进度，审核多文件变更，形成相互连接的 Wiki，获得带来源的答案，把值得保留的结果确认写回，并在内容未变化时可靠跳过重复工作。
 
 ---
 
@@ -125,18 +126,26 @@ OKF 将 LLM Wiki 收敛为非常小的互操作表面：
 
 ## 3. 产品形态
 
-不同入口服务不同工作，但不应各自实现一套知识逻辑。
+产品由两个互补表面组成，而不是把所有能力继续塞进侧边栏：
+
+- **Chat sidebar**：随时提问、讨论和创作，围绕当前笔记、选区、附件和 Project 工作。
+- **Knowledge Studio full-page view**：集中管理 Sources、Wiki、Review、Activity、Graph 和 Health，承载摄入、审核与维护等长流程。
+
+从 Chat 拖入任何内容时，必须明确分流为 `Use in this chat` 或 `Add to Knowledge`。前者只进入当前轮上下文，后者创建可恢复的 Ingest Job；用户不需要先理解 Raw/Wiki/OKF 等技术概念。
+
+不同入口服务不同工作，但共享同一套知识逻辑。
 
 | 入口 | 主要用途 | 约束 |
 | --- | --- | --- |
 | Chat | 围绕显式上下文讨论、总结和创作 | 默认只使用当前轮附件与允许的记忆 |
+| Knowledge Studio | 来源、Wiki、审核、队列、维护与图谱 | 使用全页 ItemView；桌面完整、移动端渐进降级 |
 | Vault QA | 跨 Vault 检索和综合回答 | 返回可定位的来源，说明检索不足 |
 | Project | 在项目文件、标签和项目说明范围内持续工作 | 项目范围与聊天历史隔离 |
 | Agent Mode | 多步搜索、读取、整理和动作建议 | 工具受注册表、预算和权限控制 |
 | Composer / Quick Command | 对选中文本或目标笔记进行变换 | 写入前提供预览，保持目标明确 |
 | ACP Agent（规划） | 接入 Codex、Claude Code、OpenCode 等外部 Agent | 作为平行 Runtime，不假装复用 LangChain 上下文与工具栈 |
 
-所有入口最终共享四类能力：知识范围解析、知识检索、知识综合和受控写入。
+所有入口最终共享七类能力：来源身份、知识范围、持久任务、知识编译、混合检索、引用定位和受控写入。Knowledge Studio 只提供新的工作表面，不创建另一份事实状态。
 
 ---
 
@@ -200,7 +209,7 @@ tags: [ai, context]
 timestamp: 2026-07-16T00:00:00Z
 status: reviewed
 source_refs:
-  - ../sources/articles/context-engineering.md
+  - ../../sources/articles/context-engineering.md
 ---
 
 # Summary
@@ -227,7 +236,7 @@ Ingest 不是“为文件生成 embedding”这么简单，而是一次受控的
 3. 读取 `index.md` 和相关 Wiki 页面，而不是扫描全部页面。
 4. 生成一个多文件 ChangeSet：新增来源摘要、更新概念、补链接、更新 index、追加 log。
 5. 校验引用、链接、OKF frontmatter 和写入范围。
-6. 默认展示 ChangeSet；用户接受后原子写入，失败时回滚。
+6. 默认展示 ChangeSet；用户接受后按可恢复事务语义写入，失败时依据 journal 恢复或回滚。
 
 Query 先利用已经编译的 Wiki，再按需下钻 Raw Sources 和检索索引。答案若包含可复用的新比较、综合或决策，可生成 `KnowledgeCandidate`，而不是只留在聊天历史。
 
@@ -257,9 +266,13 @@ Lint 只产生报告或 ChangeSet，不静默重写整个 Wiki。
 | `ContextManager` | 处理笔记、URL、选中文本、标签和目录，并构建当前轮上下文 |
 | `PromptContextEnvelope` | L1-L5 的版本化、可 hash、模型无关上下文契约 |
 | `ProjectManager` | 项目范围、项目上下文缓存和模式切换 |
-| Search v3 / Vector Store | 词法、语义、过滤、合并与索引能力；属于派生检索层 |
+| Search v3 | `SearchCore` / `TieredLexicalRetriever` 负责词法召回，`MergedSemanticRetriever` 负责语义融合，`GraphBoostCalculator` 提供图信号；不让新代码依赖 legacy Orama `VectorStoreManager` |
 | `ToolRegistry` | 工具发现、启用、元数据和 LangChain 原生工具绑定 |
 | Composer tools | 带预览和用户设置约束的笔记写入能力 |
+| `ApplyView` | 现有 split diff 与逐块接受/拒绝；扩展为多文件 ChangeSet review |
+| `useChatFileDrop` | 现有 Chat 文件拖入；增加一次使用与加入知识库的意图分流 |
+| `ProcessingStatus` / `IndexingProgressCard` | 现有处理、暂停、恢复、失败和重试体验；复用到 Ingest Activity |
+| `CopilotView` | Obsidian ItemView、React root 与 popout migration 范式；供 Knowledge Studio 复用 |
 | `UserMemoryManager` | Recent Conversations 与用户显式 Saved Memories |
 | `ChatPersistenceManager` | 项目感知的聊天 Markdown 保存与加载 |
 
@@ -269,11 +282,11 @@ Lint 只产生报告或 ChangeSet，不静默重写整个 Wiki。
 
 ```mermaid
 flowchart TB
-    UI[交互层<br/>Chat / QA / Project / Agent / Composer] --> ORCH[编排层<br/>ChatManager / KnowledgeTaskService]
+    UI[交互层<br/>Chat / Knowledge Studio / QA / Project / Agent / Composer] --> ORCH[编排层<br/>ChatManager / KnowledgeTaskService]
     ORCH --> SCOPE[范围与上下文<br/>Scope Resolver / Context Envelope / Budget]
     ORCH --> RETRIEVE[检索层<br/>Search Core / Retriever / External Read]
-    ORCH --> ACTION[动作层<br/>Tool Registry / Permission / Write Preview]
-    ORCH --> BUNDLE[知识编译层<br/>Bundle / Ingest / Query / Lint / ChangeSet]
+    ORCH --> ACTION[动作层<br/>Tool Registry / Permission / Multi-file Transaction]
+    ORCH --> BUNDLE[知识编译层<br/>Bundle / Manifest / Queue / Ingest / Query / Lint / ChangeSet]
     ORCH --> MEMORY[沉淀层<br/>Candidate / Saved Memory / Note Writeback]
     SCOPE --> RUNTIME[模型运行层<br/>LangChain Runners]
     RETRIEVE --> RUNTIME
@@ -310,7 +323,7 @@ interface KnowledgeArtifact {
 
 该结构是架构方向，不要求在 MVP 一次替换现有 `PromptLayerSegment`。第一步可以扩展现有 segment metadata，让来源、hash、可恢复性和截断状态可被检查。
 
-`KnowledgeArtifact` 是一次 Runtime 中实际使用的内容快照；它不等于持久化的 OKF concept。持久化层还需要三个小契约：
+`KnowledgeArtifact` 是一次 Runtime 中实际使用的内容快照；它不等于持久化的 OKF concept。持久化层还需要 Bundle、文档、来源状态、任务和变更集契约：
 
 ```ts
 interface KnowledgeBundleConfig {
@@ -331,19 +344,76 @@ interface OkfConceptDocument {
   timestamp?: string;
   extensions: Record<string, unknown>;
   body: string;
+  citations: ClaimCitation[];
 }
+
+interface SourceLocatorBase {
+  sourceId: string;
+  artifactId: string;
+  contentHash: string;
+  quoteHash: string;
+}
+
+type SourceLocator =
+  | (SourceLocatorBase & {
+      kind: "markdown_lines";
+      startLine: number;
+      endLine: number;
+      heading?: string;
+    })
+  | (SourceLocatorBase & { kind: "heading"; heading: string })
+  | (SourceLocatorBase & { kind: "pdf_page"; page: number })
+  | (SourceLocatorBase & { kind: "quote" });
+
+interface ClaimCitation {
+  claimId: string;
+  relation: "supports" | "contradicts" | "context";
+  locator: SourceLocator;
+}
+
+interface SourceManifestEntry {
+  sourceId: string;
+  sourcePath: string;
+  sourceContentHash: string;
+  pipelineFingerprint: string;
+  generatedPages: string[];
+  ownership: "source" | "shared" | "user";
+  status: "pending" | "processing" | "succeeded" | "failed" | "stale";
+  lastSuccessfulRun?: number;
+  error?: string;
+}
+
+interface KnowledgeIngestJob {
+  id: string;
+  bundleId: string;
+  sourceId: string;
+  stage: "queued" | "parsing" | "analyzing" | "generating" | "validating" | "review";
+  status: "pending" | "processing" | "paused" | "failed" | "completed" | "cancelled";
+  attempt: number;
+  rerunRequested: boolean;
+}
+
+type KnowledgeFileChange =
+  | { operation: "create"; path: string; afterContent: string }
+  | { operation: "update"; path: string; beforeHash: string; afterContent: string }
+  | { operation: "delete"; path: string; beforeHash: string };
 
 interface KnowledgeChangeSet {
   id: string;
   operation: "ingest" | "query_writeback" | "lint_fix";
   sourceRefs: string[];
-  changes: Array<{ path: string; beforeHash?: string; afterContent: string }>;
+  changes: KnowledgeFileChange[];
+  citations: ClaimCitation[];
   validation: { okfValid: boolean; citationsValid: boolean; linksValid: boolean };
   status: "proposed" | "accepted" | "rejected" | "applied" | "failed";
 }
 ```
 
-路径覆盖、越界写入、同文件并发修改和部分失败必须在应用 ChangeSet 前由确定性代码处理。模型只能提出 ChangeSet，不能自己宣称事务成功。
+`SourceLocator` 用 discriminated union 固定不同定位方式的必填字段；validator 还要检查行号、页码和 quote hash 是否实际存在。`quoteHash` 用于内容漂移后检测 locator 是否仍可靠。Wiki 主张、ChangeSet 和回答 citation 共享同一个 `ClaimCitation`，避免三套引用语义。
+
+`pipelineFingerprint` 至少覆盖 schema、compiler、parser、模型配置和输出语言，不能只凭 source hash 判断是否跳过。路径覆盖、越界写入、同文件并发修改和部分失败必须在应用 ChangeSet 前由确定性代码处理。模型只能提出 ChangeSet，不能自己宣称事务成功。
+
+Obsidian Vault API 不提供跨文件的真正原子事务。这里的“事务”指可恢复语义：记录 pre-state journal 和 staging plan，按确定顺序检查 before hash 并写入，最后写 commit marker；失败或启动恢复时根据 journal 完成或回滚。文件观察者可能短暂看到中间状态，但只有 commit marker 完成后任务和 manifest 才能显示为成功。
 
 ### 6.2 知识层级
 
@@ -415,11 +485,13 @@ interface KnowledgeChangeSet {
 1. Scope Resolver 确定当前笔记、Knowledge Bundle、Project、标签/目录或全 Vault 范围。
 2. 对 Knowledge Bundle 先读取相关层级的 `index.md`，以低成本完成渐进发现。
 3. Query Planner 生成有限数量的检索意图和关键词，不直接生成答案。
-4. Search Core 按规模并行使用目录索引、词法、语义、链接图和结构信号。
+4. `SearchCore` / `TieredLexicalRetriever` 完成词法召回，`MergedSemanticRetriever` 按配置融合语义结果，再叠加链接图和结构信号。
 5. Result Merger 去重，并保留每条命中的来源与各路得分。
 6. Context Selector 在 token 预算内选择覆盖面与相关性更好的片段。
 7. 模型基于实际选中的 Wiki 页面回答，必要时回读 Raw Sources。
 8. Citation Validator 检查答案引用能否回到选中片段和 Source。
+
+第一阶段以当前 `SearchCore` / `TieredLexicalRetriever`、`MergedSemanticRetriever` 和 `GraphBoostCalculator` 为底座。`vectorStoreManager.ts` 和旧 Orama 路径已标记 deprecated，新代码不应引用。后续可把 RRF 后的一跳 wikilink expansion 叠加到 Search v3，并返回 `graph_related_to` 解释关联召回；不复制仅支持 ASCII token 的外部 BM25，也不为 Wiki 新增 LanceDB。
 
 索引是派生缓存，不是知识源：切换 embedding provider、索引损坏或算法升级时，应能从 Vault 重建，不影响原始知识。
 
@@ -547,7 +619,10 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 | Compiled Wiki | OKF-compatible Markdown Bundle | LLM 维护、人可阅读的复利知识层 |
 | Bundle Schema | 用户指定的 schema 文件 | 页面结构和维护工作流 |
 | `index.md` / `log.md` | Wiki Bundle 保留文件 | 渐进发现和变更时间线 |
+| Source Manifest | 插件管理的版本化状态文件 | source hash、pipeline fingerprint、ownership、受影响页面和运行结果 |
+| Ingest Queue | 插件管理的版本化任务文件 | 暂停、取消、重试、rerun 与重启恢复 |
 | Proposed ChangeSet | 消息元数据或临时运行数据 | 多文件变更预览、校验和确认状态 |
+| Transaction Journal | 插件管理的短期恢复记录 | 保存 pre-state、提交进度、失败回滚与启动恢复 |
 | 项目定义 | Vault 中的 Project 配置/文件 | 范围和稳定项目上下文 |
 | 聊天历史 | Markdown chat 文件 | 用户可读的会话记录 |
 | Saved Memories | 用户配置的 memory 文件夹 | 用户确认的长期偏好与事实 |
@@ -555,6 +630,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 | Context Envelope | 运行态/消息元数据，未来可持久化紧凑快照 | 重现当轮模型上下文 |
 | 索引与 embedding | 插件数据或后端缓存 | 可重建的派生数据 |
 | 工具执行记录 | 消息元数据或轻量事件记录 | 调试、权限与回放 |
+| Temporal Graph Projection（可选） | 外部 Graphiti 服务 | 可删除、可重建的时态关系查询投影，不是事实源 |
 
 持久化原则：
 
@@ -564,6 +640,9 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 保存聊天后重新加载，关键上下文语义应能确定性恢复。
 - Project 切换必须同时隔离消息历史、上下文范围和后续候选写入目标。
 - 候选内容在接受前不进入索引和长期 memory。
+- 重启时把遗留 processing 任务恢复为 pending，但默认等待用户恢复，避免意外消耗模型额度。
+- Manifest、Wiki 页面、index/log 和 transaction 状态必须作为同一个 ChangeSet 提交语义处理。
+- Graphiti 如被启用，只能通过 durable outbox 和 projection ledger 同步；删除投影不影响 Markdown 主数据。
 - 用户能通过普通文件操作查看、编辑、迁移或删除长期知识。
 
 ---
@@ -580,11 +659,11 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 | Project A 内容泄漏到 Project B | Scope Resolver 和 MessageRepository 均使用项目身份隔离 |
 | 模型虚构来源 | 引用必须对应实际输入 artifact 或工具结果 |
 | 自动总结污染长期记忆 | 自动总结只进入 Recent Conversations 或 Candidate |
-| LLM 更新多个 Wiki 页面后产生不一致 | 使用 ChangeSet、before hash、合规校验、原子应用和回滚 |
+| LLM 更新多个 Wiki 页面后产生不一致 | 使用 ChangeSet、before hash、合规校验、commit marker 和 journal 恢复 |
 | Wiki 综合掩盖 Raw Source 的矛盾 | concept 保留引用和冲突说明，Query 可下钻原文 |
 | OKF 扩展变成新的私有锁定 | 核心字段遵守 v0.1，扩展字段可忽略并在 round-trip 时保留 |
 | 大上下文导致遗漏或请求失败 | 最终装配点执行总预算和优先级降级 |
-| 写错文件或覆盖原文 | 目标规范化、diff preview、用户确认和原子写入 |
+| 写错文件或覆盖原文 | 目标规范化、diff preview、用户确认和可恢复写入 |
 | 外部 provider 接收敏感笔记 | 在发送前让范围可见，并支持本地/自托管 provider |
 | Popout window 中 UI 或确认框落到错误窗口 | 从元素 `.doc` / `.win` 派生文档与窗口，迁移时重建 renderer |
 | 工具超时或部分失败 | 返回类型化失败，不能把失败结果当作有效知识 |
@@ -599,10 +678,12 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 ### 15.1 核心指标
 
+- Knowledge reuse rate：确认写入的知识在之后 30 天内被问答、创作、链接浏览或维护任务实际重新使用的比例；第一阶段先建立个人真实使用基线。
 - Grounded answer rate：关键结论能够回到实际上下文来源的比例。
-- Knowledge reuse rate：用户确认保存的知识在后续任务中被有效找回的比例。
 - Successful writeback rate：候选内容经用户确认后正确写入目标位置的比例。
 - Compounding coverage：新增来源被整合到已有相关概念而非只生成孤立摘要的比例。
+- Time to first grounded answer：从来源入队到第一次可引用回答的时间。
+- Daily friction：完成加入、审核和提问需要的操作数与被等待打断的次数。
 
 ### 15.2 质量与护栏指标
 
@@ -615,6 +696,9 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - Persistence parity：保存、重载后相同任务的上下文行为是否一致。
 - Tool safety：未经授权写入、错误目标、部分失败和超时率。
 - Wiki health：OKF 不合规、断链、孤立页面、无引用主张和过期页面数量。
+- Citation navigation success：发出的引用是否能够实际打开并定位到来源。
+- Unchanged skip rate：source hash 与 pipeline fingerprint 相同的来源是否在不调用模型时正确跳过。
+- Queue recovery success：暂停、失败和插件重启后的任务是否能恢复且不重复扣费。
 - 延迟与成本：上下文装配、检索、模型调用和写入各阶段耗时。
 
 ### 15.3 基准任务集
@@ -642,49 +726,62 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 ## 16. MVP 与路线图
 
-### Phase 1：可信问答基础
+### Phase 1：Golden Flow — 一个来源变成可复用知识
 
-- 实现无模型依赖的 OKF v0.1 parser、validator 和 Bundle 配置 spike。
-- 支持从用户指定 `wikiRoot` 读取分层 `index.md`、concept 和 `log.md`。
-- 在最终消息装配点执行 L1-L5 总 token 预算。
-- 修复聊天重载后的 envelope 恢复一致性。
-- 使用确定性 fallback artifact ID。
-- 统一笔记、搜索和外部来源的引用元数据。
-- 增加多轮、Project 隔离、预算和引用回归测试。
+- 实现纯 TypeScript `KnowledgeBundleConfig`、`SourceManifest`、`OkfDocument`、`KnowledgeIngestJob`、`KnowledgeChangeSet` 与 validator。
+- 使用 SHA-256 和覆盖 schema/compiler/parser/model/output language 的 `pipelineFingerprint` 实现幂等判断。
+- 建立可恢复的串行队列：去重、rerun、暂停、取消、重试、重启后 processing → pending，并默认等待用户恢复。
+- 在 Chat 文件拖入中增加 `Use in this chat` / `Add to Knowledge` 分流，并建立最小 Knowledge Studio / Activity 表面。
+- 完成单来源两阶段 Ingest：先分析受影响页面，再生成限定目标集合的 concept/index/log ChangeSet。
+- 扩展现有 ApplyView，支持多文件 create/update/delete、before hash、来源、校验和逐文件/逐块审核。
+- 通过 transaction journal、确定性写入顺序和 commit marker 应用 Wiki、manifest、index 和 log；失败可恢复，不修改 Raw Source。
+- 复用 Search v3 回答新知识，显示可点击 citation，并支持从回答再次生成写回 ChangeSet。
 
-完成标准：用户能在当前笔记、Project、Vault 和一个只读 OKF Bundle 中稳定获得可定位来源的答案，且不会发送超预算请求。
+完成标准：用户能在同一条可见流程中完成“拖入一个 Markdown/PDF → 等待处理 → 审核多文件 diff → 写入 Wiki → 提问并跳到引用 → 重复摄入时显示 Up to date”，插件重启不会丢任务或形成半提交。
 
-### Phase 2：知识沉淀闭环
+### Phase 2：Daily Workbench — 每天愿意打开的知识工作台
 
-- 实现单来源 Ingest：来源登记、相关页面发现、concept/index/log ChangeSet。
-- 引入轻量 `KnowledgeCandidate` 展示模型。
-- 支持从回答创建新笔记、追加、链接、决策记录或 Saved Memory。
-- 所有写入复用 preview/diff、before hash、OKF/citation/link 校验与用户确认。
-- 候选写入保留来源引用，写入后增量更新索引。
-- 记录接受、编辑、拒绝结果用于离线评测，不自动训练或改写 prompt。
+- 完成 Knowledge Studio 的 Home、Sources、Wiki、Review、Activity 和 Health。
+- 移植来源卡片、missing source 警告、related chips、ownership、重命名与删除生命周期。
+- 加入 `hot → index → domain → page` 渐进浏览和 Quick / Standard / Deep 查询档位。
+- 把写入前 ChangeSet Review 与写入后 contradiction/duplicate/missing/stale Review Inbox 分开。
+- 实现确定性 lint、来源 hash 漂移、引用覆盖、队列历史和真实 fixture 回归。
+- 监听用户授权的 source roots；Project 切换时 flush/suspend，防止旧状态覆盖新项目。
+- 支持从回答创建新笔记、更新页面、决策记录或 Saved Memory，并记录接受、编辑和拒绝结果。
 
-完成标准：用户能把一个新来源或一次有依据的回答，通过一个可审查的多文件 ChangeSet 沉淀为相互连接、符合 OKF 的知识。
+完成标准：用户可以连续数周加入、查询、审核和维护资料，不需要手工确认任务状态、记住来源位置或修复重复摄入。
 
-### Phase 3：类型化 Artifact 与统一动作边界
+### Phase 3：Explore — 图谱、关系检索与统一 Artifact
 
 - Context Processor 直接产生类型化 artifact，XML 只作为渲染格式。
-- 实现 Wiki Lint 和来源 hash 漂移检测。
+- 从 Obsidian metadata cache、index、links 和 frontmatter 增量派生知识图，不全量逐文件扫描。
+- 移植 Graphology/Sigma worker、Louvain community、过滤、预览、知识缺口和 surprising connections 体验。
+- 在现有 Search v3 上加入 RRF 后的一跳图扩展，为图结果动态保留配额，并解释 `graph_related_to`。
 - 为 OKF Bundle 增加导入、导出和宽容 round-trip 测试。
-- 从 index、链接和 frontmatter 派生交互式知识图，用于浏览 topic、entity、claim、source、孤立节点和隐含关系；图是消费视图，不是新的事实源。
-- 引入统一 `ToolExecutionRecord` 和动作等级。
-- 将搜索、读取、Composer 与未来 MCP 的结果统一为 Observation/Action Result。
-- 加入最小 Planner sidecar 和任务状态可视化，但不暴露隐藏思维链。
+- 引入统一 `ToolExecutionRecord`，将搜索、读取、Composer 与未来 MCP 结果统一为 Observation/Action Result。
 
-完成标准：不同入口对同一来源、工具和写入动作具有一致语义与测试方式。
+完成标准：图谱不仅可浏览，还能在真实问题上改善关联召回、知识缺口发现和研究导航；不同入口对来源与写入具有一致语义。
 
-### Phase 4：ACP 与可扩展工作流
+### Phase 4：Temporal and Agent Expansion — 只在真实需求出现后扩展
 
+- 先在 Markdown 中支持 `observedAt`、`validFrom`、`validTo`、`supersedes` 和 `contradicts`，并建立历史问答任务集。
+- 只有频繁历史追问、多跳关系或数千条持续事件证明必要时，才通过 durable outbox/projection ledger 接入可选 Graphiti 服务。
 - 实现独立 ACP port/adapter、session、permission 和 terminal 生命周期。
 - 支持用户配置的 Markdown Skills，按需披露而非全部注入。
-- 在真实任务集上比较 LangChain Agent 与 ACP Agent。
-- 只在单 Agent 基准证明不足后试验 Context Capsule 和子 Agent。
+- 只在单 Agent 基准证明不足后试验 Context Capsule、Planner sidecar 和子 Agent。
 
-完成标准：外部 Agent 能在不破坏 Copilot 数据所有权和权限边界的前提下完成复杂知识任务。
+完成标准：外部 Agent 或时态图服务可以提升复杂任务，但删除它们后，Markdown 知识、核心 Chat、移动端和写入安全仍完整可用。
+
+### 跨阶段可靠性轨道
+
+以下是现有 Chat/Context 架构的重要债务，但不作为 Golden Flow 首个切片的前置范围：
+
+- 在最终消息装配点执行 L1-L5 总 token 预算。
+- 使用确定性 fallback artifact ID。
+- 修复聊天重载后的 envelope 恢复一致性。
+- 增加多轮、Project 隔离、预算和引用回归测试。
+
+它们可以与知识编译切片并行交付；若真实集成测试证明某项直接阻塞 citation 或 Project scope，再提升为对应切片的验收条件。
 
 ---
 
@@ -692,12 +789,15 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 当前方案明确不做：
 
+- 账号、订阅、支付、团队空间、多租户和商业许可证系统。
+- 独立于 Obsidian 的第二套 Tauri/桌面编辑器或 Web SaaS。
 - 自动重写、移动或“清理”整个 Vault。
 - 把向量数据库、embedding 或模型总结当作知识源。
 - 未经确认自动把聊天结论写入长期记忆。
 - 为个人知识库引入 Kafka、PostgreSQL、租户系统或后台复核队列。
 - 强制把现有整个 Vault 一次性迁移为 OKF，或拒绝读取非 OKF 笔记。
 - 把 OKF 当作检索算法、向量数据库、权限系统或 Agent Runtime。
+- 把 Graphiti、Neo4j、LanceDB 或其他派生数据库作为核心运行前提或唯一事实源。
 - 一开始就建设多 Agent 编排、知识图谱本体或通用工作流引擎。
 - 用一个通用自然语言匹配器决定所有知识范围、权限和写入目标。
 - 为了适配某类笔记而硬编码目录名、语言词表或内容模式。
@@ -711,18 +811,23 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 | --- | --- |
 | Vault Markdown 是知识事实源 | 用户可读、可编辑、可迁移，不依赖模型或服务商 |
 | Raw Sources 与 LLM-maintained Wiki 分层 | 既保留来源真实性，又获得持续综合和链接的复利价值 |
+| Chat + 全页 Knowledge Studio | Chat 适合即时助手，摄入、审核、队列、维护和图谱需要完整工作区 |
 | 指定 Wiki Root 采用 OKF v0.1 | 提供最小、开放、可被其他 Agent 消费的文件契约 |
 | 普通 Vault 读取保持宽容 | 不用标准化成本阻断现有 Obsidian 工作流 |
 | `index.md` 优先于全量扫描 | 支持 Agent 渐进发现并降低 token 与检索成本 |
-| 多文件 Wiki 更新使用 ChangeSet | 让跨页面维护可预览、校验、原子应用和回滚 |
+| 多文件 Wiki 更新使用 ChangeSet | 让跨页面维护可预览、校验，并通过 journal 获得可恢复事务语义 |
 | `PromptContextEnvelope` 是 LangChain 上下文契约 | 已覆盖所有当前 Chain Runner，并提供层级和 hash |
-| Search index 是派生缓存 | 可重建，不能覆盖原始内容 |
+| Search v3 是基础检索底座 | 当前已有词法、语义和图信号；只叠加 Wiki 渐进发现与图扩展，不再建第二套搜索 |
+| Source hash 与 pipeline fingerprint 共同决定幂等 | 来源未变不代表解析、schema、模型或输出规则未变 |
+| 持久队列恢复后等待用户继续 | 防止插件重启后意外调用模型和消耗额度 |
 | 用户显式附件高于自动检索 | 尊重当前任务意图并降低上下文噪声 |
 | 模型输出先是 Synthesis 或 Candidate | 防止流畅回答直接污染长期知识 |
 | 写入默认 preview/diff | 个人知识库最常见的高风险是误写而非网络攻击 |
 | LangChain 与 ACP 使用平行 Runtime | 两者的上下文、工具和会话所有权不同 |
+| Graphiti 仅是可选外部投影 | 时态语义值得预留，但 Markdown/Raw 必须保持 canonical 且移动端不依赖服务 |
+| 外部实现按 Copy / Port / Reference 管理 | 能快速吸收好代码，同时保留来源、测试、许可证和平台边界 |
 | 暂不引入子 Agent | 当前更需要预算、引用、权限和持久化正确性 |
-| 先补可靠性，再增加自治 | 可靠知识闭环比复杂 Agent 演示更有持续价值 |
+| 以 Golden Flow 驱动架构 | 先完成一个来源到可复用知识的完整体验，再逐层增加工作台、图谱与自治 |
 
 ---
 
@@ -730,8 +835,11 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 ### 产品评审
 
+- 文件拖入时能否不理解内部术语就选择一次使用或长期沉淀？
+- 用户能否从一个任务卡看懂当前阶段、结果、失败原因和下一步？
 - 用户能否知道答案用了哪些知识、遗漏了哪些知识？
 - 聊天产生的价值能否低摩擦地沉淀回 Vault？
+- Chat 与 Knowledge Studio 是否共享状态，而不是出现两份来源、队列或审核结果？
 - 自动行为是否尊重当前笔记、Project 和 Vault 范围？
 - 工具不可用时是否提供诚实且可用的降级结果？
 
@@ -749,7 +857,10 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 普通 concept 是否包含非空 `type`，保留文件是否符合 OKF 结构？
 - 未知 type、扩展字段、断链或缺失 index 是否被宽容消费？
 - Ingest 是否更新受影响的已有页面，而不只新增孤立摘要？
+- Manifest 是否同时包含 source hash 和 pipeline fingerprint，并在输出缺失时强制重新摄入？
+- 重启后的 processing job 是否恢复为 pending 且等待用户继续？
 - ChangeSet 是否包含 source refs、before hash、index/log 更新和校验结果？
+- 写入前 ChangeSet Review 与写入后 Review Inbox 是否语义分离？
 - Lint 是否只提出报告或变更集，而不静默重写整个 Wiki？
 
 ### 记忆与写回评审
@@ -772,6 +883,8 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 | 文档 | 用途 |
 | --- | --- |
+| [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) | 产品目标、核心体验、需求、验收标准和成功指标 |
+| [`OPEN_SOURCE_REUSE_PLAN.md`](./OPEN_SOURCE_REUSE_PLAN.md) | 外部项目的 commit、许可证、文件级 Copy/Port/Reference 台账 |
 | [`MESSAGE_ARCHITECTURE.md`](./MESSAGE_ARCHITECTURE.md) | 当前 MessageRepository → ChatManager → UIState 架构 |
 | [`CONTEXT_ENGINEERING.md`](./CONTEXT_ENGINEERING.md) | 当前 L1-L5 上下文实现、缺口和路线 |
 | [`TOOLS.md`](./TOOLS.md) | 当前工具注册、提示集成和执行方式 |
