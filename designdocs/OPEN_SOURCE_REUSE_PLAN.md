@@ -14,11 +14,11 @@ Snapshot date: 2026-07-16
 
 ### 1.1 Three Levels
 
-| 等级 | 含义 | 实施要求 |
-| --- | --- | --- |
-| Copy | 纯逻辑叶子模块可近乎原样复用 | 锁定 commit 和原路径；保留版权/许可证；适配 import 和本项目类型；携带或重写测试 |
-| Port | 产品机制或算法优秀，但运行环境、状态或 UI 架构不兼容 | 保留行为契约，自行用 TypeScript、Vault API 和当前状态架构重写 |
-| Reference | 只借鉴流程、交互或边界 | 不复制实现；在设计或代码注释中记录灵感来源即可 |
+| 等级      | 含义                                                 | 实施要求                                                                        |
+| --------- | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Copy      | 纯逻辑叶子模块可近乎原样复用                         | 锁定 commit 和原路径；保留版权/许可证；适配 import 和本项目类型；携带或重写测试 |
+| Port      | 产品机制或算法优秀，但运行环境、状态或 UI 架构不兼容 | 保留行为契约，自行用 TypeScript、Vault API 和当前状态架构重写                   |
+| Reference | 只借鉴流程、交互或边界                               | 不复制实现；在设计或代码注释中记录灵感来源即可                                  |
 
 ### 1.2 Non-negotiable Rules
 
@@ -31,31 +31,31 @@ Snapshot date: 2026-07-16
 
 ## 2. Audited Source Snapshots
 
-| 项目 | 审计 commit | 版本/状态 | 许可证 | 总体采用方式 |
-| --- | --- | --- | --- | --- |
-| [`atomicstrata/llm-wiki-compiler`](https://github.com/atomicstrata/llm-wiki-compiler/tree/6963a7f8374282de5d4084a324be69b50f62a32d) | `6963a7f8374282de5d4084a324be69b50f62a32d` | v1.1.0 | MIT | Copy 纯逻辑和测试；Port I/O/事务；不嵌入 SDK/CLI |
-| [`nashsu/llm_wiki`](https://github.com/nashsu/llm_wiki/tree/38f4cb1dc8757059be618af215d14a5bebbf820d) | `38f4cb1dc8757059be618af215d14a5bebbf820d` | v0.6.4 | GPL-3.0 | Copy 少量叶子模块；Port UX、队列、图谱；不引入 Tauri/Rust/LanceDB |
-| [`AgriciDaniel/claude-obsidian`](https://github.com/AgriciDaniel/claude-obsidian/tree/cb93ff6d82f9c35a08bf6010e7fac36dfddc827b) | `cb93ff6d82f9c35a08bf6010e7fac36dfddc827b` | main，v1.9.2 后 1 commit | MIT | Port 工作流和数据契约；不复制 Bash/Python Runtime |
-| [`GoogleCloudPlatform/knowledge-catalog`](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/d44368c15e38e7c92481c5992e4f9b5b421a801d) | `d44368c15e38e7c92481c5992e4f9b5b421a801d` | OKF v0.1 Draft | Apache-2.0 | 实现规范；不引入 GCP reference tools |
-| [`getzep/graphiti`](https://github.com/getzep/graphiti/tree/5e2be0faf7038a5b40e700d757b2c337e96b3a05) | `5e2be0faf7038a5b40e700d757b2c337e96b3a05` | graphiti-core 0.29.2 后 28 commits | Apache-2.0 | Port 时态/provenance 契约；后期可选外部投影 |
+| 项目                                                                                                                                              | 审计 commit                                | 版本/状态                          | 许可证     | 总体采用方式                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------- | ---------- | ----------------------------------------------------------------- |
+| [`atomicstrata/llm-wiki-compiler`](https://github.com/atomicstrata/llm-wiki-compiler/tree/6963a7f8374282de5d4084a324be69b50f62a32d)               | `6963a7f8374282de5d4084a324be69b50f62a32d` | v1.1.0                             | MIT        | Copy 纯逻辑和测试；Port I/O/事务；不嵌入 SDK/CLI                  |
+| [`nashsu/llm_wiki`](https://github.com/nashsu/llm_wiki/tree/38f4cb1dc8757059be618af215d14a5bebbf820d)                                             | `38f4cb1dc8757059be618af215d14a5bebbf820d` | v0.6.4                             | GPL-3.0    | Copy 少量叶子模块；Port UX、队列、图谱；不引入 Tauri/Rust/LanceDB |
+| [`AgriciDaniel/claude-obsidian`](https://github.com/AgriciDaniel/claude-obsidian/tree/cb93ff6d82f9c35a08bf6010e7fac36dfddc827b)                   | `cb93ff6d82f9c35a08bf6010e7fac36dfddc827b` | main，v1.9.2 后 1 commit           | MIT        | Port 工作流和数据契约；不复制 Bash/Python Runtime                 |
+| [`GoogleCloudPlatform/knowledge-catalog`](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/d44368c15e38e7c92481c5992e4f9b5b421a801d) | `d44368c15e38e7c92481c5992e4f9b5b421a801d` | OKF v0.1 Draft                     | Apache-2.0 | 实现规范；不引入 GCP reference tools                              |
+| [`getzep/graphiti`](https://github.com/getzep/graphiti/tree/5e2be0faf7038a5b40e700d757b2c337e96b3a05)                                             | `5e2be0faf7038a5b40e700d757b2c337e96b3a05` | graphiti-core 0.29.2 后 28 commits | Apache-2.0 | Port 时态/provenance 契约；后期可选外部投影                       |
 
 ## 3. Reuse Current Project Before External Code
 
 本项目已经有大量成熟能力。新增知识系统必须先复用这些模块，避免外部实现覆盖现有架构。
 
-| 当前模块 | 直接用途 | 新增边界 |
-| --- | --- | --- |
-| `src/components/CopilotView.tsx` | Obsidian ItemView、React root、popout migration | 新建 Knowledge Studio 时复用窗口迁移模式 |
-| `src/components/Chat.tsx`、`src/hooks/useChatFileDrop.ts` | Chat 与文件拖入 | 增加 `Use in this chat` / `Add to Knowledge` 分流 |
-| `src/components/project/processing-status.tsx` | 文件转换状态、重试和打开来源 | 复用状态视觉，接入 Ingest Job stages |
-| `src/components/IndexingProgressCard.tsx` | 暂停、恢复、停止和错误进度 | 复用交互，不另造 Activity 反馈模式 |
-| `src/components/composer/ApplyView.tsx` | split diff、逐块接受/拒绝 | 扩展为多文件 Knowledge ChangeSet review |
-| `src/tools/ComposerTools.ts` | 写入预览与用户确认 | 作为事务应用的用户权限入口，而非直接写盘核心 |
-| `src/search/v3/SearchCore.ts`、`TieredLexicalRetriever.ts` | 词法召回、过滤和 top-K | 复用 lexical core；不把 semantic/fusion 误归到该模块 |
-| `src/search/v3/MergedSemanticRetriever.ts` | 词法与语义结果融合 | 在融合后增加 Wiki/index/图扩展；新代码不引用 deprecated `vectorStoreManager.ts` |
-| `src/search/v3/scoring/GraphBoostCalculator.ts` | backlinks、co-citations、shared tags | 作为图检索第一版基础 |
-| `src/core/MessageRepository.ts`、`ChatManager.ts`、`ContextManager.ts` | 消息、业务协调和上下文 | 引用 Knowledge Artifact，不复制外部聊天状态 |
-| `src/tools/ToolRegistry.ts`、`NoteTools.ts`、`SearchTools.ts` | Agent 工具 | 暴露同一套 knowledge query/change-set 能力 |
+| 当前模块                                                               | 直接用途                                        | 新增边界                                                                        |
+| ---------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| `src/components/CopilotView.tsx`                                       | Obsidian ItemView、React root、popout migration | 新建 Knowledge Studio 时复用窗口迁移模式                                        |
+| `src/components/Chat.tsx`、`src/hooks/useChatFileDrop.ts`              | Chat 与文件拖入                                 | 增加 `Use in this chat` / `Add to Knowledge` 分流                               |
+| `src/components/project/processing-status.tsx`                         | 文件转换状态、重试和打开来源                    | 复用状态视觉，接入 Ingest Job stages                                            |
+| `src/components/IndexingProgressCard.tsx`                              | 暂停、恢复、停止和错误进度                      | 复用交互，不另造 Activity 反馈模式                                              |
+| `src/components/composer/ApplyView.tsx`                                | split diff、逐块接受/拒绝                       | 扩展为多文件 Knowledge ChangeSet review                                         |
+| `src/tools/ComposerTools.ts`                                           | 写入预览与用户确认                              | 作为事务应用的用户权限入口，而非直接写盘核心                                    |
+| `src/search/v3/SearchCore.ts`、`TieredLexicalRetriever.ts`             | 词法召回、过滤和 top-K                          | 复用 lexical core；不把 semantic/fusion 误归到该模块                            |
+| `src/search/v3/MergedSemanticRetriever.ts`                             | 词法与语义结果融合                              | 在融合后增加 Wiki/index/图扩展；新代码不引用 deprecated `vectorStoreManager.ts` |
+| `src/search/v3/scoring/GraphBoostCalculator.ts`                        | backlinks、co-citations、shared tags            | 作为图检索第一版基础                                                            |
+| `src/core/MessageRepository.ts`、`ChatManager.ts`、`ContextManager.ts` | 消息、业务协调和上下文                          | 引用 Knowledge Artifact，不复制外部聊天状态                                     |
+| `src/tools/ToolRegistry.ts`、`NoteTools.ts`、`SearchTools.ts`          | Agent 工具                                      | 暴露同一套 knowledge query/change-set 能力                                      |
 
 ## 4. `llm-wiki-compiler`: Best Pure Logic Source
 
@@ -63,28 +63,28 @@ Snapshot date: 2026-07-16
 
 以下模块接近纯 TypeScript 叶子逻辑，可在保留 MIT 版权和测试后适配：
 
-| 上游路径 | 价值 | 本地目标方向 |
-| --- | --- | --- |
-| `src/trust/decision.ts` | 合成 allow/warn/stage/quarantine/deny | `src/knowledge/review/trustDecision.ts` |
-| `src/review/policy.ts` | 低置信、矛盾、schema/provenance review gate | `src/knowledge/review/reviewPolicy.ts` |
-| `src/schema/types.ts` | PageKind 与 SchemaConfig 契约 | `src/knowledge/schema/types.ts` |
-| `src/linter/types.ts` | 结构化 lint diagnostics | `src/knowledge/lint/types.ts` |
-| `src/import/types.ts`、`src/import/okf-limits.ts` | OKF import 数据形状与资源上限 | `src/knowledge/okf/importTypes.ts` |
-| `src/eval/types.ts`、`src/eval/delta.ts` | 质量指标和回归差值 | `src/knowledge/eval/` |
-| `src/export/okf/citations.ts` | `# Citations` 渲染 | 适配内部 claim-level Citation 类型 |
+| 上游路径                                          | 价值                                        | 本地目标方向                            |
+| ------------------------------------------------- | ------------------------------------------- | --------------------------------------- |
+| `src/trust/decision.ts`                           | 合成 allow/warn/stage/quarantine/deny       | `src/knowledge/review/trustDecision.ts` |
+| `src/review/policy.ts`                            | 低置信、矛盾、schema/provenance review gate | `src/knowledge/review/reviewPolicy.ts`  |
+| `src/schema/types.ts`                             | PageKind 与 SchemaConfig 契约               | `src/knowledge/schema/types.ts`         |
+| `src/linter/types.ts`                             | 结构化 lint diagnostics                     | `src/knowledge/lint/types.ts`           |
+| `src/import/types.ts`、`src/import/okf-limits.ts` | OKF import 数据形状与资源上限               | `src/knowledge/okf/importTypes.ts`      |
+| `src/eval/types.ts`、`src/eval/delta.ts`          | 质量指标和回归差值                          | `src/knowledge/eval/`                   |
+| `src/export/okf/citations.ts`                     | `# Citations` 渲染                          | 适配内部 claim-level Citation 类型      |
 
 对应的 `trust-decision`、`review-policy`、`eval-delta` 测试应一并移植，避免只复制实现。
 
 ### 4.2 Port the Algorithm, Rewrite the Environment
 
-| 上游路径 | 保留 | 必须重写 |
-| --- | --- | --- |
-| `src/compiler/citation-normalize.ts`、`src/utils/markdown.ts` | 行范围修复、删除不存在的引用行 | 使用 Markdown AST/tokenizer，保护 fenced 与 inline code |
-| `src/export/okf/*`、`src/import/okf-*` | 未知字段 round-trip、链接转换、导入默认 review | 当前项目 `yaml`、Vault adapter、WebCrypto、Unicode 路径 |
-| `src/compiler/hasher.ts`、`source-state.ts`、freshness 模块 | hash、状态和 stale 判断 | `crypto.subtle` 与平台无关路径接口 |
-| `src/utils/atomic-write.ts`、`lock.ts`、trust journal/recovery | pre-state journal → 写入 → commit → recovery | 插件内 mutex、before-hash CAS、Vault transaction store |
-| `src/context/budget.ts` | 确定性预算裁剪 | 映射 `PromptContextEnvelope` 与现有 token 预算 |
-| `src/review/config.ts` | normalize 与 fail-closed 配置 | Settings/Vault 读取 adapter |
+| 上游路径                                                       | 保留                                           | 必须重写                                                |
+| -------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------- |
+| `src/compiler/citation-normalize.ts`、`src/utils/markdown.ts`  | 行范围修复、删除不存在的引用行                 | 使用 Markdown AST/tokenizer，保护 fenced 与 inline code |
+| `src/export/okf/*`、`src/import/okf-*`                         | 未知字段 round-trip、链接转换、导入默认 review | 当前项目 `yaml`、Vault adapter、WebCrypto、Unicode 路径 |
+| `src/compiler/hasher.ts`、`source-state.ts`、freshness 模块    | hash、状态和 stale 判断                        | `crypto.subtle` 与平台无关路径接口                      |
+| `src/utils/atomic-write.ts`、`lock.ts`、trust journal/recovery | pre-state journal → 写入 → commit → recovery   | 插件内 mutex、before-hash CAS、Vault transaction store  |
+| `src/context/budget.ts`                                        | 确定性预算裁剪                                 | 映射 `PromptContextEnvelope` 与现有 token 预算          |
+| `src/review/config.ts`                                         | normalize 与 fail-closed 配置                  | Settings/Vault 读取 adapter                             |
 
 Obsidian Vault API 没有跨文件原子事务，所以 `Vault transaction store` 只能提供可恢复语义：pre-state journal、staging plan、before-hash CAS、确定性写入顺序、commit marker 和启动恢复。观察者可能短暂看到中间文件状态，任务与 manifest 不能在 commit marker 前报告成功。
 
@@ -116,13 +116,13 @@ Obsidian Vault API 没有跨文件原子事务，所以 `Vault transaction store
 
 ### 5.1 Copy Small Leaf Modules
 
-| 上游路径 | 采用方式 | 注意事项 |
-| --- | --- | --- |
-| `src/components/graph/graph-layout-worker.ts` | Copy | 适配类型/import；220+ 节点的 ForceAtlas2 worker 很有价值 |
-| `src/lib/graph-search.ts` | Copy | 纯函数；适配本地 Node 类型 |
-| `src/lib/graph-visibility.ts` | Copy | 纯可见性逻辑 |
-| `src/lib/ingest.ts:388-547` 的 `isSafeIngestPath`、`parseFileBlocks` | Copy function | 只作为非结构化模型输出的 fallback |
-| `src/lib/ingest-cache.ts:20-112` | Copy algorithm | hash 后还验证所有输出存在；存储改为 Vault adapter |
+| 上游路径                                                             | 采用方式       | 注意事项                                                 |
+| -------------------------------------------------------------------- | -------------- | -------------------------------------------------------- |
+| `src/components/graph/graph-layout-worker.ts`                        | Copy           | 适配类型/import；220+ 节点的 ForceAtlas2 worker 很有价值 |
+| `src/lib/graph-search.ts`                                            | Copy           | 纯函数；适配本地 Node 类型                               |
+| `src/lib/graph-visibility.ts`                                        | Copy           | 纯可见性逻辑                                             |
+| `src/lib/ingest.ts:388-547` 的 `isSafeIngestPath`、`parseFileBlocks` | Copy function  | 只作为非结构化模型输出的 fallback                        |
+| `src/lib/ingest-cache.ts:20-112`                                     | Copy algorithm | hash 后还验证所有输出存在；存储改为 Vault adapter        |
 
 这些文件属于 GPL-3.0。复制时必须保留 `Copyright (C) 2024-2026 Yong Su`、GPL 许可证和原路径/commit。
 
@@ -209,14 +209,14 @@ ChangeSet diff before write
 
 ### 6.1 Port Now
 
-| 机制 | 精确上游位置 | 当前项目实现 |
-| --- | --- | --- |
-| `hot → index → domain → page` | `skills/wiki/SKILL.md`、`skills/wiki-query/SKILL.md` | 可重建导航缓存；ChangeSet 成功后统一刷新 |
-| Quick / Standard / Deep 查询 | `skills/wiki-query/SKILL.md` | 映射到检索深度、图扩展和 source 回读预算 |
-| Manifest | `skills/wiki-ingest/SKILL.md`、`.raw/.manifest.json` | SHA-256 + pipeline fingerprint + ownership + status/error |
-| Ingest / Query / Lint | 三个对应 Skill | 固化为 TS Runtime 和 UI；Skill 仅薄编排 |
-| 矛盾不覆盖 | ingest workflow | 保留两种说法、来源与 supersedes/contradicts |
-| Git checkpoint | `skills/wiki/references/git-setup.md` | 可选完整 ChangeSet checkpoint，不默认操作用户 Git |
+| 机制                          | 精确上游位置                                         | 当前项目实现                                                                                                         |
+| ----------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `hot → index → domain → page` | `skills/wiki/SKILL.md`、`skills/wiki-query/SKILL.md` | 可重建导航缓存；ChangeSet 成功后统一刷新                                                                             |
+| Quick / Standard / Deep 查询  | `skills/wiki-query/SKILL.md`                         | 映射到检索深度、图扩展和 source 回读预算                                                                             |
+| Manifest                      | `skills/wiki-ingest/SKILL.md`、`.raw/.manifest.json` | 原始字节 SHA-256 + pipeline fingerprint + stable source identity + last successful/failed；运行状态由 Queue 单独持有 |
+| Ingest / Query / Lint         | 三个对应 Skill                                       | 固化为 TS Runtime 和 UI；Skill 仅薄编排                                                                              |
+| 矛盾不覆盖                    | ingest workflow                                      | 保留两种说法、来源与 supersedes/contradicts                                                                          |
+| Git checkpoint                | `skills/wiki/references/git-setup.md`                | 可选完整 ChangeSet checkpoint，不默认操作用户 Git                                                                    |
 
 确定性 lint 与模型建议必须分开：frontmatter、断链、hash、路径和 before-hash 属于代码；stale claim、缺页和潜在矛盾属于候选建议。
 
@@ -248,11 +248,11 @@ Google 仓库根目录和 OKF 目录为 Apache-2.0，但 `toolbox/mdcode/package
 
 Graphiti 的核心价值是 episode provenance 和双时态：
 
-| 语义 | 字段 | 含义 |
-| --- | --- | --- |
-| 来源/事件时间 | `valid_at`、`invalid_at` | 事实何时在现实世界中开始/停止成立 |
-| 系统认知时间 | `created_at`、`expired_at` | 系统何时知道该事实、何时判定它失效 |
-| 证据来源 | `episodes[]` | 每条事实回到哪些 raw episode |
+| 语义          | 字段                       | 含义                               |
+| ------------- | -------------------------- | ---------------------------------- |
+| 来源/事件时间 | `valid_at`、`invalid_at`   | 事实何时在现实世界中开始/停止成立  |
+| 系统认知时间  | `created_at`、`expired_at` | 系统何时知道该事实、何时判定它失效 |
+| 证据来源      | `episodes[]`               | 每条事实回到哪些 raw episode       |
 
 新矛盾不删除旧事实，而是结束旧事实的有效区间并保留来源。第一阶段在 Markdown/OKF 契约中预留：
 
@@ -299,8 +299,8 @@ Graphiti 必须可删、可重建，不参与核心写入事务。用户需显�
 
 ### Slice 1 — Knowledge Foundation and Golden Flow
 
-1. Copy/port compiler 的类型、trust/review、OKF limits 和 tests。
-2. 实现纯 TS Source Manifest、pipeline fingerprint、OKF parser/round-trip 和 ChangeSet。
+1. 先独立实现纯 TS contract、strict schema、Windows path、hash/fingerprint、freshness 和 tests。
+2. 实现 Source Manifest repository、OKF parser/round-trip 和 ChangeSet transaction；后续需要 trust/review/OKF limits 时再按台账 Copy/Port。
 3. Port 可恢复队列契约；复用当前进度 UI。
 4. 扩展 ApplyView 为多文件写入前审核。
 5. 完成单来源两阶段编译、事务、citation jump 和 unchanged skip。
@@ -329,8 +329,8 @@ Graphiti 必须可删、可重建，不参与核心写入事务。用户需显�
 
 首次复制外部代码时，同一个 commit 必须完成：
 
-1. 新增根目录 `THIRD_PARTY_NOTICES.md`，按项目记录仓库、commit、版权、许可证和本地目标文件。
-2. 在 `third_party/licenses/` 或等价目录保存所需 MIT、GPL-3.0、Apache-2.0 文本。
+1. 更新根目录 `THIRD_PARTY_NOTICES.md`，按项目记录仓库、commit、版权、许可证和本地目标文件。
+2. 只为实际纳入的材料在 `third_party/licenses/` 保存对应 MIT、GPL-3.0、Apache-2.0 原文和 NOTICE；不能提前暗示组件已包含。
 3. 在明显复制或派生的源码文件头注明原仓库、commit、路径和修改说明。
 4. 保留上游测试意图，并增加 Windows CRLF、盘符/反斜杠、大小写碰撞、保留设备名、文件占用、中文路径、popout window 和 Vault adapter 回归测试。
 5. 在 PR/commit 描述中区分 copied、ported 和 inspired，避免以后无法追溯。

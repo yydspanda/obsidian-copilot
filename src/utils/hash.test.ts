@@ -1,4 +1,4 @@
-import { md5, sha256 } from "./hash";
+import { md5, sha256, sha256Bytes } from "./hash";
 
 // Test vectors below are standard RFC 1321 / FIPS 180-4 reference values and
 // match what `crypto-js`'s `MD5(str).toString()` / `SHA256(str).toString()`
@@ -75,6 +75,18 @@ describe("sha256", () => {
     );
     expect(sha256("a".repeat(120))).toBe(
       "2f3d335432c70b580af0e8e1b3674a7c020d683aa5f73aaaedfdc55af904c21c"
+    );
+  });
+
+  it("hashes exact binary content without text conversion", () => {
+    expect(sha256Bytes(new Uint8Array())).toBe(
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    expect(sha256Bytes(new Uint8Array([0, 1, 2, 255]))).toBe(
+      "3d1f57c984978ef98a18378c8166c1cb8ede02c03eeb6aee7e2f121dfeee3e56"
+    );
+    expect(sha256Bytes(new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55, 10]).buffer)).toBe(
+      "0716f9264c9fe19f5d7455276107f3ddcc1d3497f63d60689a73558ae8a1bf5e"
     );
   });
 });

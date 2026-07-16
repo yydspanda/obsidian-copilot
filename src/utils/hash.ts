@@ -130,8 +130,24 @@ function rotr32(x: number, n: number): number {
   return (x >>> n) | (x << (32 - n));
 }
 
+/**
+ * Computes a lowercase SHA-256 digest for a UTF-8 string.
+ *
+ * @param input - Text encoded as UTF-8 before hashing
+ * @returns Lowercase hexadecimal SHA-256 digest
+ */
 export function sha256(input: string): string {
-  const msg = new TextEncoder().encode(input);
+  return sha256Bytes(new TextEncoder().encode(input));
+}
+
+/**
+ * Computes a lowercase SHA-256 digest for exact binary content.
+ *
+ * @param input - Bytes to hash without text conversion or normalization
+ * @returns Lowercase hexadecimal SHA-256 digest
+ */
+export function sha256Bytes(input: Uint8Array | ArrayBuffer): string {
+  const msg = input instanceof Uint8Array ? input : new Uint8Array(input);
   const len = msg.length;
   const paddedLen = (((len + 8) >>> 6) + 1) << 6;
   const padded = new Uint8Array(paddedLen);

@@ -1,0 +1,8 @@
+{
+  "retryable": ["EBUSY", "EPERM", "EACCES"],
+  "nonRetryable": ["ENOENT", "EINVAL"],
+  "postWriteMismatch": {
+    "code": "CONTENT_MISMATCH",
+    "message": "The content observed after writing does not match afterHash"
+  }
+}

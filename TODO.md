@@ -25,15 +25,20 @@
 - [x] 编写体验优先的个人知识操作系统 PRD，定义 Knowledge Studio、Golden Flow、验收标准与本地成功指标。
 - [x] 将主技术方案路线图改为端到端体验切片，并补充 manifest、pipeline fingerprint、持久队列、事务和可选时态投影。
 - [x] 将首期平台范围收敛为 Windows Obsidian Desktop，移除 macOS、Linux、iOS、Android 和浏览器适配承诺。
+- [x] 编写 Windows-only commit-by-commit 执行计划，并建立 Now / Next / Later 退出门槛。
+- [x] 建立第三方来源声明与许可证落盘规则；五个候选当前明确标记为 audited/reference、未复制源码。
+- [x] 完成 Slice 1A 纯 TypeScript 契约、strict runtime schema、语义 validator 与公共导出边界。
+- [x] 完成原始字节 SHA-256、pipeline fingerprint、稳定 source identity、Windows Vault path 和输出存在性 freshness 判定。
+- [x] 建立 Markdown 文本、PDF locator、OKF round-trip、Windows 路径/碰撞、文件占用和中文/emoji fixture。
 
 ## Pending Tasks 📋
 
-### Slice 1A：契约与来源归属
+### Slice 1A：契约与来源归属 ✅
 
-- [ ] 建立 `THIRD_PARTY_NOTICES.md` 和第三方许可证目录，记录首批复制模块的仓库、commit、路径与修改说明。
-- [ ] 建立 Golden Flow 的 Markdown、PDF locator、OKF round-trip、CRLF、盘符/反斜杠、大小写碰撞、保留设备名、文件占用和中文路径 fixture。
-- [ ] 实现纯 TypeScript `KnowledgeBundleConfig`、`SourceManifestEntry`、`SourceLocator`、`ClaimCitation`、`KnowledgeIngestJob` 和 discriminated `KnowledgeFileChange`。
-- [ ] 实现 source content hash、pipeline fingerprint、稳定 source identity 和输出存在性校验。
+- [x] 建立 `THIRD_PARTY_NOTICES.md` 和第三方许可证目录规则；实际 Copy 时再同步加入许可证原文与文件映射。
+- [x] 建立 Golden Flow 的 Markdown、PDF locator、OKF round-trip、CRLF、盘符/反斜杠、大小写碰撞、保留设备名、文件占用和中文路径 fixture。
+- [x] 实现纯 TypeScript `KnowledgeBundleConfig`、`SourceManifestEntry`、`SourceLocator`、`ClaimCitation`、`KnowledgeIngestJob` 和 discriminated `KnowledgeFileChange`。
+- [x] 实现 source byte hash、pipeline fingerprint、稳定 source identity、Windows path contract 和输出存在性校验。
 
 ### Slice 1B：持久队列与可恢复写入
 
@@ -77,6 +82,10 @@
 - 当前唯一产品与验收平台是 Windows Obsidian Desktop；不为 macOS、Linux、iOS、Android 或浏览器增加兼容工作。
 - 允许在 adapter 边缘使用有明确体验收益的 Windows/Node/Electron 能力，但纯知识契约保持 TypeScript 与 I/O 无关。
 - 不因平台收敛直接嵌入 Node 24 CLI；所有依赖仍须兼容 Obsidian 实际捆绑的 Windows Runtime。
+- Manifest 不保存 processing 状态；持久来源状态与当前 Queue Job 在 UI 层按 `sourceId` 联结。
+- `sourceContentHash` 使用原始文件字节；citation quote 只统一换行符；ChangeSet before/after hash 保留精确文本字节语义。
+- Windows Vault path 在领域边界选择“验证并拒绝”，不静默修复盘符、UNC、反斜杠、保留设备名或碰撞目标。
+- Pipeline fingerprint 只接受 allowlisted JSON 配置，并防御性拒绝 credential-like 字段。
 
 ## Testing Checklist
 
@@ -87,6 +96,7 @@
 - [x] 检查新增 PRD、主方案与复用台账之间的链接和决策一致性。
 - [x] 检查 Markdown heading/fence/link 结构并运行 `git diff --check`；仓库没有安装 `node_modules`，未调用 Prettier。
 - [x] 确认没有修改 DeerFlow/SOC 文件或把 `.env.test` 纳入版本控制。
+- [x] Slice 1A 通过 TypeScript `noEmit`、目标 ESLint、Prettier check 与 7 个 Jest suite / 192 个测试。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 
 ## Source Documents
@@ -95,3 +105,5 @@
 - [`designdocs/PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./designdocs/PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md)：技术架构、数据契约、可靠性与路线图。
 - [`designdocs/OPEN_SOURCE_REUSE_PLAN.md`](./designdocs/OPEN_SOURCE_REUSE_PLAN.md)：外部代码 Copy / Port / Reference 台账。
 - [`designdocs/GITHUB_PERSONAL_KNOWLEDGE_LANDSCAPE.md`](./designdocs/GITHUB_PERSONAL_KNOWLEDGE_LANDSCAPE.md)：开源项目调研快照。
+- [`designdocs/PERSONAL_KNOWLEDGE_EXECUTION_PLAN.md`](./designdocs/PERSONAL_KNOWLEDGE_EXECUTION_PLAN.md)：Windows-only commit 顺序、依赖与退出门槛。
+- [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)：人工复制/派生外部材料的归属台账与发布门禁。

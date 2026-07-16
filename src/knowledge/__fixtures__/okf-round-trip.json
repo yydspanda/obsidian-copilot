@@ -1,0 +1,28 @@
+{
+  "kind": "concept",
+  "path": "topics/时序知识图谱.md",
+  "body": "# 时序知识图谱\n",
+  "type": "topic",
+  "title": "时序知识图谱",
+  "tags": ["knowledge-graph"],
+  "extensions": {
+    "confidence": 0.9,
+    "reviewed": false
+  },
+  "citations": [
+    {
+      "citationId": "citation-pdf-1",
+      "claimId": "claim-temporal-1",
+      "relation": "supports",
+      "locator": {
+        "kind": "pdf_page",
+        "sourceId": "source-pdf-1",
+        "artifactId": "artifact-pdf-page-1",
+        "artifactContentHash": "ba98fabbad845a9a55bf46c3dc58f1f107a60371ae72e44566f30d9bf97d1555",
+        "excerpt": "图数据库支持时序事实。",
+        "quoteHash": "9fbc324a4093d800abd3867be12433abe3f61d4eadd442d6461069bf7d8f85c6",
+        "page": 1
+      }
+    }
+  ]
+}

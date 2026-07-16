@@ -1,0 +1,13 @@
+{
+  "validVaultPaths": ["Sources/研究笔记.md", "资料/论文/知识图谱.pdf", "Wiki/Café/概念.md"],
+  "nativePaths": [
+    "C:\\Users\\我\\资料\\报告.md",
+    "D:\\知识库\\论文.pdf",
+    "\\\\server\\share\\知识.pdf"
+  ],
+  "reservedSegments": ["CON.md", "aux.txt", "COM1.json", "name.", "name "],
+  "collisionGroups": [
+    ["Wiki/Page.md", "wiki/page.md"],
+    ["Wiki/Café.md", "wiki/Café.md"]
+  ]
+}
