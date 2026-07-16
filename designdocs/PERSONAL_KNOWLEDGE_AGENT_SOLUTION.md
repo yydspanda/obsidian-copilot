@@ -779,6 +779,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 | [`todo/AGENT_PLANNING_REFLECTION_V0.md`](./todo/AGENT_PLANNING_REFLECTION_V0.md) | 最小 Planner 与可见任务状态设计 |
 | [`todo/ACP_DESIGN.md`](./todo/ACP_DESIGN.md) | ACP 平行 Runtime 设计 |
 | [`../src/memory/memory-design.md`](../src/memory/memory-design.md) | 当前 Recent Conversations 与 Saved Memories 语义 |
+| [`GITHUB_PERSONAL_KNOWLEDGE_LANDSCAPE.md`](./GITHUB_PERSONAL_KNOWLEDGE_LANDSCAPE.md) | GitHub 活跃项目、技术路线、许可证与本项目采用建议 |
 | [Karpathy LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) | Raw / Wiki / Schema 与 Ingest / Query / Lint 原始模式 |
 | [Google Cloud: Introducing the Open Knowledge Format](https://cloud.google.com/blog/products/data-analytics/how-the-open-knowledge-format-can-improve-data-sharing) | OKF 的官方定位、原则与发布说明 |
 | [OKF v0.1 Specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) | Bundle、frontmatter、链接、index、log、citation 与合规规则 |
