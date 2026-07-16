@@ -93,6 +93,7 @@ function createJobBase() {
     sourceId: "source-1",
     sourceContentHash: SHA_A,
     pipelineFingerprint: SHA_B,
+    inputRevision: 1,
     attempt: 0,
     rerunRequested: false,
     createdAt: 100,

@@ -32,6 +32,9 @@
 - [x] 建立 Markdown 文本、PDF locator、OKF round-trip、Windows 路径/碰撞、文件占用和中文/emoji fixture。
 - [x] 完成 Source Manifest Repository 与可注入 Storage Port；支持 stable identity、rename、freshness、扩展字段保真与 revision CAS。
 - [x] 修复并发 success/failure 覆盖竞态，以单调观察时间和有界 CAS retry 保留较新状态。
+- [x] 完成持久 Ingest Queue Core：严格快照、revision CAS、Bundle 隔离、claim ownership、同来源去重与 exactly-one latest rerun。
+- [x] 完成暂停/恢复/取消、显式审核、指数退避、最大重试、provider 限流暂停、错误脱敏与同会话基础设施失败恢复。
+- [x] 将 applying 设为事务安全边界；Commit E 日志完成前，中断或失败 apply 进入不可绕过的 recovery-required gate。
 
 ## Pending Tasks 📋
 
@@ -44,8 +47,10 @@
 
 ### Slice 1B：持久队列与可恢复写入
 
-- [ ] 实现可注入的 `QueueStorage`、`IngestExecutor`、`EventSink`、`RetryPolicy` 和队列状态机。
-- [ ] 支持任务去重、处理中 rerun、暂停、取消、指数退避、重试和重启后 processing → pending。
+- [x] 实现可注入的 `QueueStorage`、`IngestExecutor`、`EventSink`、`RetryPolicy` 和队列状态机。
+- [x] 支持任务去重、处理中 latest rerun、暂停、取消、指数退避、重试、stale claim 防护和安全启动恢复。
+- [ ] 实现 Windows/Vault `QueueStorage` adapter 的原子 revision compare-and-replace，以及跨重启、并发安全的 per-source `inputRevision` 分配器。
+- [ ] 在接入长期 Activity UI 前定义 terminal job 归档/压缩策略，避免运行队列无限增长。
 - [ ] 实现 before-hash CAS、pre-state journal、确定性写入顺序、commit marker 和启动恢复。
 - [ ] 验证失败或崩溃后不会出现“任务/manifest 已成功但 Wiki 页面未完成”的状态。
 
@@ -88,6 +93,12 @@
 - `sourceContentHash` 使用原始文件字节；citation quote 只统一换行符；ChangeSet before/after hash 保留精确文本字节语义。
 - Windows Vault path 在领域边界选择“验证并拒绝”，不静默修复盘符、UNC、反斜杠、保留设备名或碰撞目标。
 - Pipeline fingerprint 只接受 allowlisted JSON 配置，并防御性拒绝 credential-like 字段。
+- Queue 的 `inputRevision` 必须由 source adapter 按 source 严格单调分配、跨重启保存，并在相同内容观察时同样推进；不得使用内存计数器或文件 mtime 代替。
+- `QueueStorage.write` 的 expected revision 比较与完整 snapshot 替换必须是 adapter 内的同一原子操作。
+- Queue snapshot 使用 strict、显式版本化 schema；新增持久字段必须配套版本升级和迁移，不得依靠静默宽容读取。
+- Queue 执行语义是 at-least-once：持久 claim 保证同一时刻至多一个 active job，attempt ownership 拒绝迟到结果，但终态写入前崩溃仍可能重放模型调用。
+- EventSink 只提供非阻塞 post-commit 通知，持久 Queue snapshot 才是状态真相。
+- applying 在 ChangeSet journal 接入前不可取消、自动重试或普通恢复；失败后只能由 Commit E 的事务恢复流程解除 gate。
 
 ## Testing Checklist
 
@@ -98,7 +109,7 @@
 - [x] 检查新增 PRD、主方案与复用台账之间的链接和决策一致性。
 - [x] 检查 Markdown heading/fence/link 结构并运行 `git diff --check`；仓库没有安装 `node_modules`，未调用 Prettier。
 - [x] 确认没有修改 DeerFlow/SOC 文件或把 `.env.test` 纳入版本控制。
-- [x] Knowledge foundation 通过 TypeScript `noEmit`、目标 ESLint、Prettier check 与 8 个 Jest suite / 224 个测试。
+- [x] Knowledge foundation 通过 TypeScript `noEmit`、目标 ESLint、Prettier check 与 11 个 Jest suite / 305 个测试。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 
 ## Source Documents

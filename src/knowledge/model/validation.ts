@@ -430,6 +430,73 @@ export function validateKnowledgeIngestJob(value: unknown): KnowledgeValidationR
       "Job updatedAt cannot precede createdAt"
     );
   }
+  const requiresCompletedAttempt =
+    job.status === "processing" ||
+    job.status === "paused" ||
+    job.status === "awaiting_review" ||
+    job.status === "failed" ||
+    job.status === "completed" ||
+    (job.status === "pending" && job.nextAttemptAt !== undefined);
+  if (requiresCompletedAttempt && job.attempt === 0) {
+    addError(
+      diagnostics,
+      "job_attempt_invalid",
+      "attempt",
+      "This durable job state requires at least one claimed execution"
+    );
+  }
+  if (
+    job.status === "processing" &&
+    (job.startedAt < job.createdAt || job.startedAt > job.updatedAt)
+  ) {
+    addError(
+      diagnostics,
+      "job_started_timestamp_invalid",
+      "startedAt",
+      "Job startedAt must fall between createdAt and updatedAt"
+    );
+  }
+  if (job.status === "paused" && (job.pausedAt < job.createdAt || job.pausedAt > job.updatedAt)) {
+    addError(
+      diagnostics,
+      "job_paused_timestamp_invalid",
+      "pausedAt",
+      "Job pausedAt must fall between createdAt and updatedAt"
+    );
+  }
+  if (
+    job.status === "failed" &&
+    (job.failure.occurredAt < job.createdAt || job.failure.occurredAt > job.updatedAt)
+  ) {
+    addError(
+      diagnostics,
+      "job_failure_timestamp_invalid",
+      "failure.occurredAt",
+      "Job failure time must fall between createdAt and updatedAt"
+    );
+  }
+  if (
+    job.status === "completed" &&
+    (job.completedAt < job.createdAt || job.completedAt > job.updatedAt)
+  ) {
+    addError(
+      diagnostics,
+      "job_completed_timestamp_invalid",
+      "completedAt",
+      "Job completedAt must fall between createdAt and updatedAt"
+    );
+  }
+  if (
+    job.status === "cancelled" &&
+    (job.cancelledAt < job.createdAt || job.cancelledAt > job.updatedAt)
+  ) {
+    addError(
+      diagnostics,
+      "job_cancelled_timestamp_invalid",
+      "cancelledAt",
+      "Job cancelledAt must fall between createdAt and updatedAt"
+    );
+  }
   return toResult(diagnostics);
 }
 

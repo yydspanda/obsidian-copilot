@@ -8,7 +8,7 @@ Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C complete; Commit D is next. The knowledge foundation currently passes TypeScript `noEmit`, targeted ESLint, Prettier check, and 224 tests across eight Jest suites. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D complete; Commit E is next. The knowledge foundation currently passes TypeScript `noEmit`, targeted ESLint, Prettier check, and 305 tests across eleven Jest suites. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -130,7 +130,7 @@ Exit criteria:
 - 输出缺失、fingerprint 变化或 source hash 变化返回明确 stale reason。
 - 失败运行不覆盖 last successful state。
 
-### Commit D — Persistent Queue Core ← Next
+### Commit D — Persistent Queue Core ✅
 
 Target files:
 
@@ -147,15 +147,19 @@ Scope:
 - pending/processing/paused/review/failed/completed/cancelled 状态机。
 - 同一 source 去重；processing 时变化只安排一次 rerun。
 - `AbortController`、指数退避、jitter、最大重试和 provider 限流暂停。
-- 启动时 processing → pending，恢复 backlog 默认等待用户操作。
+- 非 applying 的 processing 在启动恢复时回到 pending，backlog 默认等待用户操作。
+- 每次执行使用 attempt/startedAt claim ownership；旧 attempt 的迟到结果只返回 stale。
+- 来源新旧由 adapter 分配、跨重启持久化的 per-source `inputRevision` 判定，不依赖 Windows 墙上时钟。
+- Queue snapshot 采用 strict、显式版本化 schema；持久结构扩展必须通过版本升级和迁移完成。
+- applying 在 Commit E 的事务日志可用前 fail closed，并保持不可绕过的 recovery-required gate。
 
 Exit criteria:
 
 - 任一状态迁移均有测试；非法迁移 fail closed。
-- 项目切换和重启不会丢 job 或重复执行。
+- 项目切换和重启不丢 job、不产生重复 active job；中断 attempt 采用 at-least-once，可能重放模型调用。
 - 取消不会删除已经存在或被多个来源共享的页面。
 
-### Commit E — Recoverable ChangeSet Application
+### Commit E — Recoverable ChangeSet Application ← Next
 
 Target files:
 

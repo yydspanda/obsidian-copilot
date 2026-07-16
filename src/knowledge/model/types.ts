@@ -162,6 +162,8 @@ export interface KnowledgeIngestJobBase {
   sourceId: string;
   sourceContentHash: string;
   pipelineFingerprint: string;
+  /** Durable per-source observation revision, independent of wall-clock time. */
+  inputRevision: number;
   attempt: number;
   rerunRequested: boolean;
   createdAt: number;

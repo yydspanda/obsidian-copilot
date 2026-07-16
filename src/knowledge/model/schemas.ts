@@ -206,6 +206,7 @@ const ingestJobBaseShape = {
   sourceId: nonEmptyStringSchema,
   sourceContentHash: sha256Schema,
   pipelineFingerprint: sha256Schema,
+  inputRevision: nonNegativeIntegerSchema,
   attempt: nonNegativeIntegerSchema,
   rerunRequested: z.boolean(),
   createdAt: nonNegativeIntegerSchema,

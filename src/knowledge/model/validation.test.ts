@@ -345,6 +345,7 @@ describe("validateKnowledgeIngestJob", () => {
       sourceId: "source-1",
       sourceContentHash: HASH_A,
       pipelineFingerprint: HASH_B,
+      inputRevision: 1,
       attempt: 0,
       rerunRequested: false,
       createdAt: 200,
@@ -355,6 +356,100 @@ describe("validateKnowledgeIngestJob", () => {
 
     expect(diagnosticCodes(validateKnowledgeIngestJob(job))).toContain(
       "job_timestamp_order_invalid"
+    );
+  });
+
+  it("rejects state-specific timestamps outside the durable job lifetime", () => {
+    const base = {
+      id: "job-1",
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      attempt: 1,
+      rerunRequested: false,
+      createdAt: 100,
+      updatedAt: 200,
+    };
+
+    expect(
+      diagnosticCodes(
+        validateKnowledgeIngestJob({
+          ...base,
+          status: "processing",
+          stage: "parsing",
+          startedAt: 99,
+        })
+      )
+    ).toContain("job_started_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        validateKnowledgeIngestJob({
+          ...base,
+          status: "paused",
+          stage: "generating",
+          pausedAt: 201,
+        })
+      )
+    ).toContain("job_paused_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        validateKnowledgeIngestJob({
+          ...base,
+          status: "failed",
+          stage: "analyzing",
+          failure: {
+            code: "provider_timeout",
+            message: "Provider timed out",
+            retryable: true,
+            occurredAt: 201,
+          },
+        })
+      )
+    ).toContain("job_failure_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        validateKnowledgeIngestJob({
+          ...base,
+          status: "completed",
+          stage: "completed",
+          changeSetId: "changeset-1",
+          completedAt: 99,
+        })
+      )
+    ).toContain("job_completed_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        validateKnowledgeIngestJob({
+          ...base,
+          status: "cancelled",
+          stage: "cancelled",
+          cancelledAt: 201,
+        })
+      )
+    ).toContain("job_cancelled_timestamp_invalid");
+  });
+
+  it("requires a claimed attempt for states that cannot precede execution", () => {
+    const processing = {
+      id: "job-1",
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      attempt: 0,
+      rerunRequested: false,
+      createdAt: 100,
+      updatedAt: 100,
+      status: "processing",
+      stage: "parsing",
+      startedAt: 100,
+    };
+
+    expect(diagnosticCodes(validateKnowledgeIngestJob(processing))).toContain(
+      "job_attempt_invalid"
     );
   });
 });

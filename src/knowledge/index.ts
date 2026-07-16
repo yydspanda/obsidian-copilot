@@ -1,3 +1,6 @@
+export * from "@/knowledge/ingest/queue/IngestQueue";
+export * from "@/knowledge/ingest/queue/QueueStorage";
+export * from "@/knowledge/ingest/queue/RetryPolicy";
 export * from "@/knowledge/manifest/freshness";
 export * from "@/knowledge/manifest/SourceManifestRepository";
 export * from "@/knowledge/manifest/SourceManifestStorage";
