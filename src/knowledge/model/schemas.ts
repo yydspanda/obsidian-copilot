@@ -21,8 +21,8 @@ function hasNonWhitespaceText(value: string): boolean {
 
 const nonEmptyStringSchema = z.string().refine(hasNonWhitespaceText, "Expected a non-empty string");
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
-const nonNegativeIntegerSchema = z.number().int().nonnegative();
-const positiveIntegerSchema = z.number().int().positive();
+const nonNegativeIntegerSchema = z.number().int().safe().nonnegative();
+const positiveIntegerSchema = z.number().int().safe().positive();
 
 /** Runtime schema for recursive JSON metadata. */
 export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>

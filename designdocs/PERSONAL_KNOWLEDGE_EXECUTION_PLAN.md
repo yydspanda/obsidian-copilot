@@ -8,7 +8,7 @@ Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B complete; Commit C is next. Slice 1A currently passes TypeScript `noEmit`, targeted ESLint, Prettier check, and 192 tests across seven Jest suites. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C complete; Commit D is next. The knowledge foundation currently passes TypeScript `noEmit`, targeted ESLint, Prettier check, and 224 tests across eight Jest suites. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -106,7 +106,7 @@ Exit criteria:
 - Pipeline fingerprint 对字段顺序稳定，对 schema/parser/compiler/model/output 变化敏感。
 - 无 Obsidian、Node filesystem、模型或 UI import。
 
-### Commit C — Source Manifest and Repository Port ← Next
+### Commit C — Source Manifest and Repository Port ✅
 
 Target files:
 
@@ -130,7 +130,7 @@ Exit criteria:
 - 输出缺失、fingerprint 变化或 source hash 变化返回明确 stale reason。
 - 失败运行不覆盖 last successful state。
 
-### Commit D — Persistent Queue Core
+### Commit D — Persistent Queue Core ← Next
 
 Target files:
 

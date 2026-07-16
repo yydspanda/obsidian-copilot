@@ -1,4 +1,6 @@
 export * from "@/knowledge/manifest/freshness";
+export * from "@/knowledge/manifest/SourceManifestRepository";
+export * from "@/knowledge/manifest/SourceManifestStorage";
 export * from "@/knowledge/model/fingerprint";
 export * from "@/knowledge/model/locatorMaterialValidation";
 export {

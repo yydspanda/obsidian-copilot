@@ -30,6 +30,8 @@
 - [x] 完成 Slice 1A 纯 TypeScript 契约、strict runtime schema、语义 validator 与公共导出边界。
 - [x] 完成原始字节 SHA-256、pipeline fingerprint、稳定 source identity、Windows Vault path 和输出存在性 freshness 判定。
 - [x] 建立 Markdown 文本、PDF locator、OKF round-trip、Windows 路径/碰撞、文件占用和中文/emoji fixture。
+- [x] 完成 Source Manifest Repository 与可注入 Storage Port；支持 stable identity、rename、freshness、扩展字段保真与 revision CAS。
+- [x] 修复并发 success/failure 覆盖竞态，以单调观察时间和有界 CAS retry 保留较新状态。
 
 ## Pending Tasks 📋
 
@@ -96,7 +98,7 @@
 - [x] 检查新增 PRD、主方案与复用台账之间的链接和决策一致性。
 - [x] 检查 Markdown heading/fence/link 结构并运行 `git diff --check`；仓库没有安装 `node_modules`，未调用 Prettier。
 - [x] 确认没有修改 DeerFlow/SOC 文件或把 `.env.test` 纳入版本控制。
-- [x] Slice 1A 通过 TypeScript `noEmit`、目标 ESLint、Prettier check 与 7 个 Jest suite / 192 个测试。
+- [x] Knowledge foundation 通过 TypeScript `noEmit`、目标 ESLint、Prettier check 与 8 个 Jest suite / 224 个测试。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 
 ## Source Documents
