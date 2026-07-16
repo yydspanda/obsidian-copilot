@@ -238,7 +238,7 @@ Ingest 不是“为文件生成 embedding”这么简单，而是一次受控的
 3. 读取 `index.md` 和相关 Wiki 页面，而不是扫描全部页面。
 4. 生成一个多文件 ChangeSet：新增来源摘要、更新概念、补链接、更新 index、追加 log。
 5. 校验引用、链接、OKF frontmatter 和写入范围。
-6. 默认展示 ChangeSet；用户接受后按可恢复事务语义写入，失败时依据 journal 恢复或回滚。
+6. 默认展示 ChangeSet；用户接受后按可恢复事务语义写入，失败时依据 journal 幂等 roll-forward；任何非预期文件状态都 fail closed，留给显式冲突恢复流程处理。
 
 Query 先利用已经编译的 Wiki，再按需下钻 Raw Sources 和检索索引。答案若包含可复用的新比较、综合或决策，可生成 `KnowledgeCandidate`，而不是只留在聊天历史。
 
@@ -431,6 +431,7 @@ interface KnowledgeIngestJobBase {
   sourceId: string;
   sourceContentHash: string;
   pipelineFingerprint: string;
+  inputRevision: number;
   attempt: number;
   rerunRequested: boolean;
   createdAt: number;
@@ -447,6 +448,25 @@ type KnowledgeIngestJob = KnowledgeIngestJobBase &
     | { status: "completed"; stage: "completed"; changeSetId: string; completedAt: number }
     | { status: "cancelled"; stage: "cancelled"; cancelledAt: number }
   );
+
+interface IngestSourceHighWatermark {
+  sourceId: string;
+  sourceContentHash: string;
+  pipelineFingerprint: string;
+  inputRevision: number;
+  observedAt: number;
+}
+
+interface IngestQueueSnapshotV2 {
+  version: 2;
+  bundleId: string;
+  revision: number;
+  jobs: KnowledgeIngestJob[];
+  reruns: IngestRerunRequest[];
+  sourceHighWatermarks: IngestSourceHighWatermark[];
+  applyClaim?: IngestApplyClaimMarker;
+  applyCommit?: IngestApplyCommitMarker;
+}
 
 interface KnowledgeFileChangeBase {
   id: string;
@@ -485,7 +505,11 @@ Manifest 只记录 durable source identity、最后成功提交和最后失败�
 
 上述接口的可执行基线位于 `src/knowledge/model/`；未知持久化 JSON 先经过 strict Zod 3 schema，再经过路径、hash、跨字段和写入边界的确定性语义校验，公共 API 不泄露 Zod 类型。
 
-Obsidian Vault API 不提供跨文件的真正原子事务。这里的“事务”指可恢复语义：记录 pre-state journal 和 staging plan，按确定顺序检查 before hash 并写入，最后写 commit marker；失败或启动恢复时根据 journal 完成或回滚。文件观察者可能短暂看到中间状态，但只有 commit marker 完成后任务和 manifest 才能显示为成功。
+Obsidian Vault API 不提供跨文件的真正原子事务。这里的“事务”指可恢复语义：在 Vault-global 单活动槽中记录完整 pre-state journal 和 staging plan，按 Windows 确定顺序执行单文件原子 compare-and-swap，写后复验，最后写 commit marker。失败或启动恢复只自动 roll-forward；文件状态既不等于精确 before、也不等于精确 after 时进入 sticky recovery gate，不自动 rollback 或覆盖用户编辑。文件观察者可能短暂看到中间状态，但只有 commit marker 完成后才允许后续成功账本推进。
+
+成功账本采用可重试的交接协议：committed journal 先与 Queue 中完整 source/hash/pipeline/input revision/job attempt claim 做只读精确核验；通过后记录幂等 Manifest 成功，再把 Queue job 与 `commit_pending_ack` marker 原子落盘，然后清除全局 journal，最后移除 Queue marker 并保留 `startup_recovery` 暂停。applying executor 必须返回 `completed + exact commitReceipt`，再由 `IngestQueue.runNext` 对外转换为 `commit_ready`，不能提前把 durable job 标为 completed；审核接受也先产生同时绑定 accepted ChangeSet id 与 canonical digest 的 durable `applyClaim`。任何一步崩溃都从 journal、`applyClaim` 或 Queue commit marker 继续；因此不会出现页面尚未提交而任务或 Manifest 已成功的状态，也不会把一个来源或一份审核结果记到另一个 job。Manifest adapter、Queue adapter 和 journal adapter 都必须提供各自契约要求的 durable CAS，普通的 read-then-write 不满足要求。
+
+在接入真实 Vault 写盘前还必须关闭两个边界：其一，把 schema、非 target link 和 source artifact 的 hash/read-set journal 化并在恢复前复证；其二，明确 CAS 已完成但 progress 尚未落盘时的 content ABA 策略。当前纯 core 采用 content-addressed at-least-once 判定，若用户在停机期间把文件精确恢复为 before bytes，恢复无法区分“尚未写入”与“用户撤销”；个人知识资产默认应优先考虑 mutation-intent marker 加 fail-closed，代价是更频繁的人工恢复。
 
 ### 6.2 知识层级
 
@@ -685,24 +709,24 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 ## 13. 持久化与数据所有权
 
-| 数据                              | 位置                                      | 角色                                                               |
-| --------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ |
-| Raw Sources                       | 用户指定的 Vault Markdown、网页快照与附件 | 不可被 Agent 静默修改的来源资产                                    |
-| Compiled Wiki                     | OKF-compatible Markdown Bundle            | LLM 维护、人可阅读的复利知识层                                     |
-| Bundle Schema                     | 用户指定的 schema 文件                    | 页面结构和维护工作流                                               |
-| `index.md` / `log.md`             | Wiki Bundle 保留文件                      | 渐进发现和变更时间线                                               |
-| Source Manifest                   | 插件管理的版本化状态文件                  | source hash、pipeline fingerprint、ownership、受影响页面和运行结果 |
-| Ingest Queue                      | 插件管理的版本化任务文件                  | 暂停、取消、重试、rerun 与重启恢复                                 |
-| Proposed ChangeSet                | 消息元数据或临时运行数据                  | 多文件变更预览、校验和确认状态                                     |
-| Transaction Journal               | 插件管理的短期恢复记录                    | 保存 pre-state、提交进度、失败回滚与启动恢复                       |
-| 项目定义                          | Vault 中的 Project 配置/文件              | 范围和稳定项目上下文                                               |
-| 聊天历史                          | Markdown chat 文件                        | 用户可读的会话记录                                                 |
-| Saved Memories                    | 用户配置的 memory 文件夹                  | 用户确认的长期偏好与事实                                           |
-| Recent Conversations              | memory 文件夹中的滚动摘要                 | 非权威的回忆辅助                                                   |
-| Context Envelope                  | 运行态/消息元数据，未来可持久化紧凑快照   | 重现当轮模型上下文                                                 |
-| 索引与 embedding                  | 插件数据或后端缓存                        | 可重建的派生数据                                                   |
-| 工具执行记录                      | 消息元数据或轻量事件记录                  | 调试、权限与回放                                                   |
-| Temporal Graph Projection（可选） | 外部 Graphiti 服务                        | 可删除、可重建的时态关系查询投影，不是事实源                       |
+| 数据                              | 位置                                      | 角色                                                                   |
+| --------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------- |
+| Raw Sources                       | 用户指定的 Vault Markdown、网页快照与附件 | 不可被 Agent 静默修改的来源资产                                        |
+| Compiled Wiki                     | OKF-compatible Markdown Bundle            | LLM 维护、人可阅读的复利知识层                                         |
+| Bundle Schema                     | 用户指定的 schema 文件                    | 页面结构和维护工作流                                                   |
+| `index.md` / `log.md`             | Wiki Bundle 保留文件                      | 渐进发现和变更时间线                                                   |
+| Source Manifest                   | 插件管理的版本化状态文件                  | source hash、pipeline fingerprint、ownership、受影响页面和运行结果     |
+| Ingest Queue                      | 插件管理的版本化任务文件                  | 暂停、取消、重试、rerun、source high-watermark 与重启恢复              |
+| Proposed ChangeSet                | 消息元数据或临时运行数据                  | 多文件变更预览、校验和确认状态                                         |
+| Transaction Journal               | 插件管理的 Vault-global 短期恢复记录      | 保存 pre-state、提交进度、commit marker、幂等 roll-forward 与冲突 gate |
+| 项目定义                          | Vault 中的 Project 配置/文件              | 范围和稳定项目上下文                                                   |
+| 聊天历史                          | Markdown chat 文件                        | 用户可读的会话记录                                                     |
+| Saved Memories                    | 用户配置的 memory 文件夹                  | 用户确认的长期偏好与事实                                               |
+| Recent Conversations              | memory 文件夹中的滚动摘要                 | 非权威的回忆辅助                                                       |
+| Context Envelope                  | 运行态/消息元数据，未来可持久化紧凑快照   | 重现当轮模型上下文                                                     |
+| 索引与 embedding                  | 插件数据或后端缓存                        | 可重建的派生数据                                                       |
+| 工具执行记录                      | 消息元数据或轻量事件记录                  | 调试、权限与回放                                                       |
+| Temporal Graph Projection（可选） | 外部 Graphiti 服务                        | 可删除、可重建的时态关系查询投影，不是事实源                           |
 
 持久化原则：
 
@@ -713,7 +737,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - Project 切换必须同时隔离消息历史、上下文范围和后续候选写入目标。
 - 候选内容在接受前不进入索引和长期 memory。
 - 重启时把遗留 processing 任务恢复为 pending，但默认等待用户恢复，避免意外消耗模型额度。
-- Manifest、Wiki 页面、index/log 和 transaction 状态必须作为同一个 ChangeSet 提交语义处理。
+- Wiki 页面与 index/log 作为同一个 ChangeSet 写入；Manifest 和 Queue 通过 `manifest → queue marker → journal ack → queue release` 的持久协调顺序加入同一个成功语义。
 - Graphiti 如被启用，只能通过 durable outbox 和 projection ledger 同步；删除投影不影响 Markdown 主数据。
 - 用户能通过普通文件操作查看、编辑、迁移或删除长期知识。
 
@@ -802,11 +826,11 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 - 实现纯 TypeScript `KnowledgeBundleConfig`、`SourceManifest`、`OkfDocument`、`KnowledgeIngestJob`、`KnowledgeChangeSet` 与 validator。
 - 使用 SHA-256 和覆盖 schema/compiler/parser/model/output language 的 `pipelineFingerprint` 实现幂等判断。
-- 建立可恢复的串行队列：去重、rerun、暂停、取消、重试、重启后 processing → pending，并默认等待用户恢复。
+- 建立可恢复的串行队列：去重、source high-watermark、rerun、暂停、取消、重试、重启后 processing → pending，并默认等待用户恢复。
 - 在 Chat 文件拖入中增加 `Use in this chat` / `Add to Knowledge` 分流，并建立最小 Knowledge Studio / Activity 表面。
 - 完成单来源两阶段 Ingest：先分析受影响页面，再生成限定目标集合的 concept/index/log ChangeSet。
 - 扩展现有 ApplyView，支持多文件 create/update/delete、before hash、来源、校验和逐文件/逐块审核。
-- 通过 transaction journal、确定性写入顺序和 commit marker 应用 Wiki、manifest、index 和 log；失败可恢复，不修改 Raw Source。
+- 通过 Vault-global transaction journal、确定性写入顺序、单文件 CAS 和 commit marker 应用 Wiki、index 和 log，再按持久交接顺序更新 manifest 与 Queue；失败可恢复，不修改 Raw Source。
 - 复用 Search v3 回答新知识，显示可点击 citation，并支持从回答再次生成写回 ChangeSet。
 
 完成标准：用户能在同一条可见流程中完成“拖入一个 Markdown/PDF → 等待处理 → 审核多文件 diff → 写入 Wiki → 提问并跳到引用 → 重复摄入时显示 Up to date”，插件重启不会丢任务或形成半提交。

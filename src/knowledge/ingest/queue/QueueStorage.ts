@@ -10,14 +10,15 @@ import type {
 import { validateKnowledgeIngestJob } from "@/knowledge/model/validation";
 
 /** Current version of the persisted ingest queue snapshot. */
-export const INGEST_QUEUE_VERSION = 1 as const;
+export const INGEST_QUEUE_VERSION = 2 as const;
 
 /** Durable reason that prevents a Bundle queue from claiming more work. */
 export type IngestQueuePauseReason =
   | "user"
   | "rate_limit"
   | "startup_recovery"
-  | "recovery_required";
+  | "recovery_required"
+  | "commit_pending_ack";
 
 /** Durable execution gate shared by every job in one Bundle queue. */
 export type IngestQueueControl =
@@ -42,6 +43,46 @@ export interface IngestRerunRequest {
   updatedAt: number;
 }
 
+/** Latest durable source observation used to reject out-of-order watcher delivery. */
+export interface IngestSourceHighWatermark {
+  sourceId: string;
+  sourceContentHash: string;
+  pipelineFingerprint: string;
+  inputRevision: number;
+  observedAt: number;
+}
+
+/** Immutable queue-job identity shared by interrupted and committed apply markers. */
+export interface IngestApplyJobClaim {
+  jobId: string;
+  sourceId: string;
+  sourceContentHash: string;
+  pipelineFingerprint: string;
+  inputRevision: number;
+  attempt: number;
+  startedAt: number;
+}
+
+/** Exact reviewed ChangeSet payload accepted by the user before file application. */
+export interface IngestReviewedChangeSetIdentity {
+  changeSetId: string;
+  changeSetDigest: string;
+}
+
+/** Exact active or interrupted applying claim, optionally bound to reviewed content. */
+export interface IngestApplyClaimMarker extends IngestApplyJobClaim {
+  reviewedChangeSet?: IngestReviewedChangeSetIdentity;
+}
+
+/** Durable hand-off proving that file commit finished before queue acknowledgement. */
+export interface IngestApplyCommitMarker extends IngestApplyJobClaim {
+  transactionId: string;
+  changeSetId: string;
+  changeSetDigest: string;
+  commitRevision: number;
+  committedAt: number;
+}
+
 /** Complete versioned queue state persisted independently for one Bundle. */
 export interface IngestQueueSnapshot {
   version: typeof INGEST_QUEUE_VERSION;
@@ -50,6 +91,9 @@ export interface IngestQueueSnapshot {
   control: IngestQueueControl;
   jobs: KnowledgeIngestJob[];
   reruns: IngestRerunRequest[];
+  sourceHighWatermarks: IngestSourceHighWatermark[];
+  applyClaim?: IngestApplyClaimMarker;
+  applyCommit?: IngestApplyCommitMarker;
 }
 
 /**
@@ -109,13 +153,60 @@ const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 
 });
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const nonNegativeIntegerSchema = z.number().int().safe().nonnegative();
+const positiveIntegerSchema = z.number().int().safe().positive();
+
+/** Pause reasons accepted by the read-only version-1 migration schema. */
+type LegacyIngestQueuePauseReason = Exclude<IngestQueuePauseReason, "commit_pending_ack">;
+
+/** Version-1 queue control retained exclusively for strict read migration. */
+type LegacyIngestQueueControl =
+  | { status: "running" }
+  | {
+      status: "paused";
+      reason: LegacyIngestQueuePauseReason;
+      pausedAt: number;
+      detail?: string;
+      resumeAt?: number;
+    };
+
+/** Complete legacy snapshot accepted only by the version-1 read migration. */
+interface LegacyIngestQueueSnapshotV1 {
+  version: 1;
+  bundleId: string;
+  revision: number;
+  control: LegacyIngestQueueControl;
+  jobs: KnowledgeIngestJob[];
+  reruns: IngestRerunRequest[];
+}
+
+const legacyQueueControlSchema: z.ZodType<LegacyIngestQueueControl> = z.discriminatedUnion(
+  "status",
+  [
+    z.object({ status: z.literal("running") }).strict(),
+    z
+      .object({
+        status: z.literal("paused"),
+        reason: z.enum(["user", "rate_limit", "startup_recovery", "recovery_required"]),
+        pausedAt: nonNegativeIntegerSchema,
+        detail: z.string().optional(),
+        resumeAt: nonNegativeIntegerSchema.optional(),
+      })
+      .strict(),
+  ]
+);
 
 const queueControlSchema: z.ZodType<IngestQueueControl> = z.discriminatedUnion("status", [
   z.object({ status: z.literal("running") }).strict(),
   z
     .object({
       status: z.literal("paused"),
-      reason: z.enum(["user", "rate_limit", "startup_recovery", "recovery_required"]),
+      reason: z.enum([
+        "user",
+        "rate_limit",
+        "startup_recovery",
+        "recovery_required",
+        "commit_pending_ack",
+      ]),
       pausedAt: nonNegativeIntegerSchema,
       detail: z.string().optional(),
       resumeAt: nonNegativeIntegerSchema.optional(),
@@ -135,7 +226,63 @@ const rerunRequestSchema: z.ZodType<IngestRerunRequest> = z
   })
   .strict();
 
-/** Strict runtime schema for a complete ingest queue snapshot. */
+const sourceHighWatermarkSchema: z.ZodType<IngestSourceHighWatermark> = z
+  .object({
+    sourceId: nonEmptyStringSchema,
+    sourceContentHash: sha256Schema,
+    pipelineFingerprint: sha256Schema,
+    inputRevision: nonNegativeIntegerSchema,
+    observedAt: nonNegativeIntegerSchema,
+  })
+  .strict();
+
+const applyJobClaimShape = {
+  jobId: nonEmptyStringSchema,
+  sourceId: nonEmptyStringSchema,
+  sourceContentHash: sha256Schema,
+  pipelineFingerprint: sha256Schema,
+  inputRevision: nonNegativeIntegerSchema,
+  attempt: positiveIntegerSchema,
+  startedAt: nonNegativeIntegerSchema,
+};
+
+const reviewedChangeSetIdentitySchema: z.ZodType<IngestReviewedChangeSetIdentity> = z
+  .object({ changeSetId: nonEmptyStringSchema, changeSetDigest: sha256Schema })
+  .strict();
+
+const applyClaimMarkerSchema: z.ZodType<IngestApplyClaimMarker> = z
+  .object({ ...applyJobClaimShape, reviewedChangeSet: reviewedChangeSetIdentitySchema.optional() })
+  .strict();
+
+const applyCommitMarkerSchema: z.ZodType<IngestApplyCommitMarker> = z
+  .object({
+    ...applyJobClaimShape,
+    transactionId: nonEmptyStringSchema,
+    changeSetId: nonEmptyStringSchema,
+    changeSetDigest: sha256Schema,
+    commitRevision: nonNegativeIntegerSchema,
+    committedAt: nonNegativeIntegerSchema,
+  })
+  .strict();
+
+/** Strict read-only schema for a version-1 queue snapshot. */
+const legacyIngestQueueSnapshotSchema: z.ZodType<LegacyIngestQueueSnapshotV1> = z
+  .object({
+    version: z.literal(1),
+    bundleId: nonEmptyStringSchema,
+    revision: nonNegativeIntegerSchema,
+    control: legacyQueueControlSchema,
+    jobs: z.array(knowledgeIngestJobSchema),
+    reruns: z.array(rerunRequestSchema),
+  })
+  .strict();
+
+/**
+ * Strict runtime schema for a complete version-2 ingest queue snapshot.
+ *
+ * Version 2 intentionally has no extension bag. Every new persisted field
+ * requires another version and an explicit read migration.
+ */
 export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
   .object({
     version: z.literal(INGEST_QUEUE_VERSION),
@@ -144,6 +291,9 @@ export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
     control: queueControlSchema,
     jobs: z.array(knowledgeIngestJobSchema),
     reruns: z.array(rerunRequestSchema),
+    sourceHighWatermarks: z.array(sourceHighWatermarkSchema),
+    applyClaim: applyClaimMarkerSchema.optional(),
+    applyCommit: applyCommitMarkerSchema.optional(),
   })
   .strict();
 
@@ -158,6 +308,106 @@ function formatIssuePath(path: (string | number)[]): string {
 }
 
 /**
+ * Reports whether unknown persisted JSON declares the legacy version-1 format.
+ *
+ * @param value - Untrusted queue JSON
+ * @returns Whether the top-level version discriminator is exactly one
+ */
+function isLegacyVersionOneSnapshot(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
+    ? (value as { version?: unknown }).version === 1
+    : false;
+}
+
+/**
+ * Reconstructs the best available per-source high-watermark from legacy records.
+ *
+ * Equal-revision payload conflicts deliberately retain the first candidate so
+ * semantic validation can detect the disagreeing job or rerun and fail closed.
+ *
+ * @param legacy - Strictly parsed version-1 queue state
+ * @returns One highest observed record per source
+ */
+function deriveLegacySourceHighWatermarks(
+  legacy: LegacyIngestQueueSnapshotV1
+): IngestSourceHighWatermark[] {
+  const highWatermarks = new Map<string, IngestSourceHighWatermark>();
+  const candidates: IngestSourceHighWatermark[] = [
+    ...legacy.jobs.map((job) => ({
+      sourceId: job.sourceId,
+      sourceContentHash: job.sourceContentHash,
+      pipelineFingerprint: job.pipelineFingerprint,
+      inputRevision: job.inputRevision,
+      observedAt: job.updatedAt,
+    })),
+    ...legacy.reruns.map((rerun) => ({
+      sourceId: rerun.sourceId,
+      sourceContentHash: rerun.sourceContentHash,
+      pipelineFingerprint: rerun.pipelineFingerprint,
+      inputRevision: rerun.inputRevision,
+      observedAt: rerun.updatedAt,
+    })),
+  ];
+  for (const candidate of candidates) {
+    const current = highWatermarks.get(candidate.sourceId);
+    if (!current || candidate.inputRevision > current.inputRevision) {
+      highWatermarks.set(candidate.sourceId, candidate);
+    }
+  }
+  return [...highWatermarks.values()];
+}
+
+/**
+ * Converts one strictly parsed legacy snapshot into detached version-2 state.
+ *
+ * @param legacy - Valid version-1 persisted queue
+ * @returns Equivalent version-2 queue without an apply-commit marker
+ */
+function migrateLegacySnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueueSnapshot {
+  const applying = legacy.jobs.find(
+    (job): job is Extract<KnowledgeIngestJob, { status: "processing" }> =>
+      job.status === "processing" && job.stage === "applying"
+  );
+  return {
+    version: INGEST_QUEUE_VERSION,
+    bundleId: legacy.bundleId,
+    revision: legacy.revision,
+    control: legacy.control,
+    jobs: legacy.jobs,
+    reruns: legacy.reruns,
+    sourceHighWatermarks: deriveLegacySourceHighWatermarks(legacy),
+    ...(applying
+      ? {
+          applyClaim: {
+            jobId: applying.id,
+            sourceId: applying.sourceId,
+            sourceContentHash: applying.sourceContentHash,
+            pipelineFingerprint: applying.pipelineFingerprint,
+            inputRevision: applying.inputRevision,
+            attempt: applying.attempt,
+            startedAt: applying.startedAt,
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Maps strict schema issues to stable public knowledge diagnostics.
+ *
+ * @param issues - Zod issues emitted by the selected persisted version schema
+ * @returns Stable structural diagnostics
+ */
+function mapSchemaIssues(issues: z.ZodIssue[]): KnowledgeDiagnostic[] {
+  return issues.map((issue) => ({
+    code: `schema_${issue.code}`,
+    severity: "error",
+    field: formatIssuePath(issue.path),
+    message: issue.message,
+  }));
+}
+
+/**
  * Strictly parses unknown persisted queue JSON.
  *
  * @param value - Runtime value expected to contain a queue snapshot
@@ -166,18 +416,21 @@ function formatIssuePath(path: (string | number)[]): string {
 export function parseIngestQueueSnapshot(
   value: unknown
 ): KnowledgeParseResult<IngestQueueSnapshot> {
+  if (isLegacyVersionOneSnapshot(value)) {
+    const legacyResult = legacyIngestQueueSnapshotSchema.safeParse(value);
+    if (legacyResult.success) {
+      return { ok: true, value: migrateLegacySnapshot(legacyResult.data) };
+    }
+    return { ok: false, issues: mapSchemaIssues(legacyResult.error.issues) };
+  }
+
   const result = ingestQueueSnapshotSchema.safeParse(value);
   if (result.success) {
     return { ok: true, value: result.data };
   }
   return {
     ok: false,
-    issues: result.error.issues.map((issue) => ({
-      code: `schema_${issue.code}`,
-      severity: "error",
-      field: formatIssuePath(issue.path),
-      message: issue.message,
-    })),
+    issues: mapSchemaIssues(result.error.issues),
   };
 }
 
@@ -209,6 +462,41 @@ function isActiveJob(job: KnowledgeIngestJob): boolean {
 }
 
 /**
+ * Compares every immutable queue-job field retained by an apply claim marker.
+ *
+ * @param claim - Interrupted or committed apply identity
+ * @param job - Durable queue job expected to own the claim
+ * @returns Whether the marker belongs to the exact job input and attempt
+ */
+function applyClaimMatchesJob(claim: IngestApplyJobClaim, job: KnowledgeIngestJob): boolean {
+  return (
+    claim.jobId === job.id &&
+    claim.sourceId === job.sourceId &&
+    claim.sourceContentHash === job.sourceContentHash &&
+    claim.pipelineFingerprint === job.pipelineFingerprint &&
+    claim.inputRevision === job.inputRevision &&
+    claim.attempt === job.attempt
+  );
+}
+
+/**
+ * Compares the content and pipeline represented by two source observations.
+ *
+ * @param left - First source payload identity
+ * @param right - Second source payload identity
+ * @returns Whether both observations describe identical compile input
+ */
+function sourcePayloadMatches(
+  left: Pick<IngestSourceHighWatermark, "sourceContentHash" | "pipelineFingerprint">,
+  right: Pick<IngestSourceHighWatermark, "sourceContentHash" | "pipelineFingerprint">
+): boolean {
+  return (
+    left.sourceContentHash === right.sourceContentHash &&
+    left.pipelineFingerprint === right.pipelineFingerprint
+  );
+}
+
+/**
  * Validates cross-record queue invariants after strict shape parsing.
  *
  * @param value - Unknown or typed queue snapshot
@@ -226,6 +514,7 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
   const activeSourceIds = new Set<string>();
   const rerunSourceIds = new Set<string>();
   const rerunJobIds = new Set<string>();
+  const highWatermarkSourceIds = new Set<string>();
   let processingCount = 0;
 
   snapshot.jobs.forEach((job, index) => {
@@ -305,9 +594,107 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
     );
   }
 
-  const hasApplyRecoveryFailure = snapshot.jobs.some(
+  snapshot.sourceHighWatermarks.forEach((highWatermark, index) => {
+    const field = `sourceHighWatermarks.${index}`;
+    if (highWatermarkSourceIds.has(highWatermark.sourceId)) {
+      addError(
+        diagnostics,
+        "queue_source_high_watermark_duplicate",
+        `${field}.sourceId`,
+        "A source may retain exactly one durable observation high-watermark"
+      );
+    }
+    highWatermarkSourceIds.add(highWatermark.sourceId);
+
+    const sourceJobs = snapshot.jobs.filter((job) => job.sourceId === highWatermark.sourceId);
+    const sourceReruns = snapshot.reruns.filter(
+      (rerun) => rerun.sourceId === highWatermark.sourceId
+    );
+    if (sourceJobs.length === 0 && sourceReruns.length === 0) {
+      addError(
+        diagnostics,
+        "queue_source_high_watermark_orphaned",
+        field,
+        "A source high-watermark must retain related queue history"
+      );
+    }
+    for (const record of [...sourceJobs, ...sourceReruns]) {
+      if (record.inputRevision > highWatermark.inputRevision) {
+        addError(
+          diagnostics,
+          "queue_source_high_watermark_behind",
+          `${field}.inputRevision`,
+          "A source high-watermark cannot precede a durable job or rerun observation"
+        );
+      } else if (
+        record.inputRevision === highWatermark.inputRevision &&
+        !sourcePayloadMatches(record, highWatermark)
+      ) {
+        addError(
+          diagnostics,
+          "queue_source_high_watermark_payload_mismatch",
+          field,
+          "Equal source revisions must retain identical content and pipeline identity"
+        );
+      }
+    }
+  });
+
+  for (const sourceId of new Set([
+    ...snapshot.jobs.map((job) => job.sourceId),
+    ...snapshot.reruns.map((rerun) => rerun.sourceId),
+  ])) {
+    if (!highWatermarkSourceIds.has(sourceId)) {
+      addError(
+        diagnostics,
+        "queue_source_high_watermark_missing",
+        "sourceHighWatermarks",
+        "Every durable source record requires one observation high-watermark"
+      );
+    }
+  }
+
+  for (const active of snapshot.jobs.filter((job) => isActiveJob(job))) {
+    const highWatermark = snapshot.sourceHighWatermarks.find(
+      (candidate) => candidate.sourceId === active.sourceId
+    );
+    if (
+      highWatermark &&
+      highWatermark.inputRevision > active.inputRevision &&
+      !sourcePayloadMatches(highWatermark, active)
+    ) {
+      const exactRerun = snapshot.reruns.some(
+        (rerun) =>
+          rerun.sourceId === highWatermark.sourceId &&
+          rerun.inputRevision === highWatermark.inputRevision &&
+          sourcePayloadMatches(rerun, highWatermark)
+      );
+      if (!exactRerun) {
+        addError(
+          diagnostics,
+          "queue_source_high_watermark_rerun_missing",
+          "sourceHighWatermarks",
+          "A newer divergent source high-watermark requires its exact latest rerun"
+        );
+      }
+    }
+  }
+
+  const failedApplyingJobs = snapshot.jobs.filter(
     (job) => job.status === "failed" && job.stage === "applying"
   );
+  const applyingJobs = snapshot.jobs.filter(
+    (job) => (job.status === "processing" || job.status === "failed") && job.stage === "applying"
+  );
+  const hasApplyRecoveryFailure = failedApplyingJobs.length > 0;
+  if (applyingJobs.length > 1) {
+    addError(
+      diagnostics,
+      "queue_apply_recovery_job_count_invalid",
+      "jobs",
+      "A Bundle queue may retain at most one active or interrupted applying job"
+    );
+  }
   if (
     hasApplyRecoveryFailure &&
     !(snapshot.control.status === "paused" && snapshot.control.reason === "recovery_required")
@@ -330,6 +717,141 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
       "control.reason",
       "A recovery-required gate must reference a failed applying job"
     );
+  }
+  if (snapshot.applyClaim && applyingJobs.length === 0) {
+    addError(
+      diagnostics,
+      "queue_apply_claim_job_missing",
+      "applyClaim",
+      "An apply claim marker requires one active or interrupted applying job"
+    );
+  }
+  if (applyingJobs.length > 0 && !snapshot.applyClaim) {
+    addError(
+      diagnostics,
+      "queue_apply_claim_marker_missing",
+      "applyClaim",
+      "Every active or interrupted apply must retain its exact claim"
+    );
+  }
+  if (snapshot.applyClaim) {
+    const claim = snapshot.applyClaim;
+    const owningJob = applyingJobs.find((job) => job.id === claim.jobId);
+    if (!owningJob || !applyClaimMatchesJob(claim, owningJob)) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_job_mismatch",
+        "applyClaim",
+        "Apply claim marker must identify the exact applying job"
+      );
+    } else if (
+      claim.startedAt < owningJob.createdAt ||
+      claim.startedAt > owningJob.updatedAt ||
+      (owningJob.status === "processing" && claim.startedAt !== owningJob.startedAt)
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_timestamp_invalid",
+        "applyClaim.startedAt",
+        "Apply claim start must exactly identify active work or its interrupted lifetime"
+      );
+    }
+  }
+
+  const hasCommitPendingAckGate =
+    snapshot.control.status === "paused" && snapshot.control.reason === "commit_pending_ack";
+  if (snapshot.applyCommit && !hasCommitPendingAckGate) {
+    addError(
+      diagnostics,
+      "queue_apply_commit_gate_missing",
+      "control",
+      "A durable apply-commit marker requires a commit-pending-ack pause gate"
+    );
+  }
+  if (hasCommitPendingAckGate && !snapshot.applyCommit) {
+    addError(
+      diagnostics,
+      "queue_apply_commit_marker_missing",
+      "applyCommit",
+      "A commit-pending-ack pause gate requires its durable apply-commit marker"
+    );
+  }
+  if (snapshot.applyCommit) {
+    const marker = snapshot.applyCommit;
+    const owningJob = snapshot.jobs.find((job) => job.id === marker.jobId);
+    if (marker.startedAt > marker.committedAt) {
+      addError(
+        diagnostics,
+        "queue_apply_commit_started_timestamp_invalid",
+        "applyCommit.startedAt",
+        "Apply attempt cannot start after its durable file commit"
+      );
+    }
+    if (
+      !owningJob ||
+      owningJob.status !== "completed" ||
+      !applyClaimMatchesJob(marker, owningJob)
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_commit_job_invalid",
+        "applyCommit.jobId",
+        "Apply-commit marker must reference one completed queue job"
+      );
+    } else {
+      if (marker.changeSetId !== owningJob.changeSetId) {
+        addError(
+          diagnostics,
+          "queue_apply_commit_changeset_mismatch",
+          "applyCommit.changeSetId",
+          "Apply-commit marker ChangeSet must match its completed queue job"
+        );
+      }
+      if (marker.startedAt < owningJob.createdAt) {
+        addError(
+          diagnostics,
+          "queue_apply_commit_started_timestamp_invalid",
+          "applyCommit.startedAt",
+          "Apply attempt must start after job creation and no later than its commit"
+        );
+      }
+      if (marker.committedAt > owningJob.completedAt) {
+        addError(
+          diagnostics,
+          "queue_apply_commit_committed_timestamp_invalid",
+          "applyCommit.committedAt",
+          "File commit must complete no later than queue-job completion"
+        );
+      }
+    }
+    if (
+      hasCommitPendingAckGate &&
+      snapshot.control.status === "paused" &&
+      snapshot.control.pausedAt < marker.committedAt
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_commit_pause_timestamp_invalid",
+        "control.pausedAt",
+        "Commit acknowledgement gate cannot precede the durable file commit"
+      );
+    }
+    if (hasApplyRecoveryFailure) {
+      addError(
+        diagnostics,
+        "queue_apply_commit_recovery_conflict",
+        "applyCommit",
+        "An acknowledged file commit cannot coexist with a failed applying job"
+      );
+    }
+    if (snapshot.applyClaim) {
+      addError(
+        diagnostics,
+        "queue_apply_commit_claim_conflict",
+        "applyClaim",
+        "Committed and unacknowledged apply claim markers cannot coexist"
+      );
+    }
   }
 
   snapshot.reruns.forEach((rerun, index) => {

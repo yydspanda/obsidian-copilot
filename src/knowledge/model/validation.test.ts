@@ -314,6 +314,26 @@ describe("validateKnowledgeFileChange and validateKnowledgeChangeSet", () => {
     );
   });
 
+  it("rejects ancestor and descendant targets in one all-or-nothing set", () => {
+    const changeSet = createChangeSet("Wiki/Topic");
+    const descendant = createFileChange("Wiki/Topic/Page.md");
+    descendant.id = "change-2";
+    changeSet.changes.push(descendant);
+
+    expect(diagnosticCodes(validateKnowledgeChangeSet(changeSet, createBundle()))).toContain(
+      "change_path_overlap"
+    );
+  });
+
+  it("rejects a ChangeSet that belongs to another Bundle", () => {
+    const changeSet = createChangeSet();
+    changeSet.bundleId = "another-bundle";
+
+    expect(diagnosticCodes(validateKnowledgeChangeSet(changeSet, createBundle()))).toContain(
+      "changeset_bundle_mismatch"
+    );
+  });
+
   it("rejects targets outside the Wiki or inside raw sources", () => {
     const outside = createChangeSet("Elsewhere/Page.md");
     const rawSource = createChangeSet("Sources/Page.md");
@@ -324,6 +344,12 @@ describe("validateKnowledgeFileChange and validateKnowledgeChangeSet", () => {
     expect(diagnosticCodes(validateKnowledgeChangeSet(rawSource, createBundle()))).toEqual(
       expect.arrayContaining(["change_path_outside_wiki", "change_path_inside_source"])
     );
+  });
+
+  it("rejects a file target equal to the Wiki root itself", () => {
+    expect(
+      diagnosticCodes(validateKnowledgeChangeSet(createChangeSet("Wiki"), createBundle()))
+    ).toContain("change_path_equals_wiki_root");
   });
 
   it("rejects undeclared file and citation source references", () => {

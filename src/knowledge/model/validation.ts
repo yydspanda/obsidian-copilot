@@ -322,6 +322,14 @@ export function validateKnowledgeChangeSet(
 
   const changeSet = parsed.value;
   const diagnostics: KnowledgeDiagnostic[] = [];
+  if (bundle && changeSet.bundleId !== bundle.id) {
+    addError(
+      diagnostics,
+      "changeset_bundle_mismatch",
+      "bundleId",
+      "ChangeSet bundleId must match the Bundle selected for application"
+    );
+  }
   const sourceRefs = new Set(changeSet.sourceRefs);
   if (sourceRefs.size !== changeSet.sourceRefs.length) {
     addError(
@@ -363,6 +371,14 @@ export function validateKnowledgeChangeSet(
         "Knowledge changes must remain inside the generated Wiki root"
       );
     }
+    if (bundle && toWindowsPathKey(change.path) === toWindowsPathKey(bundle.wikiRoot)) {
+      addError(
+        diagnostics,
+        "change_path_equals_wiki_root",
+        `changes[${index}].path`,
+        "Knowledge file changes must target a strict descendant of the Wiki root"
+      );
+    }
     if (bundle?.sourceRoots.some((root) => isPathWithinRoot(change.path, root))) {
       addError(
         diagnostics,
@@ -381,6 +397,24 @@ export function validateKnowledgeChangeSet(
       "changes",
       `A ChangeSet cannot target Windows path '${collision.key}' more than once`
     );
+  }
+
+  for (let leftIndex = 0; leftIndex < changeSet.changes.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < changeSet.changes.length; rightIndex += 1) {
+      const left = changeSet.changes[leftIndex];
+      const right = changeSet.changes[rightIndex];
+      if (
+        toWindowsPathKey(left.path) !== toWindowsPathKey(right.path) &&
+        pathsOverlap(left.path, right.path)
+      ) {
+        addError(
+          diagnostics,
+          "change_path_overlap",
+          `changes[${rightIndex}].path`,
+          "A ChangeSet cannot target both an ancestor path and its descendant"
+        );
+      }
+    }
   }
 
   const citationIds = new Set<string>();

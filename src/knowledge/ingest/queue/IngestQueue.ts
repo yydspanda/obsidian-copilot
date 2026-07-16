@@ -1,5 +1,6 @@
 import { Mutex } from "async-mutex";
 
+import type { TransactionCommitReceipt } from "@/knowledge/changeset/ChangeSetTransaction";
 import type {
   KnowledgeDiagnostic,
   KnowledgeFailure,
@@ -12,11 +13,16 @@ import {
   type RetryPolicy,
 } from "@/knowledge/ingest/queue/RetryPolicy";
 import {
+  INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
   parseIngestQueueSnapshot,
+  type IngestApplyClaimMarker,
+  type IngestApplyCommitMarker,
   type IngestQueuePauseReason,
   type IngestQueueSnapshot,
+  type IngestReviewedChangeSetIdentity,
   type IngestRerunRequest,
+  type IngestSourceHighWatermark,
   type QueueStorage,
   validateIngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
@@ -54,10 +60,17 @@ export interface EnqueueIngestResult {
   job: KnowledgeIngestJob;
 }
 
-/** Successful executor outcome that either waits for review or commits directly. */
+/** Successful executor outcome that waits for review, changes nothing, or commits pages. */
 export type IngestExecutionResult =
   | { kind: "awaiting_review"; changeSetId: string }
-  | { kind: "completed"; changeSetId: string };
+  /** Terminal compile outcome that intentionally produced no file mutation. */
+  | { kind: "no_changes"; changeSetId: string }
+  | {
+      kind: "completed";
+      changeSetId: string;
+      /** Durable apply proof retained until manifest/queue/journal reconciliation finishes. */
+      commitReceipt: TransactionCommitReceipt;
+    };
 
 /** Context passed to a provider-neutral ingest executor. */
 export interface IngestExecutionContext {
@@ -111,11 +124,14 @@ export type IngestQueueEventCause =
   | "rate_limit"
   | "failure"
   | "awaiting_review"
+  | "review_accepted"
   | "complete"
   | "pause"
   | "resume"
   | "cancel"
-  | "recover";
+  | "recover"
+  | "apply_commit_pending"
+  | "apply_commit_finalized";
 
 /** Best-effort notification emitted only after durable state is known. */
 export interface IngestQueueEvent {
@@ -152,6 +168,7 @@ export type RunNextResult =
   | { kind: "waiting"; nextAttemptAt: number }
   | { kind: "busy"; jobId: string }
   | { kind: "stale"; jobId: string }
+  | { kind: "commit_ready"; jobId: string; receipt: TransactionCommitReceipt }
   | {
       kind: "executed";
       jobId: string;
@@ -330,6 +347,53 @@ export class IngestQueueRecoveryRequiredError extends Error {
   }
 }
 
+/** Reports an apply receipt that cannot own the selected durable queue job. */
+export class IngestQueueApplyCommitConflictError extends Error {
+  /**
+   * Creates an apply-commit correlation failure.
+   *
+   * @param bundleId - Bundle whose receipt cannot be reconciled
+   * @param jobId - Job claimed by the receipt
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly jobId: string
+  ) {
+    super(`Committed apply receipt for job '${jobId}' does not match queue '${bundleId}'`);
+    this.name = "IngestQueueApplyCommitConflictError";
+  }
+}
+
+/** Reports a queue still waiting for its committed journal to be acknowledged. */
+export class IngestQueueApplyCommitPendingError extends Error {
+  /**
+   * Creates a commit-pending execution gate failure.
+   *
+   * @param bundleId - Bundle whose journal acknowledgement is incomplete
+   */
+  constructor(public readonly bundleId: string) {
+    super(`Bundle queue '${bundleId}' is waiting for apply journal acknowledgement`);
+    this.name = "IngestQueueApplyCommitPendingError";
+  }
+}
+
+/** Reports an applying execution that did not provide durable transaction proof. */
+export class IngestQueueApplyReceiptRequiredError extends Error {
+  /**
+   * Creates a missing or misplaced apply-receipt protocol failure.
+   *
+   * @param bundleId - Bundle whose applying claim cannot be completed safely
+   * @param jobId - Exact queue job at the applying boundary
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly jobId: string
+  ) {
+    super(`Applying job '${jobId}' in Bundle queue '${bundleId}' requires exact commit proof`);
+    this.name = "IngestQueueApplyReceiptRequiredError";
+  }
+}
+
 /** Reports queue persistence failures separately from executor failures. */
 export class IngestQueueInfrastructureError extends Error {
   /**
@@ -383,6 +447,8 @@ interface FailureMutationValue {
   changed: boolean;
   cause: IngestQueueEventCause;
 }
+
+type SuccessMutationValue = "changed" | "stale" | "commit_ready";
 
 interface ActiveController {
   jobId: string;
@@ -480,12 +546,13 @@ function replaceJob(
  */
 function createEmptyQueue(bundleId: string): IngestQueueSnapshot {
   return {
-    version: 1,
+    version: INGEST_QUEUE_VERSION,
     bundleId,
     revision: 0,
     control: { status: "running" },
     jobs: [],
     reruns: [],
+    sourceHighWatermarks: [],
   };
 }
 
@@ -515,6 +582,88 @@ function rerunMatchesRequest(rerun: IngestRerunRequest, request: EnqueueIngestRe
     rerun.sourceContentHash === request.sourceContentHash &&
     rerun.pipelineFingerprint === request.pipelineFingerprint
   );
+}
+
+/**
+ * Checks whether a source high-watermark represents the requested compile input.
+ *
+ * @param highWatermark - Latest durable observation for one source
+ * @param request - Candidate source observation
+ * @returns Whether content and pipeline identity are unchanged
+ */
+function highWatermarkMatchesRequest(
+  highWatermark: IngestSourceHighWatermark,
+  request: EnqueueIngestRequest
+): boolean {
+  return (
+    highWatermark.sourceContentHash === request.sourceContentHash &&
+    highWatermark.pipelineFingerprint === request.pipelineFingerprint
+  );
+}
+
+/**
+ * Records one strictly newer source observation outside any claimed job identity.
+ *
+ * @param snapshot - Current validated queue state
+ * @param request - New highest source observation
+ * @param timestamp - Validated observation time
+ * @returns Snapshot containing the replaced or appended high-watermark
+ */
+function recordSourceHighWatermark(
+  snapshot: IngestQueueSnapshot,
+  request: EnqueueIngestRequest,
+  timestamp: number
+): IngestQueueSnapshot {
+  const current = snapshot.sourceHighWatermarks.find(
+    (candidate) => candidate.sourceId === request.sourceId
+  );
+  const next: IngestSourceHighWatermark = {
+    sourceId: request.sourceId,
+    sourceContentHash: request.sourceContentHash,
+    pipelineFingerprint: request.pipelineFingerprint,
+    inputRevision: request.inputRevision,
+    observedAt: Math.max(timestamp, current?.observedAt ?? 0),
+  };
+  return {
+    ...snapshot,
+    sourceHighWatermarks: current
+      ? snapshot.sourceHighWatermarks.map((candidate) =>
+          candidate.sourceId === request.sourceId ? next : candidate
+        )
+      : [...snapshot.sourceHighWatermarks, next],
+  };
+}
+
+/**
+ * Finds the newest retained job for a source high-watermark result.
+ *
+ * @param snapshot - Current validated queue state
+ * @param sourceId - Source whose observation was deduplicated
+ * @returns Newest retained job for the source
+ */
+function requireLatestSourceJob(
+  snapshot: IngestQueueSnapshot,
+  sourceId: string
+): KnowledgeIngestJob {
+  const job = snapshot.jobs
+    .filter((candidate) => candidate.sourceId === sourceId)
+    .sort(
+      (left, right) =>
+        right.inputRevision - left.inputRevision ||
+        right.updatedAt - left.updatedAt ||
+        left.id.localeCompare(right.id)
+    )[0];
+  if (!job) {
+    throw new IngestQueueValidationError(snapshot.bundleId, [
+      {
+        code: "queue_source_high_watermark_orphaned",
+        severity: "error",
+        field: "sourceHighWatermarks",
+        message: "A source high-watermark has no retained queue history",
+      },
+    ]);
+  }
+  return job;
 }
 
 /**
@@ -576,8 +725,8 @@ function promoteRerun(
  * @param value - Identifier supplied by orchestration
  * @param field - Field name used by the thrown error
  */
-function assertIdentifier(value: string, field: string): void {
-  if (value.trim().length === 0) {
+function assertIdentifier(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must contain non-whitespace text`);
   }
 }
@@ -588,10 +737,228 @@ function assertIdentifier(value: string, field: string): void {
  * @param value - Hash supplied by orchestration
  * @param field - Field name used by the thrown error
  */
-function assertHash(value: string, field: string): void {
-  if (!HASH_PATTERN.test(value)) {
+function assertHash(value: unknown, field: string): asserts value is string {
+  if (typeof value !== "string" || !HASH_PATTERN.test(value)) {
     throw new TypeError(`${field} must be a lowercase SHA-256 hex digest`);
   }
+}
+
+/**
+ * Validates the receipt fields needed for durable queue reconciliation.
+ *
+ * @param value - Runtime receipt returned by the ChangeSet transaction layer
+ */
+function assertTransactionCommitReceipt(value: unknown): asserts value is TransactionCommitReceipt {
+  const jobClaim = isRecord(value) && isRecord(value.jobClaim) ? value.jobClaim : null;
+  if (
+    !isRecord(value) ||
+    typeof value.transactionId !== "string" ||
+    typeof value.bundleId !== "string" ||
+    typeof value.changeSetId !== "string" ||
+    typeof value.changeSetDigest !== "string" ||
+    !Number.isSafeInteger(value.commitRevision) ||
+    (value.commitRevision as number) < 0 ||
+    !Number.isSafeInteger(value.committedAt) ||
+    (value.committedAt as number) < 0 ||
+    jobClaim === null ||
+    typeof jobClaim.jobId !== "string" ||
+    typeof jobClaim.sourceId !== "string" ||
+    typeof jobClaim.sourceContentHash !== "string" ||
+    typeof jobClaim.pipelineFingerprint !== "string" ||
+    !Number.isSafeInteger(jobClaim.inputRevision) ||
+    (jobClaim.inputRevision as number) < 0 ||
+    !Number.isSafeInteger(jobClaim.attempt) ||
+    (jobClaim.attempt as number) <= 0 ||
+    !Number.isSafeInteger(jobClaim.startedAt) ||
+    (jobClaim.startedAt as number) < 0 ||
+    !Array.isArray(value.targets) ||
+    value.targets.some(
+      (target) =>
+        !isRecord(target) ||
+        typeof target.path !== "string" ||
+        target.path.trim().length === 0 ||
+        (target.kind !== "missing" &&
+          (target.kind !== "file" ||
+            typeof target.contentHash !== "string" ||
+            !HASH_PATTERN.test(target.contentHash)))
+    )
+  ) {
+    throw new TypeError("transaction commit receipt does not satisfy the queue contract");
+  }
+  assertIdentifier(value.transactionId, "receipt.transactionId");
+  assertIdentifier(value.bundleId, "receipt.bundleId");
+  assertIdentifier(value.changeSetId, "receipt.changeSetId");
+  assertIdentifier(jobClaim.jobId, "receipt.jobClaim.jobId");
+  assertIdentifier(jobClaim.sourceId, "receipt.jobClaim.sourceId");
+  assertHash(jobClaim.sourceContentHash, "receipt.jobClaim.sourceContentHash");
+  assertHash(jobClaim.pipelineFingerprint, "receipt.jobClaim.pipelineFingerprint");
+  assertHash(value.changeSetDigest, "receipt.changeSetDigest");
+  const startedAt = jobClaim.startedAt as number;
+  const committedAt = value.committedAt as number;
+  if (startedAt > committedAt) {
+    throw new TypeError("receipt committedAt cannot precede its owning job claim");
+  }
+}
+
+/**
+ * Extracts the queue-owned durable marker from a committed transaction receipt.
+ *
+ * @param receipt - Strictly validated transaction commit receipt
+ * @returns Marker retained until the journal slot is durably cleared
+ */
+function createApplyCommitMarker(receipt: TransactionCommitReceipt): IngestApplyCommitMarker {
+  return {
+    transactionId: receipt.transactionId,
+    changeSetId: receipt.changeSetId,
+    changeSetDigest: receipt.changeSetDigest,
+    commitRevision: receipt.commitRevision,
+    jobId: receipt.jobClaim.jobId,
+    sourceId: receipt.jobClaim.sourceId,
+    sourceContentHash: receipt.jobClaim.sourceContentHash,
+    pipelineFingerprint: receipt.jobClaim.pipelineFingerprint,
+    inputRevision: receipt.jobClaim.inputRevision,
+    attempt: receipt.jobClaim.attempt,
+    startedAt: receipt.jobClaim.startedAt,
+    committedAt: receipt.committedAt,
+  };
+}
+
+/**
+ * Compares all queue-persisted receipt correlation fields.
+ *
+ * @param left - Existing durable apply marker
+ * @param right - Candidate marker derived from a receipt
+ * @returns Whether both markers identify one exact commit
+ */
+function sameApplyCommitMarker(
+  left: IngestApplyCommitMarker,
+  right: IngestApplyCommitMarker
+): boolean {
+  return (
+    left.transactionId === right.transactionId &&
+    left.changeSetId === right.changeSetId &&
+    left.changeSetDigest === right.changeSetDigest &&
+    left.commitRevision === right.commitRevision &&
+    left.jobId === right.jobId &&
+    left.sourceId === right.sourceId &&
+    left.sourceContentHash === right.sourceContentHash &&
+    left.pipelineFingerprint === right.pipelineFingerprint &&
+    left.inputRevision === right.inputRevision &&
+    left.attempt === right.attempt &&
+    left.startedAt === right.startedAt &&
+    left.committedAt === right.committedAt
+  );
+}
+
+/**
+ * Captures the exact applying claim when work crosses the durable write boundary.
+ *
+ * @param job - Durable processing job at the applying boundary
+ * @param reviewedChangeSet - Optional exact reviewed payload that this claim may apply
+ * @returns Claim marker retained until coordinated commit completion
+ */
+function createApplyClaimMarker(
+  job: ProcessingIngestJob,
+  reviewedChangeSet?: IngestReviewedChangeSetIdentity
+): IngestApplyClaimMarker {
+  return {
+    jobId: job.id,
+    sourceId: job.sourceId,
+    sourceContentHash: job.sourceContentHash,
+    pipelineFingerprint: job.pipelineFingerprint,
+    inputRevision: job.inputRevision,
+    attempt: job.attempt,
+    startedAt: job.startedAt,
+    ...(reviewedChangeSet === undefined ? {} : { reviewedChangeSet: { ...reviewedChangeSet } }),
+  };
+}
+
+/**
+ * Checks one queue job against every immutable field in a committed apply marker.
+ *
+ * @param job - Durable queue job
+ * @param marker - Marker derived from transaction commit proof
+ * @returns Whether the transaction belongs to the exact queue input and attempt
+ */
+function jobMatchesApplyMarker(job: KnowledgeIngestJob, marker: IngestApplyCommitMarker): boolean {
+  return (
+    job.id === marker.jobId &&
+    job.sourceId === marker.sourceId &&
+    job.sourceContentHash === marker.sourceContentHash &&
+    job.pipelineFingerprint === marker.pipelineFingerprint &&
+    job.inputRevision === marker.inputRevision &&
+    job.attempt === marker.attempt
+  );
+}
+
+/**
+ * Compares a retained applying claim with one committed transaction marker.
+ *
+ * @param claim - Exact claim captured at the applying boundary
+ * @param committed - Exact claim carried by the committed transaction
+ * @returns Whether both claims identify the same applying execution
+ */
+function applyClaimMatchesCommit(
+  claim: IngestApplyClaimMarker,
+  committed: IngestApplyCommitMarker
+): boolean {
+  return (
+    claim.jobId === committed.jobId &&
+    claim.sourceId === committed.sourceId &&
+    claim.sourceContentHash === committed.sourceContentHash &&
+    claim.pipelineFingerprint === committed.pipelineFingerprint &&
+    claim.inputRevision === committed.inputRevision &&
+    claim.attempt === committed.attempt &&
+    claim.startedAt === committed.startedAt &&
+    (claim.reviewedChangeSet === undefined ||
+      (claim.reviewedChangeSet.changeSetId === committed.changeSetId &&
+        claim.reviewedChangeSet.changeSetDigest === committed.changeSetDigest))
+  );
+}
+
+/**
+ * Proves that one committed receipt can safely own the current durable queue state.
+ *
+ * This read-only check is shared by pre-manifest verification and the later
+ * marker mutation so identity rules cannot drift between the two phases.
+ *
+ * @param snapshot - Current validated Bundle queue
+ * @param marker - Commit marker derived from the exact transaction receipt
+ * @returns Queue job owned by the committed transaction
+ */
+function requireApplyRecoveryJob(
+  snapshot: IngestQueueSnapshot,
+  marker: IngestApplyCommitMarker
+): KnowledgeIngestJob {
+  if (snapshot.applyCommit && !sameApplyCommitMarker(snapshot.applyCommit, marker)) {
+    throw new IngestQueueApplyCommitConflictError(snapshot.bundleId, marker.jobId);
+  }
+
+  const job = requireJob(snapshot, marker.jobId);
+  if (!jobMatchesApplyMarker(job, marker)) {
+    throw new IngestQueueApplyCommitConflictError(snapshot.bundleId, marker.jobId);
+  }
+
+  const processingMatch =
+    job.status === "processing" &&
+    job.stage === "applying" &&
+    job.startedAt === marker.startedAt &&
+    snapshot.applyClaim !== undefined &&
+    applyClaimMatchesCommit(snapshot.applyClaim, marker);
+  const failedMatch =
+    job.status === "failed" &&
+    job.stage === "applying" &&
+    snapshot.applyClaim !== undefined &&
+    applyClaimMatchesCommit(snapshot.applyClaim, marker);
+  const completedMatch =
+    job.status === "completed" &&
+    snapshot.applyCommit !== undefined &&
+    sameApplyCommitMarker(snapshot.applyCommit, marker) &&
+    job.changeSetId === marker.changeSetId;
+  if (!processingMatch && !failedMatch && !completedMatch) {
+    throw new IngestQueueApplyCommitConflictError(snapshot.bundleId, marker.jobId);
+  }
+  return job;
 }
 
 /**
@@ -691,6 +1058,30 @@ export class IngestQueue {
         const active = current.jobs.find(
           (job) => isActiveJob(job) && job.sourceId === request.sourceId
         );
+        const highWatermark = current.sourceHighWatermarks.find(
+          (candidate) => candidate.sourceId === request.sourceId
+        );
+        if (highWatermark && request.inputRevision <= highWatermark.inputRevision) {
+          const deduplicatedJob = active ?? requireLatestSourceJob(current, request.sourceId);
+          if (
+            request.inputRevision === highWatermark.inputRevision &&
+            !highWatermarkMatchesRequest(highWatermark, request)
+          ) {
+            throw new IngestQueueObservationConflictError(
+              request.bundleId,
+              request.sourceId,
+              request.inputRevision
+            );
+          }
+          return { value: { kind: "deduplicated" as const, jobId: deduplicatedJob.id } };
+        }
+        if (!active && highWatermark && highWatermarkMatchesRequest(highWatermark, request)) {
+          const deduplicatedJob = requireLatestSourceJob(current, request.sourceId);
+          return {
+            next: recordSourceHighWatermark(current, request, timestamp),
+            value: { kind: "deduplicated" as const, jobId: deduplicatedJob.id },
+          };
+        }
         if (!active) {
           this.assertJobIdAvailable(current, reservedJobId);
           const job: KnowledgeIngestJob = {
@@ -708,73 +1099,72 @@ export class IngestQueue {
             stage: "queued",
           };
           return {
-            next: { ...current, jobs: [...current.jobs, job] },
+            next: recordSourceHighWatermark(
+              { ...current, jobs: [...current.jobs, job] },
+              request,
+              timestamp
+            ),
             value: { kind: "enqueued" as const, jobId: job.id },
           };
         }
 
         const existingRerun = current.reruns.find((rerun) => rerun.sourceId === request.sourceId);
-        const latestInputRevision = existingRerun?.inputRevision ?? active.inputRevision;
-        const matchesLatestInput = existingRerun
-          ? rerunMatchesRequest(existingRerun, request)
-          : jobMatchesRequest(active, request);
-        if (request.inputRevision < latestInputRevision) {
-          return { value: { kind: "deduplicated" as const, jobId: active.id } };
-        }
-        if (request.inputRevision === latestInputRevision && !matchesLatestInput) {
-          throw new IngestQueueObservationConflictError(
-            request.bundleId,
-            request.sourceId,
-            request.inputRevision
-          );
-        }
         if (existingRerun !== undefined && rerunMatchesRequest(existingRerun, request)) {
-          if (request.inputRevision === existingRerun.inputRevision) {
-            return { value: { kind: "deduplicated" as const, jobId: active.id } };
-          }
+          const next = {
+            ...replaceJob(current, {
+              ...active,
+              updatedAt: Math.max(timestamp, active.updatedAt),
+            }),
+            reruns: current.reruns.map((rerun) =>
+              rerun.sourceId === active.sourceId
+                ? {
+                    ...rerun,
+                    inputRevision: request.inputRevision,
+                    updatedAt: Math.max(timestamp, rerun.updatedAt),
+                  }
+                : rerun
+            ),
+          };
           return {
-            next: {
-              ...replaceJob(current, {
-                ...active,
-                updatedAt: Math.max(timestamp, active.updatedAt),
-              }),
-              reruns: current.reruns.map((rerun) =>
-                rerun.sourceId === active.sourceId
-                  ? {
-                      ...rerun,
-                      inputRevision: request.inputRevision,
-                      updatedAt: Math.max(timestamp, rerun.updatedAt),
-                    }
-                  : rerun
-              ),
-            },
+            next: recordSourceHighWatermark(next, request, timestamp),
             value: { kind: "deduplicated" as const, jobId: active.id },
           };
         }
         if (jobMatchesRequest(active, request)) {
           if (!existingRerun) {
-            if (request.inputRevision === active.inputRevision) {
-              return { value: { kind: "deduplicated" as const, jobId: active.id } };
+            if (active.status !== "pending" && active.status !== "paused") {
+              return {
+                next: recordSourceHighWatermark(current, request, timestamp),
+                value: { kind: "deduplicated" as const, jobId: active.id },
+              };
             }
             return {
-              next: replaceJob(current, {
-                ...active,
-                inputRevision: request.inputRevision,
-                updatedAt: Math.max(timestamp, active.updatedAt),
-              }),
+              next: recordSourceHighWatermark(
+                replaceJob(current, {
+                  ...active,
+                  inputRevision: request.inputRevision,
+                  updatedAt: Math.max(timestamp, active.updatedAt),
+                }),
+                request,
+                timestamp
+              ),
               value: { kind: "deduplicated" as const, jobId: active.id },
             };
           }
+          const claimSafeActive =
+            active.status === "pending" || active.status === "paused"
+              ? { ...active, inputRevision: request.inputRevision }
+              : active;
+          const next = {
+            ...replaceJob(current, {
+              ...claimSafeActive,
+              rerunRequested: false,
+              updatedAt: Math.max(timestamp, active.updatedAt),
+            }),
+            reruns: current.reruns.filter((rerun) => rerun.sourceId !== active.sourceId),
+          };
           return {
-            next: {
-              ...replaceJob(current, {
-                ...active,
-                inputRevision: request.inputRevision,
-                rerunRequested: false,
-                updatedAt: Math.max(timestamp, active.updatedAt),
-              }),
-              reruns: current.reruns.filter((rerun) => rerun.sourceId !== active.sourceId),
-            },
+            next: recordSourceHighWatermark(next, request, timestamp),
             value: { kind: "updated" as const, jobId: active.id },
           };
         }
@@ -799,7 +1189,7 @@ export class IngestQueue {
             stage: "queued",
           };
           return {
-            next: replaceJob(current, nextJob),
+            next: recordSourceHighWatermark(replaceJob(current, nextJob), request, timestamp),
             value: { kind: "updated" as const, jobId: active.id },
           };
         }
@@ -822,15 +1212,16 @@ export class IngestQueue {
           rerunRequested: true,
           updatedAt: Math.max(timestamp, active.updatedAt),
         };
+        const next = {
+          ...replaceJob(current, nextJob),
+          reruns: existingRerun
+            ? current.reruns.map((candidate) =>
+                candidate.sourceId === rerun.sourceId ? rerun : candidate
+              )
+            : [...current.reruns, rerun],
+        };
         return {
-          next: {
-            ...replaceJob(current, nextJob),
-            reruns: existingRerun
-              ? current.reruns.map((candidate) =>
-                  candidate.sourceId === rerun.sourceId ? rerun : candidate
-                )
-              : [...current.reruns, rerun],
-          },
+          next: recordSourceHighWatermark(next, request, timestamp),
           value: { kind: "rerun_scheduled" as const, jobId: active.id },
         };
       });
@@ -941,6 +1332,9 @@ export class IngestQueue {
         executionJob.startedAt,
         result
       );
+      if (typeof finalized !== "string") {
+        return { kind: "commit_ready", jobId: executionJob.id, receipt: finalized.receipt };
+      }
       if (finalized === "stale") {
         return { kind: "stale", jobId: executionJob.id };
       }
@@ -987,7 +1381,10 @@ export class IngestQueue {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
       return this.mutate<PauseMutationValue>(bundleId, (current) => {
-        if (current.control.status === "paused" && current.control.reason === "recovery_required") {
+        if (
+          current.control.status === "paused" &&
+          ["recovery_required", "commit_pending_ack"].includes(current.control.reason)
+        ) {
           return { value: { changed: false } };
         }
         const processing = current.jobs.find((job) => job.status === "processing");
@@ -1062,6 +1459,12 @@ export class IngestQueue {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
       return this.mutate(bundleId, (current) => {
+        if (
+          current.control.status === "paused" &&
+          current.control.reason === "commit_pending_ack"
+        ) {
+          throw new IngestQueueApplyCommitPendingError(bundleId);
+        }
         const hasApplyRecoveryFailure = current.jobs.some(
           (job) => job.status === "failed" && job.stage === "applying"
         );
@@ -1218,26 +1621,60 @@ export class IngestQueue {
   }
 
   /**
-   * Records successful user review and promotes a queued latest-source rerun.
+   * Converts an accepted review into a durable applying claim.
+   *
+   * Review acceptance is not job success. The caller must apply the accepted
+   * ChangeSet through ChangeSetTransaction and pass its receipt to the
+   * ApplyCommitCoordinator before the queue can become completed.
    *
    * @param bundleId - Stable Bundle identifier
    * @param jobId - Awaiting-review job identifier
-   * @returns Detached completed predecessor job
+   * @param reviewedChangeSet - Exact identifier and digest of the payload the user accepted
+   * @returns Detached processing job containing the exact apply claim
    */
-  async completeReview(bundleId: string, jobId: string): Promise<KnowledgeIngestJob> {
+  async beginReviewApply(
+    bundleId: string,
+    jobId: string,
+    reviewedChangeSet: IngestReviewedChangeSetIdentity
+  ): Promise<ProcessingIngestJob> {
     assertIdentifier(jobId, "jobId");
+    if (!isRecord(reviewedChangeSet)) {
+      throw new TypeError("reviewedChangeSet must be an object");
+    }
+    const acceptedReview = Object.freeze({
+      changeSetId: reviewedChangeSet.changeSetId,
+      changeSetDigest: reviewedChangeSet.changeSetDigest,
+    });
+    assertIdentifier(acceptedReview.changeSetId, "reviewedChangeSet.changeSetId");
+    assertHash(acceptedReview.changeSetDigest, "reviewedChangeSet.changeSetDigest");
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
       return this.mutate(bundleId, (current) => {
+        if (current.control.status === "paused" && current.control.reason === "recovery_required") {
+          throw new IngestQueueRecoveryRequiredError(bundleId);
+        }
+        if (
+          current.control.status === "paused" &&
+          current.control.reason === "commit_pending_ack"
+        ) {
+          throw new IngestQueueApplyCommitPendingError(bundleId);
+        }
         const job = requireJob(current, jobId);
-        if (job.status === "completed") {
-          return { value: false };
-        }
         if (job.status !== "awaiting_review") {
-          throw new IngestQueueTransitionError(job.id, jobState(job), "complete review");
+          throw new IngestQueueTransitionError(job.id, jobState(job), "begin review apply");
         }
-        const completedAt = Math.max(timestamp, job.updatedAt);
-        const completed: KnowledgeIngestJob = {
+        if (job.changeSetId !== acceptedReview.changeSetId) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "apply a different reviewed ChangeSet"
+          );
+        }
+        if (current.jobs.some((candidate) => candidate.status === "processing")) {
+          throw new IngestQueueTransitionError(job.id, jobState(job), "apply beside active work");
+        }
+        const startedAt = Math.max(timestamp, job.updatedAt);
+        const applying: ProcessingIngestJob = {
           id: job.id,
           bundleId: job.bundleId,
           sourceId: job.sourceId,
@@ -1245,24 +1682,28 @@ export class IngestQueue {
           pipelineFingerprint: job.pipelineFingerprint,
           inputRevision: job.inputRevision,
           attempt: job.attempt,
-          rerunRequested: false,
+          rerunRequested: job.rerunRequested,
           createdAt: job.createdAt,
-          updatedAt: completedAt,
-          status: "completed",
-          stage: "completed",
-          changeSetId: job.changeSetId,
-          completedAt,
+          updatedAt: startedAt,
+          status: "processing",
+          stage: "applying",
+          startedAt,
         };
         return {
-          next: promoteRerun(replaceJob(current, completed), job.sourceId, completedAt),
+          next: {
+            ...replaceJob(current, applying),
+            applyClaim: createApplyClaimMarker(applying, acceptedReview),
+          },
           value: true,
         };
       });
     });
-    if (mutation.value) {
-      this.emit(mutation.snapshot, "complete", jobId);
+    this.emit(mutation.snapshot, "review_accepted", jobId);
+    const applying = requireJob(mutation.snapshot, jobId);
+    if (applying.status !== "processing" || applying.stage !== "applying") {
+      throw new IngestQueueTransitionError(jobId, jobState(applying), "return apply claim");
     }
-    return requireJob(mutation.snapshot, jobId);
+    return applying;
   }
 
   /**
@@ -1291,14 +1732,14 @@ export class IngestQueue {
           return { value: false };
         }
         let next = current;
-        let interruptedApply = false;
+        let requiresApplyRecovery = false;
         for (const job of current.jobs) {
           if (job.status !== "processing") {
             continue;
           }
           const recoveredAt = Math.max(timestamp, job.updatedAt);
           if (job.stage === "applying") {
-            interruptedApply = true;
+            requiresApplyRecovery = true;
             const failed: KnowledgeIngestJob = {
               id: job.id,
               bundleId: job.bundleId,
@@ -1341,7 +1782,7 @@ export class IngestQueue {
         return {
           next: {
             ...next,
-            control: interruptedApply
+            control: requiresApplyRecovery
               ? {
                   status: "paused",
                   reason: "recovery_required",
@@ -1358,6 +1799,166 @@ export class IngestQueue {
     });
     if (mutation.value) {
       this.emit(mutation.snapshot, "recover");
+    }
+    return mutation.snapshot;
+  }
+
+  /**
+   * Verifies the exact queue job and apply claim before Manifest success is written.
+   *
+   * This method never mutates queue state. The coordinator must call it before
+   * its idempotent Manifest write, then call {@link resolveApplyRecovery}; the
+   * latter repeats the same proof inside the queue CAS mutation.
+   *
+   * @param receipt - Durable transaction proof proposed for reconciliation
+   * @returns Detached exact queue job owned by the receipt
+   */
+  async verifyApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
+    assertTransactionCommitReceipt(receipt);
+    const marker = createApplyCommitMarker(receipt);
+    return this.getBundleMutex(receipt.bundleId).runExclusive(async () => {
+      const snapshot = await this.load(receipt.bundleId);
+      return requireApplyRecoveryJob(snapshot, marker);
+    });
+  }
+
+  /**
+   * Reconciles a committed transaction receipt with an interrupted applying job.
+   *
+   * The manifest success record MUST already be durable before this method is
+   * called. The queue job becomes completed, but execution remains blocked by a
+   * durable `commit_pending_ack` marker until the global transaction journal is
+   * cleared and {@link finalizeApplyRecovery} removes that marker.
+   *
+   * @param receipt - Durable proof returned by ChangeSet transaction recovery
+   * @returns Detached completed queue job
+   */
+  async resolveApplyRecovery(receipt: TransactionCommitReceipt): Promise<KnowledgeIngestJob> {
+    assertTransactionCommitReceipt(receipt);
+    const bundleId = receipt.bundleId;
+    const marker = createApplyCommitMarker(receipt);
+    const timestamp = this.now();
+    const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
+      return this.mutate<boolean>(bundleId, (current) => {
+        const job = requireApplyRecoveryJob(current, marker);
+        if (current.applyCommit) {
+          return { value: false };
+        }
+
+        const completedAt = Math.max(timestamp, marker.committedAt, job.updatedAt);
+        const completed: KnowledgeIngestJob = {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: job.sourceContentHash,
+          pipelineFingerprint: job.pipelineFingerprint,
+          inputRevision: job.inputRevision,
+          attempt: job.attempt,
+          rerunRequested: false,
+          createdAt: job.createdAt,
+          updatedAt: completedAt,
+          status: "completed",
+          stage: "completed",
+          changeSetId: marker.changeSetId,
+          completedAt,
+        };
+        const next = promoteRerun(replaceJob(current, completed), job.sourceId, completedAt);
+        const withoutApplyClaim: IngestQueueSnapshot = { ...next };
+        delete withoutApplyClaim.applyClaim;
+        return {
+          next: {
+            ...withoutApplyClaim,
+            control: {
+              status: "paused",
+              reason: "commit_pending_ack",
+              pausedAt: completedAt,
+              detail: "Committed pages are waiting for durable journal acknowledgement",
+            },
+            applyCommit: marker,
+          },
+          value: true,
+        };
+      });
+    });
+
+    const active = this.activeControllers.get(bundleId);
+    if (
+      mutation.value &&
+      active?.jobId === marker.jobId &&
+      active.attempt === marker.attempt &&
+      active.startedAt === marker.startedAt
+    ) {
+      active.controller.abort();
+    }
+    if (mutation.value) {
+      this.emit(mutation.snapshot, "apply_commit_pending", marker.jobId);
+    }
+    return requireJob(mutation.snapshot, marker.jobId);
+  }
+
+  /**
+   * Reads the durable queue marker waiting for journal acknowledgement.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @returns Detached pending marker, or null when none exists
+   */
+  async getPendingApplyCommit(bundleId: string): Promise<IngestApplyCommitMarker | null> {
+    const snapshot = await this.load(bundleId);
+    return snapshot.applyCommit ? { ...snapshot.applyCommit } : null;
+  }
+
+  /**
+   * Releases a commit-pending queue only after the journal slot is durably clear.
+   *
+   * This method deliberately leaves the backlog under `startup_recovery` pause,
+   * requiring an explicit resume after startup reconciliation.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param transactionId - Exact acknowledged transaction identifier
+   * @returns Detached reconciled queue snapshot
+   */
+  async finalizeApplyRecovery(
+    bundleId: string,
+    transactionId: string
+  ): Promise<IngestQueueSnapshot> {
+    assertIdentifier(bundleId, "bundleId");
+    assertIdentifier(transactionId, "transactionId");
+    const timestamp = this.now();
+    const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
+      return this.mutate<boolean>(bundleId, (current) => {
+        const marker = current.applyCommit;
+        if (!marker) {
+          return { value: false };
+        }
+        if (marker.transactionId !== transactionId) {
+          throw new IngestQueueApplyCommitConflictError(bundleId, marker.jobId);
+        }
+        const job = requireJob(current, marker.jobId);
+        if (
+          job.status !== "completed" ||
+          !jobMatchesApplyMarker(job, marker) ||
+          job.changeSetId !== marker.changeSetId
+        ) {
+          throw new IngestQueueApplyCommitConflictError(bundleId, marker.jobId);
+        }
+        const withoutMarker: IngestQueueSnapshot = { ...current };
+        delete withoutMarker.applyCommit;
+        return {
+          next: {
+            ...withoutMarker,
+            control: {
+              status: "paused",
+              reason: "startup_recovery",
+              pausedAt: Math.max(timestamp, marker.committedAt),
+              detail: "Recovered apply committed; resume the backlog explicitly",
+            },
+          },
+          value: true,
+        };
+      });
+    });
+    if (mutation.value) {
+      this.emit(mutation.snapshot, "apply_commit_finalized");
     }
     return mutation.snapshot;
   }
@@ -1500,12 +2101,17 @@ export class IngestQueue {
           if (nextIndex === currentIndex) {
             return { value: false };
           }
+          const nextJob: ProcessingIngestJob = {
+            ...job,
+            stage,
+            updatedAt: Math.max(timestamp, job.updatedAt),
+          };
+          const next = replaceJob(current, nextJob);
           return {
-            next: replaceJob(current, {
-              ...job,
-              stage,
-              updatedAt: Math.max(timestamp, job.updatedAt),
-            }),
+            next:
+              stage === "applying"
+                ? { ...next, applyClaim: createApplyClaimMarker(nextJob) }
+                : next,
             value: true,
           };
         });
@@ -1522,12 +2128,12 @@ export class IngestQueue {
   }
 
   /**
-   * Persists a successful executor outcome unless a concurrent user action won first.
+   * Persists a non-applying outcome or returns committed apply proof for coordination.
    *
    * @param bundleId - Stable Bundle identifier
    * @param jobId - Claimed job identifier
    * @param result - Review or completed executor outcome
-   * @returns Final durable job status
+   * @returns Final durable status, stale claim, or unacknowledged commit proof
    */
   private async finalizeSuccess(
     bundleId: string,
@@ -1535,20 +2141,54 @@ export class IngestQueue {
     attempt: number,
     startedAt: number,
     result: IngestExecutionResult
-  ): Promise<ExecutedJobStatus | "stale"> {
-    if (result.kind !== "awaiting_review" && result.kind !== "completed") {
+  ): Promise<
+    ExecutedJobStatus | "stale" | { kind: "commit_ready"; receipt: TransactionCommitReceipt }
+  > {
+    if (
+      result.kind !== "awaiting_review" &&
+      result.kind !== "no_changes" &&
+      result.kind !== "completed"
+    ) {
       throw new TypeError("executor result kind is not supported");
     }
     assertIdentifier(result.changeSetId, "changeSetId");
+    let commitMarker: IngestApplyCommitMarker | undefined;
+    if (result.kind === "completed") {
+      assertTransactionCommitReceipt(result.commitReceipt);
+      if (
+        result.commitReceipt.bundleId !== bundleId ||
+        result.commitReceipt.changeSetId !== result.changeSetId ||
+        result.commitReceipt.jobClaim.jobId !== jobId ||
+        result.commitReceipt.jobClaim.attempt !== attempt ||
+        result.commitReceipt.jobClaim.startedAt !== startedAt
+      ) {
+        throw new IngestQueueApplyCommitConflictError(bundleId, jobId);
+      }
+      commitMarker = createApplyCommitMarker(result.commitReceipt);
+    }
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
-      return this.mutate<boolean>(bundleId, (current) => {
+      return this.mutate<SuccessMutationValue>(bundleId, (current) => {
         const job = requireJob(current, jobId);
         if (job.status !== "processing") {
-          return { value: false };
+          return { value: "stale" };
         }
         if (!isSameClaim(job, attempt, startedAt)) {
-          return { value: false };
+          return { value: "stale" };
+        }
+        if (job.stage === "applying") {
+          if (
+            result.kind !== "completed" ||
+            !commitMarker ||
+            !jobMatchesApplyMarker(job, commitMarker) ||
+            commitMarker.startedAt !== job.startedAt
+          ) {
+            throw new IngestQueueApplyReceiptRequiredError(bundleId, jobId);
+          }
+          return { value: "commit_ready" };
+        }
+        if (result.kind === "completed" || commitMarker) {
+          throw new IngestQueueApplyReceiptRequiredError(bundleId, jobId);
         }
         if (result.kind === "awaiting_review") {
           const awaitingReview: KnowledgeIngestJob = {
@@ -1566,7 +2206,7 @@ export class IngestQueue {
             stage: "review",
             changeSetId: result.changeSetId,
           };
-          return { next: replaceJob(current, awaitingReview), value: true };
+          return { next: replaceJob(current, awaitingReview), value: "changed" };
         }
         const completedAt = Math.max(timestamp, job.updatedAt);
         const completed: KnowledgeIngestJob = {
@@ -1587,18 +2227,25 @@ export class IngestQueue {
         };
         return {
           next: promoteRerun(replaceJob(current, completed), job.sourceId, completedAt),
-          value: true,
+          value: "changed",
         };
       });
     });
+    if (mutation.value === "stale") {
+      return "stale";
+    }
+    if (mutation.value === "commit_ready") {
+      if (result.kind !== "completed") {
+        throw new IngestQueueApplyReceiptRequiredError(bundleId, jobId);
+      }
+      return { kind: "commit_ready", receipt: result.commitReceipt };
+    }
     const finalJob = requireJob(mutation.snapshot, jobId);
     if (finalJob.attempt !== attempt) {
       return "stale";
     }
     const cause = finalJob.status === "awaiting_review" ? "awaiting_review" : "complete";
-    if (mutation.value) {
-      this.emit(mutation.snapshot, cause, jobId);
-    }
+    this.emit(mutation.snapshot, cause, jobId);
     return this.toRunStatus(finalJob);
   }
 
@@ -1892,11 +2539,24 @@ export class IngestQueue {
   private assertExecutionResult(value: unknown): asserts value is IngestExecutionResult {
     if (
       !isRecord(value) ||
-      (value.kind !== "awaiting_review" && value.kind !== "completed") ||
+      (value.kind !== "awaiting_review" &&
+        value.kind !== "no_changes" &&
+        value.kind !== "completed") ||
       typeof value.changeSetId !== "string" ||
       value.changeSetId.trim().length === 0
     ) {
       throw new TypeError("executor result does not satisfy the ingest outcome contract");
+    }
+    if (value.kind === "completed") {
+      if (!("commitReceipt" in value)) {
+        throw new TypeError("completed executor result requires transaction commit proof");
+      }
+      assertTransactionCommitReceipt(value.commitReceipt);
+      if (value.commitReceipt.changeSetId !== value.changeSetId) {
+        throw new TypeError("executor commit receipt must match its ChangeSet result");
+      }
+    } else if ("commitReceipt" in value) {
+      throw new TypeError("only a completed executor result may carry transaction commit proof");
     }
   }
 
@@ -2022,7 +2682,12 @@ export class IngestQueue {
     if (raw === null) {
       return { snapshot: createEmptyQueue(bundleId), expectedRevision: null };
     }
-    if (isRecord(raw) && "version" in raw && raw.version !== 1) {
+    if (
+      isRecord(raw) &&
+      "version" in raw &&
+      raw.version !== 1 &&
+      raw.version !== INGEST_QUEUE_VERSION
+    ) {
       throw new IngestQueueIncompatibleVersionError(bundleId, raw.version);
     }
     const snapshot = this.cloneValidatedSnapshot(bundleId, raw);
@@ -2059,7 +2724,7 @@ export class IngestQueue {
       }
       const next = this.cloneValidatedSnapshot(bundleId, {
         ...proposal.next,
-        version: 1,
+        version: INGEST_QUEUE_VERSION,
         bundleId,
         revision: loaded.snapshot.revision + 1,
       });

@@ -1,7 +1,12 @@
 import type { KnowledgeIngestJob } from "@/knowledge/model/types";
 import {
+  INGEST_QUEUE_VERSION,
   parseIngestQueueSnapshot,
+  type IngestApplyClaimMarker,
+  type IngestApplyCommitMarker,
   type IngestQueueSnapshot,
+  type IngestRerunRequest,
+  type IngestSourceHighWatermark,
   validateIngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
 
@@ -52,20 +57,116 @@ function createProcessingJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowl
 }
 
 /**
+ * Creates a valid completed job for apply-commit acknowledgement tests.
+ *
+ * @param overrides - Optional completed-job fields to replace
+ * @returns Strict durable completed job
+ */
+function createCompletedJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
+  return {
+    ...createPendingJob(),
+    attempt: 1,
+    status: "completed",
+    stage: "completed",
+    changeSetId: "changeset-1",
+    completedAt: 140,
+    updatedAt: 140,
+    ...overrides,
+  } as KnowledgeIngestJob;
+}
+
+/**
+ * Creates a marker proving file commit preceded completed-job acknowledgement.
+ *
+ * @param overrides - Optional marker fields to replace
+ * @returns Strict version-2 apply-commit marker
+ */
+function createApplyCommitMarker(
+  overrides: Partial<IngestApplyCommitMarker> = {}
+): IngestApplyCommitMarker {
+  return {
+    transactionId: "transaction-1",
+    changeSetId: "changeset-1",
+    changeSetDigest: HASH_C,
+    commitRevision: 4,
+    jobId: "job-1",
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision: 1,
+    attempt: 1,
+    startedAt: 110,
+    committedAt: 130,
+    ...overrides,
+  };
+}
+
+/**
+ * Creates the exact claim retained while an applying job is active or interrupted.
+ *
+ * @param overrides - Optional claim fields to replace
+ * @returns Strict apply-claim marker
+ */
+function createApplyClaimMarker(
+  overrides: Partial<IngestApplyClaimMarker> = {}
+): IngestApplyClaimMarker {
+  return {
+    jobId: "job-1",
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision: 1,
+    attempt: 1,
+    startedAt: 110,
+    ...overrides,
+  };
+}
+
+/**
+ * Derives one highest source observation for a synthetic storage snapshot.
+ *
+ * @param jobs - Durable test jobs
+ * @param reruns - Durable test rerun payloads
+ * @returns One high-watermark per represented source
+ */
+function deriveTestHighWatermarks(
+  jobs: readonly KnowledgeIngestJob[],
+  reruns: readonly IngestRerunRequest[]
+): IngestSourceHighWatermark[] {
+  const values = new Map<string, IngestSourceHighWatermark>();
+  for (const record of [...jobs, ...reruns]) {
+    const current = values.get(record.sourceId);
+    if (!current || record.inputRevision > current.inputRevision) {
+      values.set(record.sourceId, {
+        sourceId: record.sourceId,
+        sourceContentHash: record.sourceContentHash,
+        pipelineFingerprint: record.pipelineFingerprint,
+        inputRevision: record.inputRevision,
+        observedAt: record.updatedAt,
+      });
+    }
+  }
+  return [...values.values()];
+}
+
+/**
  * Creates a valid queue snapshot for structural and semantic tests.
  *
  * @param overrides - Optional snapshot fields to replace
  * @returns Strict queue snapshot
  */
 function createSnapshot(overrides: Partial<IngestQueueSnapshot> = {}): IngestQueueSnapshot {
+  const jobs = overrides.jobs ?? [createPendingJob()];
+  const reruns = overrides.reruns ?? [];
   return {
-    version: 1,
+    version: INGEST_QUEUE_VERSION,
     bundleId: "personal",
     revision: 0,
     control: { status: "running" },
-    jobs: [createPendingJob()],
-    reruns: [],
+    jobs,
+    reruns,
     ...overrides,
+    sourceHighWatermarks: overrides.sourceHighWatermarks ?? deriveTestHighWatermarks(jobs, reruns),
   };
 }
 
@@ -96,14 +197,141 @@ describe("parseIngestQueueSnapshot", () => {
     expect(
       parseIngestQueueSnapshot({ ...createSnapshot(), revision: Number.MAX_SAFE_INTEGER + 1 }).ok
     ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...createSnapshot(),
+        applyCommit: { ...createApplyCommitMarker(), unexpected: true },
+      }).ok
+    ).toBe(false);
+    const missingHighWatermarks = { ...createSnapshot() } as Record<string, unknown>;
+    delete missingHighWatermarks.sourceHighWatermarks;
+    expect(parseIngestQueueSnapshot(missingHighWatermarks).ok).toBe(false);
+  });
+
+  it("strictly migrates version 1 reads into detached version 2 state", () => {
+    const current = createSnapshot();
+    const legacy = {
+      version: 1,
+      bundleId: current.bundleId,
+      revision: current.revision,
+      control: current.control,
+      jobs: current.jobs,
+      reruns: current.reruns,
+    };
+    const parsed = parseIngestQueueSnapshot(legacy);
+
+    expect(parsed).toEqual({ ok: true, value: current });
+    if (parsed.ok) {
+      expect(parsed.value.version).toBe(INGEST_QUEUE_VERSION);
+      expect("applyCommit" in parsed.value).toBe(false);
+      expect(parsed.value).not.toBe(legacy);
+      expect(parsed.value.jobs[0]).not.toBe(legacy.jobs[0]);
+    }
+
+    expect(parseIngestQueueSnapshot({ ...legacy, applyCommit: createApplyCommitMarker() }).ok).toBe(
+      false
+    );
+
+    const legacyApplying = {
+      ...legacy,
+      jobs: [createProcessingJob({ stage: "applying" })],
+    };
+    expect(parseIngestQueueSnapshot(legacyApplying)).toMatchObject({
+      ok: true,
+      value: {
+        applyClaim: { jobId: "job-1", attempt: 1, startedAt: 110 },
+      },
+    });
+
+    const legacyDivergentHistory = {
+      ...legacy,
+      jobs: [
+        createCompletedJob({
+          id: "job-old",
+          sourceContentHash: HASH_C,
+          inputRevision: 3,
+        }),
+        createPendingJob(),
+      ],
+    };
+    expect(diagnosticCodes(legacyDivergentHistory)).toContain(
+      "queue_source_high_watermark_rerun_missing"
+    );
   });
 
   it("rejects unsupported versions and illegal job discriminants", () => {
-    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 2 }).ok).toBe(false);
+    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 3 }).ok).toBe(false);
     expect(
       parseIngestQueueSnapshot({
         ...createSnapshot(),
         jobs: [{ ...createPendingJob(), status: "processing", stage: "review" }],
+      }).ok
+    ).toBe(false);
+  });
+
+  it("strictly parses apply-commit marker hashes, attempts, and revisions", () => {
+    const base = createSnapshot({
+      control: { status: "paused", reason: "commit_pending_ack", pausedAt: 140 },
+      jobs: [createCompletedJob()],
+      applyCommit: createApplyCommitMarker(),
+    });
+    expect(parseIngestQueueSnapshot(base).ok).toBe(true);
+    expect(
+      parseIngestQueueSnapshot({
+        ...base,
+        applyCommit: createApplyCommitMarker({ changeSetDigest: "not-a-hash" }),
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...base,
+        applyCommit: createApplyCommitMarker({ sourceContentHash: "not-a-hash" }),
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...base,
+        applyCommit: createApplyCommitMarker({ attempt: 0 }),
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...base,
+        applyCommit: createApplyCommitMarker({ commitRevision: -1 }),
+      }).ok
+    ).toBe(false);
+  });
+
+  it("strictly persists the exact digest of a reviewed apply claim", () => {
+    const base = createSnapshot({
+      jobs: [createProcessingJob({ stage: "applying" })],
+      applyClaim: createApplyClaimMarker({
+        reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
+      }),
+    });
+
+    expect(parseIngestQueueSnapshot(base).ok).toBe(true);
+    expect(
+      parseIngestQueueSnapshot({
+        ...base,
+        applyClaim: createApplyClaimMarker({
+          reviewedChangeSet: {
+            changeSetId: "changeset-reviewed",
+            changeSetDigest: "not-a-hash",
+          },
+        }),
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...base,
+        applyClaim: createApplyClaimMarker({
+          reviewedChangeSet: {
+            changeSetId: "changeset-reviewed",
+            changeSetDigest: HASH_C,
+            unexpected: true,
+          } as never,
+        }),
       }).ok
     ).toBe(false);
   });
@@ -122,6 +350,57 @@ describe("validateIngestQueueSnapshot", () => {
     const snapshot = createSnapshot({ jobs: [completed, createPendingJob({ id: "job-new" })] });
 
     expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("requires one monotonic payload-consistent high-watermark per source", () => {
+    expect(diagnosticCodes(createSnapshot({ sourceHighWatermarks: [] }))).toContain(
+      "queue_source_high_watermark_missing"
+    );
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          sourceHighWatermarks: [
+            ...deriveTestHighWatermarks([createPendingJob()], []),
+            ...deriveTestHighWatermarks([createPendingJob()], []),
+          ],
+        })
+      )
+    ).toContain("queue_source_high_watermark_duplicate");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createPendingJob({ inputRevision: 2 })],
+          sourceHighWatermarks: deriveTestHighWatermarks([createPendingJob()], []),
+        })
+      )
+    ).toContain("queue_source_high_watermark_behind");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          sourceHighWatermarks: [
+            {
+              ...deriveTestHighWatermarks([createPendingJob()], [])[0],
+              sourceContentHash: HASH_C,
+            },
+          ],
+        })
+      )
+    ).toContain("queue_source_high_watermark_payload_mismatch");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          sourceHighWatermarks: [
+            {
+              sourceId: "source-1",
+              sourceContentHash: HASH_C,
+              pipelineFingerprint: HASH_B,
+              inputRevision: 3,
+              observedAt: 120,
+            },
+          ],
+        })
+      )
+    ).toContain("queue_source_high_watermark_rerun_missing");
   });
 
   it("rejects Bundle mismatches, duplicate ids, duplicate active sources, and two workers", () => {
@@ -239,6 +518,7 @@ describe("validateIngestQueueSnapshot", () => {
         createSnapshot({
           control: { status: "paused", reason: "user", pausedAt: 120 },
           jobs: [createProcessingJob({ stage: "applying" })],
+          applyClaim: createApplyClaimMarker(),
         })
       ).valid
     ).toBe(true);
@@ -273,5 +553,195 @@ describe("validateIngestQueueSnapshot", () => {
         })
       )
     ).toContain("queue_resume_timestamp_invalid");
+  });
+
+  it("accepts an atomically paired apply-commit marker and acknowledgement gate", () => {
+    const snapshot = createSnapshot({
+      control: { status: "paused", reason: "commit_pending_ack", pausedAt: 140 },
+      jobs: [createCompletedJob()],
+      applyCommit: createApplyCommitMarker(),
+    });
+
+    expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("rejects a torn marker or commit-pending acknowledgement gate", () => {
+    expect(
+      diagnosticCodes(
+        createSnapshot({ jobs: [createCompletedJob()], applyCommit: createApplyCommitMarker() })
+      )
+    ).toContain("queue_apply_commit_gate_missing");
+
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { status: "paused", reason: "commit_pending_ack", pausedAt: 140 },
+          jobs: [createCompletedJob()],
+        })
+      )
+    ).toContain("queue_apply_commit_marker_missing");
+  });
+
+  it("requires the marker to identify one exact completed job attempt and ChangeSet", () => {
+    const control = { status: "paused", reason: "commit_pending_ack", pausedAt: 140 } as const;
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control,
+          jobs: [createPendingJob()],
+          applyCommit: createApplyCommitMarker(),
+        })
+      )
+    ).toContain("queue_apply_commit_job_invalid");
+
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control,
+          jobs: [createCompletedJob()],
+          applyCommit: createApplyCommitMarker({ attempt: 2, changeSetId: "changeset-other" }),
+        })
+      )
+    ).toContain("queue_apply_commit_job_invalid");
+  });
+
+  it("enforces job, file-commit, completion, and pause timestamp order", () => {
+    const completed = createCompletedJob();
+    const control = { status: "paused", reason: "commit_pending_ack", pausedAt: 140 } as const;
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control,
+          jobs: [completed],
+          applyCommit: createApplyCommitMarker({ startedAt: 99 }),
+        })
+      )
+    ).toContain("queue_apply_commit_started_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control,
+          jobs: [completed],
+          applyCommit: createApplyCommitMarker({ startedAt: 131, committedAt: 130 }),
+        })
+      )
+    ).toContain("queue_apply_commit_started_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { ...control, pausedAt: 150 },
+          jobs: [completed],
+          applyCommit: createApplyCommitMarker({ committedAt: 150 }),
+        })
+      )
+    ).toContain("queue_apply_commit_committed_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { ...control, pausedAt: 129 },
+          jobs: [completed],
+          applyCommit: createApplyCommitMarker(),
+        })
+      )
+    ).toContain("queue_apply_commit_pause_timestamp_invalid");
+  });
+
+  it("never allows a committed marker to coexist with failed applying recovery", () => {
+    const failedApplying: KnowledgeIngestJob = {
+      ...createPendingJob({ id: "job-failed", sourceId: "source-failed" }),
+      attempt: 1,
+      status: "failed",
+      stage: "applying",
+      failure: {
+        code: "apply_failed",
+        message: "Apply requires recovery",
+        retryable: false,
+        occurredAt: 130,
+      },
+      updatedAt: 130,
+    };
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { status: "paused", reason: "commit_pending_ack", pausedAt: 140 },
+          jobs: [createCompletedJob(), failedApplying],
+          applyCommit: createApplyCommitMarker(),
+        })
+      )
+    ).toContain("queue_apply_commit_recovery_conflict");
+  });
+
+  it("retains the sticky recovery-required invariants from version 1", () => {
+    const failedApplying: KnowledgeIngestJob = {
+      ...createPendingJob(),
+      attempt: 1,
+      status: "failed",
+      stage: "applying",
+      failure: {
+        code: "apply_failed",
+        message: "Apply requires recovery",
+        retryable: false,
+        occurredAt: 120,
+      },
+      updatedAt: 120,
+    };
+    expect(diagnosticCodes(createSnapshot({ jobs: [failedApplying] }))).toContain(
+      "queue_apply_recovery_gate_missing"
+    );
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { status: "paused", reason: "recovery_required", pausedAt: 120 },
+        })
+      )
+    ).toContain("queue_apply_recovery_job_missing");
+    expect(
+      validateIngestQueueSnapshot(
+        createSnapshot({
+          control: { status: "paused", reason: "recovery_required", pausedAt: 120 },
+          jobs: [failedApplying],
+          applyClaim: createApplyClaimMarker(),
+        })
+      ).valid
+    ).toBe(true);
+  });
+
+  it("requires every applying state to retain and exactly match its claim", () => {
+    const failedApplying: KnowledgeIngestJob = {
+      ...createPendingJob(),
+      attempt: 1,
+      status: "failed",
+      stage: "applying",
+      failure: {
+        code: "apply_failed",
+        message: "Apply requires recovery",
+        retryable: false,
+        occurredAt: 120,
+      },
+      updatedAt: 120,
+    };
+    const control = { status: "paused", reason: "recovery_required", pausedAt: 120 } as const;
+
+    expect(diagnosticCodes(createSnapshot({ control, jobs: [failedApplying] }))).toContain(
+      "queue_apply_claim_marker_missing"
+    );
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control,
+          jobs: [failedApplying],
+          applyClaim: createApplyClaimMarker({ startedAt: 111 }),
+        })
+      )
+    ).not.toContain("queue_apply_claim_job_mismatch");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control,
+          jobs: [failedApplying],
+          applyClaim: createApplyClaimMarker({ sourceContentHash: HASH_C }),
+        })
+      )
+    ).toContain("queue_apply_claim_job_mismatch");
   });
 });

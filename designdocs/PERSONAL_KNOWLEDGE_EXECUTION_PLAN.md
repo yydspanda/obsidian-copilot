@@ -8,7 +8,7 @@ Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C/D complete; Commit E is next. The knowledge foundation currently passes TypeScript `noEmit`, targeted ESLint, Prettier check, and 305 tests across eleven Jest suites. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D/E core complete; Commit F is next. The knowledge foundation currently passes TypeScript `noEmit`, targeted ESLint, changed-file Prettier check, and 444 tests across sixteen Jest suites; the full repository passes 2,551 tests across 131 suites. Repository-wide Prettier check still reports the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -145,11 +145,11 @@ src/knowledge/ingest/queue/
 Scope:
 
 - pending/processing/paused/review/failed/completed/cancelled 状态机。
-- 同一 source 去重；processing 时变化只安排一次 rerun。
+- 同一 source 去重；processing 时变化只安排一次 rerun；claim 外的 durable source high-watermark 拒绝乱序到达的旧观察。
 - `AbortController`、指数退避、jitter、最大重试和 provider 限流暂停。
 - 非 applying 的 processing 在启动恢复时回到 pending，backlog 默认等待用户操作。
 - 每次执行使用 attempt/startedAt claim ownership；旧 attempt 的迟到结果只返回 stale。
-- 来源新旧由 adapter 分配、跨重启持久化的 per-source `inputRevision` 判定，不依赖 Windows 墙上时钟。
+- 来源新旧由 adapter 分配、跨重启持久化的 per-source `inputRevision` 判定，Queue 另行持久 revision/hash/pipeline high-watermark，不依赖 Windows 墙上时钟。
 - Queue snapshot 采用 strict、显式版本化 schema；持久结构扩展必须通过版本升级和迁移完成。
 - applying 在 Commit E 的事务日志可用前 fail closed，并保持不可绕过的 recovery-required gate。
 
@@ -159,12 +159,13 @@ Exit criteria:
 - 项目切换和重启不丢 job、不产生重复 active job；中断 attempt 采用 at-least-once，可能重放模型调用。
 - 取消不会删除已经存在或被多个来源共享的页面。
 
-### Commit E — Recoverable ChangeSet Application ← Next
+### Commit E — Recoverable ChangeSet Application ✅
 
 Target files:
 
 ```text
 src/knowledge/changeset/
+├── ApplyCommitCoordinator.ts
 ├── ChangeSetValidator.ts
 ├── ChangeSetTransaction.ts
 ├── TransactionStorage.ts
@@ -173,17 +174,32 @@ src/knowledge/changeset/
 
 Scope:
 
-- 路径越界、重复目标、before-hash 冲突和 citation/link validation。
-- pre-state journal、deterministic write order、commit marker 和 startup recovery。
+- 路径越界、重复/重叠目标、before-hash 冲突和 citation/link/OKF validation。
+- 完整 pre-state、accepted ChangeSet 和 Bundle boundary 进入 Vault-global 单活动 journal。
+- Windows deterministic write order、单文件原子 compare-and-swap、写后复验、commit marker 和幂等 startup roll-forward。
+- divergent file state 进入 sticky `recovery_required`，不自动 rollback、不覆盖并发用户编辑。
+- Transaction journal v2 将 source id、source hash、pipeline fingerprint、input revision 与 job attempt/start 绑定为完整 claim；ChangeSet 必须引用该 source。
+- applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，不能直接把 durable Queue job 标为 completed。审核接受先进入新的 durable applying claim，同样走 transaction/coordinator。
+- Queue snapshot v2 以 exact `applyClaim` 和 `commit_pending_ack` marker 连接 active/recovered applying job 与 committed journal；审核路径额外绑定 accepted ChangeSet id 与 canonical digest。v1 processing/applying 可以从原始 claim 严格迁移；无法重建 exact startedAt 的 v1 failed/applying 明确 fail closed。
+- 固定 `queue claim verify → manifest → queue marker → journal ack → queue release` 的协议；前者只读，后四步持久且均可在崩溃后重试收敛。
 - 明确 Obsidian Vault API 不提供真正跨文件原子性。
 
 Exit criteria:
 
 - 崩溃注入覆盖每个写入阶段。
-- 恢复后不存在“任务/manifest 成功但页面未完成”。
+- 纯事务与协调器层已证明：页面 commit marker 之前不会推进任务或 Manifest 成功，任一账本断点均可重试。
 - Raw Source target 永远被拒绝，除非未来出现独立显式动作契约。
 
-### Commit F — Provider-neutral Compile Port
+Runtime integration boundary before real Vault writes:
+
+- 首个真实 Windows adapter/UI 必须同步加入 Windows Desktop platform guard、非支持平台用户提示，并明确更新 `manifest.json` 的 desktop-only 决策与相应用户文档。
+- 实现 Windows/Vault `TransactionStorage`、`QueueStorage` 与 `KnowledgeFileStore.compareAndSwap` adapter；compare-and-delete 同样必须原子，不能用普通 read + delete 冒充。
+- 实现 `ApplyCommitManifestPort` 的 exact-idempotency adapter/ledger；必须按 transaction id/revision、ChangeSet digest 与 receipt 防重，且对同 key 不同 payload fail closed。
+- journal 化并复证 schema、非 target link 和 source artifact 的 semantic read-set，避免崩溃恢复时依赖已经漂移。
+- 在接入真实写盘前决定 mutation intent：当前 content-addressed at-least-once 恢复存在“CAS 后、progress 前崩溃，再被用户恢复为精确 before”这一 ABA 取舍。
+- 为 `recovery_required` 增加明确的重新校验、继续、回滚或放弃操作；在此之前冲突只保持 fail closed。
+
+### Commit F — Provider-neutral Compile Port ← Next
 
 Target files:
 

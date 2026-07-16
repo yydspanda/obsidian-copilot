@@ -1,3 +1,7 @@
+export * from "@/knowledge/changeset/ApplyCommitCoordinator";
+export * from "@/knowledge/changeset/ChangeSetTransaction";
+export * from "@/knowledge/changeset/ChangeSetValidator";
+export * from "@/knowledge/changeset/TransactionStorage";
 export * from "@/knowledge/ingest/queue/IngestQueue";
 export * from "@/knowledge/ingest/queue/QueueStorage";
 export * from "@/knowledge/ingest/queue/RetryPolicy";

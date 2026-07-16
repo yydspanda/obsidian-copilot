@@ -1,6 +1,9 @@
 import {
   IngestExecutorError,
   IngestQueue,
+  IngestQueueApplyCommitConflictError,
+  IngestQueueApplyCommitPendingError,
+  IngestQueueApplyReceiptRequiredError,
   IngestQueueBundleMismatchError,
   IngestQueueIncompatibleVersionError,
   IngestQueueInfrastructureError,
@@ -17,10 +20,15 @@ import {
   type IngestExecutor,
   type IngestQueueEvent,
 } from "@/knowledge/ingest/queue/IngestQueue";
+import type { TransactionCommitReceipt } from "@/knowledge/changeset/ChangeSetTransaction";
 import {
+  INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
   parseIngestQueueSnapshot,
+  type IngestApplyClaimMarker,
   type IngestQueueSnapshot,
+  type IngestRerunRequest,
+  type IngestSourceHighWatermark,
   type QueueStorage,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import { ExponentialRetryPolicy } from "@/knowledge/ingest/queue/RetryPolicy";
@@ -68,6 +76,33 @@ function cloneJson<T>(value: T): T {
 }
 
 /**
+ * Derives one highest source observation for a synthetic test snapshot.
+ *
+ * @param jobs - Durable test jobs
+ * @param reruns - Durable test rerun payloads
+ * @returns One high-watermark per represented source
+ */
+function deriveTestHighWatermarks(
+  jobs: readonly KnowledgeIngestJob[],
+  reruns: readonly IngestRerunRequest[]
+): IngestSourceHighWatermark[] {
+  const values = new Map<string, IngestSourceHighWatermark>();
+  for (const record of [...jobs, ...reruns]) {
+    const current = values.get(record.sourceId);
+    if (!current || record.inputRevision > current.inputRevision) {
+      values.set(record.sourceId, {
+        sourceId: record.sourceId,
+        sourceContentHash: record.sourceContentHash,
+        pipelineFingerprint: record.pipelineFingerprint,
+        inputRevision: record.inputRevision,
+        observedAt: record.updatedAt,
+      });
+    }
+  }
+  return [...values.values()];
+}
+
+/**
  * Creates a valid queue snapshot suitable for storage seeding.
  *
  * @param bundleId - Bundle identity
@@ -78,14 +113,17 @@ function createSnapshot(
   bundleId = "personal",
   overrides: Partial<IngestQueueSnapshot> = {}
 ): IngestQueueSnapshot {
+  const jobs = overrides.jobs ?? [];
+  const reruns = overrides.reruns ?? [];
   return {
-    version: 1,
+    version: INGEST_QUEUE_VERSION,
     bundleId,
     revision: 0,
     control: { status: "running" },
-    jobs: [],
-    reruns: [],
+    jobs,
+    reruns,
     ...overrides,
+    sourceHighWatermarks: overrides.sourceHighWatermarks ?? deriveTestHighWatermarks(jobs, reruns),
   };
 }
 
@@ -121,6 +159,8 @@ class InMemoryQueueStorage implements QueueStorage {
   public readCount = 0;
   public writeAttempts = 0;
   public successfulWrites = 0;
+  public readBarrier?: Promise<void>;
+  public onRead?: () => void;
 
   /**
    * Seeds unknown persisted JSON without repository validation.
@@ -175,6 +215,8 @@ class InMemoryQueueStorage implements QueueStorage {
    */
   async read(bundleId: string): Promise<unknown> {
     this.readCount += 1;
+    this.onRead?.();
+    await this.readBarrier;
     return this.get(bundleId);
   }
 
@@ -284,7 +326,7 @@ interface QueueHarness {
  */
 function createHarness(
   handler: (context: IngestExecutionContext) => Promise<IngestExecutionResult> = async () => ({
-    kind: "completed",
+    kind: "no_changes",
     changeSetId: "changeset-1",
   }),
   maxAttempts = 3
@@ -339,6 +381,61 @@ function createRequest(
   };
 }
 
+/**
+ * Creates one valid committed ChangeSet receipt for queue reconciliation tests.
+ *
+ * @param overrides - Receipt fields to replace
+ * @returns Durable transaction commit proof
+ */
+type CommitReceiptOverrides = Omit<Partial<TransactionCommitReceipt>, "jobClaim"> & {
+  jobClaim?: Partial<TransactionCommitReceipt["jobClaim"]>;
+};
+
+function createCommitReceipt(overrides: CommitReceiptOverrides = {}): TransactionCommitReceipt {
+  const { jobClaim, ...receiptOverrides } = overrides;
+  return {
+    transactionId: "transaction-1",
+    commitRevision: 4,
+    bundleId: "personal",
+    changeSetId: "changeset-committed",
+    changeSetDigest: HASH_D,
+    jobClaim: {
+      jobId: "job-1",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      attempt: 1,
+      startedAt: 100,
+      ...jobClaim,
+    },
+    committedAt: 120,
+    targets: [{ path: "Wiki/Page.md", kind: "file", contentHash: HASH_C }],
+    ...receiptOverrides,
+  };
+}
+
+/**
+ * Creates the exact queue claim persisted at the applying boundary.
+ *
+ * @param overrides - Claim fields to replace
+ * @returns Durable apply claim marker
+ */
+function createApplyClaimMarker(
+  overrides: Partial<IngestApplyClaimMarker> = {}
+): IngestApplyClaimMarker {
+  return {
+    jobId: "job-1",
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision: 1,
+    attempt: 1,
+    startedAt: 110,
+    ...overrides,
+  };
+}
+
 describe("IngestQueue persistence and enqueue", () => {
   it("loads a missing queue without eagerly writing it", async () => {
     const { queue, storage } = createHarness();
@@ -349,7 +446,7 @@ describe("IngestQueue persistence and enqueue", () => {
 
   it("fails closed for incompatible, mismatched, and malformed persisted JSON", async () => {
     const { queue, storage } = createHarness();
-    storage.seed("versioned", { ...createSnapshot("versioned"), version: 2 });
+    storage.seed("versioned", { ...createSnapshot("versioned"), version: 3 });
     storage.seed("mismatch", createSnapshot("other"));
     storage.seed("malformed", { ...createSnapshot("malformed"), jobs: [{ status: "mystery" }] });
 
@@ -399,7 +496,7 @@ describe("IngestQueue execution and reruns", () => {
       await context.reportStage("analyzing");
       await context.reportStage("generating");
       await context.reportStage("validating");
-      return { kind: "completed", changeSetId: "changeset-final" };
+      return { kind: "no_changes", changeSetId: "changeset-final" };
     });
     await harness.queue.enqueue(createRequest());
 
@@ -420,7 +517,7 @@ describe("IngestQueue execution and reruns", () => {
     );
   });
 
-  it("waits for review and promotes a latest rerun only after review completes", async () => {
+  it("waits for coordinated apply and promotes a latest rerun only after commit proof", async () => {
     const deferred = createDeferred<IngestExecutionResult>();
     const started = createDeferred<void>();
     const harness = createHarness(async () => {
@@ -457,7 +554,53 @@ describe("IngestQueue execution and reruns", () => {
     });
 
     harness.setNow(130);
-    await harness.queue.completeReview("personal", "job-1");
+    const applying = await harness.queue.beginReviewApply("personal", "job-1", {
+      changeSetId: "changeset-review",
+      changeSetDigest: HASH_D,
+    });
+    expect(applying).toMatchObject({ status: "processing", stage: "applying", startedAt: 130 });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      reruns: [expect.any(Object)],
+      applyClaim: {
+        jobId: "job-1",
+        reviewedChangeSet: {
+          changeSetId: "changeset-review",
+          changeSetDigest: HASH_D,
+        },
+        startedAt: 130,
+      },
+    });
+    const receipt = createCommitReceipt({
+      changeSetId: "changeset-review",
+      jobClaim: {
+        jobId: applying.id,
+        sourceId: applying.sourceId,
+        sourceContentHash: applying.sourceContentHash,
+        pipelineFingerprint: applying.pipelineFingerprint,
+        inputRevision: applying.inputRevision,
+        attempt: applying.attempt,
+        startedAt: applying.startedAt,
+      },
+      committedAt: 140,
+    });
+    await expect(
+      harness.queue.verifyApplyRecovery({
+        ...receipt,
+        changeSetId: "changeset-not-reviewed",
+      })
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitConflictError);
+    await expect(
+      harness.queue.verifyApplyRecovery({
+        ...receipt,
+        changeSetDigest: HASH_C,
+      })
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitConflictError);
+    await expect(harness.queue.verifyApplyRecovery(receipt)).resolves.toMatchObject({
+      status: "processing",
+      stage: "applying",
+    });
+    await harness.queue.resolveApplyRecovery(receipt);
+    await harness.queue.finalizeApplyRecovery("personal", receipt.transactionId);
     const reviewed = harness.storage.getSnapshot("personal");
     expect(reviewed.reruns).toEqual([]);
     expect(reviewed.jobs).toEqual(
@@ -473,6 +616,98 @@ describe("IngestQueue execution and reruns", () => {
     );
   });
 
+  it("snapshots reviewed ChangeSet identity before asynchronous queue storage", async () => {
+    const harness = createHarness(async () => ({
+      kind: "awaiting_review",
+      changeSetId: "changeset-review",
+    }));
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    const readStarted = createDeferred<void>();
+    const releaseRead = createDeferred<void>();
+    harness.storage.onRead = () => readStarted.resolve();
+    harness.storage.readBarrier = releaseRead.promise;
+    const reviewedChangeSet = {
+      changeSetId: "changeset-review",
+      changeSetDigest: HASH_D,
+    };
+
+    const applying = harness.queue.beginReviewApply("personal", "job-1", reviewedChangeSet);
+    await readStarted.promise;
+    reviewedChangeSet.changeSetDigest = HASH_C;
+    releaseRead.resolve();
+
+    await expect(applying).resolves.toMatchObject({ status: "processing", stage: "applying" });
+    expect(harness.storage.getSnapshot("personal").applyClaim).toMatchObject({
+      reviewedChangeSet: {
+        changeSetId: "changeset-review",
+        changeSetDigest: HASH_D,
+      },
+    });
+  });
+
+  it("deduplicates equivalent newer observations without mutating an applying claim", async () => {
+    const started = createDeferred<IngestExecutionContext>();
+    const result = createDeferred<IngestExecutionResult>();
+    const harness = createHarness(async (context) => {
+      await context.reportStage("applying");
+      started.resolve(context);
+      return result.promise;
+    });
+    await harness.queue.enqueue(createRequest());
+    const running = harness.queue.runNext("personal");
+    const context = await started.promise;
+
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 3 }))).resolves.toMatchObject(
+      { kind: "deduplicated", job: { inputRevision: 1 } }
+    );
+    await expect(
+      harness.queue.enqueue(createRequest({ sourceContentHash: HASH_C, inputRevision: 2 }))
+    ).resolves.toMatchObject({ kind: "deduplicated", job: { inputRevision: 1 } });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ inputRevision: 1, stage: "applying" })],
+      applyClaim: { inputRevision: 1, startedAt: context.job.startedAt },
+      reruns: [],
+      sourceHighWatermarks: [
+        expect.objectContaining({ sourceContentHash: HASH_A, inputRevision: 3 }),
+      ],
+    });
+
+    result.resolve({
+      kind: "completed",
+      changeSetId: "changeset-committed",
+      commitReceipt: createCommitReceipt({
+        jobClaim: {
+          jobId: context.job.id,
+          sourceId: context.job.sourceId,
+          sourceContentHash: context.job.sourceContentHash,
+          pipelineFingerprint: context.job.pipelineFingerprint,
+          inputRevision: context.job.inputRevision,
+          attempt: context.job.attempt,
+          startedAt: context.job.startedAt,
+        },
+      }),
+    });
+    const committed = await running;
+    expect(committed).toMatchObject({ kind: "commit_ready", jobId: "job-1" });
+    if (committed.kind !== "commit_ready") {
+      throw new Error("Expected coordinated commit proof");
+    }
+    await harness.queue.resolveApplyRecovery(committed.receipt);
+    await harness.queue.finalizeApplyRecovery("personal", committed.receipt.transactionId);
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 4 }))).resolves.toMatchObject(
+      { kind: "deduplicated", job: { status: "completed" } }
+    );
+    await expect(
+      harness.queue.enqueue(createRequest({ sourceContentHash: HASH_C, inputRevision: 2 }))
+    ).resolves.toMatchObject({ kind: "deduplicated", job: { status: "completed" } });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ status: "completed", inputRevision: 1 })],
+      reruns: [],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 4 })],
+    });
+  });
+
   it("promotes exactly one latest rerun after direct completion", async () => {
     const deferred = createDeferred<IngestExecutionResult>();
     const started = createDeferred<void>();
@@ -486,7 +721,7 @@ describe("IngestQueue execution and reruns", () => {
     await harness.queue.enqueue(createRequest({ sourceContentHash: HASH_C, inputRevision: 2 }));
     await harness.queue.enqueue(createRequest({ sourceContentHash: HASH_D, inputRevision: 3 }));
 
-    deferred.resolve({ kind: "completed", changeSetId: "changeset-old" });
+    deferred.resolve({ kind: "no_changes", changeSetId: "changeset-old" });
     await running;
 
     const snapshot = harness.storage.getSnapshot("personal");
@@ -518,7 +753,7 @@ describe("IngestQueue execution and reruns", () => {
       reruns: [],
     });
 
-    deferred.resolve({ kind: "completed", changeSetId: "changeset-reverted" });
+    deferred.resolve({ kind: "no_changes", changeSetId: "changeset-reverted" });
     await running;
     expect(
       harness.storage.getSnapshot("personal").jobs.filter((job) => job.status === "pending")
@@ -560,7 +795,7 @@ describe("IngestQueue execution and reruns", () => {
     const harness = createHarness(async (context) => {
       await context.reportStage("generating");
       await context.reportStage("analyzing");
-      return { kind: "completed", changeSetId: "unreachable" };
+      return { kind: "no_changes", changeSetId: "unreachable" };
     });
     await harness.queue.enqueue(createRequest());
 
@@ -591,7 +826,7 @@ describe("IngestQueue retries and rate limits", () => {
           rateLimited: false,
         });
       }
-      return { kind: "completed", changeSetId: "changeset-after-retry" };
+      return { kind: "no_changes", changeSetId: "changeset-after-retry" };
     });
     await harness.queue.enqueue(createRequest());
 
@@ -645,7 +880,7 @@ describe("IngestQueue retries and rate limits", () => {
           retryAfterMs: 500,
         });
       }
-      return { kind: "completed", changeSetId: "changeset-resumed" };
+      return { kind: "no_changes", changeSetId: "changeset-resumed" };
     });
     await harness.queue.enqueue(createRequest());
 
@@ -712,6 +947,140 @@ describe("IngestQueue retries and rate limits", () => {
 });
 
 describe("IngestQueue pause, cancellation, review, and recovery", () => {
+  it("fails closed when applying completion omits transaction commit proof", async () => {
+    const harness = createHarness(async (context) => {
+      await context.reportStage("applying");
+      return {
+        kind: "completed",
+        changeSetId: "changeset-unproved",
+      } as unknown as IngestExecutionResult;
+    });
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "failed",
+    });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "paused", reason: "recovery_required" },
+      jobs: [expect.objectContaining({ status: "failed", stage: "applying" })],
+      applyClaim: { jobId: "job-1", startedAt: 100 },
+    });
+  });
+
+  it("rejects commit proof from an execution that never entered applying", async () => {
+    const harness = createHarness(async () => ({
+      kind: "completed",
+      changeSetId: "changeset-misplaced",
+      commitReceipt: createCommitReceipt({ changeSetId: "changeset-misplaced" }),
+    }));
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).rejects.toBeInstanceOf(
+      IngestQueueApplyReceiptRequiredError
+    );
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "paused", reason: "startup_recovery" },
+      jobs: [expect.objectContaining({ status: "pending" })],
+    });
+  });
+
+  it("retains a committed apply marker until journal acknowledgement is finalized", async () => {
+    const harness = createHarness(async (context) => {
+      await context.reportStage("applying");
+      return {
+        kind: "completed",
+        changeSetId: "changeset-committed",
+        commitReceipt: createCommitReceipt({
+          jobClaim: {
+            jobId: context.job.id,
+            sourceId: context.job.sourceId,
+            sourceContentHash: context.job.sourceContentHash,
+            pipelineFingerprint: context.job.pipelineFingerprint,
+            inputRevision: context.job.inputRevision,
+            attempt: context.job.attempt,
+            startedAt: context.job.startedAt,
+          },
+        }),
+      };
+    });
+    await harness.queue.enqueue(createRequest());
+
+    const run = await harness.queue.runNext("personal");
+    expect(run).toMatchObject({
+      kind: "commit_ready",
+      jobId: "job-1",
+    });
+    if (run.kind !== "commit_ready") {
+      throw new Error("Expected durable commit proof before queue completion");
+    }
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "running" },
+      jobs: [expect.objectContaining({ status: "processing", stage: "applying" })],
+      applyClaim: { jobId: "job-1", startedAt: 100 },
+    });
+    expect(harness.storage.getSnapshot("personal").applyCommit).toBeUndefined();
+
+    await expect(harness.queue.verifyApplyRecovery(run.receipt)).resolves.toMatchObject({
+      status: "processing",
+      stage: "applying",
+    });
+    await harness.queue.resolveApplyRecovery(run.receipt);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "paused", reason: "commit_pending_ack" },
+      jobs: [
+        expect.objectContaining({
+          id: "job-1",
+          status: "completed",
+          changeSetId: "changeset-committed",
+        }),
+      ],
+      applyCommit: {
+        transactionId: "transaction-1",
+        jobId: "job-1",
+        attempt: 1,
+        startedAt: 100,
+      },
+    });
+    await expect(harness.queue.resume("personal")).rejects.toBeInstanceOf(
+      IngestQueueApplyCommitPendingError
+    );
+    await harness.queue.pause("personal", "Cannot replace commit gate");
+    expect(harness.storage.getSnapshot("personal").control).toMatchObject({
+      reason: "commit_pending_ack",
+    });
+    await expect(
+      harness.queue.finalizeApplyRecovery("personal", "transaction-other")
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitConflictError);
+
+    const finalized = await harness.queue.finalizeApplyRecovery("personal", "transaction-1");
+    expect(finalized).toMatchObject({
+      control: { status: "paused", reason: "startup_recovery" },
+    });
+    expect(finalized.applyCommit).toBeUndefined();
+    await expect(harness.queue.finalizeApplyRecovery("personal", "transaction-1")).resolves.toEqual(
+      finalized
+    );
+    await expect(harness.queue.verifyApplyRecovery(run.receipt)).rejects.toBeInstanceOf(
+      IngestQueueApplyCommitConflictError
+    );
+  });
+
+  it("never treats marker-free no-change completion as transaction recovery proof", async () => {
+    const harness = createHarness();
+    await harness.queue.enqueue(createRequest());
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "completed",
+    });
+
+    await expect(
+      harness.queue.verifyApplyRecovery(
+        createCommitReceipt({ changeSetId: "changeset-1", committedAt: 120 })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitConflictError);
+  });
+
   it("aborts active non-applying work only after persisting a paused state", async () => {
     const started = createDeferred<void>();
     const harness = createHarness(async (context) => {
@@ -805,11 +1174,15 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     await expect(applyHarness.queue.cancel("personal", "job-1")).rejects.toBeInstanceOf(
       IngestQueueTransitionError
     );
-    applying.resolve({ kind: "completed", changeSetId: "changeset-applied" });
-    await running;
+    applying.resolve({
+      kind: "completed",
+      changeSetId: "changeset-applied",
+      commitReceipt: createCommitReceipt({ changeSetId: "changeset-applied" }),
+    });
+    await expect(running).resolves.toMatchObject({ kind: "commit_ready" });
   });
 
-  it("pauses only the gate during applying and lets the safe boundary finish", async () => {
+  it("pauses only the gate during applying and returns proof without early queue success", async () => {
     const applying = createDeferred<IngestExecutionResult>();
     const applyingStarted = createDeferred<AbortSignal>();
     const harness = createHarness(async (context) => {
@@ -828,17 +1201,27 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
       jobs: [expect.objectContaining({ status: "processing", stage: "applying" })],
     });
 
-    applying.resolve({ kind: "completed", changeSetId: "changeset-safe-apply" });
-    await expect(running).resolves.toMatchObject({ status: "completed" });
-    expect(harness.storage.getSnapshot("personal").control.status).toBe("paused");
+    applying.resolve({
+      kind: "completed",
+      changeSetId: "changeset-safe-apply",
+      commitReceipt: createCommitReceipt({ changeSetId: "changeset-safe-apply" }),
+    });
+    await expect(running).resolves.toMatchObject({ kind: "commit_ready" });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "paused", reason: "user" },
+      jobs: [expect.objectContaining({ status: "processing", stage: "applying" })],
+    });
   });
 
   it("rejects illegal review and explicit retry transitions", async () => {
     const harness = createHarness();
     await harness.queue.enqueue(createRequest());
-    await expect(harness.queue.completeReview("personal", "job-1")).rejects.toBeInstanceOf(
-      IngestQueueTransitionError
-    );
+    await expect(
+      harness.queue.beginReviewApply("personal", "job-1", {
+        changeSetId: "changeset-1",
+        changeSetDigest: HASH_D,
+      })
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
 
     harness.executor.handler = async () => {
       throw new IngestExecutorError({
@@ -932,11 +1315,24 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
       stage: "applying",
       startedAt: 110,
     };
-    harness.storage.seed("personal", createSnapshot("personal", { revision: 4, jobs: [applying] }));
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [applying],
+        applyClaim: createApplyClaimMarker(),
+      })
+    );
     harness.setNow(200);
 
     const recovered = await harness.queue.recoverOnStartup("personal");
     expect(recovered.control).toMatchObject({ status: "paused", reason: "recovery_required" });
+    expect(recovered.applyClaim).toMatchObject({
+      jobId: "job-1",
+      attempt: 1,
+      startedAt: 110,
+      sourceId: "source-1",
+    });
     expect(recovered.jobs[0]).toMatchObject({ status: "failed", stage: "applying" });
     const failed = recovered.jobs[0];
     if (failed.status !== "failed") {
@@ -947,6 +1343,76 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     await expect(harness.queue.resume("personal")).rejects.toBeInstanceOf(
       IngestQueueRecoveryRequiredError
     );
+  });
+
+  it("reconciles an interrupted apply only for its exact committed job attempt", async () => {
+    const harness = createHarness();
+    const applying: KnowledgeIngestJob = {
+      ...createPendingJob(),
+      attempt: 1,
+      updatedAt: 110,
+      status: "processing",
+      stage: "applying",
+      startedAt: 110,
+    };
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [applying],
+        applyClaim: createApplyClaimMarker(),
+      })
+    );
+    harness.setNow(200);
+    await harness.queue.recoverOnStartup("personal");
+    const receipt = createCommitReceipt({
+      jobClaim: { jobId: "job-1", attempt: 1, startedAt: 110 },
+      committedAt: 150,
+    });
+
+    await expect(
+      harness.queue.resolveApplyRecovery({
+        ...receipt,
+        jobClaim: { ...receipt.jobClaim, attempt: 2 },
+      })
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitConflictError);
+    await expect(
+      harness.queue.verifyApplyRecovery({
+        ...receipt,
+        jobClaim: { ...receipt.jobClaim, startedAt: 111 },
+      })
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitConflictError);
+    await expect(
+      harness.queue.verifyApplyRecovery({
+        ...receipt,
+        jobClaim: { ...receipt.jobClaim, sourceContentHash: HASH_C },
+      })
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitConflictError);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "paused", reason: "recovery_required" },
+      jobs: [expect.objectContaining({ status: "failed", stage: "applying" })],
+    });
+
+    await expect(harness.queue.verifyApplyRecovery(receipt)).resolves.toMatchObject({
+      status: "failed",
+      stage: "applying",
+    });
+    await expect(harness.queue.resolveApplyRecovery(receipt)).resolves.toMatchObject({
+      id: "job-1",
+      status: "completed",
+      attempt: 1,
+      changeSetId: "changeset-committed",
+    });
+    await expect(harness.queue.resolveApplyRecovery(receipt)).resolves.toMatchObject({
+      status: "completed",
+    });
+    await expect(harness.queue.getPendingApplyCommit("personal")).resolves.toEqual(
+      expect.objectContaining({ transactionId: "transaction-1", startedAt: 110 })
+    );
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "paused", reason: "commit_pending_ack" },
+      jobs: [expect.objectContaining({ status: "completed" })],
+    });
   });
 });
 
@@ -1059,7 +1525,7 @@ describe("IngestQueue concurrency and adapter failures", () => {
     const running = harness.queue.runNext("personal");
     await started.promise;
     harness.storage.planWriteFailure(new Error("finalization disk failure"));
-    completion.resolve({ kind: "completed", changeSetId: "changeset-ambiguous" });
+    completion.resolve({ kind: "no_changes", changeSetId: "changeset-ambiguous" });
 
     await expect(running).rejects.toThrow("finalization disk failure");
     expect(harness.storage.getSnapshot("personal")).toMatchObject({
@@ -1080,7 +1546,7 @@ describe("IngestQueue concurrency and adapter failures", () => {
       started.resolve();
       await proceed.promise;
       await context.reportStage("analyzing");
-      return { kind: "completed", changeSetId: "unreachable" };
+      return { kind: "no_changes", changeSetId: "unreachable" };
     });
     await harness.queue.enqueue(createRequest());
     const running = harness.queue.runNext("personal");
@@ -1149,7 +1615,7 @@ describe("IngestQueue concurrency and adapter failures", () => {
       return completion.promise;
     });
     const secondExecutor = new TestExecutor(async () => ({
-      kind: "completed",
+      kind: "no_changes",
       changeSetId: "should-not-run",
     }));
     let nextId = 1;
@@ -1172,7 +1638,7 @@ describe("IngestQueue concurrency and adapter failures", () => {
       jobId: "job-1",
     });
     expect(secondExecutor.calls).toHaveLength(0);
-    completion.resolve({ kind: "completed", changeSetId: "changeset-first" });
+    completion.resolve({ kind: "no_changes", changeSetId: "changeset-first" });
     await running;
   });
 
@@ -1185,7 +1651,7 @@ describe("IngestQueue concurrency and adapter failures", () => {
       return oldCompletion.promise;
     });
     const newExecutor = new TestExecutor(async () => ({
-      kind: "completed",
+      kind: "no_changes",
       changeSetId: "changeset-new-attempt",
     }));
     let nextId = 1;
@@ -1208,7 +1674,7 @@ describe("IngestQueue concurrency and adapter failures", () => {
     await expect(newQueue.runNext("personal")).resolves.toMatchObject({
       status: "completed",
     });
-    oldCompletion.resolve({ kind: "completed", changeSetId: "changeset-old-attempt" });
+    oldCompletion.resolve({ kind: "no_changes", changeSetId: "changeset-old-attempt" });
     await expect(oldRun).resolves.toEqual({ kind: "stale", jobId: "job-1" });
     expect(storage.getSnapshot("personal").jobs[0]).toMatchObject({
       attempt: 2,

@@ -32,9 +32,11 @@
 - [x] 建立 Markdown 文本、PDF locator、OKF round-trip、Windows 路径/碰撞、文件占用和中文/emoji fixture。
 - [x] 完成 Source Manifest Repository 与可注入 Storage Port；支持 stable identity、rename、freshness、扩展字段保真与 revision CAS。
 - [x] 修复并发 success/failure 覆盖竞态，以单调观察时间和有界 CAS retry 保留较新状态。
-- [x] 完成持久 Ingest Queue Core：严格快照、revision CAS、Bundle 隔离、claim ownership、同来源去重与 exactly-one latest rerun。
+- [x] 完成持久 Ingest Queue Core：严格快照、revision CAS、Bundle 隔离、claim ownership、同来源去重、durable source high-watermark 与 exactly-one latest rerun。
 - [x] 完成暂停/恢复/取消、显式审核、指数退避、最大重试、provider 限流暂停、错误脱敏与同会话基础设施失败恢复。
 - [x] 将 applying 设为事务安全边界；Commit E 日志完成前，中断或失败 apply 进入不可绕过的 recovery-required gate。
+- [x] 完成 accepted ChangeSet preflight、Vault-global pre-state journal、Windows 确定性写入、单文件原子 CAS、commit marker 与幂等 startup roll-forward。
+- [x] 完成 Queue v2 exact apply/commit marker、v1 严格迁移，以及 `queue claim verify → manifest → queue marker → journal ack → queue release` 协调器与全断点故障注入。
 
 ## Pending Tasks 📋
 
@@ -51,11 +53,18 @@
 - [x] 支持任务去重、处理中 latest rerun、暂停、取消、指数退避、重试、stale claim 防护和安全启动恢复。
 - [ ] 实现 Windows/Vault `QueueStorage` adapter 的原子 revision compare-and-replace，以及跨重启、并发安全的 per-source `inputRevision` 分配器。
 - [ ] 在接入长期 Activity UI 前定义 terminal job 归档/压缩策略，避免运行队列无限增长。
-- [ ] 实现 before-hash CAS、pre-state journal、确定性写入顺序、commit marker 和启动恢复。
-- [ ] 验证失败或崩溃后不会出现“任务/manifest 已成功但 Wiki 页面未完成”的状态。
+- [x] 实现 before-hash CAS、完整 pre-state journal、确定性写入顺序、commit marker 和启动 roll-forward。
+- [x] 在纯 core 协调器层验证任一断点后都不会出现“任务/manifest 已成功但 Wiki 页面未完成”的状态。
+- [ ] 实现 Windows/Vault `TransactionStorage` 的全局原子 slot，以及 `KnowledgeFileStore` 的原子 compare-and-write / compare-and-delete adapter；禁止用 read-then-write/delete 冒充。
+- [ ] 实现 exact `transactionId/revision/changeSetDigest/receipt` 幂等的 `ApplyCommitManifestPort` adapter/ledger；同 identity 重放必须是单一逻辑成功，同 key 不同 digest 必须 fail closed。
+- [ ] 将 schema、非 target link 与 source artifact 的 hash/read-set 写入 journal，并在首次写入与恢复前复证 semantic dependency。
+- [ ] 在真实写盘前决定 CAS 后、progress 前崩溃的 content ABA 策略：接受 content-addressed at-least-once，或增加 mutation-intent marker 并在精确 before 状态 fail closed。
+- [ ] 为 transaction `recovery_required` 增加显式重新校验、继续、回滚或放弃动作及 Knowledge Studio 恢复 UI。
+- [ ] 严格解析并脱敏 file/projection adapter 的运行时成功返回值，非法 adapter payload 统一映射为受控 infrastructure error。
 
 ### Slice 1C：Golden Flow 产品闭环
 
+- [ ] 在首个真实 Windows adapter/UI 接入时同步加入 Windows Desktop platform guard、非支持平台提示，并更新 `manifest.json` 的 desktop-only 决策与用户文档。
 - [ ] 在 Chat 文件拖入中增加 `Use in this chat` / `Add to Knowledge` 分流。
 - [ ] 完成单来源两阶段 compile，并限制生成阶段只能修改分析阶段确定的目标集合。
 - [ ] 扩展 ApplyView，支持多文件 create/update/delete、来源、校验和逐文件/逐块审核。
@@ -94,11 +103,18 @@
 - Windows Vault path 在领域边界选择“验证并拒绝”，不静默修复盘符、UNC、反斜杠、保留设备名或碰撞目标。
 - Pipeline fingerprint 只接受 allowlisted JSON 配置，并防御性拒绝 credential-like 字段。
 - Queue 的 `inputRevision` 必须由 source adapter 按 source 严格单调分配、跨重启保存，并在相同内容观察时同样推进；不得使用内存计数器或文件 mtime 代替。
+- Queue 在 claim 外持久每个 source 的 `sourceHighWatermarks`（revision + source hash + pipeline fingerprint）；等价的更新观察不能改写已认领输入，但必须推进 high-watermark 以拒绝后到的旧内容。
 - `QueueStorage.write` 的 expected revision 比较与完整 snapshot 替换必须是 adapter 内的同一原子操作。
 - Queue snapshot 使用 strict、显式版本化 schema；新增持久字段必须配套版本升级和迁移，不得依靠静默宽容读取。
 - Queue 执行语义是 at-least-once：持久 claim 保证同一时刻至多一个 active job，attempt ownership 拒绝迟到结果，但终态写入前崩溃仍可能重放模型调用。
 - EventSink 只提供非阻塞 post-commit 通知，持久 Queue snapshot 才是状态真相。
-- applying 在 ChangeSet journal 接入前不可取消、自动重试或普通恢复；失败后只能由 Commit E 的事务恢复流程解除 gate。
+- ChangeSet journal v2 使用 Vault-global 单活动槽；完整 Bundle、accepted ChangeSet、精确 before/after，以及 owning source id/hash/pipeline/input revision/job attempt/start 一并持久化；claim source 必须存在于 ChangeSet source refs。
+- 单文件写入只能通过 adapter 原子 compare-and-swap；全局 journal 提供可恢复语义，但 Obsidian Vault 不具备真正跨文件原子性。
+- 自动恢复只做幂等 roll-forward；divergent state 进入 sticky `recovery_required`，不自动 rollback 或覆盖用户编辑；committed marker 对后续用户修改保持权威。
+- Queue v2 使用 exact `applyClaim` 与 `commit_pending_ack` marker；前者从 active applying 开始保存，审核路径同时绑定 accepted ChangeSet id 与 canonical digest，启动恢复改为 failed 后仍原样保留；禁止用 job 生命周期范围近似匹配 startedAt。v1 processing/applying 可严格迁移其现有完整 claim；v1 failed/applying 因缺失原始 startedAt 只能明确 fail closed，等待人工恢复流程。
+- applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，Queue 在 Manifest 之前仍保持 processing/applying。审核接受转换为新的 durable applying claim，不能直接完成 job。
+- 页面提交后的协议固定为只读 `queue claim verify`，再持久执行 `manifest → queue marker → journal ack → queue release`；Manifest 写入必须按 exact transaction/revision/digest 幂等。
+- 清除 Queue marker 后仍保留 `startup_recovery` 暂停，必须由用户显式 resume backlog。
 
 ## Testing Checklist
 
@@ -109,7 +125,9 @@
 - [x] 检查新增 PRD、主方案与复用台账之间的链接和决策一致性。
 - [x] 检查 Markdown heading/fence/link 结构并运行 `git diff --check`；仓库没有安装 `node_modules`，未调用 Prettier。
 - [x] 确认没有修改 DeerFlow/SOC 文件或把 `.env.test` 纳入版本控制。
-- [x] Knowledge foundation 通过 TypeScript `noEmit`、目标 ESLint、Prettier check 与 11 个 Jest suite / 305 个测试。
+- [x] Knowledge foundation 通过 TypeScript `noEmit`、目标 ESLint、本次变更文件 Prettier check 与 16 个 Jest suite / 444 个测试。
+- [x] Commit E 集成后全仓单元回归通过：131 个 Jest suite / 2551 个测试；现有测试中的预期 console 警告不影响结果。
+- [ ] 全仓 `npm run format:check` 仍被本次未修改的既有 `src/LLMProviders/chatModelManager.ts` 格式基线阻塞；不在 Commit E 中夹带修改。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 
 ## Source Documents
