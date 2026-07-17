@@ -33,3 +33,9 @@ export {
 export * from "@/knowledge/model/types";
 export * from "@/knowledge/model/validation";
 export * from "@/knowledge/paths/vaultPath";
+export * from "@/knowledge/review/ChangeSetReviewRepository";
+export * from "@/knowledge/review/ReviewDecision";
+export * from "@/knowledge/review/ReviewStorage";
+export * from "@/knowledge/ui/KnowledgeStudioController";
+export * from "@/knowledge/ui/activityModel";
+export * from "@/knowledge/ui/platform";

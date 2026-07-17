@@ -302,7 +302,7 @@ Graphiti 必须可删、可重建，不参与核心写入事务。用户需显�
 1. 先独立实现纯 TS contract、strict schema、Windows path、hash/fingerprint、freshness 和 tests。
 2. 实现 Source Manifest repository、OKF parser/round-trip 和 ChangeSet transaction；后续需要 trust/review/OKF limits 时再按台账 Copy/Port。
 3. Port 可恢复队列契约；复用当前进度 UI。
-4. 扩展 ApplyView 为多文件写入前审核。
+4. 从 ApplyView 抽取纯 diff renderer，并以独立 Knowledge Review Core/UI 实现多文件写入前审核；legacy ApplyView 写入路径不复用。
 5. 完成单来源两阶段编译、事务、citation jump 和 unchanged skip。
 
 ### Slice 2 — Knowledge Studio and Daily Reliability

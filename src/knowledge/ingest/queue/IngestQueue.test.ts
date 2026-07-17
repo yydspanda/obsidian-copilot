@@ -8,8 +8,10 @@ import {
   IngestQueueIncompatibleVersionError,
   IngestQueueInfrastructureError,
   IngestQueueJobIdConflictError,
+  IngestQueueJobNotFoundError,
   IngestQueueObservationConflictError,
   IngestQueueRecoveryRequiredError,
+  IngestQueueReviewBundleMismatchError,
   IngestQueueRevisionOverflowError,
   IngestQueueTransitionError,
   IngestQueueValidationError,
@@ -18,7 +20,11 @@ import {
   type IngestExecutionContext,
   type IngestExecutionResult,
   type IngestExecutor,
+  type IngestAcceptedReviewDecisionReceipt,
+  type IngestPendingReviewDecisionReceipt,
   type IngestQueueEvent,
+  type IngestRejectedReviewDecisionReceipt,
+  type IngestReviewDecisionJobClaim,
 } from "@/knowledge/ingest/queue/IngestQueue";
 import type { TransactionCommitReceipt } from "@/knowledge/changeset/ChangeSetTransaction";
 import {
@@ -124,6 +130,8 @@ function createSnapshot(
     reruns,
     ...overrides,
     sourceHighWatermarks: overrides.sourceHighWatermarks ?? deriveTestHighWatermarks(jobs, reruns),
+    pendingReviews: overrides.pendingReviews ?? [],
+    reviewRejections: overrides.reviewRejections ?? [],
   };
 }
 
@@ -382,6 +390,127 @@ function createRequest(
 }
 
 /**
+ * Creates the exact queue attempt retained by a durable review record.
+ *
+ * @param overrides - Claim fields to replace
+ * @returns Strict review job claim
+ */
+function createReviewJobClaim(
+  overrides: Partial<IngestReviewDecisionJobClaim> = {}
+): IngestReviewDecisionJobClaim {
+  return {
+    jobId: "job-1",
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision: 1,
+    attempt: 1,
+    ...overrides,
+  };
+}
+
+type PendingReviewDecisionOverrides = Omit<
+  Partial<IngestPendingReviewDecisionReceipt>,
+  "jobClaim"
+> & {
+  jobClaim?: Partial<IngestReviewDecisionJobClaim>;
+};
+
+/**
+ * Creates one durable pending Review Store receipt.
+ *
+ * @param overrides - Receipt and nested claim fields to replace
+ * @returns Strict pending decision receipt
+ */
+function createPendingReviewDecision(
+  overrides: PendingReviewDecisionOverrides = {}
+): IngestPendingReviewDecisionReceipt {
+  const { jobClaim, ...receiptOverrides } = overrides;
+  return {
+    outcome: "pending",
+    bundleId: "personal",
+    changeSetId: "changeset-review",
+    proposalDigest: HASH_C,
+    recordRevision: 0,
+    recordedAt: 110,
+    ...receiptOverrides,
+    jobClaim: createReviewJobClaim(jobClaim),
+  };
+}
+
+/**
+ * Creates an executor outcome whose proposal is already durable in Review Store.
+ *
+ * @param overrides - Pending receipt fields to replace
+ * @returns Strict awaiting-review executor result
+ */
+function createAwaitingReviewResult(
+  overrides: PendingReviewDecisionOverrides = {}
+): IngestExecutionResult {
+  const reviewDecision = createPendingReviewDecision(overrides);
+  return { kind: "awaiting_review", changeSetId: reviewDecision.changeSetId, reviewDecision };
+}
+
+type AcceptedReviewDecisionOverrides = Omit<
+  Partial<IngestAcceptedReviewDecisionReceipt>,
+  "jobClaim"
+> & {
+  jobClaim?: Partial<IngestReviewDecisionJobClaim>;
+};
+
+/**
+ * Creates one terminal accepted Review Store receipt.
+ *
+ * @param overrides - Receipt and nested claim fields to replace
+ * @returns Strict accepted decision receipt
+ */
+function createAcceptedReviewDecision(
+  overrides: AcceptedReviewDecisionOverrides = {}
+): IngestAcceptedReviewDecisionReceipt {
+  const { jobClaim, ...receiptOverrides } = overrides;
+  return {
+    outcome: "accepted",
+    bundleId: "personal",
+    changeSetId: "changeset-review",
+    proposalDigest: HASH_C,
+    recordRevision: 1,
+    acceptedDigest: HASH_D,
+    acceptedAt: 120,
+    ...receiptOverrides,
+    jobClaim: createReviewJobClaim(jobClaim),
+  };
+}
+
+type RejectedReviewDecisionOverrides = Omit<
+  Partial<IngestRejectedReviewDecisionReceipt>,
+  "jobClaim"
+> & {
+  jobClaim?: Partial<IngestReviewDecisionJobClaim>;
+};
+
+/**
+ * Creates one terminal rejected Review Store receipt.
+ *
+ * @param overrides - Receipt and nested claim fields to replace
+ * @returns Strict rejected decision receipt
+ */
+function createRejectedReviewDecision(
+  overrides: RejectedReviewDecisionOverrides = {}
+): IngestRejectedReviewDecisionReceipt {
+  const { jobClaim, ...receiptOverrides } = overrides;
+  return {
+    outcome: "rejected",
+    bundleId: "personal",
+    changeSetId: "changeset-review",
+    proposalDigest: HASH_C,
+    recordRevision: 1,
+    rejectedAt: 120,
+    ...receiptOverrides,
+    jobClaim: createReviewJobClaim(jobClaim),
+  };
+}
+
+/**
  * Creates one valid committed ChangeSet receipt for queue reconciliation tests.
  *
  * @param overrides - Receipt fields to replace
@@ -446,7 +575,7 @@ describe("IngestQueue persistence and enqueue", () => {
 
   it("fails closed for incompatible, mismatched, and malformed persisted JSON", async () => {
     const { queue, storage } = createHarness();
-    storage.seed("versioned", { ...createSnapshot("versioned"), version: 3 });
+    storage.seed("versioned", { ...createSnapshot("versioned"), version: 4 });
     storage.seed("mismatch", createSnapshot("other"));
     storage.seed("malformed", { ...createSnapshot("malformed"), jobs: [{ status: "mystery" }] });
 
@@ -546,7 +675,7 @@ describe("IngestQueue execution and reruns", () => {
       sourceContentHash: HASH_D,
     });
 
-    deferred.resolve({ kind: "awaiting_review", changeSetId: "changeset-review" });
+    deferred.resolve(createAwaitingReviewResult());
     await expect(running).resolves.toMatchObject({ status: "awaiting_review" });
     expect(harness.storage.getSnapshot("personal")).toMatchObject({
       jobs: [expect.objectContaining({ status: "awaiting_review", rerunRequested: true })],
@@ -554,10 +683,8 @@ describe("IngestQueue execution and reruns", () => {
     });
 
     harness.setNow(130);
-    const applying = await harness.queue.beginReviewApply("personal", "job-1", {
-      changeSetId: "changeset-review",
-      changeSetDigest: HASH_D,
-    });
+    const acceptedDecision = createAcceptedReviewDecision({ acceptedAt: 130 });
+    const applying = await harness.queue.beginReviewApply("personal", acceptedDecision);
     expect(applying).toMatchObject({ status: "processing", stage: "applying", startedAt: 130 });
     expect(harness.storage.getSnapshot("personal")).toMatchObject({
       reruns: [expect.any(Object)],
@@ -614,27 +741,25 @@ describe("IngestQueue execution and reruns", () => {
         }),
       ])
     );
+    await expect(
+      harness.queue.beginReviewApply("personal", acceptedDecision)
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
   });
 
   it("snapshots reviewed ChangeSet identity before asynchronous queue storage", async () => {
-    const harness = createHarness(async () => ({
-      kind: "awaiting_review",
-      changeSetId: "changeset-review",
-    }));
+    const harness = createHarness(async () => createAwaitingReviewResult());
     await harness.queue.enqueue(createRequest());
     await harness.queue.runNext("personal");
     const readStarted = createDeferred<void>();
     const releaseRead = createDeferred<void>();
     harness.storage.onRead = () => readStarted.resolve();
     harness.storage.readBarrier = releaseRead.promise;
-    const reviewedChangeSet = {
-      changeSetId: "changeset-review",
-      changeSetDigest: HASH_D,
-    };
+    const reviewDecision = createAcceptedReviewDecision();
 
-    const applying = harness.queue.beginReviewApply("personal", "job-1", reviewedChangeSet);
+    const applying = harness.queue.beginReviewApply("personal", reviewDecision);
     await readStarted.promise;
-    reviewedChangeSet.changeSetDigest = HASH_C;
+    reviewDecision.acceptedDigest = HASH_C;
+    reviewDecision.proposalDigest = HASH_A;
     releaseRead.resolve();
 
     await expect(applying).resolves.toMatchObject({ status: "processing", stage: "applying" });
@@ -643,7 +768,46 @@ describe("IngestQueue execution and reruns", () => {
         changeSetId: "changeset-review",
         changeSetDigest: HASH_D,
       },
+      acceptedReview: {
+        proposalDigest: HASH_C,
+        recordRevision: 1,
+        acceptedAt: 120,
+      },
     });
+  });
+
+  it("replays only the exact accepted review receipt without another write or event", async () => {
+    const harness = createHarness(async () => createAwaitingReviewResult());
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    const decision = createAcceptedReviewDecision();
+    const revisionBefore = harness.storage.getSnapshot("personal").revision;
+
+    const first = await harness.queue.beginReviewApply("personal", decision);
+    const afterFirst = harness.storage.getSnapshot("personal");
+    expect(afterFirst.revision).toBe(revisionBefore + 1);
+    expect(harness.sink.events.filter(({ cause }) => cause === "review_accepted")).toHaveLength(1);
+
+    await expect(harness.queue.beginReviewApply("personal", decision)).resolves.toEqual(first);
+    expect(harness.storage.getSnapshot("personal").revision).toBe(afterFirst.revision);
+    expect(harness.sink.events.filter(({ cause }) => cause === "review_accepted")).toHaveLength(1);
+
+    await expect(
+      harness.queue.beginReviewApply(
+        "personal",
+        createAcceptedReviewDecision({ proposalDigest: HASH_A })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    await expect(
+      harness.queue.beginReviewApply("personal", createAcceptedReviewDecision({ acceptedAt: 121 }))
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    await expect(
+      harness.queue.beginReviewApply(
+        "personal",
+        createAcceptedReviewDecision({ recordRevision: 2 } as never)
+      )
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(harness.storage.getSnapshot("personal").revision).toBe(afterFirst.revision);
   });
 
   it("deduplicates equivalent newer observations without mutating an applying claim", async () => {
@@ -947,6 +1111,152 @@ describe("IngestQueue retries and rate limits", () => {
 });
 
 describe("IngestQueue pause, cancellation, review, and recovery", () => {
+  it("reconciles a durable pending review after startup recovery without a new attempt", async () => {
+    const execution = createDeferred<IngestExecutionResult>();
+    const started = createDeferred<void>();
+    const harness = createHarness(async () => {
+      started.resolve();
+      return execution.promise;
+    });
+    await harness.queue.enqueue(createRequest());
+    const running = harness.queue.runNext("personal");
+    await started.promise;
+
+    harness.setNow(120);
+    await harness.queue.recoverOnStartup("personal");
+    const recovered = harness.storage.getSnapshot("personal");
+    expect(recovered).toMatchObject({
+      control: { status: "paused", reason: "startup_recovery" },
+      jobs: [expect.objectContaining({ status: "pending", attempt: 1 })],
+      pendingReviews: [],
+    });
+
+    const pendingDecision = createPendingReviewDecision();
+    const revisionBefore = recovered.revision;
+    const reconciled = await harness.queue.reconcilePendingReview("personal", pendingDecision);
+    expect(reconciled).toMatchObject({
+      status: "awaiting_review",
+      changeSetId: "changeset-review",
+      attempt: 1,
+    });
+    const anchored = harness.storage.getSnapshot("personal");
+    expect(anchored.revision).toBe(revisionBefore + 1);
+    expect(anchored.pendingReviews).toEqual([
+      {
+        kind: "durable",
+        jobId: "job-1",
+        changeSetId: "changeset-review",
+        proposalDigest: HASH_C,
+        reviewRecordRevision: 0,
+        recordedAt: 110,
+      },
+    ]);
+    expect(harness.sink.events.filter(({ cause }) => cause === "awaiting_review")).toHaveLength(1);
+
+    await expect(
+      harness.queue.reconcilePendingReview("personal", pendingDecision)
+    ).resolves.toEqual(reconciled);
+    expect(harness.storage.getSnapshot("personal").revision).toBe(anchored.revision);
+    expect(harness.sink.events.filter(({ cause }) => cause === "awaiting_review")).toHaveLength(1);
+
+    execution.resolve(createAwaitingReviewResult());
+    await expect(running).resolves.toEqual({ kind: "stale", jobId: "job-1" });
+    expect(harness.executor.calls).toHaveLength(1);
+  });
+
+  it("upgrades a legacy awaiting-review anchor only from its exact durable pending record", async () => {
+    const harness = createHarness();
+    const awaitingReview: Extract<KnowledgeIngestJob, { status: "awaiting_review" }> = {
+      ...createPendingJob(),
+      attempt: 1,
+      updatedAt: 110,
+      status: "awaiting_review",
+      stage: "review",
+      changeSetId: "changeset-review",
+    };
+    harness.storage.seed("personal", {
+      version: 2,
+      bundleId: "personal",
+      revision: 3,
+      control: { status: "running" },
+      jobs: [awaitingReview],
+      reruns: [],
+      sourceHighWatermarks: deriveTestHighWatermarks([awaitingReview], []),
+    });
+
+    await expect(
+      harness.queue.reconcilePendingReview("personal", createPendingReviewDecision())
+    ).resolves.toMatchObject({ status: "awaiting_review", attempt: 1 });
+    const upgraded = harness.storage.getSnapshot("personal");
+    expect(upgraded).toMatchObject({
+      version: INGEST_QUEUE_VERSION,
+      revision: 4,
+      pendingReviews: [
+        {
+          kind: "durable",
+          jobId: "job-1",
+          changeSetId: "changeset-review",
+          proposalDigest: HASH_C,
+          reviewRecordRevision: 0,
+          recordedAt: 110,
+        },
+      ],
+    });
+
+    await expect(
+      harness.queue.reconcilePendingReview(
+        "personal",
+        createPendingReviewDecision({ proposalDigest: HASH_A })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    expect(harness.storage.getSnapshot("personal")).toEqual(upgraded);
+  });
+
+  it("fails closed on cross-Bundle, malformed, or stale review receipts", async () => {
+    const harness = createHarness(async () => createAwaitingReviewResult());
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    const before = harness.storage.getSnapshot("personal");
+
+    await expect(
+      harness.queue.beginReviewApply(
+        "personal",
+        createAcceptedReviewDecision({ bundleId: "other-bundle" })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueReviewBundleMismatchError);
+    await expect(
+      harness.queue.rejectReview(
+        "personal",
+        createRejectedReviewDecision({ bundleId: "other-bundle" })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueReviewBundleMismatchError);
+    await expect(
+      harness.queue.reconcilePendingReview(
+        "personal",
+        createPendingReviewDecision({ bundleId: "other-bundle" })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueReviewBundleMismatchError);
+    await expect(
+      harness.queue.beginReviewApply(
+        "personal",
+        createAcceptedReviewDecision({ jobClaim: { sourceContentHash: HASH_D } })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    await expect(
+      harness.queue.rejectReview(
+        "personal",
+        createRejectedReviewDecision({ jobClaim: { pipelineFingerprint: HASH_D } })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    await expect(
+      harness.queue.rejectReview("personal", {
+        ...createRejectedReviewDecision(),
+        outcome: "pending",
+      } as never)
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(harness.storage.getSnapshot("personal")).toEqual(before);
+  });
+
   it("fails closed when applying completion omits transaction commit proof", async () => {
     const harness = createHarness(async (context) => {
       await context.reportStage("applying");
@@ -1143,7 +1453,7 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     });
   });
 
-  it("cancels pending and review jobs but fails closed at the applying boundary", async () => {
+  it("cancels pending work but requires exact review rejection and blocks applying", async () => {
     const pendingHarness = createHarness();
     await pendingHarness.queue.enqueue(createRequest());
     await expect(pendingHarness.queue.cancel("personal", "job-1")).resolves.toMatchObject({
@@ -1151,14 +1461,15 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     });
     expect(pendingHarness.executor.calls).toHaveLength(0);
 
-    const reviewHarness = createHarness(async () => ({
-      kind: "awaiting_review",
-      changeSetId: "changeset-review",
-    }));
+    const reviewHarness = createHarness(async () => createAwaitingReviewResult());
     await reviewHarness.queue.enqueue(createRequest());
     await reviewHarness.queue.runNext("personal");
-    await expect(reviewHarness.queue.cancel("personal", "job-1")).resolves.toMatchObject({
-      status: "cancelled",
+    await expect(reviewHarness.queue.cancel("personal", "job-1")).rejects.toBeInstanceOf(
+      IngestQueueTransitionError
+    );
+    expect(reviewHarness.storage.getSnapshot("personal").jobs[0]).toMatchObject({
+      status: "awaiting_review",
+      changeSetId: "changeset-review",
     });
 
     const applying = createDeferred<IngestExecutionResult>();
@@ -1180,6 +1491,193 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
       commitReceipt: createCommitReceipt({ changeSetId: "changeset-applied" }),
     });
     await expect(running).resolves.toMatchObject({ kind: "commit_ready" });
+  });
+
+  it("does not begin review apply while the Bundle is paused", async () => {
+    const harness = createHarness(async () => createAwaitingReviewResult());
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    await harness.queue.pause("personal", "Review later");
+
+    await expect(
+      harness.queue.beginReviewApply("personal", createAcceptedReviewDecision())
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    const paused = harness.storage.getSnapshot("personal");
+    expect(paused).toMatchObject({
+      control: { status: "paused", reason: "user" },
+      jobs: [expect.objectContaining({ status: "awaiting_review" })],
+    });
+    expect(paused.applyClaim).toBeUndefined();
+  });
+
+  it("durably rejects one exact review and replays the same decision idempotently", async () => {
+    const harness = createHarness(async () => createAwaitingReviewResult());
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    harness.setNow(130);
+    const revisionBefore = harness.storage.getSnapshot("personal").revision;
+
+    const reviewDecision = createRejectedReviewDecision();
+    const rejected = await harness.queue.rejectReview("personal", reviewDecision);
+    expect(rejected).toMatchObject({
+      status: "cancelled",
+      stage: "cancelled",
+      cancelledAt: 130,
+      rerunRequested: false,
+    });
+    const durable = harness.storage.getSnapshot("personal");
+    expect(durable.revision).toBe(revisionBefore + 1);
+    expect(durable.reviewRejections).toEqual([
+      {
+        jobId: "job-1",
+        changeSetId: "changeset-review",
+        proposalDigest: HASH_C,
+        reviewRecordRevision: 1,
+        decisionAt: 120,
+        rejectedAt: 130,
+      },
+    ]);
+    expect(harness.sink.events.filter(({ cause }) => cause === "review_rejected")).toHaveLength(1);
+    expect(harness.executor.calls).toHaveLength(1);
+
+    await expect(harness.queue.rejectReview("personal", reviewDecision)).resolves.toEqual(rejected);
+    expect(harness.storage.getSnapshot("personal").revision).toBe(revisionBefore + 1);
+    expect(harness.sink.events.filter(({ cause }) => cause === "review_rejected")).toHaveLength(1);
+  });
+
+  it("converges after another queue instance durably records the same rejection", async () => {
+    const harness = createHarness(async () => createAwaitingReviewResult());
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    harness.setNow(140);
+    const current = harness.storage.getSnapshot("personal");
+    const reviewJob = current.jobs[0];
+    const cancelled: KnowledgeIngestJob = {
+      id: reviewJob.id,
+      bundleId: reviewJob.bundleId,
+      sourceId: reviewJob.sourceId,
+      sourceContentHash: reviewJob.sourceContentHash,
+      pipelineFingerprint: reviewJob.pipelineFingerprint,
+      inputRevision: reviewJob.inputRevision,
+      attempt: reviewJob.attempt,
+      rerunRequested: false,
+      createdAt: reviewJob.createdAt,
+      updatedAt: 140,
+      status: "cancelled",
+      stage: "cancelled",
+      cancelledAt: 140,
+    };
+    const concurrent: IngestQueueSnapshot = {
+      ...current,
+      revision: current.revision + 1,
+      jobs: [cancelled],
+      pendingReviews: [],
+      reviewRejections: [
+        {
+          jobId: "job-1",
+          changeSetId: "changeset-review",
+          proposalDigest: HASH_C,
+          reviewRecordRevision: 1,
+          decisionAt: 120,
+          rejectedAt: 140,
+        },
+      ],
+    };
+    harness.storage.planWriteFailure(
+      new IngestQueueRevisionConflictError("personal", current.revision, concurrent.revision),
+      () => harness.storage.seed("personal", concurrent)
+    );
+    const rejectionEventsBefore = harness.sink.events.filter(
+      ({ cause }) => cause === "review_rejected"
+    ).length;
+
+    await expect(
+      harness.queue.rejectReview("personal", createRejectedReviewDecision())
+    ).resolves.toEqual(cancelled);
+    expect(harness.storage.getSnapshot("personal")).toEqual(concurrent);
+    expect(harness.sink.events.filter(({ cause }) => cause === "review_rejected")).toHaveLength(
+      rejectionEventsBefore
+    );
+  });
+
+  it("fails closed on stale, unknown, or conflicting review rejection identity", async () => {
+    const pendingHarness = createHarness();
+    await pendingHarness.queue.enqueue(createRequest());
+    await expect(
+      pendingHarness.queue.rejectReview("personal", createRejectedReviewDecision())
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    await expect(
+      pendingHarness.queue.rejectReview(
+        "personal",
+        createRejectedReviewDecision({ jobClaim: { jobId: "job-missing" } })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueJobNotFoundError);
+
+    const reviewHarness = createHarness(async () => createAwaitingReviewResult());
+    await reviewHarness.queue.enqueue(createRequest());
+    await reviewHarness.queue.runNext("personal");
+    const before = reviewHarness.storage.getSnapshot("personal");
+    await expect(
+      reviewHarness.queue.rejectReview(
+        "personal",
+        createRejectedReviewDecision({ changeSetId: "changeset-other" })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    expect(reviewHarness.storage.getSnapshot("personal")).toEqual(before);
+
+    await reviewHarness.queue.rejectReview("personal", createRejectedReviewDecision());
+    await expect(
+      reviewHarness.queue.rejectReview(
+        "personal",
+        createRejectedReviewDecision({ changeSetId: "changeset-other" })
+      )
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    expect(reviewHarness.storage.getSnapshot("personal").reviewRejections).toEqual([
+      expect.objectContaining({ changeSetId: "changeset-review" }),
+    ]);
+  });
+
+  it("atomically promotes the latest rerun while retaining rejection audit history", async () => {
+    const harness = createHarness(async () => createAwaitingReviewResult());
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    harness.setNow(120);
+    await harness.queue.enqueue(createRequest({ sourceContentHash: HASH_C, inputRevision: 2 }));
+    harness.setNow(130);
+    await harness.queue.enqueue(createRequest({ sourceContentHash: HASH_D, inputRevision: 3 }));
+
+    await harness.queue.rejectReview("personal", createRejectedReviewDecision());
+    const snapshot = harness.storage.getSnapshot("personal");
+    expect(snapshot.reviewRejections).toEqual([
+      {
+        jobId: "job-1",
+        changeSetId: "changeset-review",
+        proposalDigest: HASH_C,
+        reviewRecordRevision: 1,
+        decisionAt: 120,
+        rejectedAt: 130,
+      },
+    ]);
+    expect(snapshot.reruns).toEqual([]);
+    expect(snapshot.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "job-1", status: "cancelled" }),
+        expect.objectContaining({
+          id: "job-2",
+          status: "pending",
+          sourceContentHash: HASH_D,
+          inputRevision: 3,
+          attempt: 0,
+        }),
+      ])
+    );
+    expect(snapshot.sourceHighWatermarks).toEqual([
+      expect.objectContaining({
+        sourceId: "source-1",
+        sourceContentHash: HASH_D,
+        inputRevision: 3,
+      }),
+    ]);
   });
 
   it("pauses only the gate during applying and returns proof without early queue success", async () => {
@@ -1217,10 +1715,10 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     const harness = createHarness();
     await harness.queue.enqueue(createRequest());
     await expect(
-      harness.queue.beginReviewApply("personal", "job-1", {
-        changeSetId: "changeset-1",
-        changeSetDigest: HASH_D,
-      })
+      harness.queue.beginReviewApply(
+        "personal",
+        createAcceptedReviewDecision({ changeSetId: "changeset-1" })
+      )
     ).rejects.toBeInstanceOf(IngestQueueTransitionError);
 
     harness.executor.handler = async () => {

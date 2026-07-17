@@ -146,6 +146,7 @@ function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): Kno
       sourceId: "source-1",
       sourceContentHash: SOURCE_CONTENT_HASH,
       pipelineFingerprint: PIPELINE_FINGERPRINT,
+      inputRevision: 1,
     },
     schema: {
       path: "Config/knowledge-schema.md",
@@ -376,6 +377,16 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     );
 
     expect(second).toEqual(first);
+    const nextObservation = requireProposal(
+      await harness.compiler.compile(
+        createCompileInput({
+          targetAuthorizations,
+          source: { ...input.source, inputRevision: 2 },
+        }),
+        new AbortController().signal
+      )
+    );
+    expect(nextObservation.changeSet.id).not.toBe(first.changeSet.id);
     expect(first.changeSet).toMatchObject({
       bundleId: "personal",
       operation: "ingest",
@@ -412,7 +423,7 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     expect(first.proposalDigest).toBe(createChangeSetTransactionDigest(first.changeSet));
     expect(harness.validator.inputs[0].draft).not.toHaveProperty("status");
     expect(harness.validator.inputs[0].draft).not.toHaveProperty("validation");
-    expect(harness.model.generationRequests).toHaveLength(2);
+    expect(harness.model.generationRequests).toHaveLength(3);
     for (const request of harness.model.generationRequests) {
       expect(request.targets.map((target) => [target.path, target.operation])).toEqual([
         ["Wiki/Create.md", "create"],

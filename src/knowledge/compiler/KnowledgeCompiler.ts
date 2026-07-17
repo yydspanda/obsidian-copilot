@@ -91,6 +91,7 @@ const compilerSourceIdentitySchema: z.ZodType<CompilerSourceIdentity> = z
     sourceId: nonEmptyStringSchema,
     sourceContentHash: sha256Schema,
     pipelineFingerprint: sha256Schema,
+    inputRevision: nonNegativeIntegerSchema,
   })
   .strict();
 

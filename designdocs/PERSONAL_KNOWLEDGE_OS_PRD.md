@@ -46,7 +46,7 @@ Primary platform: Obsidian Desktop on Windows
 ### 2.4 当前证据
 
 - 用户明确希望把当前项目长期作为自己的助手、笔记和知识引擎，优先把个人体验做到最好。
-- 当前代码已经具备成熟 Chat、上下文、Search v3、文件解析、进度卡片和 diff 预览，但没有统一的 Source Manifest、知识编译状态、多文件 ChangeSet 和 Knowledge Studio。
+- 当前分支已经具备成熟 Chat、上下文、Search v3、文件解析，以及 Source Manifest、Queue/Transaction/Compiler/Review Core 和最小 Windows Knowledge Studio foundation；真实 Windows/Vault adapter、Chat 入口、查询闭环和启动协调器仍未接通。
 - 对 `llm_wiki`、`llm-wiki-compiler`、`claude-obsidian`、OKF 和 Graphiti 的代码审计显示，优秀项目正在共同收敛到两阶段摄入、增量 manifest、持久队列、来源追踪、渐进检索、审核和维护闭环。
 
 ## 3. Target User and Jobs-to-be-Done
@@ -101,15 +101,15 @@ Chat 和 Knowledge Studio 不是两个产品。它们共享同一个知识模型
 
 ### 5.2 Core Experience Modes
 
-| 模式 | 用户看到的体验 | 系统职责 |
-| --- | --- | --- |
-| Capture | 拖入、粘贴、选择文件或监听指定目录 | 解析来源、生成稳定身份、去重、排队 |
-| Understand | 阶段式进度和完成摘要 | 两阶段分析，发现受影响页面，生成 ChangeSet |
-| Ask | 带 citation chips 的回答 | Wiki 优先检索，必要时回读 Raw Source |
-| Explore | 主题、相关页面、来源和图谱浏览 | 组合 index、搜索、wikilink 和社区信号 |
-| Create | 从对话生成笔记、综合、决策或计划 | 提供目标、来源和 diff，支持保存或编辑 |
-| Review | 批量接受、编辑、拒绝和稍后处理 | 写入前审批与写入后知识问题分离 |
-| Maintain | Health 报告和修复建议 | 检查 freshness、断链、孤立页、引用和矛盾 |
+| 模式       | 用户看到的体验                     | 系统职责                                   |
+| ---------- | ---------------------------------- | ------------------------------------------ |
+| Capture    | 拖入、粘贴、选择文件或监听指定目录 | 解析来源、生成稳定身份、去重、排队         |
+| Understand | 阶段式进度和完成摘要               | 两阶段分析，发现受影响页面，生成 ChangeSet |
+| Ask        | 带 citation chips 的回答           | Wiki 优先检索，必要时回读 Raw Source       |
+| Explore    | 主题、相关页面、来源和图谱浏览     | 组合 index、搜索、wikilink 和社区信号      |
+| Create     | 从对话生成笔记、综合、决策或计划   | 提供目标、来源和 diff，支持保存或编辑      |
+| Review     | 批量接受、编辑、拒绝和稍后处理     | 写入前审批与写入后知识问题分离             |
+| Maintain   | Health 报告和修复建议              | 检查 freshness、断链、孤立页、引用和矛盾   |
 
 ### 5.3 The Golden Ingest Flow
 
@@ -150,7 +150,7 @@ Knowledge Review Inbox
 
 - 支持至少 Markdown、纯文本和当前已能稳定解析的 PDF 来源。
 - 从 Chat 拖入文件时提供一次使用/加入知识库分流。
-- 使用持久队列展示任务阶段、进度、暂停、取消、恢复和重试。
+- 使用持久队列展示任务阶段、进度、暂停、取消、恢复和重试；`awaiting_review` 不走通用取消，只能通过 durable Accept/Reject 决策退出。
 - 使用 SHA-256 加 pipeline fingerprint 做幂等摄入。
 - 生成 Source Manifest、OKF-compatible Wiki 页面和 claim-level citation 元数据。
 - 提供多文件 ChangeSet，包含 before hash、来源、校验和可编辑 diff。
@@ -211,7 +211,7 @@ one source
 - [ ] 任一文件 before hash 冲突时，整个 ChangeSet 停止并要求重新生成或重新审核。
 - [ ] 应用失败或崩溃恢复后，不会留下“manifest/任务标记成功但页面未完成”的半提交状态。
 - [ ] 每个关键 Wiki 主张都能回到 source ID 和 locator；回答引用可以打开对应来源。
-- [ ] 插件重启后 processing 任务恢复为 pending，并等待用户恢复。
+- [ ] 插件重启后非 applying processing 任务恢复为 pending；applying 进入 recovery gate；已持久化的 pending review 在新 claim 前完成协调，并等待用户恢复。
 - [ ] 内容和 pipeline fingerprint 未变化时不调用 LLM，且 UI 明确显示已是最新。
 - [ ] 在 Windows Obsidian Desktop 完成全部流程，并通过 Windows 路径、CRLF、文件占用和大小写冲突 fixture。
 
@@ -256,15 +256,15 @@ one source
 
 ## 10. Risks and Mitigations
 
-| 风险 | 缓解方式 |
-| --- | --- |
-| 体验被大量审核打断 | 默认只展示关键摘要；支持批量接受；未来仅对明确 generated directory 开启受控自动应用 |
-| 模型生成不稳定 | 两阶段编译、类型化输出、确定性校验、fail-closed review policy 和真实 fixture 回归 |
-| 知识页逐渐污染 | Raw/Wiki 分层、claim-level provenance、before hash、事务、lint 和可撤销记录 |
-| 队列重启后重复扣费 | pipeline fingerprint、持久 job 状态、恢复 backlog 默认等待用户确认 |
-| 图谱变成漂亮但无用的玩具 | 先验证图增强检索和知识缺口任务，再建设完整 Graph UI |
+| 风险                                          | 缓解方式                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 体验被大量审核打断                            | 默认只展示关键摘要；支持批量接受；未来仅对明确 generated directory 开启受控自动应用        |
+| 模型生成不稳定                                | 两阶段编译、类型化输出、确定性校验、fail-closed review policy 和真实 fixture 回归          |
+| 知识页逐渐污染                                | Raw/Wiki 分层、claim-level provenance、before hash、事务、lint 和可撤销记录                |
+| 队列重启后重复扣费                            | pipeline fingerprint、持久 job 状态、恢复 backlog 默认等待用户确认                         |
+| 图谱变成漂亮但无用的玩具                      | 先验证图增强检索和知识缺口任务，再建设完整 Graph UI                                        |
 | 上游代码不适合中文或 Obsidian Windows Runtime | 文件级审计；保留算法，替换 ASCII tokenizer、独立 CLI 假设和错误的全局 window/document 使用 |
-| 未来难以分享或发布 | 从首次复制开始保存 commit、路径、版权、许可证和修改说明 |
+| 未来难以分享或发布                            | 从首次复制开始保存 commit、路径、版权、许可证和修改说明                                    |
 
 ## 11. Out of Scope
 

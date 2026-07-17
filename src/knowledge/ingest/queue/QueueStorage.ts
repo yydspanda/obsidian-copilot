@@ -10,7 +10,7 @@ import type {
 import { validateKnowledgeIngestJob } from "@/knowledge/model/validation";
 
 /** Current version of the persisted ingest queue snapshot. */
-export const INGEST_QUEUE_VERSION = 2 as const;
+export const INGEST_QUEUE_VERSION = 3 as const;
 
 /** Durable reason that prevents a Bundle queue from claiming more work. */
 export type IngestQueuePauseReason =
@@ -69,9 +69,24 @@ export interface IngestReviewedChangeSetIdentity {
   changeSetDigest: string;
 }
 
+/** Exact durable Review Store decision that authorized one apply claim. */
+export interface IngestAcceptedReviewIdentity {
+  proposalDigest: string;
+  recordRevision: 1;
+  acceptedAt: number;
+}
+
+/** Explicit fail-closed provenance for a reviewed apply claim migrated from version 2. */
+export interface IngestLegacyReviewIdentity {
+  kind: "legacy_unverified";
+  migratedFromVersion: 2;
+}
+
 /** Exact active or interrupted applying claim, optionally bound to reviewed content. */
 export interface IngestApplyClaimMarker extends IngestApplyJobClaim {
   reviewedChangeSet?: IngestReviewedChangeSetIdentity;
+  acceptedReview?: IngestAcceptedReviewIdentity;
+  legacyReview?: IngestLegacyReviewIdentity;
 }
 
 /** Durable hand-off proving that file commit finished before queue acknowledgement. */
@@ -83,6 +98,37 @@ export interface IngestApplyCommitMarker extends IngestApplyJobClaim {
   committedAt: number;
 }
 
+/** Durable proof that one exact review proposal was explicitly rejected. */
+export interface IngestReviewRejection {
+  jobId: string;
+  changeSetId: string;
+  proposalDigest: string;
+  reviewRecordRevision: 1;
+  decisionAt: number;
+  rejectedAt: number;
+}
+
+/** Durable pending Review Store record anchored before a queue waits for user input. */
+export interface IngestDurablePendingReview {
+  kind: "durable";
+  jobId: string;
+  changeSetId: string;
+  proposalDigest: string;
+  reviewRecordRevision: 0;
+  recordedAt: number;
+}
+
+/** Explicit fail-closed marker for a pre-v3 awaiting-review job without an anchor. */
+export interface IngestLegacyPendingReview {
+  kind: "legacy_unverified";
+  jobId: string;
+  changeSetId: string;
+  migratedFromVersion: 1 | 2;
+}
+
+/** Exact pending-review ownership retained by the queue. */
+export type IngestPendingReview = IngestDurablePendingReview | IngestLegacyPendingReview;
+
 /** Complete versioned queue state persisted independently for one Bundle. */
 export interface IngestQueueSnapshot {
   version: typeof INGEST_QUEUE_VERSION;
@@ -92,6 +138,8 @@ export interface IngestQueueSnapshot {
   jobs: KnowledgeIngestJob[];
   reruns: IngestRerunRequest[];
   sourceHighWatermarks: IngestSourceHighWatermark[];
+  pendingReviews: IngestPendingReview[];
+  reviewRejections: IngestReviewRejection[];
   applyClaim?: IngestApplyClaimMarker;
   applyCommit?: IngestApplyCommitMarker;
 }
@@ -179,6 +227,24 @@ interface LegacyIngestQueueSnapshotV1 {
   reruns: IngestRerunRequest[];
 }
 
+/** Version-2 apply claim before durable accepted-review identity was retained. */
+interface LegacyIngestApplyClaimMarker extends IngestApplyJobClaim {
+  reviewedChangeSet?: IngestReviewedChangeSetIdentity;
+}
+
+/** Complete version-2 snapshot accepted only by the strict read migration. */
+interface LegacyIngestQueueSnapshotV2 {
+  version: 2;
+  bundleId: string;
+  revision: number;
+  control: IngestQueueControl;
+  jobs: KnowledgeIngestJob[];
+  reruns: IngestRerunRequest[];
+  sourceHighWatermarks: IngestSourceHighWatermark[];
+  applyClaim?: LegacyIngestApplyClaimMarker;
+  applyCommit?: IngestApplyCommitMarker;
+}
+
 const legacyQueueControlSchema: z.ZodType<LegacyIngestQueueControl> = z.discriminatedUnion(
   "status",
   [
@@ -250,7 +316,28 @@ const reviewedChangeSetIdentitySchema: z.ZodType<IngestReviewedChangeSetIdentity
   .object({ changeSetId: nonEmptyStringSchema, changeSetDigest: sha256Schema })
   .strict();
 
+const acceptedReviewIdentitySchema: z.ZodType<IngestAcceptedReviewIdentity> = z
+  .object({
+    proposalDigest: sha256Schema,
+    recordRevision: z.literal(1),
+    acceptedAt: nonNegativeIntegerSchema,
+  })
+  .strict();
+
+const legacyReviewIdentitySchema: z.ZodType<IngestLegacyReviewIdentity> = z
+  .object({ kind: z.literal("legacy_unverified"), migratedFromVersion: z.literal(2) })
+  .strict();
+
 const applyClaimMarkerSchema: z.ZodType<IngestApplyClaimMarker> = z
+  .object({
+    ...applyJobClaimShape,
+    reviewedChangeSet: reviewedChangeSetIdentitySchema.optional(),
+    acceptedReview: acceptedReviewIdentitySchema.optional(),
+    legacyReview: legacyReviewIdentitySchema.optional(),
+  })
+  .strict();
+
+const legacyApplyClaimMarkerSchema: z.ZodType<LegacyIngestApplyClaimMarker> = z
   .object({ ...applyJobClaimShape, reviewedChangeSet: reviewedChangeSetIdentitySchema.optional() })
   .strict();
 
@@ -265,6 +352,38 @@ const applyCommitMarkerSchema: z.ZodType<IngestApplyCommitMarker> = z
   })
   .strict();
 
+const reviewRejectionSchema: z.ZodType<IngestReviewRejection> = z
+  .object({
+    jobId: nonEmptyStringSchema,
+    changeSetId: nonEmptyStringSchema,
+    proposalDigest: sha256Schema,
+    reviewRecordRevision: z.literal(1),
+    decisionAt: nonNegativeIntegerSchema,
+    rejectedAt: nonNegativeIntegerSchema,
+  })
+  .strict();
+
+const pendingReviewSchema: z.ZodType<IngestPendingReview> = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("durable"),
+      jobId: nonEmptyStringSchema,
+      changeSetId: nonEmptyStringSchema,
+      proposalDigest: sha256Schema,
+      reviewRecordRevision: z.literal(0),
+      recordedAt: nonNegativeIntegerSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("legacy_unverified"),
+      jobId: nonEmptyStringSchema,
+      changeSetId: nonEmptyStringSchema,
+      migratedFromVersion: z.union([z.literal(1), z.literal(2)]),
+    })
+    .strict(),
+]);
+
 /** Strict read-only schema for a version-1 queue snapshot. */
 const legacyIngestQueueSnapshotSchema: z.ZodType<LegacyIngestQueueSnapshotV1> = z
   .object({
@@ -277,10 +396,25 @@ const legacyIngestQueueSnapshotSchema: z.ZodType<LegacyIngestQueueSnapshotV1> = 
   })
   .strict();
 
+/** Strict read-only schema for a version-2 queue snapshot. */
+const legacyIngestQueueSnapshotV2Schema: z.ZodType<LegacyIngestQueueSnapshotV2> = z
+  .object({
+    version: z.literal(2),
+    bundleId: nonEmptyStringSchema,
+    revision: nonNegativeIntegerSchema,
+    control: queueControlSchema,
+    jobs: z.array(knowledgeIngestJobSchema),
+    reruns: z.array(rerunRequestSchema),
+    sourceHighWatermarks: z.array(sourceHighWatermarkSchema),
+    applyClaim: legacyApplyClaimMarkerSchema.optional(),
+    applyCommit: applyCommitMarkerSchema.optional(),
+  })
+  .strict();
+
 /**
- * Strict runtime schema for a complete version-2 ingest queue snapshot.
+ * Strict runtime schema for a complete version-3 ingest queue snapshot.
  *
- * Version 2 intentionally has no extension bag. Every new persisted field
+ * Version 3 intentionally has no extension bag. Every new persisted field
  * requires another version and an explicit read migration.
  */
 export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
@@ -292,6 +426,8 @@ export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
     jobs: z.array(knowledgeIngestJobSchema),
     reruns: z.array(rerunRequestSchema),
     sourceHighWatermarks: z.array(sourceHighWatermarkSchema),
+    pendingReviews: z.array(pendingReviewSchema),
+    reviewRejections: z.array(reviewRejectionSchema),
     applyClaim: applyClaimMarkerSchema.optional(),
     applyCommit: applyCommitMarkerSchema.optional(),
   })
@@ -316,6 +452,18 @@ function formatIssuePath(path: (string | number)[]): string {
 function isLegacyVersionOneSnapshot(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
     ? (value as { version?: unknown }).version === 1
+    : false;
+}
+
+/**
+ * Reports whether unknown persisted JSON declares the legacy version-2 format.
+ *
+ * @param value - Untrusted queue JSON
+ * @returns Whether the top-level version discriminator is exactly two
+ */
+function isLegacyVersionTwoSnapshot(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
+    ? (value as { version?: unknown }).version === 2
     : false;
 }
 
@@ -358,12 +506,36 @@ function deriveLegacySourceHighWatermarks(
 }
 
 /**
- * Converts one strictly parsed legacy snapshot into detached version-2 state.
+ * Makes pre-v3 awaiting-review state explicit without inventing Review Store proof.
+ *
+ * @param jobs - Strictly parsed legacy queue jobs
+ * @param version - Legacy snapshot version that owned the jobs
+ * @returns One fail-closed marker per legacy awaiting-review job
+ */
+function deriveLegacyPendingReviews(
+  jobs: readonly KnowledgeIngestJob[],
+  version: 1 | 2
+): IngestLegacyPendingReview[] {
+  return jobs
+    .filter(
+      (job): job is Extract<KnowledgeIngestJob, { status: "awaiting_review" }> =>
+        job.status === "awaiting_review"
+    )
+    .map((job) => ({
+      kind: "legacy_unverified",
+      jobId: job.id,
+      changeSetId: job.changeSetId,
+      migratedFromVersion: version,
+    }));
+}
+
+/**
+ * Converts one strictly parsed version-1 snapshot into detached version-3 state.
  *
  * @param legacy - Valid version-1 persisted queue
- * @returns Equivalent version-2 queue without an apply-commit marker
+ * @returns Equivalent version-3 queue without review-rejection history
  */
-function migrateLegacySnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueueSnapshot {
+function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueueSnapshot {
   const applying = legacy.jobs.find(
     (job): job is Extract<KnowledgeIngestJob, { status: "processing" }> =>
       job.status === "processing" && job.stage === "applying"
@@ -376,6 +548,8 @@ function migrateLegacySnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueue
     jobs: legacy.jobs,
     reruns: legacy.reruns,
     sourceHighWatermarks: deriveLegacySourceHighWatermarks(legacy),
+    pendingReviews: deriveLegacyPendingReviews(legacy.jobs, 1),
+    reviewRejections: [],
     ...(applying
       ? {
           applyClaim: {
@@ -386,6 +560,32 @@ function migrateLegacySnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueue
             inputRevision: applying.inputRevision,
             attempt: applying.attempt,
             startedAt: applying.startedAt,
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Converts one strictly parsed version-2 snapshot into detached version-3 state.
+ *
+ * Version 2 predates durable review rejection identity, so migration starts
+ * that append-only audit collection empty without inferring prior decisions.
+ *
+ * @param legacy - Valid version-2 persisted queue
+ * @returns Equivalent version-3 queue
+ */
+function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQueueSnapshot {
+  return {
+    ...legacy,
+    version: INGEST_QUEUE_VERSION,
+    pendingReviews: deriveLegacyPendingReviews(legacy.jobs, 2),
+    reviewRejections: [],
+    ...(legacy.applyClaim?.reviewedChangeSet
+      ? {
+          applyClaim: {
+            ...legacy.applyClaim,
+            legacyReview: { kind: "legacy_unverified" as const, migratedFromVersion: 2 as const },
           },
         }
       : {}),
@@ -419,7 +619,15 @@ export function parseIngestQueueSnapshot(
   if (isLegacyVersionOneSnapshot(value)) {
     const legacyResult = legacyIngestQueueSnapshotSchema.safeParse(value);
     if (legacyResult.success) {
-      return { ok: true, value: migrateLegacySnapshot(legacyResult.data) };
+      return { ok: true, value: migrateVersionOneSnapshot(legacyResult.data) };
+    }
+    return { ok: false, issues: mapSchemaIssues(legacyResult.error.issues) };
+  }
+
+  if (isLegacyVersionTwoSnapshot(value)) {
+    const legacyResult = legacyIngestQueueSnapshotV2Schema.safeParse(value);
+    if (legacyResult.success) {
+      return { ok: true, value: migrateVersionTwoSnapshot(legacyResult.data) };
     }
     return { ok: false, issues: mapSchemaIssues(legacyResult.error.issues) };
   }
@@ -515,6 +723,10 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
   const rerunSourceIds = new Set<string>();
   const rerunJobIds = new Set<string>();
   const highWatermarkSourceIds = new Set<string>();
+  const pendingReviewJobIds = new Set<string>();
+  const pendingReviewChangeSetIds = new Set<string>();
+  const rejectedJobIds = new Set<string>();
+  const rejectedChangeSetIds = new Set<string>();
   let processingCount = 0;
 
   snapshot.jobs.forEach((job, index) => {
@@ -584,6 +796,200 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
       );
     }
   });
+
+  snapshot.pendingReviews.forEach((pendingReview, index) => {
+    const field = `pendingReviews.${index}`;
+    if (pendingReviewJobIds.has(pendingReview.jobId)) {
+      addError(
+        diagnostics,
+        "queue_pending_review_job_duplicate",
+        `${field}.jobId`,
+        "A queue job may own only one pending review anchor"
+      );
+    }
+    pendingReviewJobIds.add(pendingReview.jobId);
+    if (pendingReviewChangeSetIds.has(pendingReview.changeSetId)) {
+      addError(
+        diagnostics,
+        "queue_pending_review_changeset_duplicate",
+        `${field}.changeSetId`,
+        "A ChangeSet may be pending for only one queue job"
+      );
+    }
+    pendingReviewChangeSetIds.add(pendingReview.changeSetId);
+
+    const job = snapshot.jobs.find((candidate) => candidate.id === pendingReview.jobId);
+    if (job?.status !== "awaiting_review") {
+      addError(
+        diagnostics,
+        "queue_pending_review_job_invalid",
+        `${field}.jobId`,
+        "A pending review anchor must belong to one awaiting-review queue job"
+      );
+      return;
+    }
+    if (job.changeSetId !== pendingReview.changeSetId) {
+      addError(
+        diagnostics,
+        "queue_pending_review_changeset_mismatch",
+        `${field}.changeSetId`,
+        "Pending review identity must match its awaiting-review queue job"
+      );
+    }
+    if (
+      pendingReview.kind === "durable" &&
+      (pendingReview.recordedAt < job.createdAt || pendingReview.recordedAt > job.updatedAt)
+    ) {
+      addError(
+        diagnostics,
+        "queue_pending_review_timestamp_invalid",
+        `${field}.recordedAt`,
+        "Pending review persistence must occur during the owning queue job lifetime"
+      );
+    }
+  });
+
+  snapshot.jobs.forEach((job, index) => {
+    if (job.status === "awaiting_review" && !pendingReviewJobIds.has(job.id)) {
+      addError(
+        diagnostics,
+        "queue_pending_review_missing",
+        `jobs.${index}.changeSetId`,
+        "An awaiting-review job requires a durable or explicit legacy review anchor"
+      );
+    }
+  });
+
+  snapshot.reviewRejections.forEach((rejection, index) => {
+    const field = `reviewRejections.${index}`;
+    if (rejectedJobIds.has(rejection.jobId)) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_job_duplicate",
+        `${field}.jobId`,
+        "A queue job may retain only one durable review rejection"
+      );
+    }
+    rejectedJobIds.add(rejection.jobId);
+    if (rejectedChangeSetIds.has(rejection.changeSetId)) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_changeset_duplicate",
+        `${field}.changeSetId`,
+        "A ChangeSet may be rejected by only one durable queue job"
+      );
+    }
+    rejectedChangeSetIds.add(rejection.changeSetId);
+
+    const job = snapshot.jobs.find((candidate) => candidate.id === rejection.jobId);
+    if (!job || job.status !== "cancelled" || job.attempt < 1) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_job_invalid",
+        `${field}.jobId`,
+        "A review rejection must reference one completed-attempt cancelled job"
+      );
+      return;
+    }
+    if (rejection.rejectedAt !== job.cancelledAt) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_timestamp_mismatch",
+        `${field}.rejectedAt`,
+        "Review rejection time must match its cancelled queue job"
+      );
+    }
+    if (rejection.decisionAt > rejection.rejectedAt) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_decision_time_invalid",
+        `${field}.decisionAt`,
+        "Durable review decision time cannot follow its queue cancellation"
+      );
+    }
+    if (rejection.decisionAt < job.createdAt) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_decision_time_invalid",
+        `${field}.decisionAt`,
+        "Durable review decision time cannot precede its queue job"
+      );
+    }
+    const conflictingJob = snapshot.jobs.find(
+      (candidate) =>
+        candidate.id !== job.id &&
+        (candidate.status === "awaiting_review" || candidate.status === "completed") &&
+        candidate.changeSetId === rejection.changeSetId
+    );
+    if (conflictingJob) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_changeset_conflict",
+        `${field}.changeSetId`,
+        "A rejected ChangeSet cannot belong to another durable queue job"
+      );
+    }
+    if (snapshot.applyClaim?.reviewedChangeSet?.changeSetId === rejection.changeSetId) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_apply_conflict",
+        `${field}.changeSetId`,
+        "A rejected ChangeSet cannot also own the active apply claim"
+      );
+    }
+    if (pendingReviewChangeSetIds.has(rejection.changeSetId)) {
+      addError(
+        diagnostics,
+        "queue_review_rejection_pending_conflict",
+        `${field}.changeSetId`,
+        "A rejected ChangeSet cannot remain in pending review state"
+      );
+    }
+  });
+
+  if (snapshot.applyClaim) {
+    const { acceptedReview, legacyReview, reviewedChangeSet } = snapshot.applyClaim;
+    if (reviewedChangeSet && pendingReviewChangeSetIds.has(reviewedChangeSet.changeSetId)) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_pending_review_conflict",
+        "applyClaim.reviewedChangeSet.changeSetId",
+        "A ChangeSet cannot be both pending review and actively applying"
+      );
+    }
+    if ((acceptedReview || legacyReview) && !reviewedChangeSet) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_review_payload_missing",
+        "applyClaim.reviewedChangeSet",
+        "Review authorization requires the exact reviewed ChangeSet payload"
+      );
+    }
+    if (reviewedChangeSet && !acceptedReview && !legacyReview) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_review_authorization_missing",
+        "applyClaim.reviewedChangeSet",
+        "A reviewed ChangeSet requires a durable decision or explicit legacy provenance"
+      );
+    }
+    if (acceptedReview && legacyReview) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_review_authorization_conflict",
+        "applyClaim",
+        "A review apply claim cannot be both durable and legacy-unverified"
+      );
+    }
+    if (acceptedReview && acceptedReview.acceptedAt > snapshot.applyClaim.startedAt) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_review_time_invalid",
+        "applyClaim.acceptedReview.acceptedAt",
+        "A durable review decision cannot follow the apply claim start"
+      );
+    }
+  }
 
   if (processingCount > 1) {
     addError(
@@ -754,6 +1160,18 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
         "queue_apply_claim_timestamp_invalid",
         "applyClaim.startedAt",
         "Apply claim start must exactly identify active work or its interrupted lifetime"
+      );
+    }
+    if (
+      owningJob &&
+      claim.acceptedReview &&
+      claim.acceptedReview.acceptedAt < owningJob.createdAt
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_claim_review_time_invalid",
+        "applyClaim.acceptedReview.acceptedAt",
+        "A durable review decision cannot precede its queue job"
       );
     }
   }

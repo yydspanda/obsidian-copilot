@@ -10,6 +10,11 @@ import { NoteSelectedTextContext, SelectedTextContext } from "@/types/message";
 import { registerCommands } from "@/commands";
 import CopilotView from "@/components/CopilotView";
 import { APPLY_VIEW_TYPE, ApplyView } from "@/components/composer/ApplyView";
+import {
+  DEFAULT_KNOWLEDGE_BUNDLE_ID,
+  KNOWLEDGE_STUDIO_VIEW_TYPE,
+  KnowledgeStudioView,
+} from "@/components/KnowledgeStudioView";
 import { LoadChatHistoryModal } from "@/components/modals/LoadChatHistoryModal";
 
 import { registerContextMenu } from "@/commands/contextMenu";
@@ -31,6 +36,11 @@ import {
   resetPersistenceState,
 } from "@/services/settingsPersistence";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
+import {
+  KnowledgeStudioController,
+  UnavailableKnowledgeStudioPort,
+} from "@/knowledge/ui/KnowledgeStudioController";
+import { isKnowledgeStudioPlatformSupported } from "@/knowledge/ui/platform";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
 import { checkIsPlusUser, refreshSelfHostModeValidation } from "@/plusUtils";
 import {
@@ -194,6 +204,22 @@ export default class CopilotPlugin extends Plugin {
 
     this.registerView(CHAT_VIEWTYPE, (leaf: WorkspaceLeaf) => new CopilotView(leaf, this));
     this.registerView(APPLY_VIEW_TYPE, (leaf: WorkspaceLeaf) => new ApplyView(leaf));
+
+    if (isKnowledgeStudioPlatformSupported()) {
+      this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
+        const port = new UnavailableKnowledgeStudioPort();
+        const controller = new KnowledgeStudioController(port, port);
+        return new KnowledgeStudioView(leaf, controller, DEFAULT_KNOWLEDGE_BUNDLE_ID);
+      });
+      this.addRibbonIcon("library-big", "Open Knowledge Studio", () => {
+        void this.activateKnowledgeStudio();
+      });
+    }
+    this.addCommand({
+      id: "open-knowledge-studio",
+      name: "Open Knowledge Studio",
+      callback: () => void this.activateKnowledgeStudio(),
+    });
 
     this.initActiveLeafChangeHandler();
 
@@ -641,6 +667,25 @@ export default class CopilotPlugin extends Plugin {
     window.setTimeout(() => {
       this.emitChatIsVisible();
     }, 50);
+  }
+
+  /** Opens the Windows-only personal Knowledge Studio workspace. */
+  async activateKnowledgeStudio(): Promise<void> {
+    if (!isKnowledgeStudioPlatformSupported()) {
+      new Notice("Knowledge Studio is currently available only in Obsidian Desktop on Windows.");
+      return;
+    }
+
+    const leaves = this.app.workspace.getLeavesOfType(KNOWLEDGE_STUDIO_VIEW_TYPE);
+    if (leaves.length > 0) {
+      this.app.workspace.revealLeaf(leaves[0]);
+      return;
+    }
+
+    await this.app.workspace.getLeaf(true).setViewState({
+      type: KNOWLEDGE_STUDIO_VIEW_TYPE,
+      active: true,
+    });
   }
 
   async deactivateView() {

@@ -8,7 +8,7 @@ Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C/D/E/F core complete; Commit G is next. The provider-neutral compiler passes 79 targeted tests across five Jest suites, TypeScript `noEmit`, repository-wide ESLint, and changed-file Prettier check; the full repository passes 2,623 tests across 135 suites. Repository-wide Prettier check still reports the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D/E/F/G foundations are implemented; Commit H is next after the real Windows/Vault adapters and startup coordinators close the remaining runtime gates. Commit G adds the provider-neutral compiler, durable multi-file Review Store, pending/terminal Review→Queue hand-off, Activity/Review UI, and a fail-closed Windows Knowledge Studio shell. The repository currently passes 2,750 unit tests across 148 Jest suites, TypeScript `noEmit`, and repository-wide ESLint; details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier check still reports only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -180,7 +180,7 @@ Scope:
 - divergent file state 进入 sticky `recovery_required`，不自动 rollback、不覆盖并发用户编辑。
 - Transaction journal v2 将 source id、source hash、pipeline fingerprint、input revision 与 job attempt/start 绑定为完整 claim；ChangeSet 必须引用该 source。
 - applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，不能直接把 durable Queue job 标为 completed。审核接受先进入新的 durable applying claim，同样走 transaction/coordinator。
-- Queue snapshot v2 以 exact `applyClaim` 和 `commit_pending_ack` marker 连接 active/recovered applying job 与 committed journal；审核路径额外绑定 accepted ChangeSet id 与 canonical digest。v1 processing/applying 可以从原始 claim 严格迁移；无法重建 exact startedAt 的 v1 failed/applying 明确 fail closed。
+- Queue snapshot v3 以 exact `applyClaim`、pending review anchor、review rejection tombstone 和 `commit_pending_ack` marker 连接 Review Store、active/recovered apply 与 committed journal；审核路径绑定 proposal/accepted digest、terminal revision/time 和完整 job claim。v1/v2 无法证明的 review/apply identity 以 `legacy_unverified` 明确 fail closed。
 - 固定 `queue claim verify → manifest → queue marker → journal ack → queue release` 的协议；前者只读，后四步持久且均可在崩溃后重试收敛。
 - 明确 Obsidian Vault API 不提供真正跨文件原子性。
 
@@ -198,6 +198,9 @@ Runtime integration boundary before real Vault writes:
 - journal 化并复证 schema、非 target link、source artifact 和 manifest target authorization 的 semantic read-set，避免崩溃恢复时依赖已经漂移；在 ownership/sourceRefs/last-generated hash 可于 apply-time 复证前，不在真实 UI 启用 compiler delete。
 - 在接入真实写盘前决定 mutation intent：当前 content-addressed at-least-once 恢复存在“CAS 后、progress 前崩溃，再被用户恢复为精确 before”这一 ABA 取舍。
 - 为 `recovery_required` 增加明确的重新校验、继续、回滚或放弃操作；在此之前冲突只保持 fail closed。
+- 在重新 claim startup backlog 前扫描 durable Review Store，并用 `reconcilePendingReview` 收敛“proposal 已落盘、Queue hand-off 未落盘”的旧 attempt。
+- 为 accepted apply claim 已落盘但 journal 尚未创建的 crash window 增加 no-journal verify/continue/abandon；没有写入 intent 证明时不得自动重试。
+- terminal archive 必须同时协调 Queue jobs、pending/terminal review identity、Review Store 与 source high-watermark，或保留等价 tombstone。
 
 ### Commit F — Provider-neutral Compile Port ✅
 
@@ -222,6 +225,7 @@ Scope:
 - claim 必须至少有一条 trusted evidence 的 material-valid `supports`；引用 identity、locator 和 hash 不由模型填写。
 - OKF、link 与 citation candidate validator 是构造 proposed ChangeSet 的必需端口；apply-time 仍独立复验。
 - Provider 和模型配置通过 port 注入；不复制外部 Provider Runtime。
+- Compiler source identity 包含单调 `inputRevision`，因此来源内容 A→B→A 仍生成不同 ChangeSet/review instance，不复用旧审核。
 
 Constraint:
 
@@ -233,18 +237,23 @@ Exit criteria:
 - 无效或不完整输出进入 review/failure，不直接写盘。
 - 固定 fake model fixture 可以产生稳定 ChangeSet。
 
-### Commit G — Multi-file Review and Activity UI ← Next
+### Commit G — Multi-file Review and Activity UI ← Implemented; Windows validation in Commit I
 
 Scope:
 
-- 扩展 ApplyView 支持多文件 create/update/delete。
-- 复用 ProcessingStatus/IndexingProgressCard 视觉语言显示任务阶段。
-- 增加 Knowledge Studio 最小 ItemView：Activity、ChangeSet Review、完成摘要。
+- 从 ApplyView 抽取无写入能力的 diff renderer；legacy 单文件执行路径保持隔离。
+- 增加 strict durable Review Store、opaque review command 与选择后重新 hash/validation。
+- Queue 只有在收到同 Bundle、同 exact job claim 的 durable pending Review Store receipt 后才能进入 `awaiting_review`；accepted/rejected receipt 必须把 record revision 从 0 精确推进到 1。
+- 同一 accepted receipt 在 active applying claim 内重放不增加 Queue revision/event；proposal、digest、revision、time、Bundle 或 job claim 冲突均 fail closed。
+- `awaiting_review` 不允许通用 Cancel；Reject 必须先 durable persist，再原子移除 pending anchor、保留 rejection tombstone 并提升 latest rerun。
+- 提供 `reconcilePendingReview` 关闭 Review Store 已写而 Queue hand-off 未写的崩溃窗口；旧版 `legacy_unverified` anchor 只能由精确 pending record 升级。
+- 复用 ProcessingStatus/IndexingProgressCard 视觉语言显示任务阶段、finalizing 与 recovery gate。
+- 增加 Windows-only Knowledge Studio 最小 ItemView：Activity、ChangeSet Review、完成摘要；真实 Vault adapter 接入前 fail closed。
 - 遵守 popout-window 的 `.doc/.win` 和 `onWindowMigrated` 规则。
 
 Exit criteria:
 
-- 用户能逐文件、逐块或批量接受/拒绝；delete 有单独危险语义。
+- 用户能逐文件、逐块或批量接受/拒绝；delete 有单独危险语义且当前不可接受。
 - UI 不展示任务成功，直到 commit marker 完成。
 - Windows 触控板、键盘和不同窗口均可完成审核。
 

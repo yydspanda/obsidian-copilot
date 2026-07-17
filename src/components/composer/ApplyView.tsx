@@ -2,195 +2,16 @@ import { cn } from "@/lib/utils";
 import { logError } from "@/logger";
 import { getSettings, updateSetting } from "@/settings/model";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
-import { Change, diffArrays } from "diff";
+import type { Change } from "diff";
 import { Check, X as XIcon } from "lucide-react";
 import { App, ItemView, Notice, TFile, WorkspaceLeaf } from "obsidian";
-import React, { memo, useMemo, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { Button } from "../ui/button";
 import { SettingSwitch } from "../ui/setting-switch";
 import { getChangeBlocks } from "@/composerUtils";
 import { ApplyViewResult } from "@/types";
 import { ensureFolderExists } from "@/utils";
-
-/** Represents a row in the diff view with original and modified content */
-interface DiffRow {
-  original: string | null;
-  modified: string | null;
-  isUnchanged: boolean;
-}
-
-/**
- * Performs word-level diff between two strings, ensuring only complete words are matched.
- * Uses regex-based tokenization for better performance.
- * @param original - The original string to compare
- * @param modified - The modified string to compare against
- * @returns Array of diff parts with value, added, and removed flags
- */
-function wordLevelDiff(
-  original: string,
-  modified: string
-): { value: string; added?: boolean; removed?: boolean }[] {
-  // Split on whitespace boundaries while preserving delimiters
-  const tokenize = (str: string): string[] => str.split(/(\s+)/).filter(Boolean);
-
-  const diff = diffArrays(tokenize(original), tokenize(modified));
-
-  return diff.map((part) => ({
-    value: part.value.join(""),
-    added: part.added,
-    removed: part.removed,
-  }));
-}
-
-/**
- * Splits a string into lines, removing trailing empty line from split.
- * @param value - The string to split
- * @returns Array of lines
- */
-function splitLines(value: string): string[] {
-  const lines = value.split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") {
-    lines.pop();
-  }
-  return lines;
-}
-
-/**
- * Converts a block of changes into row pairs for line-by-line comparison.
- * Handles multi-line chunks and pairs removed/added changes intelligently.
- * @param block - Array of Change objects from the diff library
- * @returns Array of DiffRow objects for rendering
- */
-function buildDiffRows(block: Change[]): DiffRow[] {
-  const rows: DiffRow[] = [];
-
-  let i = 0;
-  while (i < block.length) {
-    const current = block[i];
-
-    if (!current.added && !current.removed) {
-      // Unchanged chunk - split into lines and show on both sides
-      splitLines(current.value).forEach((line) => {
-        rows.push({ original: line, modified: line, isUnchanged: true });
-      });
-      i++;
-    } else if (current.removed) {
-      // Check if next item is an added chunk (replacement pair)
-      const next = block[i + 1];
-      if (next?.added) {
-        // Split both chunks into lines and pair by index
-        const originalLines = splitLines(current.value);
-        const modifiedLines = splitLines(next.value);
-        const maxLines = Math.max(originalLines.length, modifiedLines.length);
-
-        for (let j = 0; j < maxLines; j++) {
-          rows.push({
-            original: originalLines[j] ?? null,
-            modified: modifiedLines[j] ?? null,
-            isUnchanged: false,
-          });
-        }
-        i += 2;
-      } else {
-        // Standalone removal - split into lines
-        splitLines(current.value).forEach((line) => {
-          rows.push({ original: line, modified: null, isUnchanged: false });
-        });
-        i++;
-      }
-    } else if (current.added) {
-      // Standalone addition - split into lines
-      splitLines(current.value).forEach((line) => {
-        rows.push({ original: null, modified: line, isUnchanged: false });
-      });
-      i++;
-    } else {
-      i++;
-    }
-  }
-
-  return rows;
-}
-
-/**
- * Renders word-level diff highlighting for a single side of the comparison.
- * Shows only the relevant changes (removed for original, added for modified).
- */
-interface WordDiffSpanProps {
-  original: string;
-  modified: string;
-  side: "original" | "modified";
-}
-
-const WordDiffSpan: React.FC<WordDiffSpanProps> = memo(({ original, modified, side }) => {
-  const diff = wordLevelDiff(original, modified);
-
-  return (
-    <span>
-      {diff.map((part, idx) => {
-        if (side === "original") {
-          if (part.removed) {
-            return (
-              // eslint-disable-next-line @eslint-react/no-array-index-key -- diff parts are computed once per render and not reordered
-              <span key={idx} className="tw-bg-error tw-text-error">
-                {part.value}
-              </span>
-            );
-          }
-          if (part.added) return null;
-        } else {
-          if (part.added) {
-            return (
-              // eslint-disable-next-line @eslint-react/no-array-index-key -- diff parts are computed once per render and not reordered
-              <span key={idx} className="tw-bg-success tw-text-success">
-                {part.value}
-              </span>
-            );
-          }
-          if (part.removed) return null;
-        }
-        // eslint-disable-next-line @eslint-react/no-array-index-key -- diff parts are computed once per render and not reordered
-        return <span key={idx}>{part.value}</span>;
-      })}
-    </span>
-  );
-});
-
-WordDiffSpan.displayName = "WordDiffSpan";
-
-/**
- * Renders a single cell in the diff view with appropriate highlighting.
- */
-interface DiffCellProps {
-  row: DiffRow;
-  side: "original" | "modified";
-}
-
-const DiffCell: React.FC<DiffCellProps> = memo(({ row, side }) => {
-  const text = side === "original" ? row.original : row.modified;
-  const paired = side === "original" ? row.modified : row.original;
-
-  if (text === null) {
-    // Empty placeholder for alignment
-    return <span className="tw-text-muted">&nbsp;</span>;
-  }
-
-  if (row.isUnchanged) {
-    return <span className="tw-text-normal">{text || "\u00A0"}</span>;
-  }
-
-  if (paired !== null) {
-    // Paired change - show word-level diff
-    return <WordDiffSpan original={row.original!} modified={row.modified!} side={side} />;
-  }
-
-  // Standalone change - highlight entire line
-  const highlightClass =
-    side === "original" ? "tw-bg-error tw-text-error" : "tw-bg-success tw-text-success";
-  return <span className={highlightClass}>{text || "\u00A0"}</span>;
-});
-
-DiffCell.displayName = "DiffCell";
+import { SideBySideDiffBlock, SplitDiffBlock } from "@/components/composer/DiffPreview";
 
 export const APPLY_VIEW_TYPE = "obsidian-copilot-apply-view";
 
@@ -211,52 +32,72 @@ export class ApplyView extends ItemView {
   private root: ReturnType<typeof createPluginRoot> | null = null;
   private state: ApplyViewState | null = null;
   private result: ApplyViewResult | null = null;
+  private windowMigrationDestroy: (() => void) | null = null;
 
+  /** Creates a preview view attached to one Obsidian workspace leaf. */
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
   }
 
+  /** Returns the stable workspace view type. */
   getViewType(): string {
     return APPLY_VIEW_TYPE;
   }
 
+  /** Returns the user-facing workspace title. */
   getDisplayText(): string {
     return "Preview Changes";
   }
 
-  async setState(state: ApplyViewState) {
+  /** Stores a new preview state and renders it into the current window. */
+  async setState(state: ApplyViewState): Promise<void> {
     this.state = state;
     this.render();
   }
 
-  async onOpen() {
+  /** Mounts the preview and prepares it to follow popout-window migrations. */
+  async onOpen(): Promise<void> {
     this.render();
+    this.windowMigrationDestroy?.();
+    this.windowMigrationDestroy = this.containerEl.onWindowMigrated(() => {
+      this.unmountRoot();
+      this.render();
+    });
   }
 
-  async onClose() {
-    if (this.root) {
-      this.root.unmount();
-      this.root = null;
-    }
+  /** Unmounts the preview and resolves an unfinished session as aborted. */
+  async onClose(): Promise<void> {
+    this.windowMigrationDestroy?.();
+    this.windowMigrationDestroy = null;
+    this.unmountRoot();
 
     this.state?.resultCallback?.(this.result ? this.result : "aborted");
   }
 
-  private render() {
-    if (!this.state) return;
+  /** Unmounts the current React root from the exact document that owns it. */
+  private unmountRoot(): void {
+    this.root?.unmount();
+    this.root = null;
+  }
 
-    // The second child is the actual content of the view, and the first child is the title of the view
-    // NOTE: While no official documentation is found, this seems like a standard pattern across community plugins.
+  /** Creates a React root only when the current window does not already own one. */
+  private ensureRoot(): void {
+    if (this.root) return;
+
     const contentEl = this.containerEl.children[1];
     contentEl.empty();
-
     const rootEl = contentEl.createDiv();
-    if (!this.root) {
-      this.root = createPluginRoot(rootEl, this.app);
-    }
+    this.root = createPluginRoot(rootEl, this.app);
+  }
+
+  /** Renders the current state without detaching an existing React root host. */
+  private render(): void {
+    if (!this.state) return;
+
+    this.ensureRoot();
 
     // Pass a close function that takes a result
-    this.root.render(
+    this.root?.render(
       <ApplyViewRoot
         app={this.app}
         state={this.state}
@@ -275,99 +116,7 @@ interface ApplyViewRootProps {
   close: (result: ApplyViewResult) => void;
 }
 
-/** Side-by-side block component for comparing original and modified content */
-interface SideBySideBlockProps {
-  block: Change[];
-}
-
-const SideBySideBlock = memo(({ block }: SideBySideBlockProps) => {
-  const rows = useMemo(() => buildDiffRows(block), [block]);
-
-  return (
-    <div className="tw-grid tw-grid-cols-2 tw-gap-2">
-      {/* Original (left) column */}
-      <div className="tw-rounded-md tw-border tw-border-solid tw-border-border tw-bg-primary tw-p-2">
-        {rows.map((row, idx) => (
-          // eslint-disable-next-line @eslint-react/no-array-index-key -- diff rows are computed once per block and not reordered
-          <div key={idx} className="tw-whitespace-pre-wrap tw-font-mono tw-text-sm">
-            <DiffCell row={row} side="original" />
-          </div>
-        ))}
-      </div>
-
-      {/* Modified (right) column */}
-      <div className="tw-rounded-md tw-border tw-border-solid tw-border-border tw-bg-primary tw-p-2">
-        {rows.map((row, idx) => (
-          // eslint-disable-next-line @eslint-react/no-array-index-key -- diff rows are computed once per block and not reordered
-          <div key={idx} className="tw-whitespace-pre-wrap tw-font-mono tw-text-sm">
-            <DiffCell row={row} side="modified" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-});
-
-SideBySideBlock.displayName = "SideBySideBlock";
-
-/** Split block component - shows old and new content separately with highlighting */
-interface SplitBlockProps {
-  block: Change[];
-}
-
-const SplitBlock = memo(({ block }: SplitBlockProps) => {
-  const hasChanges = block.some((c) => c.added || c.removed);
-  const rows = useMemo(() => buildDiffRows(block), [block]);
-
-  if (!hasChanges) {
-    // No changes - just show the content once
-    return (
-      <div className="tw-whitespace-pre-wrap tw-px-2 tw-py-1 tw-font-mono tw-text-sm tw-text-normal">
-        {block.map((change, idx) => (
-          // eslint-disable-next-line @eslint-react/no-array-index-key -- block changes are computed once per render and not reordered
-          <span key={idx}>{change.value}</span>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="tw-flex tw-flex-col tw-gap-2">
-      {/* Original version with word-level removed parts highlighted */}
-      <div className="tw-rounded-md tw-border tw-border-solid tw-border-border tw-bg-primary tw-p-2">
-        <div className="tw-mb-1 tw-text-xs tw-font-medium tw-text-muted">Original</div>
-        <div className="tw-whitespace-pre-wrap tw-font-mono tw-text-sm">
-          {rows.map((row, idx) =>
-            row.original !== null ? (
-              // eslint-disable-next-line @eslint-react/no-array-index-key -- diff rows are computed once per block and not reordered
-              <div key={idx}>
-                <DiffCell row={row} side="original" />
-              </div>
-            ) : null
-          )}
-        </div>
-      </div>
-
-      {/* Modified version with word-level added parts highlighted */}
-      <div className="tw-rounded-md tw-border tw-border-solid tw-border-border tw-bg-primary tw-p-2">
-        <div className="tw-mb-1 tw-text-xs tw-font-medium tw-text-muted">Modified</div>
-        <div className="tw-whitespace-pre-wrap tw-font-mono tw-text-sm">
-          {rows.map((row, idx) =>
-            row.modified !== null ? (
-              // eslint-disable-next-line @eslint-react/no-array-index-key -- diff rows are computed once per block and not reordered
-              <div key={idx}>
-                <DiffCell row={row} side="modified" />
-              </div>
-            ) : null
-          )}
-        </div>
-      </div>
-    </div>
-  );
-});
-
-SplitBlock.displayName = "SplitBlock";
-
+/** Renders one interactive legacy single-file preview session. */
 const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
   const simple = state.simple ?? false;
   const [diff, setDiff] = useState<ExtendedChange[]>(() => {
@@ -382,6 +131,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     () => getSettings().diffViewMode ?? "split"
   );
 
+  /** Persists and applies the selected visual comparison mode. */
   const handleViewModeChange = (mode: "side-by-side" | "split") => {
     setViewMode(mode);
     updateSetting("diffViewMode", mode);
@@ -406,7 +156,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     );
   }
 
-  // Apply all changes regardless of whether they have been marked as accepted
+  /** Applies every accepted or still-undecided change and closes the preview. */
   const handleAccept = async () => {
     try {
       // Mark all undecided changes as accepted
@@ -425,7 +175,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     }
   };
 
-  // Handle rejecting all changes
+  /** Rejects every undecided change while preserving earlier block decisions. */
   const handleReject = async () => {
     try {
       // Mark all undecided changes as rejected
@@ -444,6 +194,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     }
   };
 
+  /** Resolves or creates the legacy preview target file. */
   const getFile = async (file_path: string) => {
     const file = app.vault.getAbstractFileByPath(file_path);
     if (file) {
@@ -457,7 +208,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     return await app.vault.create(file_path, "");
   };
 
-  // Shared function to apply changes to file
+  /** Reconstructs and writes the content selected by the current block decisions. */
   const applyDecidedChangesToFile = async (
     updatedDiff: ExtendedChange[],
     showSuccessNotice = true
@@ -486,7 +237,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     return true;
   };
 
-  // Function to focus on the next change block or scroll to top if it's the last block
+  /** Scrolls the next undecided change block into view. */
   const focusNextChangeBlock = (currentBlockIndex: number) => {
     if (!changeBlocks) return;
 
@@ -511,7 +262,15 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     }
   };
 
-  // Accept a block of changes
+  /** Schedules focus movement in the window that owns the current block. */
+  const scheduleNextBlockFocus = (currentBlockIndex: number) => {
+    const currentBlock = blockRefs.current[currentBlockIndex];
+    if (!currentBlock) return;
+
+    currentBlock.win.setTimeout(() => focusNextChangeBlock(currentBlockIndex), 0);
+  };
+
+  /** Accepts one visual block without applying it to the file yet. */
   const acceptBlock = (blockIndex: number) => {
     setDiff((prevDiff) => {
       const newDiff = [...prevDiff];
@@ -533,11 +292,10 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
       return newDiff;
     });
 
-    // Focus on the next change block after state update
-    window.setTimeout(() => focusNextChangeBlock(blockIndex), 0);
+    scheduleNextBlockFocus(blockIndex);
   };
 
-  // Reject a block of changes
+  /** Rejects one visual block without applying it to the file yet. */
   const rejectBlock = (blockIndex: number) => {
     setDiff((prevDiff) => {
       const newDiff = [...prevDiff];
@@ -559,8 +317,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
       return newDiff;
     });
 
-    // Focus on the next change block after state update
-    window.setTimeout(() => focusNextChangeBlock(blockIndex), 0);
+    scheduleNextBlockFocus(blockIndex);
   };
 
   return (
@@ -651,10 +408,10 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
                 </div>
               ) : viewMode === "side-by-side" ? (
                 // Side-by-side view
-                <SideBySideBlock block={block} />
+                <SideBySideDiffBlock block={block} />
               ) : (
                 // Split view (default) - old and new shown separately
-                <SplitBlock block={block} />
+                <SplitDiffBlock block={block} />
               )}
 
               {/* Only show accept/reject buttons for blocks with changes that are undecided */}

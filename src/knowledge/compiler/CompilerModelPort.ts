@@ -18,6 +18,8 @@ export interface CompilerSourceIdentity {
   sourceId: string;
   sourceContentHash: string;
   pipelineFingerprint: string;
+  /** Durable queue observation revision that makes each review instance unique. */
+  inputRevision: number;
 }
 
 /** Immutable schema material supplied by the Bundle adapter. */

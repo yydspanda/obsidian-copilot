@@ -271,7 +271,7 @@ Lint 只产生报告或 ChangeSet，不静默重写整个 Wiki。
 | Search v3                                   | `SearchCore` / `TieredLexicalRetriever` 负责词法召回，`MergedSemanticRetriever` 负责语义融合，`GraphBoostCalculator` 提供图信号；不让新代码依赖 legacy Orama `VectorStoreManager` |
 | `ToolRegistry`                              | 工具发现、启用、元数据和 LangChain 原生工具绑定                                                                                                                                   |
 | Composer tools                              | 带预览和用户设置约束的笔记写入能力                                                                                                                                                |
-| `ApplyView`                                 | 现有 split diff 与逐块接受/拒绝；扩展为多文件 ChangeSet review                                                                                                                    |
+| `ApplyView`                                 | 只复用抽出的纯 diff renderer；其直接 `Vault.create/modify` 的 legacy 执行路径不作为多文件 ChangeSet writer                                                                        |
 | `useChatFileDrop`                           | 现有 Chat 文件拖入；增加一次使用与加入知识库的意图分流                                                                                                                            |
 | `ProcessingStatus` / `IndexingProgressCard` | 现有处理、暂停、恢复、失败和重试体验；复用到 Ingest Activity                                                                                                                      |
 | `CopilotView`                               | Obsidian ItemView、React root 与 popout migration 范式；供 Knowledge Studio 复用                                                                                                  |
@@ -308,7 +308,7 @@ flowchart TB
 - Windows 文件系统、Node/Electron、`FileSystemAdapter`、worker 或未来本地 helper 只能位于 adapter 边缘；使用前核对 Obsidian 实际 Runtime，不假定系统安装的 Node 版本等于插件 Runtime。
 - Vault 内部身份始终使用规范化 Vault path；原生盘符、反斜杠和绝对路径不能泄漏进 OKF concept ID。
 - Windows fixture 必须覆盖 CRLF、大小写不敏感碰撞、保留设备名、尾随点/空格、长路径、文件占用和外部编辑器并发修改。
-- 当前 `manifest.json` 暂不因文档决策立即改为 desktop-only；当第一个 Windows-only 模块落地时，再同时加入平台 guard、用户提示和 manifest/文档变更。
+- Knowledge Studio 入口使用 `Platform.isDesktopApp && Platform.isWin` 的功能级 guard，并提供不支持平台提示。`manifest.json` 保持 `isDesktopOnly: false`：这是对既有 Copilot Chat 平台范围的兼容决定，不代表 Knowledge Studio 支持移动端或其他桌面系统；Windows-only 行为与限制单独写入用户文档。
 
 ---
 
@@ -457,13 +457,15 @@ interface IngestSourceHighWatermark {
   observedAt: number;
 }
 
-interface IngestQueueSnapshotV2 {
-  version: 2;
+interface IngestQueueSnapshotV3 {
+  version: 3;
   bundleId: string;
   revision: number;
   jobs: KnowledgeIngestJob[];
   reruns: IngestRerunRequest[];
   sourceHighWatermarks: IngestSourceHighWatermark[];
+  pendingReviews: IngestPendingReview[];
+  reviewRejections: IngestReviewRejection[];
   applyClaim?: IngestApplyClaimMarker;
   applyCommit?: IngestApplyCommitMarker;
 }
@@ -505,15 +507,17 @@ Manifest 只记录 durable source identity、最后成功提交和最后失败�
 
 上述接口的可执行基线位于 `src/knowledge/model/`；未知持久化 JSON 先经过 strict Zod 3 schema，再经过路径、hash、跨字段和写入边界的确定性语义校验，公共 API 不泄露 Zod 类型。
 
-两阶段编译的可执行 Core 位于 `src/knowledge/compiler/`。第一阶段只能从调用方按当前来源和 Manifest 选出的最小 target catalog 获得既有页权限；catalog 外路径只能做 Windows case-insensitive existence probe，确认缺失后才可成为 create。第二阶段只看到 runtime 绑定后的 create/update 最小 DTO，并以 `targetSetDigest + targetId` 返回 write/unchanged；模型不能提交路径、operation、hash、source refs、validation、status，也看不到 delete 原文或 ownership 授权。普通 claim 至少需要一条实际送模 evidence 的 material-valid `supports`，candidate validator 再确定性检查 OKF、links 与 citations，最终只生成 `proposed` ChangeSet。
+两阶段编译的可执行 Core 位于 `src/knowledge/compiler/`。第一阶段只能从调用方按当前来源和 Manifest 选出的最小 target catalog 获得既有页权限；catalog 外路径只能做 Windows case-insensitive existence probe，确认缺失后才可成为 create。第二阶段只看到 runtime 绑定后的 create/update 最小 DTO，并以 `targetSetDigest + targetId` 返回 write/unchanged；模型不能提交路径、operation、hash、source refs、validation、status，也看不到 delete 原文或 ownership 授权。普通 claim 至少需要一条实际送模 evidence 的 material-valid `supports`，candidate validator 再确定性检查 OKF、links 与 citations，最终只生成 `proposed` ChangeSet。compiler source identity 包含 source adapter 单调分配的 `inputRevision`，所以来源内容 A→B→A 会产生新的 ChangeSet/review instance，而不会复用第一次 A 的审核身份。
 
 Delete 的授权比普通 write 更窄：目标必须由 Manifest 标记为当前 source 独占的 generated page，resolver 观察到的 bytes 必须仍匹配 last-generated hash。该判断在 Compiler Core 内防止过期或共享页面进入 proposal，但真实 apply 仍必须把 Manifest revision、ownership/sourceRefs 和 expected hash 作为 semantic read-set 写入 journal 并在写前复证；完成该边界前，产品 UI 不启用 compiler delete。
+
+审核使用独立 strict v1 Review Store 保存完整 proposal、canonical digest、queue job claim、record revision 以及 accepted/rejected 终态，不能只在 Queue 的 `awaiting_review` job 中保存一个 ChangeSet id。Queue 只有收到同 Bundle、同 exact job claim 的 durable pending receipt（revision 0）才进入 `awaiting_review`；接受/拒绝必须携带匹配 proposal digest 的 terminal receipt（revision 1）。`reconcilePendingReview` 用来收敛“Review Store 已落盘、Queue hand-off 未落盘”的崩溃窗口，旧版 `legacy_unverified` anchor 只能由真实 pending record 升级。UI 只提交 opaque change/block id；Core 按当前 snapshot token 精确重组选择后的文本，保留 proposal-owned change identity/order，重新计算 content hash 与 accepted ChangeSet digest，并重新运行 OKF、citation 与 link validator。accepted payload 与 proposal 的 Bundle、operation、provenance、citation 身份必须一致，delete 在 journalized authorization read-set 完成前 fail closed。`awaiting_review` 不能通用 Cancel，Reject 必须先写 Review Store；同一 accepted receipt 只在 active apply claim 内幂等，apply 完成后的晚到回执由未来 Review/Manifest 协调器判断 already-applied。Activity 只从 durable Queue snapshot 派生；EventSink 只触发 reload，commit marker 清除前显示 `finalizing` 而不是 `completed`。
 
 Obsidian Vault API 不提供跨文件的真正原子事务。这里的“事务”指可恢复语义：在 Vault-global 单活动槽中记录完整 pre-state journal 和 staging plan，按 Windows 确定顺序执行单文件原子 compare-and-swap，写后复验，最后写 commit marker。失败或启动恢复只自动 roll-forward；文件状态既不等于精确 before、也不等于精确 after 时进入 sticky recovery gate，不自动 rollback 或覆盖用户编辑。文件观察者可能短暂看到中间状态，但只有 commit marker 完成后才允许后续成功账本推进。
 
 成功账本采用可重试的交接协议：committed journal 先与 Queue 中完整 source/hash/pipeline/input revision/job attempt claim 做只读精确核验；通过后记录幂等 Manifest 成功，再把 Queue job 与 `commit_pending_ack` marker 原子落盘，然后清除全局 journal，最后移除 Queue marker 并保留 `startup_recovery` 暂停。applying executor 必须返回 `completed + exact commitReceipt`，再由 `IngestQueue.runNext` 对外转换为 `commit_ready`，不能提前把 durable job 标为 completed；审核接受也先产生同时绑定 accepted ChangeSet id 与 canonical digest 的 durable `applyClaim`。任何一步崩溃都从 journal、`applyClaim` 或 Queue commit marker 继续；因此不会出现页面尚未提交而任务或 Manifest 已成功的状态，也不会把一个来源或一份审核结果记到另一个 job。Manifest adapter、Queue adapter 和 journal adapter 都必须提供各自契约要求的 durable CAS，普通的 read-then-write 不满足要求。
 
-在接入真实 Vault 写盘前还必须关闭两个边界：其一，把 schema、非 target link 和 source artifact 的 hash/read-set journal 化并在恢复前复证；其二，明确 CAS 已完成但 progress 尚未落盘时的 content ABA 策略。当前纯 core 采用 content-addressed at-least-once 判定，若用户在停机期间把文件精确恢复为 before bytes，恢复无法区分“尚未写入”与“用户撤销”；个人知识资产默认应优先考虑 mutation-intent marker 加 fail-closed，代价是更频繁的人工恢复。
+在接入真实 Vault 写盘前还必须关闭三个边界：其一，把 schema、非 target link 和 source artifact 的 hash/read-set journal 化并在恢复前复证；其二，明确 CAS 已完成但 progress 尚未落盘时的 content ABA 策略；其三，为 accepted apply claim 已落盘、transaction journal 尚未创建的 crash window 提供显式 no-journal verify/continue/abandon。当前纯 core 采用 content-addressed at-least-once 判定，若用户在停机期间把文件精确恢复为 before bytes，恢复无法区分“尚未写入”与“用户撤销”；个人知识资产默认应优先考虑 mutation-intent marker 加 fail-closed，代价是更频繁的人工恢复。启动编排器还必须在重新 claim 前扫描 Review Store 并调用 `reconcilePendingReview`，否则旧 pending record 会与新 attempt 冲突。
 
 ### 6.2 知识层级
 
@@ -713,24 +717,24 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 ## 13. 持久化与数据所有权
 
-| 数据                              | 位置                                      | 角色                                                                   |
-| --------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------- |
-| Raw Sources                       | 用户指定的 Vault Markdown、网页快照与附件 | 不可被 Agent 静默修改的来源资产                                        |
-| Compiled Wiki                     | OKF-compatible Markdown Bundle            | LLM 维护、人可阅读的复利知识层                                         |
-| Bundle Schema                     | 用户指定的 schema 文件                    | 页面结构和维护工作流                                                   |
-| `index.md` / `log.md`             | Wiki Bundle 保留文件                      | 渐进发现和变更时间线                                                   |
-| Source Manifest                   | 插件管理的版本化状态文件                  | source hash、pipeline fingerprint、ownership、受影响页面和运行结果     |
-| Ingest Queue                      | 插件管理的版本化任务文件                  | 暂停、取消、重试、rerun、source high-watermark 与重启恢复              |
-| Proposed ChangeSet                | 消息元数据或临时运行数据                  | 多文件变更预览、校验和确认状态                                         |
-| Transaction Journal               | 插件管理的 Vault-global 短期恢复记录      | 保存 pre-state、提交进度、commit marker、幂等 roll-forward 与冲突 gate |
-| 项目定义                          | Vault 中的 Project 配置/文件              | 范围和稳定项目上下文                                                   |
-| 聊天历史                          | Markdown chat 文件                        | 用户可读的会话记录                                                     |
-| Saved Memories                    | 用户配置的 memory 文件夹                  | 用户确认的长期偏好与事实                                               |
-| Recent Conversations              | memory 文件夹中的滚动摘要                 | 非权威的回忆辅助                                                       |
-| Context Envelope                  | 运行态/消息元数据，未来可持久化紧凑快照   | 重现当轮模型上下文                                                     |
-| 索引与 embedding                  | 插件数据或后端缓存                        | 可重建的派生数据                                                       |
-| 工具执行记录                      | 消息元数据或轻量事件记录                  | 调试、权限与回放                                                       |
-| Temporal Graph Projection（可选） | 外部 Graphiti 服务                        | 可删除、可重建的时态关系查询投影，不是事实源                           |
+| 数据                              | 位置                                      | 角色                                                                     |
+| --------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ |
+| Raw Sources                       | 用户指定的 Vault Markdown、网页快照与附件 | 不可被 Agent 静默修改的来源资产                                          |
+| Compiled Wiki                     | OKF-compatible Markdown Bundle            | LLM 维护、人可阅读的复利知识层                                           |
+| Bundle Schema                     | 用户指定的 schema 文件                    | 页面结构和维护工作流                                                     |
+| `index.md` / `log.md`             | Wiki Bundle 保留文件                      | 渐进发现和变更时间线                                                     |
+| Source Manifest                   | 插件管理的版本化状态文件                  | source hash、pipeline fingerprint、ownership、受影响页面和运行结果       |
+| Ingest Queue                      | 插件管理的版本化任务文件                  | 暂停、取消、重试、rerun、source high-watermark、review anchor 与重启恢复 |
+| ChangeSet Review Store            | 插件管理的版本化审核文件                  | 完整 proposal、job claim、pending/accepted/rejected 终态与 CAS revision  |
+| Transaction Journal               | 插件管理的 Vault-global 短期恢复记录      | 保存 pre-state、提交进度、commit marker、幂等 roll-forward 与冲突 gate   |
+| 项目定义                          | Vault 中的 Project 配置/文件              | 范围和稳定项目上下文                                                     |
+| 聊天历史                          | Markdown chat 文件                        | 用户可读的会话记录                                                       |
+| Saved Memories                    | 用户配置的 memory 文件夹                  | 用户确认的长期偏好与事实                                                 |
+| Recent Conversations              | memory 文件夹中的滚动摘要                 | 非权威的回忆辅助                                                         |
+| Context Envelope                  | 运行态/消息元数据，未来可持久化紧凑快照   | 重现当轮模型上下文                                                       |
+| 索引与 embedding                  | 插件数据或后端缓存                        | 可重建的派生数据                                                         |
+| 工具执行记录                      | 消息元数据或轻量事件记录                  | 调试、权限与回放                                                         |
+| Temporal Graph Projection（可选） | 外部 Graphiti 服务                        | 可删除、可重建的时态关系查询投影，不是事实源                             |
 
 持久化原则：
 
@@ -740,7 +744,8 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 保存聊天后重新加载，关键上下文语义应能确定性恢复。
 - Project 切换必须同时隔离消息历史、上下文范围和后续候选写入目标。
 - 候选内容在接受前不进入索引和长期 memory。
-- 重启时把遗留 processing 任务恢复为 pending，但默认等待用户恢复，避免意外消耗模型额度。
+- 重启时只把非 applying 的遗留 processing 任务恢复为 pending，并默认等待用户恢复；applying 进入显式 recovery gate。
+- 终态归档必须协调 Queue job、pending/terminal review identity、Review Store、source high-watermark，或保留等价 tombstone。
 - Wiki 页面与 index/log 作为同一个 ChangeSet 写入；Manifest 和 Queue 通过 `manifest → queue marker → journal ack → queue release` 的持久协调顺序加入同一个成功语义。
 - Graphiti 如被启用，只能通过 durable outbox 和 projection ledger 同步；删除投影不影响 Markdown 主数据。
 - 用户能通过普通文件操作查看、编辑、迁移或删除长期知识。
@@ -830,10 +835,10 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 - 实现纯 TypeScript `KnowledgeBundleConfig`、`SourceManifest`、`OkfDocument`、`KnowledgeIngestJob`、`KnowledgeChangeSet` 与 validator。
 - 使用 SHA-256 和覆盖 schema/compiler/parser/model/output language 的 `pipelineFingerprint` 实现幂等判断。
-- 建立可恢复的串行队列：去重、source high-watermark、rerun、暂停、取消、重试、重启后 processing → pending，并默认等待用户恢复。
+- 建立可恢复的串行队列：去重、source high-watermark、rerun、暂停、取消、重试；重启后非 applying processing → pending，applying → recovery gate，并默认等待用户恢复。
 - 在 Chat 文件拖入中增加 `Use in this chat` / `Add to Knowledge` 分流，并建立最小 Knowledge Studio / Activity 表面。
 - 完成单来源两阶段 Ingest：先分析受影响页面，再生成限定目标集合的 concept/index/log ChangeSet。
-- 扩展现有 ApplyView，支持多文件 create/update/delete、before hash、来源、校验和逐文件/逐块审核。
+- 从现有 ApplyView 抽取纯 diff 展示组件，并由独立 Knowledge Review Core/UI 支持多文件 create/update、before hash、来源、校验和逐文件/逐块审核；delete 先展示为 rejection-only，直到其授权 read-set 可事务复证。
 - 通过 Vault-global transaction journal、确定性写入顺序、单文件 CAS 和 commit marker 应用 Wiki、index 和 log，再按持久交接顺序更新 manifest 与 Queue；失败可恢复，不修改 Raw Source。
 - 复用 Search v3 回答新知识，显示可点击 citation，并支持从回答再次生成写回 ChangeSet。
 
@@ -960,7 +965,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 未知 type、扩展字段、断链或缺失 index 是否被宽容消费？
 - Ingest 是否更新受影响的已有页面，而不只新增孤立摘要？
 - Manifest 是否同时包含 source hash 和 pipeline fingerprint，并在输出缺失时强制重新摄入？
-- 重启后的 processing job 是否恢复为 pending 且等待用户继续？
+- 重启后的非 applying processing job 是否恢复为 pending，applying 是否进入 recovery gate，并等待用户继续？
 - ChangeSet 是否包含 source refs、before hash、index/log 更新和校验结果？
 - 写入前 ChangeSet Review 与写入后 Review Inbox 是否语义分离？
 - Lint 是否只提出报告或变更集，而不静默重写整个 Wiki？

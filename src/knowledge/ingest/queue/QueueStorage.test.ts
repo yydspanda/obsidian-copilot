@@ -5,6 +5,8 @@ import {
   type IngestApplyClaimMarker,
   type IngestApplyCommitMarker,
   type IngestQueueSnapshot,
+  type IngestPendingReview,
+  type IngestReviewRejection,
   type IngestRerunRequest,
   type IngestSourceHighWatermark,
   validateIngestQueueSnapshot,
@@ -73,6 +75,80 @@ function createCompletedJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowle
     updatedAt: 140,
     ...overrides,
   } as KnowledgeIngestJob;
+}
+
+/**
+ * Creates a cancelled review job for rejection-marker tests.
+ *
+ * @param overrides - Optional cancelled-job fields to replace
+ * @returns Strict durable cancelled job
+ */
+function createCancelledReviewJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
+  return {
+    ...createPendingJob(),
+    attempt: 1,
+    status: "cancelled",
+    stage: "cancelled",
+    cancelledAt: 130,
+    updatedAt: 130,
+    ...overrides,
+  } as KnowledgeIngestJob;
+}
+
+/**
+ * Creates a valid awaiting-review job for pending-anchor tests.
+ *
+ * @param overrides - Optional job fields to replace
+ * @returns Strict durable awaiting-review job
+ */
+function createAwaitingReviewJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
+  return {
+    ...createPendingJob(),
+    attempt: 1,
+    status: "awaiting_review",
+    stage: "review",
+    changeSetId: "changeset-review",
+    updatedAt: 120,
+    ...overrides,
+  } as KnowledgeIngestJob;
+}
+
+/**
+ * Creates one durable pending review anchor.
+ *
+ * @param overrides - Optional anchor fields to replace
+ * @returns Strict pending review marker
+ */
+function createPendingReview(overrides: Partial<IngestPendingReview> = {}): IngestPendingReview {
+  return {
+    kind: "durable",
+    jobId: "job-1",
+    changeSetId: "changeset-review",
+    proposalDigest: HASH_C,
+    reviewRecordRevision: 0,
+    recordedAt: 110,
+    ...overrides,
+  } as IngestPendingReview;
+}
+
+/**
+ * Creates one exact durable review-rejection marker.
+ *
+ * @param overrides - Optional marker fields to replace
+ * @returns Strict review rejection
+ */
+function createReviewRejection(
+  overrides: Partial<IngestReviewRejection> = {}
+): IngestReviewRejection {
+  return {
+    jobId: "job-1",
+    changeSetId: "changeset-review",
+    proposalDigest: HASH_C,
+    reviewRecordRevision: 1,
+    decisionAt: 120,
+    rejectedAt: 130,
+    ...overrides,
+  };
 }
 
 /**
@@ -167,6 +243,8 @@ function createSnapshot(overrides: Partial<IngestQueueSnapshot> = {}): IngestQue
     reruns,
     ...overrides,
     sourceHighWatermarks: overrides.sourceHighWatermarks ?? deriveTestHighWatermarks(jobs, reruns),
+    pendingReviews: overrides.pendingReviews ?? [],
+    reviewRejections: overrides.reviewRejections ?? [],
   };
 }
 
@@ -203,12 +281,27 @@ describe("parseIngestQueueSnapshot", () => {
         applyCommit: { ...createApplyCommitMarker(), unexpected: true },
       }).ok
     ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...createSnapshot({
+          jobs: [createCancelledReviewJob()],
+          reviewRejections: [createReviewRejection()],
+        }),
+        reviewRejections: [{ ...createReviewRejection(), unexpected: true }],
+      }).ok
+    ).toBe(false);
     const missingHighWatermarks = { ...createSnapshot() } as Record<string, unknown>;
     delete missingHighWatermarks.sourceHighWatermarks;
     expect(parseIngestQueueSnapshot(missingHighWatermarks).ok).toBe(false);
+    const missingPendingReviews = { ...createSnapshot() } as Record<string, unknown>;
+    delete missingPendingReviews.pendingReviews;
+    expect(parseIngestQueueSnapshot(missingPendingReviews).ok).toBe(false);
+    const missingReviewRejections = { ...createSnapshot() } as Record<string, unknown>;
+    delete missingReviewRejections.reviewRejections;
+    expect(parseIngestQueueSnapshot(missingReviewRejections).ok).toBe(false);
   });
 
-  it("strictly migrates version 1 reads into detached version 2 state", () => {
+  it("strictly migrates version 1 reads into detached version 3 state", () => {
     const current = createSnapshot();
     const legacy = {
       version: 1,
@@ -223,6 +316,7 @@ describe("parseIngestQueueSnapshot", () => {
     expect(parsed).toEqual({ ok: true, value: current });
     if (parsed.ok) {
       expect(parsed.value.version).toBe(INGEST_QUEUE_VERSION);
+      expect(parsed.value.reviewRejections).toEqual([]);
       expect("applyCommit" in parsed.value).toBe(false);
       expect(parsed.value).not.toBe(legacy);
       expect(parsed.value.jobs[0]).not.toBe(legacy.jobs[0]);
@@ -259,8 +353,52 @@ describe("parseIngestQueueSnapshot", () => {
     );
   });
 
+  it("strictly migrates version 2 reads with empty rejection history", () => {
+    const current = createSnapshot();
+    const legacy = {
+      version: 2,
+      bundleId: current.bundleId,
+      revision: current.revision,
+      control: current.control,
+      jobs: current.jobs,
+      reruns: current.reruns,
+      sourceHighWatermarks: current.sourceHighWatermarks,
+    };
+
+    const parsed = parseIngestQueueSnapshot(legacy);
+    expect(parsed).toEqual({ ok: true, value: current });
+    if (parsed.ok) {
+      expect(parsed.value.version).toBe(INGEST_QUEUE_VERSION);
+      expect(parsed.value.reviewRejections).toEqual([]);
+      expect(parsed.value).not.toBe(legacy);
+    }
+    expect(
+      parseIngestQueueSnapshot({ ...legacy, reviewRejections: [createReviewRejection()] }).ok
+    ).toBe(false);
+
+    const awaitingJob = createAwaitingReviewJob();
+    const awaitingLegacy = {
+      ...legacy,
+      jobs: [awaitingJob],
+      sourceHighWatermarks: deriveTestHighWatermarks([awaitingJob], []),
+    };
+    expect(parseIngestQueueSnapshot(awaitingLegacy)).toMatchObject({
+      ok: true,
+      value: {
+        pendingReviews: [
+          {
+            kind: "legacy_unverified",
+            jobId: "job-1",
+            changeSetId: "changeset-review",
+            migratedFromVersion: 2,
+          },
+        ],
+      },
+    });
+  });
+
   it("rejects unsupported versions and illegal job discriminants", () => {
-    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 3 }).ok).toBe(false);
+    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 4 }).ok).toBe(false);
     expect(
       parseIngestQueueSnapshot({
         ...createSnapshot(),
@@ -335,6 +473,31 @@ describe("parseIngestQueueSnapshot", () => {
       }).ok
     ).toBe(false);
   });
+
+  it("strictly parses pending and terminal review revisions", () => {
+    const pending = createSnapshot({
+      jobs: [createAwaitingReviewJob()],
+      pendingReviews: [createPendingReview()],
+    });
+    expect(parseIngestQueueSnapshot(pending).ok).toBe(true);
+    expect(
+      parseIngestQueueSnapshot({
+        ...pending,
+        pendingReviews: [createPendingReview({ reviewRecordRevision: 1 } as never)],
+      }).ok
+    ).toBe(false);
+
+    const rejected = createSnapshot({
+      jobs: [createCancelledReviewJob()],
+      reviewRejections: [createReviewRejection()],
+    });
+    expect(
+      parseIngestQueueSnapshot({
+        ...rejected,
+        reviewRejections: [createReviewRejection({ reviewRecordRevision: 2 } as never)],
+      }).ok
+    ).toBe(false);
+  });
 });
 
 describe("validateIngestQueueSnapshot", () => {
@@ -350,6 +513,226 @@ describe("validateIngestQueueSnapshot", () => {
     const snapshot = createSnapshot({ jobs: [completed, createPendingJob({ id: "job-new" })] });
 
     expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("accepts an exact rejection marker for a cancelled review attempt", () => {
+    const snapshot = createSnapshot({
+      jobs: [createCancelledReviewJob()],
+      reviewRejections: [createReviewRejection()],
+    });
+
+    expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("requires every awaiting-review job to own one exact pending anchor", () => {
+    const job = createAwaitingReviewJob();
+    expect(
+      validateIngestQueueSnapshot(
+        createSnapshot({ jobs: [job], pendingReviews: [createPendingReview()] })
+      )
+    ).toEqual({ valid: true, diagnostics: [] });
+    expect(diagnosticCodes(createSnapshot({ jobs: [job] }))).toContain(
+      "queue_pending_review_missing"
+    );
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [job],
+          pendingReviews: [createPendingReview({ changeSetId: "changeset-other" })],
+        })
+      )
+    ).toContain("queue_pending_review_changeset_mismatch");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [job],
+          pendingReviews: [createPendingReview({ recordedAt: 99 })],
+        })
+      )
+    ).toContain("queue_pending_review_timestamp_invalid");
+  });
+
+  it("rejects pending review conflicts with applying or rejected state", () => {
+    const awaiting = createAwaitingReviewJob();
+    const applying = createProcessingJob({
+      id: "job-2",
+      sourceId: "source-2",
+      sourceContentHash: HASH_B,
+      stage: "applying",
+    });
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [awaiting, applying],
+          pendingReviews: [createPendingReview()],
+          applyClaim: createApplyClaimMarker({
+            jobId: "job-2",
+            sourceId: "source-2",
+            sourceContentHash: HASH_B,
+            reviewedChangeSet: {
+              changeSetId: "changeset-review",
+              changeSetDigest: HASH_C,
+            },
+            acceptedReview: { proposalDigest: HASH_C, recordRevision: 1, acceptedAt: 110 },
+          }),
+        })
+      )
+    ).toContain("queue_apply_claim_pending_review_conflict");
+
+    const cancelled = createCancelledReviewJob({
+      id: "job-2",
+      sourceId: "source-2",
+      sourceContentHash: HASH_B,
+    });
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [awaiting, cancelled],
+          pendingReviews: [createPendingReview()],
+          reviewRejections: [createReviewRejection({ jobId: "job-2" })],
+        })
+      )
+    ).toContain("queue_review_rejection_pending_conflict");
+  });
+
+  it("requires exact durable or explicit legacy authorization for reviewed apply claims", () => {
+    const applying = createProcessingJob({ stage: "applying" });
+    const reviewedChangeSet = {
+      changeSetId: "changeset-reviewed",
+      changeSetDigest: HASH_C,
+    };
+    const acceptedReview = { proposalDigest: HASH_C, recordRevision: 1 as const, acceptedAt: 110 };
+    const valid = createSnapshot({
+      jobs: [applying],
+      applyClaim: createApplyClaimMarker({ reviewedChangeSet, acceptedReview }),
+    });
+    expect(validateIngestQueueSnapshot(valid)).toEqual({ valid: true, diagnostics: [] });
+
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [applying],
+          applyClaim: createApplyClaimMarker({ reviewedChangeSet }),
+        })
+      )
+    ).toContain("queue_apply_claim_review_authorization_missing");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [applying],
+          applyClaim: createApplyClaimMarker({ acceptedReview }),
+        })
+      )
+    ).toContain("queue_apply_claim_review_payload_missing");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [applying],
+          applyClaim: createApplyClaimMarker({
+            reviewedChangeSet,
+            acceptedReview,
+            legacyReview: { kind: "legacy_unverified", migratedFromVersion: 2 },
+          }),
+        })
+      )
+    ).toContain("queue_apply_claim_review_authorization_conflict");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [applying],
+          applyClaim: createApplyClaimMarker({
+            reviewedChangeSet,
+            acceptedReview: { ...acceptedReview, acceptedAt: 99 },
+          }),
+        })
+      )
+    ).toContain("queue_apply_claim_review_time_invalid");
+  });
+
+  it("requires rejection markers to own one exact cancelled attempt and timestamp", () => {
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createPendingJob()],
+          reviewRejections: [createReviewRejection()],
+        })
+      )
+    ).toContain("queue_review_rejection_job_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createCancelledReviewJob()],
+          reviewRejections: [createReviewRejection({ rejectedAt: 129 })],
+        })
+      )
+    ).toContain("queue_review_rejection_timestamp_mismatch");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createCancelledReviewJob({ attempt: 0 })],
+          reviewRejections: [createReviewRejection()],
+        })
+      )
+    ).toContain("queue_review_rejection_job_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createCancelledReviewJob()],
+          reviewRejections: [createReviewRejection({ decisionAt: 131 })],
+        })
+      )
+    ).toContain("queue_review_rejection_decision_time_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createCancelledReviewJob()],
+          reviewRejections: [createReviewRejection({ decisionAt: 99 })],
+        })
+      )
+    ).toContain("queue_review_rejection_decision_time_invalid");
+  });
+
+  it("rejects duplicate or cross-job review rejection identity", () => {
+    const first = createCancelledReviewJob();
+    const second = createCancelledReviewJob({
+      id: "job-2",
+      sourceId: "source-2",
+      sourceContentHash: HASH_C,
+    });
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [first],
+          reviewRejections: [
+            createReviewRejection(),
+            createReviewRejection({ changeSetId: "changeset-other" }),
+          ],
+        })
+      )
+    ).toContain("queue_review_rejection_job_duplicate");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [first, second],
+          reviewRejections: [createReviewRejection(), createReviewRejection({ jobId: "job-2" })],
+        })
+      )
+    ).toContain("queue_review_rejection_changeset_duplicate");
+
+    const completed = createCompletedJob({
+      id: "job-completed",
+      sourceId: "source-2",
+      sourceContentHash: HASH_C,
+      changeSetId: "changeset-review",
+    });
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [first, completed],
+          reviewRejections: [createReviewRejection()],
+        })
+      )
+    ).toContain("queue_review_rejection_changeset_conflict");
   });
 
   it("requires one monotonic payload-consistent high-watermark per source", () => {

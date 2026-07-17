@@ -155,6 +155,7 @@ function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): Kno
       sourceId: "source-1",
       sourceContentHash: SOURCE_CONTENT_HASH,
       pipelineFingerprint: PIPELINE_FINGERPRINT,
+      inputRevision: 1,
     },
     schema: {
       path: "Config/knowledge-schema.md",
@@ -288,6 +289,7 @@ function createQuoteCompileInput(
       sourceId: "source-1",
       sourceContentHash: createSourceContentHash(text),
       pipelineFingerprint: PIPELINE_FINGERPRINT,
+      inputRevision: 1,
     },
     artifacts: [
       {
@@ -435,6 +437,7 @@ describe("KnowledgeCompiler security locator anchors", () => {
         sourceId: "source-1",
         sourceContentHash: createSourceContentHash(markdown),
         pipelineFingerprint: PIPELINE_FINGERPRINT,
+        inputRevision: 1,
       },
       artifacts: [
         {

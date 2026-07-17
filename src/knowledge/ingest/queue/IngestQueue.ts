@@ -18,6 +18,8 @@ import {
   parseIngestQueueSnapshot,
   type IngestApplyClaimMarker,
   type IngestApplyCommitMarker,
+  type IngestAcceptedReviewIdentity,
+  type IngestDurablePendingReview,
   type IngestQueuePauseReason,
   type IngestQueueSnapshot,
   type IngestReviewedChangeSetIdentity,
@@ -60,9 +62,57 @@ export interface EnqueueIngestResult {
   job: KnowledgeIngestJob;
 }
 
+/** Exact queue attempt retained by a durable terminal review record. */
+export interface IngestReviewDecisionJobClaim {
+  jobId: string;
+  sourceId: string;
+  sourceContentHash: string;
+  pipelineFingerprint: string;
+  inputRevision: number;
+  attempt: number;
+}
+
+/** Durable pending-record receipt required before a queue may await review. */
+export interface IngestPendingReviewDecisionReceipt {
+  outcome: "pending";
+  bundleId: string;
+  changeSetId: string;
+  proposalDigest: string;
+  recordRevision: 0;
+  recordedAt: number;
+  jobClaim: IngestReviewDecisionJobClaim;
+}
+
+/** Durable accepted-record receipt required before review apply may begin. */
+export interface IngestAcceptedReviewDecisionReceipt {
+  outcome: "accepted";
+  bundleId: string;
+  changeSetId: string;
+  proposalDigest: string;
+  recordRevision: 1;
+  acceptedDigest: string;
+  acceptedAt: number;
+  jobClaim: IngestReviewDecisionJobClaim;
+}
+
+/** Durable rejected-record receipt required before a review job may be cancelled. */
+export interface IngestRejectedReviewDecisionReceipt {
+  outcome: "rejected";
+  bundleId: string;
+  changeSetId: string;
+  proposalDigest: string;
+  recordRevision: 1;
+  rejectedAt: number;
+  jobClaim: IngestReviewDecisionJobClaim;
+}
+
 /** Successful executor outcome that waits for review, changes nothing, or commits pages. */
 export type IngestExecutionResult =
-  | { kind: "awaiting_review"; changeSetId: string }
+  | {
+      kind: "awaiting_review";
+      changeSetId: string;
+      reviewDecision: IngestPendingReviewDecisionReceipt;
+    }
   /** Terminal compile outcome that intentionally produced no file mutation. */
   | { kind: "no_changes"; changeSetId: string }
   | {
@@ -125,6 +175,7 @@ export type IngestQueueEventCause =
   | "failure"
   | "awaiting_review"
   | "review_accepted"
+  | "review_rejected"
   | "complete"
   | "pause"
   | "resume"
@@ -223,6 +274,23 @@ export class IngestQueueBundleMismatchError extends Error {
   ) {
     super(`Ingest queue stored for '${requestedBundleId}' belongs to '${storedBundleId}'`);
     this.name = "IngestQueueBundleMismatchError";
+  }
+}
+
+/** Reports a terminal review receipt loaded from another Bundle. */
+export class IngestQueueReviewBundleMismatchError extends Error {
+  /**
+   * Creates a review-to-queue Bundle mismatch.
+   *
+   * @param requestedBundleId - Queue Bundle receiving the decision
+   * @param reviewBundleId - Bundle that owns the durable Review Store record
+   */
+  constructor(
+    public readonly requestedBundleId: string,
+    public readonly reviewBundleId: string
+  ) {
+    super(`Review decision for '${reviewBundleId}' cannot mutate queue '${requestedBundleId}'`);
+    this.name = "IngestQueueReviewBundleMismatchError";
   }
 }
 
@@ -553,6 +621,8 @@ function createEmptyQueue(bundleId: string): IngestQueueSnapshot {
     jobs: [],
     reruns: [],
     sourceHighWatermarks: [],
+    pendingReviews: [],
+    reviewRejections: [],
   };
 }
 
@@ -744,6 +814,149 @@ function assertHash(value: unknown, field: string): asserts value is string {
 }
 
 /**
+ * Snapshots and validates the queue claim carried by a durable review decision.
+ *
+ * @param value - Unknown claim supplied by the review orchestration boundary
+ * @returns Detached exact queue-attempt identity
+ */
+function snapshotReviewDecisionJobClaim(value: unknown): IngestReviewDecisionJobClaim {
+  if (!isRecord(value)) {
+    throw new TypeError("reviewDecision.jobClaim must be an object");
+  }
+  assertIdentifier(value.jobId, "reviewDecision.jobClaim.jobId");
+  assertIdentifier(value.sourceId, "reviewDecision.jobClaim.sourceId");
+  assertHash(value.sourceContentHash, "reviewDecision.jobClaim.sourceContentHash");
+  assertHash(value.pipelineFingerprint, "reviewDecision.jobClaim.pipelineFingerprint");
+  if (!Number.isSafeInteger(value.inputRevision) || (value.inputRevision as number) < 0) {
+    throw new TypeError("reviewDecision.jobClaim.inputRevision must be non-negative");
+  }
+  if (!Number.isSafeInteger(value.attempt) || (value.attempt as number) <= 0) {
+    throw new TypeError("reviewDecision.jobClaim.attempt must be positive");
+  }
+  return Object.freeze({
+    jobId: value.jobId,
+    sourceId: value.sourceId,
+    sourceContentHash: value.sourceContentHash,
+    pipelineFingerprint: value.pipelineFingerprint,
+    inputRevision: value.inputRevision as number,
+    attempt: value.attempt as number,
+  });
+}
+
+/**
+ * Snapshots the pending fields proven by a strict durable Review Store record.
+ *
+ * @param value - Runtime receipt supplied by the ingest executor
+ * @returns Detached pending decision identity
+ */
+function snapshotPendingReviewDecision(value: unknown): IngestPendingReviewDecisionReceipt {
+  if (!isRecord(value) || value.outcome !== "pending") {
+    throw new TypeError("reviewDecision must be a durable pending record");
+  }
+  assertIdentifier(value.bundleId, "reviewDecision.bundleId");
+  assertIdentifier(value.changeSetId, "reviewDecision.changeSetId");
+  assertHash(value.proposalDigest, "reviewDecision.proposalDigest");
+  if (value.recordRevision !== 0) {
+    throw new TypeError("reviewDecision.recordRevision must be zero while pending");
+  }
+  if (!Number.isSafeInteger(value.recordedAt) || (value.recordedAt as number) < 0) {
+    throw new TypeError("reviewDecision.recordedAt must be non-negative");
+  }
+  return Object.freeze({
+    outcome: "pending",
+    bundleId: value.bundleId,
+    changeSetId: value.changeSetId,
+    proposalDigest: value.proposalDigest,
+    recordRevision: 0,
+    recordedAt: value.recordedAt as number,
+    jobClaim: snapshotReviewDecisionJobClaim(value.jobClaim),
+  });
+}
+
+/**
+ * Snapshots the accepted fields proven by a strict durable Review Store record.
+ *
+ * @param value - Runtime receipt supplied by review orchestration
+ * @returns Detached accepted decision identity
+ */
+function snapshotAcceptedReviewDecision(value: unknown): IngestAcceptedReviewDecisionReceipt {
+  if (!isRecord(value) || value.outcome !== "accepted") {
+    throw new TypeError("reviewDecision must be a durable accepted record");
+  }
+  assertIdentifier(value.bundleId, "reviewDecision.bundleId");
+  assertIdentifier(value.changeSetId, "reviewDecision.changeSetId");
+  assertHash(value.proposalDigest, "reviewDecision.proposalDigest");
+  assertHash(value.acceptedDigest, "reviewDecision.acceptedDigest");
+  if (value.recordRevision !== 1) {
+    throw new TypeError("reviewDecision.recordRevision must be one for a terminal record");
+  }
+  if (!Number.isSafeInteger(value.acceptedAt) || (value.acceptedAt as number) < 0) {
+    throw new TypeError("reviewDecision.acceptedAt must be non-negative");
+  }
+  return Object.freeze({
+    outcome: "accepted",
+    bundleId: value.bundleId,
+    changeSetId: value.changeSetId,
+    proposalDigest: value.proposalDigest,
+    recordRevision: 1,
+    acceptedDigest: value.acceptedDigest,
+    acceptedAt: value.acceptedAt as number,
+    jobClaim: snapshotReviewDecisionJobClaim(value.jobClaim),
+  });
+}
+
+/**
+ * Snapshots the rejected fields proven by a strict durable Review Store record.
+ *
+ * @param value - Runtime receipt supplied by review orchestration
+ * @returns Detached rejected decision identity
+ */
+function snapshotRejectedReviewDecision(value: unknown): IngestRejectedReviewDecisionReceipt {
+  if (!isRecord(value) || value.outcome !== "rejected") {
+    throw new TypeError("reviewDecision must be a durable rejected record");
+  }
+  assertIdentifier(value.bundleId, "reviewDecision.bundleId");
+  assertIdentifier(value.changeSetId, "reviewDecision.changeSetId");
+  assertHash(value.proposalDigest, "reviewDecision.proposalDigest");
+  if (value.recordRevision !== 1) {
+    throw new TypeError("reviewDecision.recordRevision must be one for a terminal record");
+  }
+  if (!Number.isSafeInteger(value.rejectedAt) || (value.rejectedAt as number) < 0) {
+    throw new TypeError("reviewDecision.rejectedAt must be non-negative");
+  }
+  return Object.freeze({
+    outcome: "rejected",
+    bundleId: value.bundleId,
+    changeSetId: value.changeSetId,
+    proposalDigest: value.proposalDigest,
+    recordRevision: 1,
+    rejectedAt: value.rejectedAt as number,
+    jobClaim: snapshotReviewDecisionJobClaim(value.jobClaim),
+  });
+}
+
+/**
+ * Checks whether a durable job is owned by one exact Review Store claim.
+ *
+ * @param job - Current queue job
+ * @param claim - Review decision's queue-attempt identity
+ * @returns Whether every immutable job field matches
+ */
+function jobMatchesReviewDecisionClaim(
+  job: KnowledgeIngestJob,
+  claim: IngestReviewDecisionJobClaim
+): boolean {
+  return (
+    job.id === claim.jobId &&
+    job.sourceId === claim.sourceId &&
+    job.sourceContentHash === claim.sourceContentHash &&
+    job.pipelineFingerprint === claim.pipelineFingerprint &&
+    job.inputRevision === claim.inputRevision &&
+    job.attempt === claim.attempt
+  );
+}
+
+/**
  * Validates the receipt fields needed for durable queue reconciliation.
  *
  * @param value - Runtime receipt returned by the ChangeSet transaction layer
@@ -859,7 +1072,8 @@ function sameApplyCommitMarker(
  */
 function createApplyClaimMarker(
   job: ProcessingIngestJob,
-  reviewedChangeSet?: IngestReviewedChangeSetIdentity
+  reviewedChangeSet?: IngestReviewedChangeSetIdentity,
+  acceptedReview?: IngestAcceptedReviewIdentity
 ): IngestApplyClaimMarker {
   return {
     jobId: job.id,
@@ -870,6 +1084,7 @@ function createApplyClaimMarker(
     attempt: job.attempt,
     startedAt: job.startedAt,
     ...(reviewedChangeSet === undefined ? {} : { reviewedChangeSet: { ...reviewedChangeSet } }),
+    ...(acceptedReview === undefined ? {} : { acceptedReview: { ...acceptedReview } }),
   };
 }
 
@@ -1513,11 +1728,13 @@ export class IngestQueue {
   }
 
   /**
-   * Cancels a pending, paused, processing, or review job and its reserved rerun.
+   * Cancels a pending, paused, or non-applying processing job and its reserved rerun.
    *
    * Applying cannot be cancelled at the queue boundary because aborting a
    * multi-file write without its transaction journal could corrupt user data.
-   * This is source-work cancellation, so the one coalesced rerun is discarded.
+   * Awaiting-review jobs require {@link rejectReview} so their exact durable
+   * proposal outcome and latest rerun cannot be orphaned. This is source-work
+   * cancellation, so the one coalesced rerun is discarded.
    * Cancellation only updates queue state and signals the executor; it has no
    * page-deletion capability, including for shared or user-owned pages.
    *
@@ -1536,6 +1753,13 @@ export class IngestQueue {
         }
         if (["completed", "failed"].includes(job.status)) {
           throw new IngestQueueTransitionError(job.id, jobState(job), "cancel");
+        }
+        if (job.status === "awaiting_review") {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "cancel review without an exact durable rejection"
+          );
         }
         if (job.status === "processing" && job.stage === "applying") {
           throw new IngestQueueTransitionError(job.id, jobState(job), "cancel during apply");
@@ -1621,6 +1845,268 @@ export class IngestQueue {
   }
 
   /**
+   * Reconciles a durable pending Review Store record after a hand-off interruption.
+   *
+   * This closes the crash window between proposal persistence and the queue's
+   * awaiting-review transition. It never runs the executor or writes pages and
+   * may safely convert the matching live or startup-recovered attempt.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param reviewDecision - Strict durable pending Review Store record receipt
+   * @returns Detached awaiting-review job
+   */
+  async reconcilePendingReview(
+    bundleId: string,
+    reviewDecision: IngestPendingReviewDecisionReceipt
+  ): Promise<KnowledgeIngestJob> {
+    const pendingDecision = snapshotPendingReviewDecision(reviewDecision);
+    if (pendingDecision.bundleId !== bundleId) {
+      throw new IngestQueueReviewBundleMismatchError(bundleId, pendingDecision.bundleId);
+    }
+    const { jobId } = pendingDecision.jobClaim;
+    const timestamp = this.now();
+    const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
+      return this.mutate<boolean>(bundleId, (current) => {
+        const job = requireJob(current, jobId);
+        if (!jobMatchesReviewDecisionClaim(job, pendingDecision.jobClaim)) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "reconcile a pending review for a different queue claim"
+          );
+        }
+        const existing = current.pendingReviews.find((review) => review.jobId === job.id);
+        if (job.status === "awaiting_review") {
+          if (
+            existing?.kind === "durable" &&
+            existing.changeSetId === pendingDecision.changeSetId &&
+            existing.proposalDigest === pendingDecision.proposalDigest &&
+            existing.reviewRecordRevision === pendingDecision.recordRevision &&
+            existing.recordedAt === pendingDecision.recordedAt &&
+            job.changeSetId === pendingDecision.changeSetId
+          ) {
+            return { value: false };
+          }
+          if (
+            existing?.kind === "legacy_unverified" &&
+            existing.changeSetId === pendingDecision.changeSetId &&
+            job.changeSetId === pendingDecision.changeSetId &&
+            pendingDecision.recordedAt >= job.createdAt
+          ) {
+            const updatedAt = Math.max(timestamp, job.updatedAt, pendingDecision.recordedAt);
+            const upgradedJob: KnowledgeIngestJob = { ...job, updatedAt };
+            const anchor: IngestDurablePendingReview = {
+              kind: "durable",
+              jobId: job.id,
+              changeSetId: pendingDecision.changeSetId,
+              proposalDigest: pendingDecision.proposalDigest,
+              reviewRecordRevision: pendingDecision.recordRevision,
+              recordedAt: pendingDecision.recordedAt,
+            };
+            return {
+              next: {
+                ...replaceJob(current, upgradedJob),
+                pendingReviews: current.pendingReviews.map((review) =>
+                  review.jobId === job.id ? anchor : review
+                ),
+              },
+              value: true,
+            };
+          }
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "replace a different pending review anchor"
+          );
+        }
+        const isRecoverableAttempt =
+          job.status === "pending" ||
+          job.status === "paused" ||
+          (job.status === "processing" && job.stage !== "applying");
+        if (!isRecoverableAttempt || existing) {
+          throw new IngestQueueTransitionError(job.id, jobState(job), "reconcile pending review");
+        }
+        if (
+          current.pendingReviews.some(
+            (review) => review.changeSetId === pendingDecision.changeSetId
+          )
+        ) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "reuse a pending review ChangeSet"
+          );
+        }
+        if (pendingDecision.recordedAt < job.createdAt) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "reconcile a review recorded before its queue job"
+          );
+        }
+        const updatedAt = Math.max(timestamp, job.updatedAt, pendingDecision.recordedAt);
+        const awaitingReview: KnowledgeIngestJob = {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: job.sourceContentHash,
+          pipelineFingerprint: job.pipelineFingerprint,
+          inputRevision: job.inputRevision,
+          attempt: job.attempt,
+          rerunRequested: job.rerunRequested,
+          createdAt: job.createdAt,
+          updatedAt,
+          status: "awaiting_review",
+          stage: "review",
+          changeSetId: pendingDecision.changeSetId,
+        };
+        const anchor: IngestDurablePendingReview = {
+          kind: "durable",
+          jobId: job.id,
+          changeSetId: pendingDecision.changeSetId,
+          proposalDigest: pendingDecision.proposalDigest,
+          reviewRecordRevision: pendingDecision.recordRevision,
+          recordedAt: pendingDecision.recordedAt,
+        };
+        return {
+          next: {
+            ...replaceJob(current, awaitingReview),
+            pendingReviews: [...current.pendingReviews, anchor],
+          },
+          value: true,
+        };
+      });
+    });
+    const active = this.activeControllers.get(bundleId);
+    if (
+      mutation.value &&
+      active?.jobId === jobId &&
+      active.attempt === pendingDecision.jobClaim.attempt
+    ) {
+      active.controller.abort();
+    }
+    if (mutation.value) {
+      this.emit(mutation.snapshot, "awaiting_review", jobId);
+    }
+    return requireJob(mutation.snapshot, jobId);
+  }
+
+  /**
+   * Durably rejects one exact awaiting-review ChangeSet without touching pages.
+   *
+   * Review persistence must precede this queue transition. The durable rejection
+   * marker makes an identical retry safe after a crash while preventing another
+   * ChangeSet from being attributed to the cancelled job. A retained latest
+   * rerun is promoted atomically after its predecessor becomes terminal.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param reviewDecision - Strict durable rejected Review Store record receipt
+   * @returns Detached cancelled predecessor job
+   */
+  async rejectReview(
+    bundleId: string,
+    reviewDecision: IngestRejectedReviewDecisionReceipt
+  ): Promise<KnowledgeIngestJob> {
+    const rejectedReview = snapshotRejectedReviewDecision(reviewDecision);
+    if (rejectedReview.bundleId !== bundleId) {
+      throw new IngestQueueReviewBundleMismatchError(bundleId, rejectedReview.bundleId);
+    }
+    const { jobId } = rejectedReview.jobClaim;
+    const { changeSetId } = rejectedReview;
+    const timestamp = this.now();
+    const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
+      return this.mutate<boolean>(bundleId, (current) => {
+        const job = requireJob(current, jobId);
+        const existing = current.reviewRejections.find((rejection) => rejection.jobId === jobId);
+        if (existing) {
+          if (
+            existing.changeSetId !== changeSetId ||
+            existing.proposalDigest !== rejectedReview.proposalDigest ||
+            existing.reviewRecordRevision !== rejectedReview.recordRevision ||
+            existing.decisionAt !== rejectedReview.rejectedAt ||
+            job.status !== "cancelled" ||
+            !jobMatchesReviewDecisionClaim(job, rejectedReview.jobClaim)
+          ) {
+            throw new IngestQueueTransitionError(
+              job.id,
+              jobState(job),
+              "reject a different reviewed ChangeSet"
+            );
+          }
+          return { value: false };
+        }
+        if (job.status !== "awaiting_review") {
+          throw new IngestQueueTransitionError(job.id, jobState(job), "reject review");
+        }
+        if (
+          job.changeSetId !== changeSetId ||
+          !jobMatchesReviewDecisionClaim(job, rejectedReview.jobClaim)
+        ) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "reject a different reviewed ChangeSet"
+          );
+        }
+        const pendingReview = current.pendingReviews.find((review) => review.jobId === job.id);
+        if (
+          pendingReview?.kind !== "durable" ||
+          pendingReview.changeSetId !== changeSetId ||
+          pendingReview.proposalDigest !== rejectedReview.proposalDigest ||
+          rejectedReview.recordRevision !== pendingReview.reviewRecordRevision + 1 ||
+          rejectedReview.rejectedAt < pendingReview.recordedAt
+        ) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "reject a review without its exact pending record"
+          );
+        }
+
+        const rejectedAt = Math.max(timestamp, job.updatedAt, rejectedReview.rejectedAt);
+        const cancelled: KnowledgeIngestJob = {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: job.sourceContentHash,
+          pipelineFingerprint: job.pipelineFingerprint,
+          inputRevision: job.inputRevision,
+          attempt: job.attempt,
+          rerunRequested: false,
+          createdAt: job.createdAt,
+          updatedAt: rejectedAt,
+          status: "cancelled",
+          stage: "cancelled",
+          cancelledAt: rejectedAt,
+        };
+        const rejected = {
+          ...replaceJob(current, cancelled),
+          pendingReviews: current.pendingReviews.filter((review) => review.jobId !== job.id),
+          reviewRejections: [
+            ...current.reviewRejections,
+            {
+              jobId,
+              changeSetId,
+              proposalDigest: rejectedReview.proposalDigest,
+              reviewRecordRevision: rejectedReview.recordRevision,
+              decisionAt: rejectedReview.rejectedAt,
+              rejectedAt,
+            },
+          ],
+        };
+        return {
+          next: promoteRerun(rejected, job.sourceId, rejectedAt),
+          value: true,
+        };
+      });
+    });
+    if (mutation.value) {
+      this.emit(mutation.snapshot, "review_rejected", jobId);
+    }
+    return requireJob(mutation.snapshot, jobId);
+  }
+
+  /**
    * Converts an accepted review into a durable applying claim.
    *
    * Review acceptance is not job success. The caller must apply the accepted
@@ -1628,28 +2114,63 @@ export class IngestQueue {
    * ApplyCommitCoordinator before the queue can become completed.
    *
    * @param bundleId - Stable Bundle identifier
-   * @param jobId - Awaiting-review job identifier
-   * @param reviewedChangeSet - Exact identifier and digest of the payload the user accepted
+   * @param reviewDecision - Strict durable accepted Review Store record receipt
    * @returns Detached processing job containing the exact apply claim
    */
   async beginReviewApply(
     bundleId: string,
-    jobId: string,
-    reviewedChangeSet: IngestReviewedChangeSetIdentity
+    reviewDecision: IngestAcceptedReviewDecisionReceipt
   ): Promise<ProcessingIngestJob> {
-    assertIdentifier(jobId, "jobId");
-    if (!isRecord(reviewedChangeSet)) {
-      throw new TypeError("reviewedChangeSet must be an object");
+    const acceptedDecision = snapshotAcceptedReviewDecision(reviewDecision);
+    if (acceptedDecision.bundleId !== bundleId) {
+      throw new IngestQueueReviewBundleMismatchError(bundleId, acceptedDecision.bundleId);
     }
+    const { jobId } = acceptedDecision.jobClaim;
     const acceptedReview = Object.freeze({
-      changeSetId: reviewedChangeSet.changeSetId,
-      changeSetDigest: reviewedChangeSet.changeSetDigest,
+      changeSetId: acceptedDecision.changeSetId,
+      changeSetDigest: acceptedDecision.acceptedDigest,
     });
-    assertIdentifier(acceptedReview.changeSetId, "reviewedChangeSet.changeSetId");
-    assertHash(acceptedReview.changeSetDigest, "reviewedChangeSet.changeSetDigest");
+    const acceptedReviewIdentity = Object.freeze({
+      proposalDigest: acceptedDecision.proposalDigest,
+      recordRevision: acceptedDecision.recordRevision,
+      acceptedAt: acceptedDecision.acceptedAt,
+    });
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
-      return this.mutate(bundleId, (current) => {
+      return this.mutate<boolean>(bundleId, (current) => {
+        const job = requireJob(current, jobId);
+        if (!jobMatchesReviewDecisionClaim(job, acceptedDecision.jobClaim)) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "apply a review decision for a different queue claim"
+          );
+        }
+        if (job.status === "processing" && job.stage === "applying") {
+          const claim = current.applyClaim;
+          if (
+            claim &&
+            claim.jobId === job.id &&
+            claim.sourceId === job.sourceId &&
+            claim.sourceContentHash === job.sourceContentHash &&
+            claim.pipelineFingerprint === job.pipelineFingerprint &&
+            claim.inputRevision === job.inputRevision &&
+            claim.attempt === job.attempt &&
+            claim.startedAt === job.startedAt &&
+            claim.reviewedChangeSet?.changeSetId === acceptedReview.changeSetId &&
+            claim.reviewedChangeSet.changeSetDigest === acceptedReview.changeSetDigest &&
+            claim.acceptedReview?.proposalDigest === acceptedReviewIdentity.proposalDigest &&
+            claim.acceptedReview.recordRevision === acceptedReviewIdentity.recordRevision &&
+            claim.acceptedReview.acceptedAt === acceptedReviewIdentity.acceptedAt
+          ) {
+            return { value: false };
+          }
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "replace a different active review apply claim"
+          );
+        }
         if (current.control.status === "paused" && current.control.reason === "recovery_required") {
           throw new IngestQueueRecoveryRequiredError(bundleId);
         }
@@ -1659,7 +2180,13 @@ export class IngestQueue {
         ) {
           throw new IngestQueueApplyCommitPendingError(bundleId);
         }
-        const job = requireJob(current, jobId);
+        if (current.control.status === "paused") {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "begin review apply while the Bundle is paused"
+          );
+        }
         if (job.status !== "awaiting_review") {
           throw new IngestQueueTransitionError(job.id, jobState(job), "begin review apply");
         }
@@ -1670,10 +2197,24 @@ export class IngestQueue {
             "apply a different reviewed ChangeSet"
           );
         }
+        const pendingReview = current.pendingReviews.find((review) => review.jobId === job.id);
+        if (
+          pendingReview?.kind !== "durable" ||
+          pendingReview.changeSetId !== acceptedReview.changeSetId ||
+          pendingReview.proposalDigest !== acceptedDecision.proposalDigest ||
+          acceptedDecision.recordRevision !== pendingReview.reviewRecordRevision + 1 ||
+          acceptedDecision.acceptedAt < pendingReview.recordedAt
+        ) {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "apply a review without its exact pending record"
+          );
+        }
         if (current.jobs.some((candidate) => candidate.status === "processing")) {
           throw new IngestQueueTransitionError(job.id, jobState(job), "apply beside active work");
         }
-        const startedAt = Math.max(timestamp, job.updatedAt);
+        const startedAt = Math.max(timestamp, job.updatedAt, acceptedDecision.acceptedAt);
         const applying: ProcessingIngestJob = {
           id: job.id,
           bundleId: job.bundleId,
@@ -1692,13 +2233,16 @@ export class IngestQueue {
         return {
           next: {
             ...replaceJob(current, applying),
-            applyClaim: createApplyClaimMarker(applying, acceptedReview),
+            pendingReviews: current.pendingReviews.filter((review) => review.jobId !== job.id),
+            applyClaim: createApplyClaimMarker(applying, acceptedReview, acceptedReviewIdentity),
           },
           value: true,
         };
       });
     });
-    this.emit(mutation.snapshot, "review_accepted", jobId);
+    if (mutation.value) {
+      this.emit(mutation.snapshot, "review_accepted", jobId);
+    }
     const applying = requireJob(mutation.snapshot, jobId);
     if (applying.status !== "processing" || applying.stage !== "applying") {
       throw new IngestQueueTransitionError(jobId, jobState(applying), "return apply claim");
@@ -2153,6 +2697,22 @@ export class IngestQueue {
     }
     assertIdentifier(result.changeSetId, "changeSetId");
     let commitMarker: IngestApplyCommitMarker | undefined;
+    let pendingReviewDecision: IngestPendingReviewDecisionReceipt | undefined;
+    if (result.kind === "awaiting_review") {
+      pendingReviewDecision = snapshotPendingReviewDecision(result.reviewDecision);
+      if (
+        pendingReviewDecision.bundleId !== bundleId ||
+        pendingReviewDecision.changeSetId !== result.changeSetId ||
+        pendingReviewDecision.jobClaim.jobId !== jobId ||
+        pendingReviewDecision.jobClaim.attempt !== attempt
+      ) {
+        throw new IngestQueueTransitionError(
+          jobId,
+          `attempt ${attempt}`,
+          "persist a pending review for a different queue claim"
+        );
+      }
+    }
     if (result.kind === "completed") {
       assertTransactionCommitReceipt(result.commitReceipt);
       if (
@@ -2191,6 +2751,22 @@ export class IngestQueue {
           throw new IngestQueueApplyReceiptRequiredError(bundleId, jobId);
         }
         if (result.kind === "awaiting_review") {
+          if (
+            !pendingReviewDecision ||
+            !jobMatchesReviewDecisionClaim(job, pendingReviewDecision.jobClaim) ||
+            pendingReviewDecision.recordedAt < job.createdAt ||
+            current.pendingReviews.some(
+              (review) =>
+                review.jobId === job.id || review.changeSetId === pendingReviewDecision.changeSetId
+            )
+          ) {
+            throw new IngestQueueTransitionError(
+              job.id,
+              jobState(job),
+              "persist an invalid pending review hand-off"
+            );
+          }
+          const updatedAt = Math.max(timestamp, job.updatedAt, pendingReviewDecision.recordedAt);
           const awaitingReview: KnowledgeIngestJob = {
             id: job.id,
             bundleId: job.bundleId,
@@ -2201,12 +2777,26 @@ export class IngestQueue {
             attempt: job.attempt,
             rerunRequested: job.rerunRequested,
             createdAt: job.createdAt,
-            updatedAt: Math.max(timestamp, job.updatedAt),
+            updatedAt,
             status: "awaiting_review",
             stage: "review",
             changeSetId: result.changeSetId,
           };
-          return { next: replaceJob(current, awaitingReview), value: "changed" };
+          const anchor: IngestDurablePendingReview = {
+            kind: "durable",
+            jobId: job.id,
+            changeSetId: pendingReviewDecision.changeSetId,
+            proposalDigest: pendingReviewDecision.proposalDigest,
+            reviewRecordRevision: pendingReviewDecision.recordRevision,
+            recordedAt: pendingReviewDecision.recordedAt,
+          };
+          return {
+            next: {
+              ...replaceJob(current, awaitingReview),
+              pendingReviews: [...current.pendingReviews, anchor],
+            },
+            value: "changed",
+          };
         }
         const completedAt = Math.max(timestamp, job.updatedAt);
         const completed: KnowledgeIngestJob = {
@@ -2555,8 +3145,20 @@ export class IngestQueue {
       if (value.commitReceipt.changeSetId !== value.changeSetId) {
         throw new TypeError("executor commit receipt must match its ChangeSet result");
       }
-    } else if ("commitReceipt" in value) {
+    } else if (value.kind === "awaiting_review") {
+      if (!("reviewDecision" in value)) {
+        throw new TypeError("awaiting-review executor result requires pending review proof");
+      }
+      const pendingReview = snapshotPendingReviewDecision(value.reviewDecision);
+      if (pendingReview.changeSetId !== value.changeSetId) {
+        throw new TypeError("executor pending review proof must match its ChangeSet result");
+      }
+    }
+    if (value.kind !== "completed" && "commitReceipt" in value) {
       throw new TypeError("only a completed executor result may carry transaction commit proof");
+    }
+    if (value.kind !== "awaiting_review" && "reviewDecision" in value) {
+      throw new TypeError("only an awaiting-review result may carry pending review proof");
     }
   }
 
@@ -2686,6 +3288,7 @@ export class IngestQueue {
       isRecord(raw) &&
       "version" in raw &&
       raw.version !== 1 &&
+      raw.version !== 2 &&
       raw.version !== INGEST_QUEUE_VERSION
     ) {
       throw new IngestQueueIncompatibleVersionError(bundleId, raw.version);

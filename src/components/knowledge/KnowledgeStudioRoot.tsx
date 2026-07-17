@@ -1,0 +1,480 @@
+import * as React from "react";
+import {
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  Inbox,
+  Loader2,
+  RefreshCw,
+  ShieldAlert,
+} from "lucide-react";
+
+import { KnowledgeActivityPanel } from "@/components/knowledge/KnowledgeActivityPanel";
+import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
+import type { KnowledgeReviewPlan } from "@/knowledge/review/ReviewDecision";
+import type {
+  KnowledgeStudioController,
+  KnowledgeStudioFeedback,
+  KnowledgeStudioPendingAction,
+  KnowledgeStudioState,
+  KnowledgeStudioTab,
+} from "@/knowledge/ui/KnowledgeStudioController";
+
+/** Props for the controller-backed Knowledge Studio React surface. */
+export interface KnowledgeStudioRootProps {
+  controller: KnowledgeStudioController;
+}
+
+interface TabDefinition {
+  id: KnowledgeStudioTab;
+  label: string;
+  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" | "false" }>;
+}
+
+const STUDIO_TABS: readonly TabDefinition[] = [
+  { id: "activity", label: "Activity", icon: Activity },
+  { id: "review", label: "Review", icon: Inbox },
+];
+
+const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"], string>> = {
+  pause: "Pausing knowledge activity…",
+  resume: "Resuming knowledge activity…",
+  cancel: "Cancelling the selected job…",
+  retry: "Queuing the selected job for retry…",
+  submit_review: "Submitting the review decision…",
+};
+
+/**
+ * Subscribes React to one controller without copying or deriving durable state.
+ *
+ * @param controller - Knowledge Studio external store
+ * @returns Current controller-owned state object
+ */
+function useKnowledgeStudioState(controller: KnowledgeStudioController): KnowledgeStudioState {
+  const subscribe = React.useCallback(
+    (listener: () => void) => controller.subscribe(listener),
+    [controller]
+  );
+  const getSnapshot = React.useCallback(() => controller.getState(), [controller]);
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * Renders one deterministic validation diagnostic.
+ *
+ * @param diagnostic - Sanitized diagnostic supplied by the controller
+ * @returns One diagnostic list item
+ */
+function DiagnosticItem({
+  diagnostic,
+}: {
+  diagnostic: Readonly<KnowledgeDiagnostic>;
+}): React.ReactElement {
+  return (
+    <li className="tw-text-xs">
+      <span className="tw-font-semibold">{diagnostic.code}</span>
+      <span className="tw-text-muted"> · {diagnostic.field}</span>
+      <span>: {diagnostic.message}</span>
+    </li>
+  );
+}
+
+/**
+ * Renders command feedback and its optional deterministic diagnostics.
+ *
+ * @param feedback - Safe controller feedback
+ * @returns Feedback banner, or null when no command has reported an outcome
+ */
+function FeedbackBanner({
+  feedback,
+}: {
+  feedback: KnowledgeStudioFeedback | undefined;
+}): React.ReactElement | null {
+  if (!feedback) return null;
+
+  const isSuccess = feedback.kind === "success";
+  const isBlocked = feedback.kind === "blocked";
+  const FeedbackIcon = isSuccess ? CheckCircle2 : isBlocked ? ShieldAlert : AlertCircle;
+  const toneClassName = isSuccess ? "tw-bg-success tw-text-success" : "tw-bg-error tw-text-error";
+
+  return (
+    <aside
+      aria-live="polite"
+      className={`tw-rounded-lg tw-p-3 ${toneClassName}`}
+      role={isSuccess ? "status" : "alert"}
+    >
+      <div className="tw-flex tw-items-start tw-gap-2">
+        <FeedbackIcon aria-hidden="true" className="tw-mt-0.5 tw-size-4 tw-shrink-0" />
+        <div className="tw-min-w-0">
+          <p className="tw-m-0 tw-text-sm tw-font-medium">{feedback.message}</p>
+          {feedback.diagnostics && feedback.diagnostics.length > 0 ? (
+            <ul
+              aria-label="Validation diagnostics"
+              className="tw-mb-0 tw-mt-2 tw-space-y-1 tw-pl-4"
+            >
+              {feedback.diagnostics.map((diagnostic) => (
+                <DiagnosticItem
+                  key={`${diagnostic.code}:${diagnostic.severity}:${diagnostic.field}:${diagnostic.message}`}
+                  diagnostic={diagnostic}
+                />
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/**
+ * Renders a non-authoritative progress hint while the controller reconciles.
+ *
+ * @param state - Current controller state
+ * @returns Pending or refreshing banner, or null while settled
+ */
+function ReconciliationStatus({
+  state,
+}: {
+  state: KnowledgeStudioState;
+}): React.ReactElement | null {
+  const message = state.pendingAction
+    ? PENDING_ACTION_LABELS[state.pendingAction.kind]
+    : state.refreshing
+      ? "Refreshing durable knowledge state…"
+      : undefined;
+  if (!message) return null;
+
+  return (
+    <div
+      aria-live="polite"
+      className="tw-flex tw-items-center tw-gap-2 tw-rounded-lg tw-bg-secondary-alt tw-p-2 tw-text-xs tw-text-muted"
+      role="status"
+    >
+      <Loader2 aria-hidden="true" className="tw-size-3 tw-animate-spin" />
+      {message}
+    </div>
+  );
+}
+
+/**
+ * Renders an adapter or snapshot notice without granting any action capability.
+ *
+ * @param state - Ready controller state with an optional snapshot notice
+ * @returns Fail-closed adapter notice or informational snapshot notice
+ */
+function SnapshotNotice({ state }: { state: KnowledgeStudioState }): React.ReactElement | null {
+  const snapshot = state.snapshot;
+  if (!snapshot) return null;
+  const adapterUnavailable = snapshot.availability === "adapter_unavailable";
+  if (!adapterUnavailable && !snapshot.notice) return null;
+
+  return (
+    <aside
+      className={`tw-flex tw-items-start tw-gap-2 tw-rounded-lg tw-p-3 tw-text-sm ${
+        adapterUnavailable ? "tw-bg-error tw-text-error" : "tw-bg-secondary-alt tw-text-muted"
+      }`}
+      role={adapterUnavailable ? "alert" : "note"}
+    >
+      {adapterUnavailable ? (
+        <ShieldAlert aria-hidden="true" className="tw-mt-0.5 tw-size-4 tw-shrink-0" />
+      ) : (
+        <AlertCircle aria-hidden="true" className="tw-mt-0.5 tw-size-4 tw-shrink-0" />
+      )}
+      <span>
+        {snapshot.notice ??
+          "Knowledge Studio runtime adapters are unavailable. No files can be changed."}
+      </span>
+    </aside>
+  );
+}
+
+/**
+ * Renders a load failure while retaining an explicit durable reload action.
+ *
+ * @param message - Sanitized controller error
+ * @param controller - Controller that owns the reload
+ * @param fullPage - Whether the error replaces the complete studio surface
+ * @returns Error banner with a retry control
+ */
+function LoadError({
+  message,
+  controller,
+  fullPage,
+}: {
+  message: string;
+  controller: KnowledgeStudioController;
+  fullPage: boolean;
+}): React.ReactElement {
+  return (
+    <div
+      className={`tw-rounded-lg tw-bg-error tw-p-4 tw-text-error ${fullPage ? "tw-m-auto" : ""}`}
+      role="alert"
+    >
+      <div className="tw-flex tw-flex-wrap tw-items-center tw-justify-between tw-gap-3">
+        <div className="tw-flex tw-items-start tw-gap-2">
+          <AlertCircle aria-hidden="true" className="tw-mt-0.5 tw-size-4 tw-shrink-0" />
+          <span className="tw-text-sm">{message}</span>
+        </div>
+        <Button size="sm" variant="ghost" onClick={() => void controller.refresh()}>
+          <RefreshCw aria-hidden="true" className="tw-size-3" />
+          Retry load
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Finds the review selected by the controller's opaque ChangeSet identity.
+ *
+ * @param state - Current Knowledge Studio state
+ * @returns Selected review from the current snapshot, if it still exists
+ */
+function getSelectedReview(state: KnowledgeStudioState): Readonly<KnowledgeReviewPlan> | undefined {
+  return state.snapshot?.reviews.find(
+    (review) => review.changeSetId === state.selectedReviewChangeSetId
+  );
+}
+
+/**
+ * Renders the review inbox and the exact plan selected by the controller.
+ *
+ * @param state - Current controller state
+ * @param controller - Command/navigation boundary
+ * @returns Review tab content
+ */
+function ReviewWorkspace({
+  state,
+  controller,
+}: {
+  state: KnowledgeStudioState;
+  controller: KnowledgeStudioController;
+}): React.ReactElement {
+  const reviews = state.snapshot?.reviews ?? [];
+  const selectedReview = getSelectedReview(state);
+
+  if (reviews.length === 0) {
+    return (
+      <div
+        className="tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-6 tw-text-center"
+        role="status"
+      >
+        <Inbox aria-hidden="true" className="tw-mx-auto tw-size-6 tw-text-muted" />
+        <p className="tw-m-0 tw-mt-2 tw-text-sm tw-font-medium">No proposals are awaiting review</p>
+        <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
+          Multi-file proposals will appear here after deterministic validation.
+        </p>
+        <Button
+          className="tw-mt-3"
+          size="sm"
+          variant="ghost"
+          onClick={() => controller.selectTab("activity")}
+        >
+          View activity
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="tw-space-y-4">
+      <nav aria-label="Pending knowledge reviews" className="tw-flex tw-flex-wrap tw-gap-2">
+        {reviews.map((review, index) => {
+          const selected = review.changeSetId === state.selectedReviewChangeSetId;
+          return (
+            <Button
+              key={review.changeSetId}
+              aria-label={`Open review ${index + 1}`}
+              aria-pressed={selected}
+              size="sm"
+              variant={selected ? "default" : "secondary"}
+              onClick={() => controller.openReview(review.changeSetId)}
+            >
+              Proposal {index + 1}
+              <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
+                {review.files.length} {review.files.length === 1 ? "file" : "files"}
+              </Badge>
+            </Button>
+          );
+        })}
+      </nav>
+
+      {selectedReview ? (
+        <KnowledgeReviewPanel
+          busy={state.pendingAction !== undefined}
+          plan={selectedReview}
+          onBack={() => controller.selectTab("activity")}
+          onSubmit={(command) => controller.submitReview(command)}
+        />
+      ) : (
+        <div className="tw-rounded-lg tw-bg-error tw-p-3 tw-text-sm tw-text-error" role="alert">
+          The selected review is no longer available. Choose a current proposal above.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Maps an Activity job selection to the ChangeSet currently stored in the
+ * controller snapshot, then delegates navigation back to the controller.
+ *
+ * @param controller - Current Knowledge Studio controller
+ * @param jobId - Opaque Activity job identifier
+ */
+function openJobReview(controller: KnowledgeStudioController, jobId: string): void {
+  const item = controller
+    .getState()
+    .snapshot?.activity.items.find((candidate) => candidate.id === jobId);
+  if (item?.changeSetId) {
+    controller.openReview(item.changeSetId);
+    return;
+  }
+  controller.selectTab("review");
+}
+
+/**
+ * Renders the Activity/Review composition over controller-owned durable truth.
+ *
+ * This component never writes queue, review, or Vault state. Every command is
+ * delegated to the controller, and rendered job state changes only after the
+ * controller publishes a reconciled snapshot.
+ *
+ * @param props - Knowledge Studio controller boundary
+ * @returns Controller-backed Knowledge Studio surface
+ */
+export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): React.ReactElement {
+  const state = useKnowledgeStudioState(controller);
+  const activityTabId = React.useId();
+  const reviewTabId = React.useId();
+  const tabIds: Readonly<Record<KnowledgeStudioTab, string>> = {
+    activity: activityTabId,
+    review: reviewTabId,
+  };
+
+  if (state.status === "idle") {
+    return (
+      <div className="tw-flex tw-h-full tw-items-center tw-justify-center tw-p-6" role="status">
+        <p className="tw-m-0 tw-text-sm tw-text-muted">Knowledge Studio is not active.</p>
+      </div>
+    );
+  }
+
+  if (state.status === "loading" && !state.snapshot) {
+    return (
+      <div
+        className="tw-flex tw-h-full tw-items-center tw-justify-center tw-gap-2 tw-p-6 tw-text-sm tw-text-muted"
+        role="status"
+      >
+        <Loader2 aria-hidden="true" className="tw-size-4 tw-animate-spin" />
+        Loading durable knowledge state…
+      </div>
+    );
+  }
+
+  if (state.status === "error" && !state.snapshot) {
+    return (
+      <div className="tw-flex tw-h-full tw-p-6">
+        <LoadError
+          controller={controller}
+          fullPage={true}
+          message={state.error ?? "Knowledge Studio could not load its durable state."}
+        />
+      </div>
+    );
+  }
+
+  const snapshot = state.snapshot;
+  if (!snapshot) {
+    return (
+      <div className="tw-flex tw-h-full tw-items-center tw-justify-center tw-p-6" role="status">
+        <p className="tw-m-0 tw-text-sm tw-text-muted">
+          Durable knowledge state is not available yet.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <main className="tw-flex tw-h-full tw-flex-col tw-gap-4 tw-overflow-auto tw-p-4">
+      <header className="tw-flex tw-flex-wrap tw-items-start tw-justify-between tw-gap-3">
+        <div>
+          <h1 className="tw-m-0 tw-text-lg tw-font-semibold">Knowledge Studio</h1>
+          <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
+            Bundle {snapshot.bundleId} · durable revision {snapshot.revisionToken}
+          </p>
+        </div>
+        <div aria-label="Knowledge Studio sections" className="tw-flex tw-gap-1" role="tablist">
+          {STUDIO_TABS.map((tab) => {
+            const selected = state.activeTab === tab.id;
+            const TabIcon = tab.icon;
+            return (
+              <Button
+                key={tab.id}
+                aria-controls={`${tabIds[tab.id]}-panel`}
+                aria-selected={selected}
+                id={`${tabIds[tab.id]}-tab`}
+                role="tab"
+                size="sm"
+                variant={selected ? "default" : "ghost"}
+                onClick={() => controller.selectTab(tab.id)}
+              >
+                <TabIcon aria-hidden="true" className="tw-size-3" />
+                {tab.label}
+                {tab.id === "review" && snapshot.reviews.length > 0 ? (
+                  <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
+                    {snapshot.reviews.length}
+                  </Badge>
+                ) : null}
+              </Button>
+            );
+          })}
+        </div>
+      </header>
+
+      <SnapshotNotice state={state} />
+      {state.error ? (
+        <LoadError controller={controller} fullPage={false} message={state.error} />
+      ) : null}
+      <FeedbackBanner feedback={state.feedback} />
+      <ReconciliationStatus state={state} />
+
+      <section
+        aria-labelledby={`${tabIds[state.activeTab]}-tab`}
+        id={`${tabIds[state.activeTab]}-panel`}
+        role="tabpanel"
+      >
+        {state.activeTab === "activity" ? (
+          snapshot.availability === "adapter_unavailable" ? (
+            <div
+              className="tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-6 tw-text-center"
+              role="status"
+            >
+              <ShieldAlert aria-hidden="true" className="tw-mx-auto tw-size-6 tw-text-muted" />
+              <p className="tw-m-0 tw-mt-2 tw-text-sm tw-font-medium">
+                Durable Activity is not connected
+              </p>
+              <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
+                No queue state is inferred while the Windows adapter is unavailable.
+              </p>
+            </div>
+          ) : (
+            <KnowledgeActivityPanel
+              model={snapshot.activity}
+              onCancelJob={(jobId) => void controller.cancelJob(jobId)}
+              onPauseBundle={() => void controller.pauseBundle()}
+              onResumeBundle={() => void controller.resumeBundle()}
+              onRetryJob={(jobId) => void controller.retryJob(jobId)}
+              onReviewJob={(jobId) => openJobReview(controller, jobId)}
+            />
+          )
+        ) : (
+          <ReviewWorkspace controller={controller} state={state} />
+        )}
+      </section>
+    </main>
+  );
+}

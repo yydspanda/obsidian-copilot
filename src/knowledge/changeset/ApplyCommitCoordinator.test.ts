@@ -15,9 +15,10 @@ import {
   TRANSACTION_JOURNAL_VERSION,
   type ChangeSetTransactionJournal,
 } from "@/knowledge/changeset/TransactionStorage";
-import type {
-  IngestApplyCommitMarker,
-  IngestQueueSnapshot,
+import {
+  INGEST_QUEUE_VERSION,
+  type IngestApplyCommitMarker,
+  type IngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import type {
   KnowledgeBundleConfig,
@@ -184,7 +185,7 @@ function createQueueSnapshot(
   marker: IngestApplyCommitMarker | null
 ): IngestQueueSnapshot {
   return {
-    version: 2,
+    version: INGEST_QUEUE_VERSION,
     bundleId: receipt.bundleId,
     revision: marker ? 2 : 3,
     control: marker
@@ -209,6 +210,8 @@ function createQueueSnapshot(
         observedAt: receipt.committedAt,
       },
     ],
+    pendingReviews: [],
+    reviewRejections: [],
     ...(marker ? { applyCommit: { ...marker } } : {}),
   };
 }
