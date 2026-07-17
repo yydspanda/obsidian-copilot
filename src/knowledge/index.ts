@@ -2,6 +2,16 @@ export * from "@/knowledge/changeset/ApplyCommitCoordinator";
 export * from "@/knowledge/changeset/ChangeSetTransaction";
 export * from "@/knowledge/changeset/ChangeSetValidator";
 export * from "@/knowledge/changeset/TransactionStorage";
+export * from "@/knowledge/compiler/CompilerModelPort";
+export * from "@/knowledge/compiler/KnowledgeCompiler";
+export {
+  parseCompilerAnalysisModelOutput,
+  type CompilerAnalysisModelOutput,
+} from "@/knowledge/compiler/analysisSchema";
+export {
+  parseCompilerGenerationModelOutput,
+  type CompilerGenerationModelOutput,
+} from "@/knowledge/compiler/generationSchema";
 export * from "@/knowledge/ingest/queue/IngestQueue";
 export * from "@/knowledge/ingest/queue/QueueStorage";
 export * from "@/knowledge/ingest/queue/RetryPolicy";

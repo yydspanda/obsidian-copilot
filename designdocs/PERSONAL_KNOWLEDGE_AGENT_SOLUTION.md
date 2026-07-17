@@ -505,6 +505,10 @@ Manifest 只记录 durable source identity、最后成功提交和最后失败�
 
 上述接口的可执行基线位于 `src/knowledge/model/`；未知持久化 JSON 先经过 strict Zod 3 schema，再经过路径、hash、跨字段和写入边界的确定性语义校验，公共 API 不泄露 Zod 类型。
 
+两阶段编译的可执行 Core 位于 `src/knowledge/compiler/`。第一阶段只能从调用方按当前来源和 Manifest 选出的最小 target catalog 获得既有页权限；catalog 外路径只能做 Windows case-insensitive existence probe，确认缺失后才可成为 create。第二阶段只看到 runtime 绑定后的 create/update 最小 DTO，并以 `targetSetDigest + targetId` 返回 write/unchanged；模型不能提交路径、operation、hash、source refs、validation、status，也看不到 delete 原文或 ownership 授权。普通 claim 至少需要一条实际送模 evidence 的 material-valid `supports`，candidate validator 再确定性检查 OKF、links 与 citations，最终只生成 `proposed` ChangeSet。
+
+Delete 的授权比普通 write 更窄：目标必须由 Manifest 标记为当前 source 独占的 generated page，resolver 观察到的 bytes 必须仍匹配 last-generated hash。该判断在 Compiler Core 内防止过期或共享页面进入 proposal，但真实 apply 仍必须把 Manifest revision、ownership/sourceRefs 和 expected hash 作为 semantic read-set 写入 journal 并在写前复证；完成该边界前，产品 UI 不启用 compiler delete。
+
 Obsidian Vault API 不提供跨文件的真正原子事务。这里的“事务”指可恢复语义：在 Vault-global 单活动槽中记录完整 pre-state journal 和 staging plan，按 Windows 确定顺序执行单文件原子 compare-and-swap，写后复验，最后写 commit marker。失败或启动恢复只自动 roll-forward；文件状态既不等于精确 before、也不等于精确 after 时进入 sticky recovery gate，不自动 rollback 或覆盖用户编辑。文件观察者可能短暂看到中间状态，但只有 commit marker 完成后才允许后续成功账本推进。
 
 成功账本采用可重试的交接协议：committed journal 先与 Queue 中完整 source/hash/pipeline/input revision/job attempt claim 做只读精确核验；通过后记录幂等 Manifest 成功，再把 Queue job 与 `commit_pending_ack` marker 原子落盘，然后清除全局 journal，最后移除 Queue marker 并保留 `startup_recovery` 暂停。applying executor 必须返回 `completed + exact commitReceipt`，再由 `IngestQueue.runNext` 对外转换为 `commit_ready`，不能提前把 durable job 标为 completed；审核接受也先产生同时绑定 accepted ChangeSet id 与 canonical digest 的 durable `applyClaim`。任何一步崩溃都从 journal、`applyClaim` 或 Queue commit marker 继续；因此不会出现页面尚未提交而任务或 Manifest 已成功的状态，也不会把一个来源或一份审核结果记到另一个 job。Manifest adapter、Queue adapter 和 journal adapter 都必须提供各自契约要求的 durable CAS，普通的 read-then-write 不满足要求。

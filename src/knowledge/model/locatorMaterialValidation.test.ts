@@ -47,12 +47,42 @@ describe("validateSourceLocatorAgainstArtifact", () => {
       kind: "markdown_lines",
       startLine: 5,
       endLine: 6,
+      heading: "Findings",
     };
 
     expect(validateSourceLocatorAgainstArtifact(locator, createMarkdownArtifact())).toEqual({
       valid: true,
       diagnostics: [],
     });
+  });
+
+  it.each([
+    {
+      name: "is absent",
+      excerpt: "# Findings\nTarget evidence",
+      startLine: 5,
+      endLine: 6,
+      heading: "Missing heading",
+    },
+    {
+      name: "does not cover the complete line range",
+      excerpt: "First result\n# Findings\nTarget evidence",
+      startLine: 4,
+      endLine: 6,
+      heading: "Findings",
+    },
+  ])("rejects a Markdown line heading that $name", ({ excerpt, startLine, endLine, heading }) => {
+    const locator: SourceLocator = {
+      ...createLocatorBase(excerpt),
+      kind: "markdown_lines",
+      startLine,
+      endLine,
+      heading,
+    };
+
+    expect(
+      diagnosticCodes(validateSourceLocatorAgainstArtifact(locator, createMarkdownArtifact()))
+    ).toContain("locator_heading_range_mismatch");
   });
 
   it("uses heading occurrence to disambiguate duplicate headings", () => {
@@ -131,6 +161,89 @@ describe("validateSourceLocatorAgainstArtifact", () => {
     };
 
     expect(validateSourceLocatorAgainstArtifact(locator, artifact).valid).toBe(true);
+  });
+
+  it("uses prefix and suffix context to uniquely select one repeated quote", () => {
+    const artifact: TextArtifactObservation = {
+      kind: "text",
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: ARTIFACT_HASH,
+      text: "First context\nExact quote\nFirst ending\nWanted context \n\n Exact quote \n\n Wanted ending",
+    };
+    const locator: SourceLocator = {
+      ...createLocatorBase("Exact quote"),
+      kind: "quote",
+      prefix: "Wanted context",
+      suffix: "Wanted ending",
+    };
+
+    expect(validateSourceLocatorAgainstArtifact(locator, artifact)).toEqual({
+      valid: true,
+      diagnostics: [],
+    });
+  });
+
+  it("keeps locator_excerpt_missing when quote text is absent", () => {
+    const artifact: TextArtifactObservation = {
+      kind: "text",
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: ARTIFACT_HASH,
+      text: "Before\nDifferent quote\nAfter",
+    };
+    const locator: SourceLocator = {
+      ...createLocatorBase("Exact quote"),
+      kind: "quote",
+      prefix: "Before",
+      suffix: "After",
+    };
+
+    const codes = diagnosticCodes(validateSourceLocatorAgainstArtifact(locator, artifact));
+
+    expect(codes).toContain("locator_excerpt_missing");
+    expect(codes).not.toContain("locator_quote_context_mismatch");
+  });
+
+  it("reports a stable context mismatch when quote text exists outside its anchors", () => {
+    const artifact: TextArtifactObservation = {
+      kind: "text",
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: ARTIFACT_HASH,
+      text: "Actual prefix\nExact quote\nActual suffix",
+    };
+    const locator: SourceLocator = {
+      ...createLocatorBase("Exact quote"),
+      kind: "quote",
+      prefix: "Expected prefix",
+      suffix: "Expected suffix",
+    };
+
+    const codes = diagnosticCodes(validateSourceLocatorAgainstArtifact(locator, artifact));
+
+    expect(codes).toContain("locator_quote_context_mismatch");
+    expect(codes).not.toContain("locator_excerpt_missing");
+  });
+
+  it("rejects quote context that still matches multiple occurrences", () => {
+    const artifact: TextArtifactObservation = {
+      kind: "text",
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: ARTIFACT_HASH,
+      text: "Before\nExact quote\nAfter\nBefore \n\n Exact quote \n After",
+    };
+    const locator: SourceLocator = {
+      ...createLocatorBase("Exact quote"),
+      kind: "quote",
+      prefix: "Before",
+      suffix: "After",
+    };
+
+    expect(diagnosticCodes(validateSourceLocatorAgainstArtifact(locator, artifact))).toContain(
+      "locator_quote_ambiguous"
+    );
   });
 
   it("rejects source, artifact, and exact content-hash mismatches", () => {

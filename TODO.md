@@ -37,6 +37,7 @@
 - [x] 将 applying 设为事务安全边界；Commit E 日志完成前，中断或失败 apply 进入不可绕过的 recovery-required gate。
 - [x] 完成 accepted ChangeSet preflight、Vault-global pre-state journal、Windows 确定性写入、单文件原子 CAS、commit marker 与幂等 startup roll-forward。
 - [x] 完成 Queue v2 exact apply/commit marker、v1 严格迁移，以及 `queue claim verify → manifest → queue marker → journal ack → queue release` 协调器与全断点故障注入。
+- [x] 完成 provider-neutral 两阶段 Knowledge Compiler Core：strict unknown output、可信 evidence 映射、caller-owned target authorization、Windows exact observation、opaque target binding、runtime hash/id/status、确定性 candidate validation 与 fake-model 回归。
 
 ## Pending Tasks 📋
 
@@ -57,7 +58,7 @@
 - [x] 在纯 core 协调器层验证任一断点后都不会出现“任务/manifest 已成功但 Wiki 页面未完成”的状态。
 - [ ] 实现 Windows/Vault `TransactionStorage` 的全局原子 slot，以及 `KnowledgeFileStore` 的原子 compare-and-write / compare-and-delete adapter；禁止用 read-then-write/delete 冒充。
 - [ ] 实现 exact `transactionId/revision/changeSetDigest/receipt` 幂等的 `ApplyCommitManifestPort` adapter/ledger；同 identity 重放必须是单一逻辑成功，同 key 不同 digest 必须 fail closed。
-- [ ] 将 schema、非 target link 与 source artifact 的 hash/read-set 写入 journal，并在首次写入与恢复前复证 semantic dependency。
+- [ ] 将 schema、非 target link、source artifact 与 manifest target authorization（revision、ownership、sole-source、last-generated hash）的 read-set 写入 journal，并在首次写入与恢复前复证 semantic dependency；完成前真实 UI/apply 不启用 compiler delete。
 - [ ] 在真实写盘前决定 CAS 后、progress 前崩溃的 content ABA 策略：接受 content-addressed at-least-once，或增加 mutation-intent marker 并在精确 before 状态 fail closed。
 - [ ] 为 transaction `recovery_required` 增加显式重新校验、继续、回滚或放弃动作及 Knowledge Studio 恢复 UI。
 - [ ] 严格解析并脱敏 file/projection adapter 的运行时成功返回值，非法 adapter payload 统一映射为受控 infrastructure error。
@@ -66,7 +67,8 @@
 
 - [ ] 在首个真实 Windows adapter/UI 接入时同步加入 Windows Desktop platform guard、非支持平台提示，并更新 `manifest.json` 的 desktop-only 决策与用户文档。
 - [ ] 在 Chat 文件拖入中增加 `Use in this chat` / `Add to Knowledge` 分流。
-- [ ] 完成单来源两阶段 compile，并限制生成阶段只能修改分析阶段确定的目标集合。
+- [x] 完成纯 Core 单来源两阶段 compile；生成阶段只能返回已批准的 opaque target id，不能提交 path、operation、hash、source refs、validation 或 status。
+- [ ] 接入真实 parser artifact、provider structured-output adapter、target authorization/resolver 与 projected OKF/link validator；adapter 不得解析 fenced JSON 或静默修复模型输出。
 - [ ] 扩展 ApplyView，支持多文件 create/update/delete、来源、校验和逐文件/逐块审核。
 - [ ] 建立最小 Knowledge Studio / Activity 表面，显示解析、分析、生成、校验和审核阶段。
 - [ ] 将新 Wiki 接入 Search v3，支持 grounded answer、citation jump 和从回答保存回 Wiki。
@@ -115,6 +117,11 @@
 - applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，Queue 在 Manifest 之前仍保持 processing/applying。审核接受转换为新的 durable applying claim，不能直接完成 job。
 - 页面提交后的协议固定为只读 `queue claim verify`，再持久执行 `manifest → queue marker → journal ack → queue release`；Manifest 写入必须按 exact transaction/revision/digest 幂等。
 - 清除 Queue marker 后仍保留 `startup_recovery` 暂停，必须由用户显式 resume backlog。
+- Compiler stage 1 只能从 caller-owned target catalog 读取/修改已知页；catalog 外路径只拥有 create-only 权限，resolver 必须使用 Windows 大小写不敏感 existence probe，既有内容不得送入生成模型。
+- Compiler delete 只允许 manifest 标记为 generated、由当前 primary source 独占且当前 bytes 仍匹配 last-generated hash 的目标；该授权仍须在 review/apply 时通过 journalized manifest read-set 复证。
+- Stage 2 只接收 runtime 绑定后的 create/update targets，并按 exact target-set digest 返回 `targetId + write/unchanged`；delete 原文、自由路径、operation、hash、validation 和 status 永不进入模型输出契约。
+- 模型 citation 只能选择本次实际提供的 evidence id；source/artifact identity、locator 与 quote hash 来自 parser-owned registry，普通 claim 必须至少有一条 material-valid `supports`，`context/contradicts` 不构成 grounding。
+- Candidate validator 是构造 proposed ChangeSet 的必需端口；三项 validation flag 均须由确定性 runtime 返回 true，Compiler 永不构造 accepted/applied 状态，apply-time 仍独立复验。
 
 ## Testing Checklist
 
@@ -127,7 +134,8 @@
 - [x] 确认没有修改 DeerFlow/SOC 文件或把 `.env.test` 纳入版本控制。
 - [x] Knowledge foundation 通过 TypeScript `noEmit`、目标 ESLint、本次变更文件 Prettier check 与 16 个 Jest suite / 444 个测试。
 - [x] Commit E 集成后全仓单元回归通过：131 个 Jest suite / 2551 个测试；现有测试中的预期 console 警告不影响结果。
-- [ ] 全仓 `npm run format:check` 仍被本次未修改的既有 `src/LLMProviders/chatModelManager.ts` 格式基线阻塞；不在 Commit E 中夹带修改。
+- [x] Commit F 通过 5 个定向 Jest suite / 79 个测试、TypeScript `noEmit`、全仓 ESLint 与本次变更文件 Prettier check；集成后全仓 135 个 Jest suite / 2623 个测试全部通过。
+- [ ] 全仓 `npm run format:check` 仍被本次未修改的既有 `src/LLMProviders/chatModelManager.ts` 格式基线阻塞；不在 Commit F 中夹带修改。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 
 ## Source Documents

@@ -2,13 +2,13 @@
 
 Status: Active
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C/D/E core complete; Commit F is next. The knowledge foundation currently passes TypeScript `noEmit`, targeted ESLint, changed-file Prettier check, and 444 tests across sixteen Jest suites; the full repository passes 2,551 tests across 131 suites. Repository-wide Prettier check still reports the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D/E/F core complete; Commit G is next. The provider-neutral compiler passes 79 targeted tests across five Jest suites, TypeScript `noEmit`, repository-wide ESLint, and changed-file Prettier check; the full repository passes 2,623 tests across 135 suites. Repository-wide Prettier check still reports the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -195,11 +195,11 @@ Runtime integration boundary before real Vault writes:
 - 首个真实 Windows adapter/UI 必须同步加入 Windows Desktop platform guard、非支持平台用户提示，并明确更新 `manifest.json` 的 desktop-only 决策与相应用户文档。
 - 实现 Windows/Vault `TransactionStorage`、`QueueStorage` 与 `KnowledgeFileStore.compareAndSwap` adapter；compare-and-delete 同样必须原子，不能用普通 read + delete 冒充。
 - 实现 `ApplyCommitManifestPort` 的 exact-idempotency adapter/ledger；必须按 transaction id/revision、ChangeSet digest 与 receipt 防重，且对同 key 不同 payload fail closed。
-- journal 化并复证 schema、非 target link 和 source artifact 的 semantic read-set，避免崩溃恢复时依赖已经漂移。
+- journal 化并复证 schema、非 target link、source artifact 和 manifest target authorization 的 semantic read-set，避免崩溃恢复时依赖已经漂移；在 ownership/sourceRefs/last-generated hash 可于 apply-time 复证前，不在真实 UI 启用 compiler delete。
 - 在接入真实写盘前决定 mutation intent：当前 content-addressed at-least-once 恢复存在“CAS 后、progress 前崩溃，再被用户恢复为精确 before”这一 ABA 取舍。
 - 为 `recovery_required` 增加明确的重新校验、继续、回滚或放弃操作；在此之前冲突只保持 fail closed。
 
-### Commit F — Provider-neutral Compile Port ← Next
+### Commit F — Provider-neutral Compile Port ✅
 
 Target files:
 
@@ -215,8 +215,12 @@ src/knowledge/compiler/
 Scope:
 
 - 阶段一输出概念、实体、主张、关系、引用和目标页面集合。
-- 阶段二只能为阶段一批准的目标生成文件变更。
+- 阶段一只可读取 caller-owned target catalog 中的既有页面；catalog 外路径保持 create-only，Windows existence probe 发现占用即 fail closed。
+- delete 只允许 manifest 标记为 generated、当前 source 独占且 bytes 匹配 last-generated hash 的显式授权目标。
+- 阶段二只接收 runtime 绑定后的 create/update 最小 DTO，并只能用 opaque target id 返回 write/unchanged；delete 内容和授权元数据不进入生成模型。
 - 模型输出经过结构校验、路径校验和 citation normalization。
+- claim 必须至少有一条 trusted evidence 的 material-valid `supports`；引用 identity、locator 和 hash 不由模型填写。
+- OKF、link 与 citation candidate validator 是构造 proposed ChangeSet 的必需端口；apply-time 仍独立复验。
 - Provider 和模型配置通过 port 注入；不复制外部 Provider Runtime。
 
 Constraint:
@@ -225,11 +229,11 @@ Constraint:
 
 Exit criteria:
 
-- 模型不能通过输出新增未批准路径。
+- 模型不能绕过 runtime target binding 修改既有未授权路径；新路径只有在 Windows resolver 证明缺失后才能进入 create proposal。
 - 无效或不完整输出进入 review/failure，不直接写盘。
 - 固定 fake model fixture 可以产生稳定 ChangeSet。
 
-### Commit G — Multi-file Review and Activity UI
+### Commit G — Multi-file Review and Activity UI ← Next
 
 Scope:
 
