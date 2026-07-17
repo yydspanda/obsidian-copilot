@@ -2,8 +2,10 @@ import {
   ChangeSetValidationError,
   ChangeSetValidationInfrastructureError,
   ChangeSetValidator,
+  ALL_KNOWLEDGE_FILE_MUTATIONS,
   createKnowledgeChangeSetDigest,
   type KnowledgeFileObservation,
+  type KnowledgeFileMutationCapabilities,
   type KnowledgeFileStore,
   type KnowledgeProjectionValidationInput,
   type KnowledgeProjectionValidator,
@@ -92,9 +94,11 @@ function createArtifact(text = "Before Grounded evidence After"): TextArtifactOb
 
 /** Creates an injected file store backed by exact path observations. */
 function createFileStore(
-  observations: Readonly<Record<string, KnowledgeFileObservation>> = {}
+  observations: Readonly<Record<string, KnowledgeFileObservation>> = {},
+  mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities> = ALL_KNOWLEDGE_FILE_MUTATIONS
 ): jest.Mocked<KnowledgeFileStore> {
   return {
+    mutationCapabilities,
     observe: jest.fn(async (path) => observations[path] ?? { kind: "missing" }),
     compareAndSwap: jest.fn(
       async (
@@ -225,6 +229,31 @@ describe("ChangeSetValidator", () => {
       "changeset_declared_validation_failed"
     );
     expect(store.observe).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsupported adapter operation before observing files or creating a journal", async () => {
+    const content = "# Generated page\n";
+    const deletion: KnowledgeFileChange = {
+      id: "change-delete",
+      operation: "delete",
+      path: "Wiki/Generated.md",
+      sourceRefs: ["source-1"],
+      reason: "Remove obsolete generated content",
+      beforeHash: createFileContentHash(content),
+    };
+    const capabilities = { create: true, update: true, delete: false };
+    const store = createFileStore({ "Wiki/Generated.md": { kind: "file", content } }, capabilities);
+    const resolver = createArtifactResolver();
+    const projection = createProjectionValidator();
+    const validator = new ChangeSetValidator(store, resolver, projection);
+    capabilities.delete = true;
+
+    await expect(
+      rejectedCodes(validator.prepare(createChangeSet([deletion]), createBundle()))
+    ).resolves.toContain("changeset_operation_unsupported");
+    expect(store.observe).not.toHaveBeenCalled();
+    expect(resolver.resolve).not.toHaveBeenCalled();
+    expect(projection.validate).not.toHaveBeenCalled();
   });
 
   it("rejects Bundle mismatch and Raw Source targets before observing files", async () => {

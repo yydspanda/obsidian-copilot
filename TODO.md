@@ -33,9 +33,9 @@
 - [x] 完成 Source Manifest Repository 与可注入 Storage Port；支持 stable identity、rename、freshness、扩展字段保真与 revision CAS。
 - [x] 修复并发 success/failure 覆盖竞态，以单调观察时间和有界 CAS retry 保留较新状态。
 - [x] 完成持久 Ingest Queue Core：严格快照、revision CAS、Bundle 隔离、claim ownership、同来源去重、durable source high-watermark 与 exactly-one latest rerun。
-- [x] 完成暂停/恢复/取消、显式审核、指数退避、最大重试、provider 限流暂停、错误脱敏与同会话基础设施失败恢复。
+- [x] 完成 Queue 纯 core 的暂停/恢复/取消、安全启动状态转换、显式审核、指数退避、最大重试、provider 限流暂停、错误脱敏与同会话基础设施失败恢复；不等同于真实 startup coordinator 已接通。
 - [x] 将 applying 设为事务安全边界；Commit E 日志完成前，中断或失败 apply 进入不可绕过的 recovery-required gate。
-- [x] 完成 accepted ChangeSet preflight、Vault-global pre-state journal、Windows 确定性写入、单文件原子 CAS、commit marker 与幂等 startup roll-forward。
+- [x] 完成 accepted ChangeSet preflight、Vault-global pre-state journal、Windows 确定性写入、单文件原子 CAS、commit marker 与纯 transaction core 的幂等 startup roll-forward；真实启动编排仍是 pending。
 - [x] 完成 Queue v2 exact apply/commit marker、v1 严格迁移与提交协调器；Commit G 再严格迁移到 v3，并加入 pending Review Store anchor、accepted terminal identity 与 durable rejection tombstone。
 - [x] 完成 provider-neutral 两阶段 Knowledge Compiler Core：strict unknown output、可信 evidence 映射、caller-owned target authorization、Windows exact observation、opaque target binding、runtime hash/id/status、确定性 candidate validation 与 fake-model 回归。
 - [x] 从 legacy ApplyView 抽取无写入能力的精确 diff renderer，并修复普通 rerender、popout migration 与定时器的 document/window 归属。
@@ -46,6 +46,8 @@
 - [x] 完成 durable Queue review rejection：Queue v3 保存 exact job/changeSet rejection identity，拒绝不构造空 accepted ChangeSet，并原子提升 retained latest rerun。
 - [x] 完成 Activity 只读投影、Review/Activity React 面板、reload-only Controller，以及 popout-safe Windows Knowledge Studio ItemView。
 - [x] 加入 Windows Desktop 功能级 guard、命令/导航入口与用户文档；保留现有插件 `isDesktopOnly: false`，不扩大 Knowledge Studio 的平台承诺。
+- [x] 完成 `knowledge-runtime-v1.json` 持久化基础代码：单一 strict envelope 承载 Queue、Review、Manifest、Vault-global Transaction slot 与 watcher-capture `inputRevision`，所有替换经过完整 envelope 语义校验和 revision CAS。
+- [x] 完成 Windows 文件 adapter 的 create/update 代码层：首次 runtime 以完整临时文件 + flush + 排他 hard-link 发布，Wiki create 使用排他创建，update 使用 `Vault.process`，能力声明绑定 store 并在 preflight 前禁用 delete；真实 Windows Obsidian 验收与 Golden Flow 接线仍未完成。
 
 ## Pending Tasks 📋
 
@@ -59,13 +61,16 @@
 ### Slice 1B：持久队列与可恢复写入
 
 - [x] 实现可注入的 `QueueStorage`、`IngestExecutor`、`EventSink`、`RetryPolicy` 和队列状态机。
-- [x] 支持任务去重、处理中 latest rerun、暂停、取消、指数退避、重试、stale claim 防护和安全启动恢复。
-- [ ] 实现 Windows/Vault `QueueStorage` adapter 的原子 revision compare-and-replace，以及跨重启、并发安全的 per-source `inputRevision` 分配器。
+- [x] 支持任务去重、处理中 latest rerun、暂停、取消、指数退避、重试、stale claim 防护和 Queue 纯 core 的安全启动状态恢复。
+- [x] 实现 Windows/Vault `QueueStorage` adapter 的 revision compare-and-replace 代码层，以及跨 runtime 重建、并发安全的 per-source watcher-capture `inputRevision` 分配器；真实 Windows `DataAdapter.process` 行为仍由独立实机验收项负责。
 - [ ] 在接入真实 durable adapter 并长期使用前定义 terminal job 归档/压缩策略，避免运行队列无限增长。
 - [ ] 终态归档必须原子协调 Queue jobs、pending review anchors、accepted/rejected identity、Review Store terminal records 与 source high-watermark；若删除历史，必须保留等价 tombstone，不能留下悬空记录或让旧输入复活。
-- [x] 实现 before-hash CAS、完整 pre-state journal、确定性写入顺序、commit marker 和启动 roll-forward。
+- [x] 实现 before-hash CAS、完整 pre-state journal、确定性写入顺序、commit marker 和 transaction 纯 core 启动 roll-forward。
 - [x] 在纯 core 协调器层验证任一断点后都不会出现“任务/manifest 已成功但 Wiki 页面未完成”的状态。
-- [ ] 实现 Windows/Vault `TransactionStorage` 的全局原子 slot，以及 `KnowledgeFileStore` 的原子 compare-and-write / compare-and-delete adapter；禁止用 read-then-write/delete 冒充。
+- [x] 实现 Windows/Vault `TransactionStorage` 的 Vault-global revision/token CAS slot 代码层，并以永久 envelope slot 的 `null` 清除避免删除状态文件。
+- [x] 实现 `KnowledgeFileStore` 的排他 create 与 `Vault.process` update compare-and-swap 代码层；after-state replay 可识别 `already_after`，第三状态 fail closed。
+- [ ] 实现可证明安全的 compare-and-delete；当前生产 capability 固定 `delete: false`，精确 before 确实需要删除时必须拒绝，不能用 read-then-delete 冒充。
+- [ ] 在真实 Windows Obsidian test Vault 验证 `DataAdapter.process`/`Vault.process` 的 callback 串行化、双实例竞争、返回值、插件重载、外部编辑与崩溃行为；完成前不宣称 power-loss durability 或 production-ready CAS。
 - [ ] 实现 exact `transactionId/revision/changeSetDigest/receipt` 幂等的 `ApplyCommitManifestPort` adapter/ledger；同 identity 重放必须是单一逻辑成功，同 key 不同 digest 必须 fail closed。
 - [ ] 将 schema、非 target link、source artifact 与 manifest target authorization（revision、ownership、sole-source、last-generated hash）的 read-set 写入 journal，并在首次写入与恢复前复证 semantic dependency；完成前真实 UI/apply 不启用 compiler delete。
 - [ ] 在真实写盘前决定 CAS 后、progress 前崩溃的 content ABA 策略：接受 content-addressed at-least-once，或增加 mutation-intent marker 并在精确 before 状态 fail closed。
@@ -116,6 +121,7 @@
 - Windows Vault path 在领域边界选择“验证并拒绝”，不静默修复盘符、UNC、反斜杠、保留设备名或碰撞目标。
 - Pipeline fingerprint 只接受 allowlisted JSON 配置，并防御性拒绝 credential-like 字段。
 - Queue 的 `inputRevision` 必须由 source adapter 按 source 严格单调分配、跨重启保存，并在相同内容观察时同样推进；不得使用内存计数器或文件 mtime 代替。
+- source adapter 必须在 watcher handler 开始、任何异步读取/解析之前先分配 `inputRevision`，再把 revision 绑定到随后读到的 bytes/hash；这样较早读取若较晚完成，会被 Queue 的更高 source high-watermark 拒绝。allocator 只按捕获顺序编号，不能在异步读取结束后倒置调用。
 - Compiler source identity 与 ChangeSet/review identity 同时包含 `inputRevision`；因此来源 A→B→A 不会复用第一次 A 的审核实例。该来源观察 ABA 已关闭，不等同于仍待决定的文件写入 content ABA。
 - Queue 在 claim 外持久每个 source 的 `sourceHighWatermarks`（revision + source hash + pipeline fingerprint）；等价的更新观察不能改写已认领输入，但必须推进 high-watermark 以拒绝后到的旧内容。
 - `QueueStorage.write` 的 expected revision 比较与完整 snapshot 替换必须是 adapter 内的同一原子操作。
@@ -143,6 +149,9 @@
 - Activity 的唯一事实源是 strict durable Queue snapshot；EventSink 只是 reload hint，`applyCommit`/`commit_pending_ack` 清除前 completed job 必须显示为 finalizing。
 - Queue v3 的 `reviewRejections` 为拒绝动作提供跨崩溃幂等和 identity conflict 防护；拒绝先持久化 Review Store，再转换 Queue job，不制造空 accepted ChangeSet。
 - Knowledge Studio 只在 Windows Obsidian Desktop 注册。整个 Copilot 插件仍保留原有平台范围，因此 `manifest.json` 不改为 desktop-only；这不构成对其他平台 Knowledge Studio 的支持承诺。
+- 当前 Windows 启动只初始化插件私有 `knowledge-runtime-v1.json` 与 unavailable notice；Queue/Review/Manifest/Transaction facades、文件 writer、compiler、startup recovery 和 query coordinator 尚未连到 Studio，因此不会展示伪造任务、调用模型或写 Wiki。
+- `knowledge-runtime-v1.json` 是首期个人规模的共享 envelope：跨子系统 CAS 简单，但每次 mutation 都全量 parse/validate/stringify/rewrite，存在 O(envelope size) 写放大和共享腐坏故障域。真实长期使用前必须设 size/latency threshold、协调 terminal archive/compaction，并在超过门槛时分片；它不是产品必须永久保留的核心格式。
+- 首次 runtime 文件以同目录完整临时文件、handle flush 和排他 hard-link 发布，避免并发启动暴露空/半 JSON；目录级掉电持久性与 NTFS/OneDrive/junction 行为仍属于 Windows 实机验收，不作超出证据的承诺。
 
 ## Testing Checklist
 
@@ -158,6 +167,8 @@
 - [x] Commit F 通过 5 个定向 Jest suite / 79 个测试、TypeScript `noEmit`、全仓 ESLint 与本次变更文件 Prettier check；集成后全仓 135 个 Jest suite / 2623 个测试全部通过。
 - [x] Commit G 通过 TypeScript `noEmit`、全仓 ESLint、15 个定向 Jest suite / 190 个测试，以及全仓 148 个 Jest suite / 2750 个测试；预期的既有 keychain/解密 console 输出不影响结果。
 - [x] Commit G 新增/修改文件均经 Prettier 格式化；全仓 `npm run format:check` 只被本次未修改的既有 `src/LLMProviders/chatModelManager.ts` 格式基线阻塞，继续不夹带修改。
+- [x] G.1 runtime adapter foundation 通过 TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier check，以及全仓 151 个 Jest suite / 2794 个测试；既有 keychain/解密预期 console 输出不影响结果。
+- [x] G.1 自动化回归覆盖完整文件排他发布、并发初始化、realpath/symlink containment、共享 envelope 无丢失并发更新、跨 runtime revision 续号、watcher-capture 乱序拒绝、全 slot corruption fail-closed、create/update CAS 竞争与 delete replay 分类。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 
 ## Source Documents

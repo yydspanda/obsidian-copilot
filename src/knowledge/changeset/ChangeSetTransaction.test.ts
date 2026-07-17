@@ -12,6 +12,7 @@ import {
   type TransactionCommitReceipt,
 } from "@/knowledge/changeset/ChangeSetTransaction";
 import {
+  ALL_KNOWLEDGE_FILE_MUTATIONS,
   ChangeSetValidator,
   type KnowledgeFileCompareAndSwapResult,
   type KnowledgeFileObservation,
@@ -112,6 +113,7 @@ class MemoryTransactionStorage implements TransactionStorage {
 
 /** In-memory exact text file store with deterministic failure injection. */
 class MemoryKnowledgeFileStore implements KnowledgeFileStore {
+  readonly mutationCapabilities = ALL_KNOWLEDGE_FILE_MUTATIONS;
   readonly files = new Map<string, MemoryFileValue>();
   readonly mutations: Array<{ kind: "write" | "delete"; path: string }> = [];
   observeCount = 0;

@@ -114,6 +114,9 @@ export default class CopilotPlugin extends Plugin {
   private selectionListenerDocument?: Document;
   private lastSelectionSignature?: string;
   private webSelectionTracker?: WebSelectionTracker;
+  private knowledgeRuntime?: import("@/knowledge/runtime/KnowledgeRuntimeStore").KnowledgeRuntimeStore;
+  private knowledgeStudioPort: UnavailableKnowledgeStudioPort =
+    new UnavailableKnowledgeStudioPort();
   private readonly chatHistoryLastAccessedAtManager = new RecentUsageManager<string>();
   async onload(): Promise<void> {
     // Reason: clear stale module-level persistence state + KeychainService
@@ -206,8 +209,9 @@ export default class CopilotPlugin extends Plugin {
     this.registerView(APPLY_VIEW_TYPE, (leaf: WorkspaceLeaf) => new ApplyView(leaf));
 
     if (isKnowledgeStudioPlatformSupported()) {
+      await this.initializeKnowledgeRuntimeFoundation();
       this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
-        const port = new UnavailableKnowledgeStudioPort();
+        const port = this.knowledgeStudioPort;
         const controller = new KnowledgeStudioController(port, port);
         return new KnowledgeStudioView(leaf, controller, DEFAULT_KNOWLEDGE_BUNDLE_ID);
       });
@@ -291,6 +295,44 @@ export default class CopilotPlugin extends Plugin {
 
     // Initialize web selection watcher (Desktop only)
     this.initWebSelectionWatcher();
+  }
+
+  /**
+   * Initializes the singleton Windows durable state foundation while keeping
+   * the user surface fail-closed until parser/compiler/startup coordination is
+   * complete.
+   */
+  private async initializeKnowledgeRuntimeFoundation(): Promise<void> {
+    const pluginDirectory = this.manifest.dir;
+    if (!pluginDirectory) {
+      logWarn("Knowledge runtime foundation is unavailable: plugin directory is missing.");
+      return;
+    }
+    try {
+      const [{ KnowledgeRuntimeStore }, { ObsidianAtomicRuntimeFile }] = await Promise.all([
+        import("@/knowledge/runtime/KnowledgeRuntimeStore"),
+        import("@/knowledge/runtime/ObsidianAtomicRuntimeFile"),
+      ]);
+      const runtimeFile = new ObsidianAtomicRuntimeFile(
+        this.app.vault.adapter,
+        `${pluginDirectory}/knowledge-runtime-v1.json`
+      );
+      const runtime = new KnowledgeRuntimeStore(runtimeFile);
+      await runtime.initialize();
+      this.knowledgeRuntime = runtime;
+      this.knowledgeStudioPort = new UnavailableKnowledgeStudioPort(
+        "Durable Windows knowledge storage is initialized. Ingest, recovery, and query adapters remain disabled until the complete Golden Flow is connected."
+      );
+    } catch (error) {
+      this.knowledgeRuntime = undefined;
+      this.knowledgeStudioPort = new UnavailableKnowledgeStudioPort(
+        "Durable knowledge storage needs attention before Knowledge Studio can start. No knowledge files were changed."
+      );
+      logWarn(
+        "Knowledge runtime foundation initialization failed.",
+        error instanceof Error ? error.name : "unknown_error"
+      );
+    }
   }
 
   async onunload() {

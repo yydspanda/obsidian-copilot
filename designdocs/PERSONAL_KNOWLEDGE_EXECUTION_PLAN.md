@@ -8,7 +8,7 @@ Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C/D/E/F/G foundations are implemented; Commit H is next after the real Windows/Vault adapters and startup coordinators close the remaining runtime gates. Commit G adds the provider-neutral compiler, durable multi-file Review Store, pending/terminal Review→Queue hand-off, Activity/Review UI, and a fail-closed Windows Knowledge Studio shell. The repository currently passes 2,750 unit tests across 148 Jest suites, TypeScript `noEmit`, and repository-wide ESLint; details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier check still reports only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D/E/F/G foundations and the G.1 runtime adapter foundation are implemented. G.1 adds a strict shared runtime envelope, Queue/Review/Manifest/Transaction/input-revision facades, safe first-file publication, and create/update file CAS code while deliberately leaving Knowledge Studio unavailable. Commit G.2 is next: it owns the exact apply-commit ledger, startup/no-journal recovery, workflow wiring, and Windows adapter acceptance gate; Commit H follows only after G.2 safely enables the runtime workflow. The repository currently passes 2,794 unit tests across 151 Jest suites, TypeScript `noEmit`, repository-wide ESLint, and changed-file Prettier checks; details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier still has only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -237,7 +237,7 @@ Exit criteria:
 - 无效或不完整输出进入 review/failure，不直接写盘。
 - 固定 fake model fixture 可以产生稳定 ChangeSet。
 
-### Commit G — Multi-file Review and Activity UI ← Implemented; Windows validation in Commit I
+### Commit G — Multi-file Review and Activity UI ← Core/UI implemented; Windows interaction validation pending Commit I
 
 Scope:
 
@@ -256,6 +256,50 @@ Exit criteria:
 - 用户能逐文件、逐块或批量接受/拒绝；delete 有单独危险语义且当前不可接受。
 - UI 不展示任务成功，直到 commit marker 完成。
 - Windows 触控板、键盘和不同窗口均可完成审核。
+
+### Commit G.1 — Windows Runtime Adapter Foundation ← Code implemented; product gate remains closed
+
+Scope:
+
+- 用插件私有 `knowledge-runtime-v1.json` strict envelope 承载 Queue、Review、Manifest、Vault-global active transaction 与 per-source watcher-capture `inputRevision`。
+- 每个 facade 的 revision/token compare 和完整 snapshot 替换在同一 `DataAdapter.process` transform 内完成；任何 slot 损坏会阻止整个 envelope 改写。
+- source watcher 的契约固定为“先分配 revision，再做异步 read/parse”，Queue high-watermark 拒绝较晚完成的旧读取。
+- 首次 runtime 文件经完整临时文件、handle flush 和排他 hard-link 发布；parent realpath 必须留在真实 Vault 根内。
+- `KnowledgeFileStore` capability 绑定具体 store；Windows store 只启用排他 create 与 `Vault.process` update，delete fail closed，但能分类 already-missing replay 和第三状态 conflict。
+- Windows plugin load 初始化 singleton state foundation，但继续注入 `UnavailableKnowledgeStudioPort`；不实例化真实 ingest/compiler/apply/query coordinator。
+
+Verified in automated code-level tests:
+
+- runtime reconstruction 后 revision 继续递增，Bundle/source namespace 隔离，并发分配不重复。
+- 较新事件先完成、较旧读取后完成时，Queue 保留较高 revision/hash。
+- 不同 subsystem 并发更新不丢失；queue/review/manifest/transaction/duplicate/unknown-version corruption 均阻止 unrelated write 且不改 bytes。
+- 首次发布并发不覆盖、missing parent 与 symlink escape fail closed；Wiki create/update race、malformed payload、external error 与 delete replay 分类被覆盖。
+
+Remaining exit gates:
+
+- 在真实 Windows Obsidian test Vault 验证 `DataAdapter.process`/`Vault.process` 的双实例序列化、callback/返回值、插件重载、外部编辑、NTFS/OneDrive/junction 和 crash/power-loss 行为；自动化测试不能替代该结论。
+- 实现 exact `ApplyCommitManifestPort` ledger、semantic read-set、startup Review reconciliation、no-journal recovery、history compaction/size threshold 和 safe compare-and-delete，或继续保持 delete unavailable。
+- 当前单 envelope 有 O(size) 写放大和共享故障域；长期使用前必须通过 size/latency benchmark 决定 archive 与分片。
+- 完成这些门槛前，不把基础代码称为可用 Golden Flow 或 production-ready durable adapter。
+
+### Commit G.2 — Runtime Coordination and Recovery ← Next
+
+Scope:
+
+- 实现 exact `ApplyCommitManifestPort` ledger，并把 queue/review/manifest/transaction facades、file store、compiler 与 startup coordinator 组装成 plugin singleton workflow。
+- 启动时先验证 runtime envelope，扫描 active journal、apply claim、commit marker 与 Review Store，再执行 pending-review reconciliation；完成前不能 claim 新任务。
+- 关闭 accepted apply claim 已落盘但 journal 尚未创建的窗口，提供 no-journal verify/continue/abandon；不能凭“没有 journal”自动推断未写盘。
+- journal 化并复证 schema、non-target links、source artifact 与 manifest ownership/last-generated hash read-set；delete 可继续保持 unavailable，不能为了过门槛降级为 read-then-delete。
+- 为 `recovery_required` 提供显式 revalidate/continue/rollback/abandon core 与 UI，所有 divergent file state 继续 fail closed。
+- 定义 envelope size/latency guard、协调 terminal archive/compaction；超过门槛时暂停新 ingest，而不是让 Obsidian UI 无界阻塞。
+- 把 file/projection adapter 的 malformed success、filesystem/runtime failure 映射为受控 infrastructure error，用户提示不包含内容、路径外数据或 credential。
+- 在独立 Windows Obsidian Vault 验证 process serialization、plugin reload、external edit、NTFS/OneDrive/junction 和 crash recovery；保留可重复验收脚本与结果。
+
+Exit criteria:
+
+- Windows Studio 从 `adapter_unavailable` 切到 ready 前，所有 startup/recovery gate 均有持久证据和测试；任一缺失仍 unavailable。
+- `Markdown/PDF → queue → compile → review → create/update → manifest/queue/journal finalize` 可在测试 Vault 重启后收敛，且 delete 仍可安全保持禁用。
+- 没有 journal/ledger/read-set 证据的状态只能进入人工恢复，不会自动调用模型或写 Wiki。
 
 ### Commit H — Chat Entry, Query, and Citation Jump
 
@@ -298,7 +342,9 @@ flowchart LR
     D --> F
     C --> G[Activity UI]
     F --> G
-    G --> H[Chat + Query]
+    G --> G1[Runtime Foundation]
+    G1 --> G2[Runtime Coordination + Recovery]
+    G2 --> H[Chat + Query]
     H --> I[Windows E2E]
 ```
 

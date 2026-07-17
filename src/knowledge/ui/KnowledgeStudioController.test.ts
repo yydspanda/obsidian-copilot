@@ -202,6 +202,22 @@ describe("KnowledgeStudioController", () => {
     });
   });
 
+  it("keeps every command disabled when the runtime foundation reports a safe notice", async () => {
+    const port = new UnavailableKnowledgeStudioPort(
+      "Durable storage is initialized, but workflow coordination remains disabled."
+    );
+    const snapshot = await port.load("personal", new AbortController().signal);
+
+    expect(snapshot).toMatchObject({
+      availability: "adapter_unavailable",
+      notice: "Durable storage is initialized, but workflow coordination remains disabled.",
+      reviews: [],
+    });
+    await expect(
+      port.submitReview("personal", createReviewCommand(), new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+  });
+
   it("treats subscription events as reload hints instead of optimistic state", async () => {
     const snapshots = [createSnapshot("revision-1"), createSnapshot("revision-2")];
     const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);

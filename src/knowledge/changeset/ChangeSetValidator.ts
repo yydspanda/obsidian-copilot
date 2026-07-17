@@ -33,8 +33,22 @@ export type KnowledgeFileCompareAndSwapResult =
   | { kind: "already_after" }
   | { kind: "conflict"; observation: KnowledgeFileObservation };
 
+/** File mutation operations one concrete adapter can safely make atomic. */
+export interface KnowledgeFileMutationCapabilities {
+  create: boolean;
+  update: boolean;
+  delete: boolean;
+}
+
+/** Full capabilities used by explicitly complete in-memory and test stores. */
+export const ALL_KNOWLEDGE_FILE_MUTATIONS: Readonly<KnowledgeFileMutationCapabilities> =
+  Object.freeze({ create: true, update: true, delete: true });
+
 /** File I/O boundary used by preflight validation and transaction application. */
 export interface KnowledgeFileStore {
+  /** Operations this exact store can serialize without a read/write gap. */
+  readonly mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities>;
+
   /**
    * Observes the exact current state of one Vault-relative path.
    *
@@ -251,6 +265,8 @@ function hasAffirmativeDeclaredValidation(summary: KnowledgeValidationSummary): 
 
 /** Deterministic preflight validator for recoverable knowledge writes. */
 export class ChangeSetValidator {
+  private readonly mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities>;
+
   /**
    * Creates a validator with all I/O and semantic dependencies injected.
    *
@@ -262,7 +278,19 @@ export class ChangeSetValidator {
     private readonly fileStore: KnowledgeFileStore,
     private readonly artifactResolver: SourceArtifactResolver,
     private readonly projectionValidator: KnowledgeProjectionValidator
-  ) {}
+  ) {
+    const mutationCapabilities = fileStore.mutationCapabilities;
+    if (
+      typeof mutationCapabilities !== "object" ||
+      mutationCapabilities === null ||
+      typeof mutationCapabilities.create !== "boolean" ||
+      typeof mutationCapabilities.update !== "boolean" ||
+      typeof mutationCapabilities.delete !== "boolean"
+    ) {
+      throw new TypeError("mutationCapabilities must declare every file operation");
+    }
+    this.mutationCapabilities = Object.freeze({ ...mutationCapabilities });
+  }
 
   /**
    * Validates an accepted ChangeSet and captures every target pre-state.
@@ -311,6 +339,7 @@ export class ChangeSetValidator {
         "An accepted ChangeSet must not retain failed review-time validation flags"
       );
     }
+    this.validateMutationCapabilities(changeSet, diagnostics);
     if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
       throw new ChangeSetValidationError(diagnostics);
     }
@@ -356,6 +385,30 @@ export class ChangeSetValidator {
         linksValid: projection.linksValid,
       },
     };
+  }
+
+  /**
+   * Rejects operations the concrete file adapter cannot make atomic before a
+   * transaction journal or any Vault mutation exists.
+   *
+   * @param changeSet - Strict accepted ChangeSet
+   * @param diagnostics - Mutable deterministic validation diagnostics
+   */
+  private validateMutationCapabilities(
+    changeSet: KnowledgeChangeSet,
+    diagnostics: KnowledgeDiagnostic[]
+  ): void {
+    changeSet.changes.forEach((change, index) => {
+      if (this.mutationCapabilities[change.operation]) {
+        return;
+      }
+      addError(
+        diagnostics,
+        "changeset_operation_unsupported",
+        `changeSet.changes[${index}].operation`,
+        "The active Vault adapter cannot apply this file operation atomically"
+      );
+    });
   }
 
   /**

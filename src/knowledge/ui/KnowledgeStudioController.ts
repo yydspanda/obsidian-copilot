@@ -144,7 +144,8 @@ export class KnowledgeStudioAdapterUnavailableError extends Error {
  * @returns Read-only unavailable snapshot with no fabricated activity
  */
 export function createUnavailableKnowledgeStudioSnapshot(
-  bundleId: string
+  bundleId: string,
+  notice = "Knowledge Studio is ready for its durable Windows adapter. No files can be changed from this shell."
 ): KnowledgeStudioSnapshot {
   const activity: Readonly<KnowledgeActivityModel> = Object.freeze({
     bundleId,
@@ -159,8 +160,7 @@ export function createUnavailableKnowledgeStudioSnapshot(
     availability: "adapter_unavailable",
     activity,
     reviews: Object.freeze([]),
-    notice:
-      "Knowledge Studio is ready for its durable Windows adapter. No files can be changed from this shell.",
+    notice,
   });
 }
 
@@ -168,12 +168,19 @@ export function createUnavailableKnowledgeStudioSnapshot(
 export class UnavailableKnowledgeStudioPort
   implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort
 {
+  /**
+   * Creates a fail-closed port with an optional sanitized readiness notice.
+   *
+   * @param notice - User-facing explanation of the remaining runtime gate
+   */
+  constructor(private readonly notice?: string) {}
+
   /** Loads an explicit unavailable snapshot without reading Vault files. */
   async load(bundleId: string, signal: AbortSignal): Promise<KnowledgeStudioSnapshot> {
     if (signal.aborted) {
       throw new DOMException("The operation was aborted", "AbortError");
     }
-    return createUnavailableKnowledgeStudioSnapshot(bundleId);
+    return createUnavailableKnowledgeStudioSnapshot(bundleId, this.notice);
   }
 
   /** Registers no hint source because no runtime adapter is active. */
