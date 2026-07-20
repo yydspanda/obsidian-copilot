@@ -48,6 +48,7 @@
 - [x] 加入 Windows Desktop 功能级 guard、命令/导航入口与用户文档；保留现有插件 `isDesktopOnly: false`，不扩大 Knowledge Studio 的平台承诺。
 - [x] 完成 `knowledge-runtime-v1.json` 持久化基础代码：单一 strict envelope 承载 Queue、Review、Manifest、Vault-global Transaction slot 与 watcher-capture `inputRevision`，所有替换经过完整 envelope 语义校验和 revision CAS。
 - [x] 完成 Windows 文件 adapter 的 create/update 代码层：首次 runtime 以完整临时文件 + flush + 排他 hard-link 发布，Wiki create 使用排他创建，update 使用 `Vault.process`，能力声明绑定 store 并在 preflight 前禁用 delete；真实 Windows Obsidian 验收与 Golden Flow 接线仍未完成。
+- [x] 完成 Review Store 启动协调器 Core：pending 审核可恢复 exact Queue anchor，rejected 审核可恢复其 pending predecessor 后收敛为 durable rejection，重复启动零 Queue revision 增长；accepted 只输出 identity-only runtime classification 输入，不自动调用模型、开始 apply 或写 Wiki。协调器以有界 revision 重读取得稳定 Review snapshot，并把 observed revision 返回给更高层继续复证。
 
 ## Pending Tasks 📋
 
@@ -72,6 +73,7 @@
 - [ ] 实现可证明安全的 compare-and-delete；当前生产 capability 固定 `delete: false`，精确 before 确实需要删除时必须拒绝，不能用 read-then-delete 冒充。
 - [ ] 在真实 Windows Obsidian test Vault 验证 `DataAdapter.process`/`Vault.process` 的 callback 串行化、双实例竞争、返回值、插件重载、外部编辑与崩溃行为；完成前不宣称 power-loss durability 或 production-ready CAS。
 - [ ] 实现 exact `transactionId/revision/changeSetDigest/receipt` 幂等的 `ApplyCommitManifestPort` adapter/ledger；同 identity 重放必须是单一逻辑成功，同 key 不同 digest 必须 fail closed。
+- [ ] 在 exact ledger 前先把完整 post-compile `generatedPages`、ownership、Manifest revision/digest 与 per-source `inputRevision` 作为 durable manifest intent/read-set 写入 Review/transaction journal；当前 journal 只有本次 changed targets，不能据此猜测完整 Manifest。
 - [ ] 将 schema、非 target link、source artifact 与 manifest target authorization（revision、ownership、sole-source、last-generated hash）的 read-set 写入 journal，并在首次写入与恢复前复证 semantic dependency；完成前真实 UI/apply 不启用 compiler delete。
 - [ ] 在真实写盘前决定 CAS 后、progress 前崩溃的 content ABA 策略：接受 content-addressed at-least-once，或增加 mutation-intent marker 并在精确 before 状态 fail closed。
 - [ ] 为 transaction `recovery_required` 增加显式重新校验、继续、回滚或放弃动作及 Knowledge Studio 恢复 UI。
@@ -132,6 +134,7 @@
 - 单文件写入只能通过 adapter 原子 compare-and-swap；全局 journal 提供可恢复语义，但 Obsidian Vault 不具备真正跨文件原子性。
 - 自动恢复只做幂等 roll-forward；divergent state 进入 sticky `recovery_required`，不自动 rollback 或覆盖用户编辑；committed marker 对后续用户修改保持权威。
 - Queue v3 保留 exact `applyClaim`、pending review anchor、review rejection tombstone 与 `commit_pending_ack` marker；审核 hand-off 固定为 durable pending record revision 0 → exact accepted/rejected record revision 1。accepted apply claim 同时绑定 proposal digest、accepted digest、review revision/time 与完整 job claim；启动恢复改为 failed 后仍原样保留。v1/v2 无法证明的 review/apply state以 `legacy_unverified` 明确 fail closed，等待真实 Review Store record 或人工恢复。
+- Review 启动协调器只拥有 Review/Queue port：按 `recordedAt + changeSetId` 稳定扫描，pending/rejected 做 exact、可重放的 Queue 收敛；accepted 只返回供更高层 journal/ledger/no-journal 分类的 identity，绝不在启动时调用 `beginReviewApply`。每轮 mutation 后重读 Review revision，持续变化超过有界次数即 fail closed；返回 revision 仍须在最终 startup gate 复证。它尚未接入 plugin startup，不能据此开放 Studio。
 - applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，Queue 在 Manifest 之前仍保持 processing/applying。审核接受转换为新的 durable applying claim，不能直接完成 job。
 - 页面提交后的协议固定为只读 `queue claim verify`，再持久执行 `manifest → queue marker → journal ack → queue release`；Manifest 写入必须按 exact transaction/revision/digest 幂等。
 - 清除 Queue marker 后仍保留 `startup_recovery` 暂停，必须由用户显式 resume backlog。
@@ -168,6 +171,8 @@
 - [x] Commit G 通过 TypeScript `noEmit`、全仓 ESLint、15 个定向 Jest suite / 190 个测试，以及全仓 148 个 Jest suite / 2750 个测试；预期的既有 keychain/解密 console 输出不影响结果。
 - [x] Commit G 新增/修改文件均经 Prettier 格式化；全仓 `npm run format:check` 只被本次未修改的既有 `src/LLMProviders/chatModelManager.ts` 格式基线阻塞，继续不夹带修改。
 - [x] G.1 runtime adapter foundation 通过 TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier check，以及全仓 151 个 Jest suite / 2794 个测试；既有 keychain/解密预期 console 输出不影响结果。
+- [x] G.2 Review startup coordinator 的 12 个定向测试通过：pending/rejected 收敛、重启幂等、accepted 零写入分类、Review revision 前进/持续 churn、并发 terminal decision 导致旧 Queue 操作失败后的 revision retry、稳定多记录排序、双 runtime pending/rejected 竞争、commit-then-throw 后置状态证明及 source identity 冲突；TypeScript `noEmit` 与变更文件 ESLint 通过。
+- [x] G.2a 集成后全仓回归通过：152 个 Jest suite / 2806 个测试、TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier check 与 `git diff --check`；既有 keychain/解密预期 console 输出不影响结果。
 - [x] G.1 自动化回归覆盖完整文件排他发布、并发初始化、realpath/symlink containment、共享 envelope 无丢失并发更新、跨 runtime revision 续号、watcher-capture 乱序拒绝、全 slot corruption fail-closed、create/update CAS 竞争与 delete replay 分类。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 

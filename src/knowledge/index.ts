@@ -36,6 +36,7 @@ export * from "@/knowledge/model/validation";
 export * from "@/knowledge/paths/vaultPath";
 export * from "@/knowledge/review/ChangeSetReviewRepository";
 export * from "@/knowledge/review/ReviewDecision";
+export * from "@/knowledge/review/ReviewQueueStartupReconciler";
 export * from "@/knowledge/review/ReviewStorage";
 export * from "@/knowledge/runtime/AtomicRuntimeFile";
 export * from "@/knowledge/runtime/KnowledgeRuntimeStore";

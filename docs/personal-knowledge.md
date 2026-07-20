@@ -39,4 +39,6 @@ Rejecting a proposal does not create an empty accepted ChangeSet and does not wr
 
 ## What comes next
 
-The next implementation steps are real workflow wiring, the exact apply-commit manifest ledger, startup reconciliation of persisted reviews, explicit no-journal apply recovery, coordinated history retention, real parser/provider/compiler adapters, Chat's **Add to Knowledge** entry, grounded query/citation navigation, and end-to-end testing in a dedicated Windows Vault. The Studio should not be treated as a finished ingestion workflow until those integrations and tests are complete.
+Startup reconciliation for persisted pending and rejected reviews now exists as an isolated safety core, but it is not connected to plugin startup yet. Accepted reviews are never applied automatically during startup; only their identity is passed onward for transaction, queue, and success-ledger classification. The full accepted content must be reloaded and rechecked before a future explicit recovery action.
+
+The next implementation steps are durable Manifest projection/read-set capture, the exact apply-commit manifest ledger, plugin workflow wiring, explicit no-journal apply recovery, coordinated history retention, real parser/provider/compiler adapters, Chat's **Add to Knowledge** entry, grounded query/citation navigation, and end-to-end testing in a dedicated Windows Vault. The Studio should not be treated as a finished ingestion workflow until those integrations and tests are complete.
