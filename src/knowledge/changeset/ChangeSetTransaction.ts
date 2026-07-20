@@ -24,6 +24,7 @@ import {
 } from "@/knowledge/changeset/ChangeSetValidator";
 import {
   TRANSACTION_JOURNAL_VERSION,
+  TransactionStorageAuthorityError,
   TransactionStorageRevisionConflictError,
   createChangeSetTransactionDigest,
   parseChangeSetTransactionJournal,
@@ -44,6 +45,30 @@ export interface ChangeSetTransactionApplyInput {
   jobClaim: TransactionJobClaim;
   manifestCommitIntent: unknown;
   manifestCommitIntentDigest: string;
+}
+
+/** Exact detached identity proved before any apply-time Vault file access. */
+export interface ChangeSetTransactionAuthorityRequest {
+  transactionId: string;
+  bundle: KnowledgeBundleConfig;
+  changeSet: KnowledgeChangeSet;
+  changeSetDigest: string;
+  jobClaim: TransactionJobClaim;
+  manifestCommitIntent: ManifestCommitIntent;
+  manifestCommitIntentDigest: string;
+}
+
+/** Durable authority boundary required by every transaction runtime. */
+export interface ChangeSetTransactionAuthorityPort {
+  /**
+   * Proves that one exact accepted apply still owns its Queue and Review state.
+   *
+   * This check must not observe or modify Wiki files. The prepared-journal
+   * storage CAS repeats the same proof atomically to close the preflight race.
+   *
+   * @param request - Strict detached apply identity
+   */
+  verify(request: ChangeSetTransactionAuthorityRequest): Promise<void>;
 }
 
 /** Content-addressed final state safe to copy into manifest bookkeeping. */
@@ -97,6 +122,7 @@ export interface ChangeSetTransactionDependencies {
   storage: TransactionStorage;
   fileStore: KnowledgeFileStore;
   validator: ChangeSetValidator;
+  authority: ChangeSetTransactionAuthorityPort;
   now?: () => number;
   createTransactionId?: () => string;
 }
@@ -560,6 +586,7 @@ export class ChangeSetTransaction {
   private readonly storage: TransactionStorage;
   private readonly fileStore: KnowledgeFileStore;
   private readonly validator: ChangeSetValidator;
+  private readonly authority: ChangeSetTransactionAuthorityPort;
   private readonly now: () => number;
   private readonly createTransactionId: () => string;
   private operationTail: Promise<void> = Promise.resolve();
@@ -573,6 +600,7 @@ export class ChangeSetTransaction {
     this.storage = dependencies.storage;
     this.fileStore = dependencies.fileStore;
     this.validator = dependencies.validator;
+    this.authority = dependencies.authority;
     this.now = dependencies.now ?? Date.now;
     this.createTransactionId = dependencies.createTransactionId ?? createDefaultTransactionId;
   }
@@ -595,16 +623,35 @@ export class ChangeSetTransaction {
         return this.resumeMatchingApply(active, input);
       }
 
-      const prepared = await this.validator.prepare(input.changeSet, input.bundle);
+      const validated = this.validator.validateAcceptedInput(input.changeSet, input.bundle);
       const manifestCommitIntent = parseApplyManifestCommitIntent(
         input.manifestCommitIntent,
         input.manifestCommitIntentDigest,
-        prepared.changeSet,
-        prepared.bundle,
+        validated.changeSet,
+        validated.bundle,
         input.jobClaim
       );
       const transactionId = this.createTransactionId();
       assertIdentifier(transactionId, "transactionId");
+      const jobClaim: TransactionJobClaim = {
+        jobId: input.jobClaim.jobId,
+        attempt: input.jobClaim.attempt,
+        startedAt: input.jobClaim.startedAt,
+        sourceId: input.jobClaim.sourceId,
+        sourceContentHash: input.jobClaim.sourceContentHash,
+        pipelineFingerprint: input.jobClaim.pipelineFingerprint,
+        inputRevision: input.jobClaim.inputRevision,
+      };
+      await this.authority.verify({
+        transactionId,
+        bundle: validated.bundle,
+        changeSet: validated.changeSet,
+        changeSetDigest: validated.changeSetDigest,
+        jobClaim,
+        manifestCommitIntent,
+        manifestCommitIntentDigest: input.manifestCommitIntentDigest,
+      });
+      const prepared = await this.validator.prepare(validated.changeSet, validated.bundle);
       const createdAt = this.readTimestamp(input.jobClaim.startedAt);
       const journal: ChangeSetTransactionJournal = {
         version: TRANSACTION_JOURNAL_VERSION,
@@ -616,7 +663,7 @@ export class ChangeSetTransaction {
         changeSetDigest: prepared.changeSetDigest,
         manifestCommitIntent,
         manifestCommitIntentDigest: input.manifestCommitIntentDigest,
-        jobClaim: { ...input.jobClaim },
+        jobClaim,
         changeSet: prepared.changeSet,
         targets: prepared.targets.map((target) => ({
           ...target,
@@ -672,6 +719,7 @@ export class ChangeSetTransaction {
         throw new ChangeSetTransactionBundleConflictError(journal.bundleId);
       }
 
+      await this.verifyJournalAuthority(journal);
       const committed = await this.rollForward(journal);
       return {
         kind: "committed",
@@ -805,7 +853,27 @@ export class ChangeSetTransaction {
     if (!sameBundleConfig(parsedBundle.value, active.bundle)) {
       throw new ChangeSetTransactionBundleConflictError(active.bundleId);
     }
+    await this.verifyJournalAuthority(active);
     return createTransactionCommitReceipt(await this.rollForward(active));
+  }
+
+  /**
+   * Re-proves one strict unfinished journal through the injected authority port.
+   *
+   * @param journal - Prepared or applying journal about to access Wiki files
+   */
+  private async verifyJournalAuthority(
+    journal: ChangeSetTransactionJournal & { phase: "prepared" | "applying" }
+  ): Promise<void> {
+    await this.authority.verify({
+      transactionId: journal.transactionId,
+      bundle: journal.bundle,
+      changeSet: journal.changeSet,
+      changeSetDigest: journal.changeSetDigest,
+      jobClaim: journal.jobClaim,
+      manifestCommitIntent: journal.manifestCommitIntent,
+      manifestCommitIntentDigest: journal.manifestCommitIntentDigest,
+    });
   }
 
   /**
@@ -817,7 +885,10 @@ export class ChangeSetTransaction {
     let raw: unknown;
     try {
       raw = await this.storage.readActive();
-    } catch {
+    } catch (error) {
+      if (error instanceof TransactionStorageAuthorityError) {
+        throw error;
+      }
       throw new ChangeSetTransactionInfrastructureError("storage_read");
     }
     if (raw === null) {
@@ -854,7 +925,10 @@ export class ChangeSetTransaction {
     try {
       await this.storage.writeActive(journal, expected ? toStorageToken(expected) : null);
     } catch (error) {
-      if (error instanceof TransactionStorageRevisionConflictError) {
+      if (
+        error instanceof TransactionStorageRevisionConflictError ||
+        error instanceof TransactionStorageAuthorityError
+      ) {
         throw error;
       }
       throw new ChangeSetTransactionInfrastructureError("storage_write");

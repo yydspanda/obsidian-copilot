@@ -10,6 +10,7 @@ import {
   ChangeSetTransactionManifestIntentValidationError,
   ChangeSetTransactionRecoveryRequiredError,
   ChangeSetTransactionRevisionOverflowError,
+  type ChangeSetTransactionAuthorityPort,
   type TransactionCommitReceipt,
 } from "@/knowledge/changeset/ChangeSetTransaction";
 import {
@@ -50,6 +51,14 @@ const DIRECTORY = Symbol("directory");
 
 type MemoryFileValue = string | typeof DIRECTORY;
 type StorageFailure = { revision: number; timing: "before" | "after" };
+
+/** Explicit test-only authority that permits already-valid synthetic inputs. */
+const ALLOWING_AUTHORITY: ChangeSetTransactionAuthorityPort = {
+  /** Accepts the synthetic apply identity without external persistence. */
+  async verify() {
+    return;
+  },
+};
 
 /** Creates a detached JSON clone for in-memory durability boundaries. */
 function cloneJson<T>(value: T): T {
@@ -355,6 +364,7 @@ function createTransaction(
     storage,
     fileStore,
     validator: createValidator(fileStore),
+    authority: ALLOWING_AUTHORITY,
     now: () => timestamp++,
     createTransactionId: () => `${prefix}-${++sequence}`,
   });
@@ -388,6 +398,30 @@ function countMutations(fileStore: MemoryKnowledgeFileStore, path: string): numb
 }
 
 describe("ChangeSetTransaction", () => {
+  it("proves durable authority before observing any target file", async () => {
+    const storage = new MemoryTransactionStorage();
+    const files = new MemoryKnowledgeFileStore();
+    const authorityFailure = new Error("durable authority rejected");
+    const authority: ChangeSetTransactionAuthorityPort = {
+      /** Rejects the preflight before the validator may inspect target paths. */
+      async verify() {
+        throw authorityFailure;
+      },
+    };
+    const transaction = new ChangeSetTransaction({
+      storage,
+      fileStore: files,
+      validator: createValidator(files),
+      authority,
+      createTransactionId: () => "transaction-authority-preflight",
+    });
+
+    await expect(transaction.apply(createApplyInput())).rejects.toBe(authorityFailure);
+    expect(files.observeCount).toBe(0);
+    expect(files.mutations).toEqual([]);
+    expect(storage.active).toBeNull();
+  });
+
   it("applies create/update/delete targets in Windows-key order and commits last", async () => {
     const storage = new MemoryTransactionStorage();
     const files = new MemoryKnowledgeFileStore();
@@ -553,6 +587,7 @@ describe("ChangeSetTransaction", () => {
       storage,
       fileStore: files,
       validator: createValidator(files),
+      authority: ALLOWING_AUTHORITY,
       now: () => (clockReads++ === 0 ? 1_000 : 900),
       createTransactionId: () => "backward-clock-transaction",
     });

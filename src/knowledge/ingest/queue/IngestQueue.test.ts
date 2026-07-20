@@ -475,6 +475,7 @@ function createAcceptedReviewDecision(
     proposalDigest: HASH_C,
     recordRevision: 1,
     acceptedDigest: HASH_D,
+    manifestCommitIntentDigest: HASH_A,
     acceptedAt: 120,
     ...receiptOverrides,
     jobClaim: createReviewJobClaim(jobClaim),
@@ -573,9 +574,44 @@ describe("IngestQueue persistence and enqueue", () => {
     expect(storage.writeAttempts).toBe(0);
   });
 
+  it("loads version 3 reviewed apply state as fail-closed version 4 provenance", async () => {
+    const harness = createHarness();
+    const applying: KnowledgeIngestJob = {
+      ...createPendingJob(),
+      attempt: 1,
+      status: "processing",
+      stage: "applying",
+      startedAt: 110,
+      updatedAt: 110,
+    };
+    const current = createSnapshot("personal", {
+      revision: 4,
+      jobs: [applying],
+      applyClaim: createApplyClaimMarker({
+        reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
+      }),
+    });
+    harness.storage.seed("personal", {
+      ...current,
+      version: 3,
+      applyClaim: {
+        ...current.applyClaim,
+        acceptedReview: { proposalDigest: HASH_D, recordRevision: 1, acceptedAt: 105 },
+      },
+    });
+
+    await expect(harness.queue.load("personal")).resolves.toMatchObject({
+      version: INGEST_QUEUE_VERSION,
+      applyClaim: {
+        reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
+        legacyReview: { kind: "legacy_unverified", migratedFromVersion: 3 },
+      },
+    });
+  });
+
   it("fails closed for incompatible, mismatched, and malformed persisted JSON", async () => {
     const { queue, storage } = createHarness();
-    storage.seed("versioned", { ...createSnapshot("versioned"), version: 4 });
+    storage.seed("versioned", { ...createSnapshot("versioned"), version: 5 });
     storage.seed("mismatch", createSnapshot("other"));
     storage.seed("malformed", { ...createSnapshot("malformed"), jobs: [{ status: "mystery" }] });
 
@@ -760,6 +796,7 @@ describe("IngestQueue execution and reruns", () => {
     await readStarted.promise;
     reviewDecision.acceptedDigest = HASH_C;
     reviewDecision.proposalDigest = HASH_A;
+    reviewDecision.manifestCommitIntentDigest = HASH_B;
     releaseRead.resolve();
 
     await expect(applying).resolves.toMatchObject({ status: "processing", stage: "applying" });
@@ -771,6 +808,7 @@ describe("IngestQueue execution and reruns", () => {
       acceptedReview: {
         proposalDigest: HASH_C,
         recordRevision: 1,
+        manifestCommitIntentDigest: HASH_A,
         acceptedAt: 120,
       },
     });
@@ -800,6 +838,12 @@ describe("IngestQueue execution and reruns", () => {
     ).rejects.toBeInstanceOf(IngestQueueTransitionError);
     await expect(
       harness.queue.beginReviewApply("personal", createAcceptedReviewDecision({ acceptedAt: 121 }))
+    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    await expect(
+      harness.queue.beginReviewApply(
+        "personal",
+        createAcceptedReviewDecision({ manifestCommitIntentDigest: HASH_B })
+      )
     ).rejects.toBeInstanceOf(IngestQueueTransitionError);
     await expect(
       harness.queue.beginReviewApply(
@@ -1911,6 +1955,76 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
       control: { status: "paused", reason: "commit_pending_ack" },
       jobs: [expect.objectContaining({ status: "completed" })],
     });
+  });
+
+  it("leaves a latest rerun with its existing successor during old-apply recovery", async () => {
+    const harness = createHarness();
+    const failedApply: KnowledgeIngestJob = {
+      ...createPendingJob(),
+      attempt: 1,
+      rerunRequested: false,
+      updatedAt: 200,
+      status: "failed",
+      stage: "applying",
+      failure: {
+        code: "interrupted_apply_requires_recovery",
+        message: "Interrupted apply requires recovery",
+        retryable: false,
+        occurredAt: 200,
+      },
+    };
+    const successor = createPendingJob({
+      id: "job-2",
+      sourceContentHash: HASH_C,
+      inputRevision: 2,
+      rerunRequested: true,
+      createdAt: 120,
+      updatedAt: 200,
+    });
+    const rerun: IngestRerunRequest = {
+      jobId: "job-3",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 3,
+      requestedAt: 130,
+      updatedAt: 190,
+    };
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 5,
+        control: { status: "paused", reason: "recovery_required", pausedAt: 200 },
+        jobs: [failedApply, successor],
+        reruns: [rerun],
+        sourceHighWatermarks: [
+          {
+            sourceId: "source-1",
+            sourceContentHash: HASH_A,
+            pipelineFingerprint: HASH_B,
+            inputRevision: 3,
+            observedAt: 190,
+          },
+        ],
+        applyClaim: createApplyClaimMarker(),
+      })
+    );
+    const receipt = createCommitReceipt({
+      jobClaim: { jobId: "job-1", attempt: 1, startedAt: 110 },
+      committedAt: 150,
+    });
+
+    await expect(harness.queue.resolveApplyRecovery(receipt)).resolves.toMatchObject({
+      id: "job-1",
+      status: "completed",
+    });
+    const snapshot = await harness.queue.load("personal");
+    expect(
+      snapshot.jobs.filter((job) => !["failed", "completed", "cancelled"].includes(job.status))
+    ).toEqual([expect.objectContaining({ id: "job-2", inputRevision: 2 })]);
+    expect(snapshot.reruns).toEqual([
+      expect.objectContaining({ jobId: "job-3", inputRevision: 3 }),
+    ]);
   });
 });
 

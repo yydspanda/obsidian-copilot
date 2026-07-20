@@ -301,7 +301,7 @@ describe("parseIngestQueueSnapshot", () => {
     expect(parseIngestQueueSnapshot(missingReviewRejections).ok).toBe(false);
   });
 
-  it("strictly migrates version 1 reads into detached version 3 state", () => {
+  it("strictly migrates version 1 reads into detached current state", () => {
     const current = createSnapshot();
     const legacy = {
       version: 1,
@@ -397,8 +397,76 @@ describe("parseIngestQueueSnapshot", () => {
     });
   });
 
+  it("migrates version 3 reviewed apply authority to explicit fail-closed provenance", () => {
+    const applying = createProcessingJob({ stage: "applying" });
+    const current = createSnapshot({
+      jobs: [applying],
+      applyClaim: createApplyClaimMarker(),
+    });
+    const legacy = {
+      ...current,
+      version: 3,
+      applyClaim: {
+        ...createApplyClaimMarker(),
+        reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
+        acceptedReview: { proposalDigest: HASH_B, recordRevision: 1, acceptedAt: 110 },
+      },
+    };
+
+    expect(parseIngestQueueSnapshot(legacy)).toMatchObject({
+      ok: true,
+      value: {
+        version: INGEST_QUEUE_VERSION,
+        applyClaim: {
+          reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
+          legacyReview: { kind: "legacy_unverified", migratedFromVersion: 3 },
+        },
+      },
+    });
+    const parsed = parseIngestQueueSnapshot(legacy);
+    expect(parsed.ok && validateIngestQueueSnapshot(parsed.value).valid).toBe(true);
+
+    expect(
+      parseIngestQueueSnapshot({
+        ...legacy,
+        applyClaim: {
+          ...legacy.applyClaim,
+          acceptedReview: { ...legacy.applyClaim.acceptedReview, acceptedAt: 99 },
+        },
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...legacy,
+        applyClaim: {
+          ...legacy.applyClaim,
+          acceptedReview: { ...legacy.applyClaim.acceptedReview, acceptedAt: 111 },
+        },
+      }).ok
+    ).toBe(false);
+
+    expect(
+      parseIngestQueueSnapshot({
+        ...legacy,
+        applyClaim: {
+          ...createApplyClaimMarker(),
+          acceptedReview: { proposalDigest: HASH_B, recordRevision: 1, acceptedAt: 110 },
+        },
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...legacy,
+        applyClaim: {
+          ...createApplyClaimMarker(),
+          reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
+        },
+      }).ok
+    ).toBe(false);
+  });
+
   it("rejects unsupported versions and illegal job discriminants", () => {
-    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 4 }).ok).toBe(false);
+    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 5 }).ok).toBe(false);
     expect(
       parseIngestQueueSnapshot({
         ...createSnapshot(),
@@ -469,6 +537,20 @@ describe("parseIngestQueueSnapshot", () => {
             changeSetDigest: HASH_C,
             unexpected: true,
           } as never,
+        }),
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...base,
+        applyClaim: createApplyClaimMarker({
+          reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
+          acceptedReview: {
+            proposalDigest: HASH_B,
+            recordRevision: 1,
+            manifestCommitIntentDigest: "not-a-hash",
+            acceptedAt: 110,
+          },
         }),
       }).ok
     ).toBe(false);
@@ -573,7 +655,12 @@ describe("validateIngestQueueSnapshot", () => {
               changeSetId: "changeset-review",
               changeSetDigest: HASH_C,
             },
-            acceptedReview: { proposalDigest: HASH_C, recordRevision: 1, acceptedAt: 110 },
+            acceptedReview: {
+              proposalDigest: HASH_C,
+              recordRevision: 1,
+              manifestCommitIntentDigest: HASH_A,
+              acceptedAt: 110,
+            },
           }),
         })
       )
@@ -601,7 +688,12 @@ describe("validateIngestQueueSnapshot", () => {
       changeSetId: "changeset-reviewed",
       changeSetDigest: HASH_C,
     };
-    const acceptedReview = { proposalDigest: HASH_C, recordRevision: 1 as const, acceptedAt: 110 };
+    const acceptedReview = {
+      proposalDigest: HASH_C,
+      recordRevision: 1 as const,
+      manifestCommitIntentDigest: HASH_A,
+      acceptedAt: 110,
+    };
     const valid = createSnapshot({
       jobs: [applying],
       applyClaim: createApplyClaimMarker({ reviewedChangeSet, acceptedReview }),
@@ -859,6 +951,35 @@ describe("validateIngestQueueSnapshot", () => {
         "queue_rerun_redundant",
       ])
     );
+  });
+
+  it("requires every retained rerun to equal the latest source observation", () => {
+    const active = createProcessingJob({ rerunRequested: true });
+    const staleRerun: IngestRerunRequest = {
+      jobId: "job-rerun",
+      sourceId: "source-1",
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 2,
+      requestedAt: 110,
+      updatedAt: 110,
+    };
+    const snapshot = createSnapshot({
+      jobs: [active],
+      reruns: [staleRerun],
+      sourceHighWatermarks: [
+        {
+          sourceId: "source-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 3,
+          observedAt: 130,
+        },
+      ],
+    });
+
+    expect(parseIngestQueueSnapshot(snapshot).ok).toBe(true);
+    expect(diagnosticCodes(snapshot)).toContain("queue_rerun_not_latest_observation");
   });
 
   it("requires a paused execution gate for paused jobs", () => {

@@ -89,6 +89,11 @@ export interface ApplyCommitManifestPort {
    * Implementations MUST be idempotent for the exact transaction, revision,
    * ChangeSet digest, and receipt. Repeating the same call after a crash must
    * preserve one logical success, while a conflicting identity must fail closed.
+   * A shared-runtime implementation MUST also re-prove the exact Queue apply
+   * claim, accepted Review identity, and allocator/source high-watermarks in
+   * the same atomic callback that publishes Manifest success and its ledger.
+   * The earlier queue-port verification is only an early diagnostic and cannot
+   * serve as the final authorization boundary.
    * The promise MUST resolve only after the manifest update is durable.
    *
    * @param journal - Complete committed journal with source and ChangeSet context

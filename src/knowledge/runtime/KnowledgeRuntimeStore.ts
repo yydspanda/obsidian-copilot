@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   createTransactionCommitReceiptDigest,
   transactionCommitReceiptMatchesJournal,
+  type ChangeSetTransactionAuthorityPort,
+  type ChangeSetTransactionAuthorityRequest,
   type TransactionCommitReceipt,
 } from "@/knowledge/changeset/ChangeSetTransaction";
 import type {
@@ -11,10 +13,13 @@ import type {
 } from "@/knowledge/changeset/ApplyCommitCoordinator";
 import {
   TransactionStorageRevisionConflictError,
+  TransactionStorageAuthorityError,
+  createChangeSetTransactionDigest,
   createChangeSetTransactionJournalDigest,
   parseChangeSetTransactionJournal,
   validateChangeSetTransactionJournal,
   type ChangeSetTransactionJournal,
+  type TransactionJobClaim,
   type TransactionStorage,
   type TransactionStorageToken,
 } from "@/knowledge/changeset/TransactionStorage";
@@ -33,6 +38,8 @@ import {
 import {
   createManifestCommitIntentDigest,
   createSourceManifestDigest,
+  parseManifestCommitIntent,
+  validateManifestCommitIntent,
   validateManifestCommitIntentForCommit,
   type ManifestCommitIntent,
 } from "@/knowledge/manifest/ManifestCommitIntent";
@@ -41,21 +48,32 @@ import {
   type SourceManifestStorage,
 } from "@/knowledge/manifest/SourceManifestStorage";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
-import { parseSourceManifest } from "@/knowledge/model/schemas";
+import {
+  parseKnowledgeBundleConfig,
+  parseKnowledgeChangeSet,
+  parseSourceManifest,
+} from "@/knowledge/model/schemas";
 import type {
   JsonValue,
+  KnowledgeBundleConfig,
+  KnowledgeChangeSet,
   KnowledgeDiagnostic,
   SourceCompileSnapshot,
   SourceManifest,
   SourceManifestEntry,
 } from "@/knowledge/model/types";
-import { validateSourceManifest } from "@/knowledge/model/validation";
+import {
+  validateKnowledgeBundleConfig,
+  validateKnowledgeChangeSet,
+  validateSourceManifest,
+} from "@/knowledge/model/validation";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import {
   CHANGESET_REVIEW_SNAPSHOT_VERSION,
   ReviewStorageRevisionConflictError,
   parseChangeSetReviewSnapshot,
   validateChangeSetReviewSnapshot,
+  type AcceptedChangeSetReviewRecord,
   type ChangeSetReviewSnapshot,
   type ReviewStorage,
 } from "@/knowledge/review/ReviewStorage";
@@ -335,8 +353,40 @@ export class KnowledgeApplyCommitProofError extends Error {
   }
 }
 
+/** Stable failures while proving Queue, Review, and source-observation authority. */
+export type KnowledgeApplyCommitAuthorityErrorReason =
+  | "request_invalid"
+  | "queue_missing"
+  | "queue_claim_missing"
+  | "queue_claim_mismatch"
+  | "queue_review_unverified"
+  | "review_missing"
+  | "review_record_missing"
+  | "review_record_mismatch"
+  | "source_high_watermark_missing"
+  | "source_high_watermark_mismatch"
+  | "input_revision_missing"
+  | "input_revision_behind";
+
+/** Reports missing or conflicting durable authority for one source apply. */
+export class KnowledgeApplyCommitAuthorityError extends TransactionStorageAuthorityError {
+  /**
+   * Creates a sanitized exact-authority failure.
+   *
+   * @param transactionId - Transaction whose durable authority was rejected
+   * @param reason - Stable Queue, Review, or source-observation mismatch
+   */
+  constructor(
+    public readonly transactionId: string,
+    public readonly reason: KnowledgeApplyCommitAuthorityErrorReason
+  ) {
+    super(`Transaction '${transactionId}' does not have exact durable apply authority`);
+    this.name = "KnowledgeApplyCommitAuthorityError";
+  }
+}
+
 /** Reports reuse of one durable transaction id for a different commit identity. */
-export class KnowledgeApplyCommitLedgerConflictError extends Error {
+export class KnowledgeApplyCommitLedgerConflictError extends TransactionStorageAuthorityError {
   /** Creates a fail-closed exact-ledger identity conflict. */
   constructor(public readonly transactionId: string) {
     super(`Transaction '${transactionId}' conflicts with its durable apply ledger record`);
@@ -354,7 +404,7 @@ export type KnowledgeApplyCommitManifestConflictReason =
   | "revision_overflow";
 
 /** Reports a fail-closed Manifest projection or source ordering conflict. */
-export class KnowledgeApplyCommitManifestConflictError extends Error {
+export class KnowledgeApplyCommitManifestConflictError extends TransactionStorageAuthorityError {
   /**
    * Creates a sanitized Manifest commit conflict.
    *
@@ -474,6 +524,7 @@ export function parseKnowledgeRuntimeStoreSnapshot(value: unknown): KnowledgeRun
  */
 function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): void {
   const manifests = new Map<string, SourceManifest>();
+  const queues = new Map<string, IngestQueueSnapshot>();
   for (const slot of snapshot.queues) {
     const parsed = parseIngestQueueSnapshot(slot.value);
     if (
@@ -483,6 +534,7 @@ function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): vo
     ) {
       throw new KnowledgeRuntimeStoreCorruptError();
     }
+    queues.set(slot.bundleId, parsed.value);
   }
   for (const slot of snapshot.reviews) {
     const parsed = parseChangeSetReviewSnapshot(slot.value);
@@ -512,6 +564,7 @@ function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): vo
     }
   }
   assertManifestLedgerSemantics(snapshot.applyCommits, manifests);
+  assertQueueApplyCommitLedgerSemantics(snapshot.applyCommits, queues);
 }
 
 /**
@@ -714,6 +767,47 @@ function assertManifestLedgerSemantics(
   }
 }
 
+/**
+ * Requires every pending Queue commit acknowledgement to reference one exact
+ * successful apply-ledger record from the same atomic runtime envelope.
+ *
+ * The marker intentionally retains the receipt fields needed by Queue
+ * recovery. Binding all overlapping fields prevents a torn or forged marker
+ * from completing a job whose Manifest success was never recorded.
+ *
+ * @param records - Complete retained apply ledger
+ * @param queues - Strict current Queue snapshots keyed by Bundle
+ */
+function assertQueueApplyCommitLedgerSemantics(
+  records: readonly KnowledgeApplyCommitLedgerRecord[],
+  queues: ReadonlyMap<string, IngestQueueSnapshot>
+): void {
+  const recordsByTransaction = new Map(
+    records.map((record) => [record.transactionId, record] as const)
+  );
+  for (const [bundleId, queue] of queues) {
+    const marker = queue.applyCommit;
+    if (!marker) {
+      continue;
+    }
+    const record = recordsByTransaction.get(marker.transactionId);
+    if (
+      !record ||
+      record.bundleId !== bundleId ||
+      record.sourceId !== marker.sourceId ||
+      record.sourceContentHash !== marker.sourceContentHash ||
+      record.pipelineFingerprint !== marker.pipelineFingerprint ||
+      record.inputRevision !== marker.inputRevision ||
+      record.changeSetId !== marker.changeSetId ||
+      record.changeSetDigest !== marker.changeSetDigest ||
+      record.commitRevision !== marker.commitRevision ||
+      record.recordedAt !== marker.committedAt
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  }
+}
+
 /** Caller-derived ledger fields that identify an exact replay before Manifest mutation. */
 type KnowledgeApplyCommitLedgerIdentity = Omit<
   KnowledgeApplyCommitLedgerRecord,
@@ -780,6 +874,314 @@ function createApplyCommitLedgerIdentity(
     manifestBeforeDigest: intent.expectedManifestDigest,
     recordedAt: receipt.committedAt,
   };
+}
+
+/** Minimal strict identity required to prove apply authority without file targets. */
+interface KnowledgeApplyAuthorityProof {
+  transactionId: string;
+  bundleId: string;
+  bundle: KnowledgeBundleConfig;
+  changeSetId: string;
+  changeSetDigest: string;
+  changeSet: KnowledgeChangeSet;
+  jobClaim: TransactionJobClaim;
+  manifestCommitIntent: ManifestCommitIntent;
+  manifestCommitIntentDigest: string;
+}
+
+/**
+ * Strictly parses one transaction preflight request without observing Wiki files.
+ *
+ * @param request - Detached identity supplied by the transaction runtime
+ * @returns Strict proof suitable for shared Queue/Review authority validation
+ */
+function parseApplyAuthorityRequest(
+  request: ChangeSetTransactionAuthorityRequest
+): KnowledgeApplyAuthorityProof {
+  const transactionId = request.transactionId;
+  const bundleResult = parseKnowledgeBundleConfig(request.bundle);
+  const changeSetResult = parseKnowledgeChangeSet(request.changeSet);
+  const intentResult = parseManifestCommitIntent(request.manifestCommitIntent);
+  const claim = request.jobClaim;
+  const claimValid =
+    typeof claim === "object" &&
+    claim !== null &&
+    typeof claim.jobId === "string" &&
+    claim.jobId.trim().length > 0 &&
+    Number.isSafeInteger(claim.attempt) &&
+    claim.attempt > 0 &&
+    Number.isSafeInteger(claim.startedAt) &&
+    claim.startedAt >= 0 &&
+    typeof claim.sourceId === "string" &&
+    claim.sourceId.trim().length > 0 &&
+    sha256Schema.safeParse(claim.sourceContentHash).success &&
+    sha256Schema.safeParse(claim.pipelineFingerprint).success &&
+    Number.isSafeInteger(claim.inputRevision) &&
+    claim.inputRevision >= 0;
+  if (
+    typeof transactionId !== "string" ||
+    transactionId.trim().length === 0 ||
+    !bundleResult.ok ||
+    !changeSetResult.ok ||
+    !intentResult.ok ||
+    !claimValid
+  ) {
+    throw new KnowledgeApplyCommitAuthorityError(transactionId, "request_invalid");
+  }
+
+  const bundle = bundleResult.value;
+  const changeSet = changeSetResult.value;
+  const intent = intentResult.value;
+  const bundleValidation = validateKnowledgeBundleConfig(bundle);
+  const changeSetValidation = validateKnowledgeChangeSet(changeSet, bundle);
+  const intentValidation = validateManifestCommitIntent(intent, bundle);
+  if (
+    !bundleValidation.valid ||
+    !changeSetValidation.valid ||
+    !intentValidation.valid ||
+    changeSet.status !== "accepted" ||
+    request.changeSetDigest !== createChangeSetTransactionDigest(changeSet) ||
+    request.manifestCommitIntentDigest !== createManifestCommitIntentDigest(intent) ||
+    changeSet.bundleId !== bundle.id ||
+    intent.bundleId !== bundle.id ||
+    intent.changeSetId !== changeSet.id ||
+    intent.sourceId !== claim.sourceId ||
+    intent.sourceContentHash !== claim.sourceContentHash ||
+    intent.pipelineFingerprint !== claim.pipelineFingerprint ||
+    intent.inputRevision !== claim.inputRevision
+  ) {
+    throw new KnowledgeApplyCommitAuthorityError(transactionId, "request_invalid");
+  }
+
+  return {
+    transactionId,
+    bundleId: bundle.id,
+    bundle,
+    changeSetId: changeSet.id,
+    changeSetDigest: request.changeSetDigest,
+    changeSet,
+    jobClaim: {
+      jobId: claim.jobId,
+      attempt: claim.attempt,
+      startedAt: claim.startedAt,
+      sourceId: claim.sourceId,
+      sourceContentHash: claim.sourceContentHash,
+      pipelineFingerprint: claim.pipelineFingerprint,
+      inputRevision: claim.inputRevision,
+    },
+    manifestCommitIntent: intent,
+    manifestCommitIntentDigest: request.manifestCommitIntentDigest,
+  };
+}
+
+/**
+ * Compares one Queue apply claim with the immutable transaction job claim.
+ *
+ * @param claim - Durable Queue claim captured at the applying boundary
+ * @param journal - Prepared or committed transaction owned by that claim
+ * @returns Whether every persisted execution identity field is exact
+ */
+function queueClaimMatchesTransaction(
+  claim: IngestQueueSnapshot["applyClaim"],
+  journal: KnowledgeApplyAuthorityProof
+): boolean {
+  return (
+    claim !== undefined &&
+    claim.jobId === journal.jobClaim.jobId &&
+    claim.sourceId === journal.jobClaim.sourceId &&
+    claim.sourceContentHash === journal.jobClaim.sourceContentHash &&
+    claim.pipelineFingerprint === journal.jobClaim.pipelineFingerprint &&
+    claim.inputRevision === journal.jobClaim.inputRevision &&
+    claim.attempt === journal.jobClaim.attempt &&
+    claim.startedAt === journal.jobClaim.startedAt
+  );
+}
+
+/**
+ * Compares one accepted Review record's Queue claim with a transaction claim.
+ *
+ * Review records intentionally predate the applying `startedAt`, so only the
+ * immutable source observation and attempt fields participate here.
+ *
+ * @param record - Exact accepted Review Store record
+ * @param journal - Prepared or committed transaction under proof
+ * @returns Whether the Review record belongs to the same Queue attempt
+ */
+function reviewClaimMatchesTransaction(
+  record: AcceptedChangeSetReviewRecord,
+  journal: KnowledgeApplyAuthorityProof
+): boolean {
+  return (
+    record.jobClaim.jobId === journal.jobClaim.jobId &&
+    record.jobClaim.sourceId === journal.jobClaim.sourceId &&
+    record.jobClaim.sourceContentHash === journal.jobClaim.sourceContentHash &&
+    record.jobClaim.pipelineFingerprint === journal.jobClaim.pipelineFingerprint &&
+    record.jobClaim.inputRevision === journal.jobClaim.inputRevision &&
+    record.jobClaim.attempt === journal.jobClaim.attempt
+  );
+}
+
+/**
+ * Compares strict persisted JSON payloads independently of property order.
+ *
+ * @param left - First JSON-compatible strict value
+ * @param right - Second JSON-compatible strict value
+ * @returns Whether both values have identical canonical JSON
+ */
+function exactJsonValuesEqual(left: unknown, right: unknown): boolean {
+  return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
+}
+
+/**
+ * Re-proves the complete source-apply authority from one atomic runtime snapshot.
+ *
+ * The Queue claim proves the exact execution, the accepted Review proves
+ * reviewed content and final Manifest intent, and the observation
+ * namespaces prove neither Queue nor allocator state moved backwards. A newer
+ * observation is legal while an older apply finishes; the strict Queue
+ * validator has already required an exact rerun for a divergent newer payload.
+ *
+ * @param state - Complete runtime envelope observed inside one atomic transform
+ * @param journal - Prepared or committed transaction under proof
+ */
+function assertApplyCommitRuntimeAuthority(
+  state: KnowledgeRuntimeStoreSnapshot,
+  journal: KnowledgeApplyAuthorityProof
+): void {
+  const queueRaw = findBundleSlot(state, "queues", journal.bundleId);
+  if (queueRaw === null) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "queue_missing");
+  }
+  const queueResult = parseIngestQueueSnapshot(queueRaw);
+  if (!queueResult.ok || !validateIngestQueueSnapshot(queueRaw).valid) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "queue_claim_mismatch");
+  }
+  const queue = queueResult.value;
+  const claim = queue.applyClaim;
+  if (!claim) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "queue_claim_missing");
+  }
+  const job = queue.jobs.find((candidate) => candidate.id === journal.jobClaim.jobId);
+  const applyingJobMatches =
+    job !== undefined &&
+    (job.status === "processing" || job.status === "failed") &&
+    job.stage === "applying" &&
+    job.sourceId === journal.jobClaim.sourceId &&
+    job.sourceContentHash === journal.jobClaim.sourceContentHash &&
+    job.pipelineFingerprint === journal.jobClaim.pipelineFingerprint &&
+    job.inputRevision === journal.jobClaim.inputRevision &&
+    job.attempt === journal.jobClaim.attempt &&
+    (job.status === "failed" || job.startedAt === journal.jobClaim.startedAt);
+  if (!applyingJobMatches || !queueClaimMatchesTransaction(claim, journal)) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "queue_claim_mismatch");
+  }
+
+  const highWatermark = queue.sourceHighWatermarks.find(
+    (candidate) => candidate.sourceId === journal.jobClaim.sourceId
+  );
+  if (!highWatermark) {
+    throw new KnowledgeApplyCommitAuthorityError(
+      journal.transactionId,
+      "source_high_watermark_missing"
+    );
+  }
+  if (
+    highWatermark.inputRevision < journal.jobClaim.inputRevision ||
+    (highWatermark.inputRevision === journal.jobClaim.inputRevision &&
+      (highWatermark.sourceContentHash !== journal.jobClaim.sourceContentHash ||
+        highWatermark.pipelineFingerprint !== journal.jobClaim.pipelineFingerprint))
+  ) {
+    throw new KnowledgeApplyCommitAuthorityError(
+      journal.transactionId,
+      "source_high_watermark_mismatch"
+    );
+  }
+  const highWatermarkHasNewPayload =
+    highWatermark.inputRevision > journal.jobClaim.inputRevision &&
+    (highWatermark.sourceContentHash !== journal.jobClaim.sourceContentHash ||
+      highWatermark.pipelineFingerprint !== journal.jobClaim.pipelineFingerprint);
+  if (highWatermarkHasNewPayload) {
+    const exactRetainedRerun = queue.reruns.some(
+      (candidate) =>
+        candidate.sourceId === highWatermark.sourceId &&
+        candidate.inputRevision === highWatermark.inputRevision &&
+        candidate.sourceContentHash === highWatermark.sourceContentHash &&
+        candidate.pipelineFingerprint === highWatermark.pipelineFingerprint
+    );
+    const exactPromotedSuccessor = queue.jobs.some(
+      (candidate) =>
+        candidate.id !== job.id &&
+        (candidate.status === "pending" || candidate.status === "paused") &&
+        candidate.sourceId === highWatermark.sourceId &&
+        candidate.inputRevision === highWatermark.inputRevision &&
+        candidate.sourceContentHash === highWatermark.sourceContentHash &&
+        candidate.pipelineFingerprint === highWatermark.pipelineFingerprint
+    );
+    if (!exactRetainedRerun && !exactPromotedSuccessor) {
+      throw new KnowledgeApplyCommitAuthorityError(
+        journal.transactionId,
+        "source_high_watermark_mismatch"
+      );
+    }
+  }
+  const revisionBundle = state.inputRevisions.find(
+    (candidate) => candidate.bundleId === journal.bundleId
+  );
+  const allocatedRevision = revisionBundle?.sources.find(
+    (candidate) => candidate.sourceId === journal.jobClaim.sourceId
+  );
+  if (!allocatedRevision) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "input_revision_missing");
+  }
+  if (allocatedRevision.inputRevision < highWatermark.inputRevision) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "input_revision_behind");
+  }
+
+  if (claim.legacyReview) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "queue_review_unverified");
+  }
+  if (!claim.reviewedChangeSet) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "queue_review_unverified");
+  }
+  const acceptedReview = claim.acceptedReview;
+  if (
+    !acceptedReview ||
+    claim.reviewedChangeSet.changeSetId !== journal.changeSetId ||
+    claim.reviewedChangeSet.changeSetDigest !== journal.changeSetDigest ||
+    acceptedReview.manifestCommitIntentDigest !== journal.manifestCommitIntentDigest
+  ) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "queue_review_unverified");
+  }
+
+  const reviewRaw = findBundleSlot(state, "reviews", journal.bundleId);
+  if (reviewRaw === null) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "review_missing");
+  }
+  const reviewResult = parseChangeSetReviewSnapshot(reviewRaw);
+  if (!reviewResult.ok || !validateChangeSetReviewSnapshot(reviewResult.value).valid) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "review_record_mismatch");
+  }
+  const record = reviewResult.value.records.find(
+    (candidate) => candidate.changeSetId === journal.changeSetId
+  );
+  if (!record) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "review_record_missing");
+  }
+  if (
+    record.outcome !== "accepted" ||
+    record.recordRevision !== acceptedReview.recordRevision ||
+    record.proposalDigest !== acceptedReview.proposalDigest ||
+    record.acceptedAt !== acceptedReview.acceptedAt ||
+    record.acceptedDigest !== journal.changeSetDigest ||
+    record.manifestCommitIntentDigest !== acceptedReview.manifestCommitIntentDigest ||
+    record.manifestCommitIntentDigest !== journal.manifestCommitIntentDigest ||
+    record.manifestCommitPlanDigest !== journal.manifestCommitIntent.manifestCommitPlanDigest ||
+    !reviewClaimMatchesTransaction(record, journal) ||
+    !exactJsonValuesEqual(record.acceptedChangeSet, journal.changeSet) ||
+    !exactJsonValuesEqual(record.manifestCommitIntent, journal.manifestCommitIntent)
+  ) {
+    throw new KnowledgeApplyCommitAuthorityError(journal.transactionId, "review_record_mismatch");
+  }
 }
 
 /**
@@ -1404,6 +1806,21 @@ export class KnowledgeRuntimeStore {
   }
 
   /**
+   * Re-proves one accepted apply before its transaction may observe Wiki files.
+   *
+   * This read-only preflight uses a detached strict request. Prepared-journal
+   * publication repeats the proof inside its atomic runtime transform, so a
+   * concurrent Queue or Review update cannot turn preflight into authority.
+   *
+   * @param request - Strict apply identity produced without Vault file access
+   */
+  async verifyApplyAuthority(request: ChangeSetTransactionAuthorityRequest): Promise<void> {
+    const proof = parseApplyAuthorityRequest(request);
+    const state = await this.readState();
+    this.assertTransactionFileAccessAuthority(state, proof);
+  }
+
+  /**
    * Atomically records one exact page commit in both Source Manifest and apply ledger.
    *
    * Exact ledger replay is a byte-preserving no-op. A new transaction must
@@ -1476,6 +1893,8 @@ export class KnowledgeRuntimeStore {
         );
       }
 
+      assertApplyCommitRuntimeAuthority(state, active);
+
       const currentRaw = findBundleSlot(state, "manifests", committed.bundleId);
       const actualManifest =
         currentRaw === null
@@ -1543,7 +1962,14 @@ export class KnowledgeRuntimeStore {
   /** Reads the detached Vault-global active transaction journal or null. */
   async readActiveTransaction(): Promise<unknown> {
     const state = await this.readState();
-    return state.activeTransaction === null ? null : cloneJson(state.activeTransaction);
+    if (state.activeTransaction === null) {
+      return null;
+    }
+    const active = this.requireTransaction(state.activeTransaction);
+    if (active.phase === "prepared" || active.phase === "applying") {
+      this.assertTransactionFileAccessAuthority(state, active);
+    }
+    return cloneJson(active);
   }
 
   /** Atomically compares and replaces the Vault-global active transaction slot. */
@@ -1573,52 +1999,12 @@ export class KnowledgeRuntimeStore {
         throw new TransactionStorageRevisionConflictError(expectedToken, actualToken);
       }
       if (expectedToken === null) {
-        if (state.applyCommits.some((record) => record.transactionId === candidate.transactionId)) {
-          throw new KnowledgeApplyCommitLedgerConflictError(candidate.transactionId);
-        }
-        const manifestRaw = findBundleSlot(state, "manifests", candidate.bundleId);
-        const actualManifest =
-          manifestRaw === null
-            ? {
-                version: 1 as const,
-                bundleId: candidate.bundleId,
-                revision: 0,
-                entries: [],
-              }
-            : this.requireManifest(candidate.bundleId, manifestRaw);
-        const source = actualManifest.entries.find(
-          (entry) => entry.sourceId === candidate.jobClaim.sourceId
-        );
-        if (!source) {
-          throw new KnowledgeApplyCommitManifestConflictError(
-            candidate.bundleId,
-            candidate.jobClaim.sourceId,
-            "source_missing"
-          );
-        }
-        const intentValidation = validateManifestCommitIntentForCommit(
-          candidate.manifestCommitIntent,
-          actualManifest,
-          candidate.changeSet,
-          candidate.bundle
-        );
-        if (!intentValidation.valid) {
-          throw new KnowledgeApplyCommitManifestConflictError(
-            candidate.bundleId,
-            candidate.jobClaim.sourceId,
-            "intent_invalid",
-            intentValidation.diagnostics
-          );
-        }
-        assertSourceInputRevisionCanCommit(
-          source,
-          candidate.bundleId,
-          candidate.jobClaim.inputRevision,
-          actualManifest,
-          state.applyCommits
-        );
+        this.assertTransactionFileAccessAuthority(state, candidate);
       } else if (current) {
         assertActiveTransactionTransition(current, candidate);
+        if (current.phase === "prepared" && candidate.phase === "applying") {
+          this.assertTransactionFileAccessAuthority(state, candidate);
+        }
       }
       return {
         next: {
@@ -1767,6 +2153,7 @@ export class KnowledgeRuntimeStore {
         return currentText;
       }
       const next = parseKnowledgeRuntimeStoreSnapshot(mutation.next);
+      this.assertUnfinishedTransactionFileAccessAuthority(next);
       expectedText = JSON.stringify(next);
       return expectedText;
     });
@@ -1775,6 +2162,89 @@ export class KnowledgeRuntimeStore {
     }
     parseRuntimeText(committedText);
     return result as T;
+  }
+
+  /**
+   * Proves every durable reservation required before Wiki file access.
+   *
+   * The Queue and Review own the exact accepted attempt, while the current
+   * Manifest must still satisfy the accepted read-set and monotonic source
+   * ordering. A transaction id already present in the success ledger can never
+   * be reused as unfinished work.
+   *
+   * @param state - Complete atomic runtime snapshot
+   * @param transaction - Exact accepted apply or unfinished transaction about to access files
+   */
+  private assertTransactionFileAccessAuthority(
+    state: KnowledgeRuntimeStoreSnapshot,
+    transaction: KnowledgeApplyAuthorityProof
+  ): void {
+    if (state.applyCommits.some((record) => record.transactionId === transaction.transactionId)) {
+      throw new KnowledgeApplyCommitLedgerConflictError(transaction.transactionId);
+    }
+    assertApplyCommitRuntimeAuthority(state, transaction);
+    const manifestRaw = findBundleSlot(state, "manifests", transaction.bundleId);
+    const actualManifest =
+      manifestRaw === null
+        ? {
+            version: 1 as const,
+            bundleId: transaction.bundleId,
+            revision: 0,
+            entries: [],
+          }
+        : this.requireManifest(transaction.bundleId, manifestRaw);
+    const source = actualManifest.entries.find(
+      (entry) => entry.sourceId === transaction.jobClaim.sourceId
+    );
+    if (!source) {
+      throw new KnowledgeApplyCommitManifestConflictError(
+        transaction.bundleId,
+        transaction.jobClaim.sourceId,
+        "source_missing"
+      );
+    }
+    const intentValidation = validateManifestCommitIntentForCommit(
+      transaction.manifestCommitIntent,
+      actualManifest,
+      transaction.changeSet,
+      transaction.bundle
+    );
+    if (!intentValidation.valid) {
+      throw new KnowledgeApplyCommitManifestConflictError(
+        transaction.bundleId,
+        transaction.jobClaim.sourceId,
+        "intent_invalid",
+        intentValidation.diagnostics
+      );
+    }
+    assertSourceInputRevisionCanCommit(
+      source,
+      transaction.bundleId,
+      transaction.jobClaim.inputRevision,
+      actualManifest,
+      state.applyCommits
+    );
+  }
+
+  /**
+   * Preserves full file-access authority across every shared-envelope mutation.
+   *
+   * Startup parsing deliberately remains byte-preserving for legacy state, but
+   * reading, recovering, or mutating unfinished work must prove the complete
+   * Queue, Review, Manifest, ledger, and source-ordering reservation first.
+   *
+   * @param state - Strict candidate runtime envelope about to be committed
+   */
+  private assertUnfinishedTransactionFileAccessAuthority(
+    state: KnowledgeRuntimeStoreSnapshot
+  ): void {
+    if (state.activeTransaction === null) {
+      return;
+    }
+    const transaction = this.requireTransaction(state.activeTransaction);
+    if (transaction.phase === "prepared" || transaction.phase === "applying") {
+      this.assertTransactionFileAccessAuthority(state, transaction);
+    }
   }
 
   /** Strictly parses and validates one queue slot. */
@@ -1989,6 +2459,17 @@ export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {
     expectedRevision: number | null
   ): Promise<void> {
     return this.runtime.writeManifest(bundleId, manifest, expectedRevision);
+  }
+}
+
+/** Read-only transaction preflight backed by the shared runtime envelope. */
+export class KnowledgeRuntimeApplyAuthorityPort implements ChangeSetTransactionAuthorityPort {
+  /** Creates the authority facade over the shared runtime store. */
+  constructor(private readonly runtime: KnowledgeRuntimeStore) {}
+
+  /** Re-proves one exact apply identity without accessing Wiki files. */
+  verify(request: ChangeSetTransactionAuthorityRequest): Promise<void> {
+    return this.runtime.verifyApplyAuthority(request);
   }
 }
 

@@ -1,7 +1,13 @@
 import {
+  ChangeSetTransaction,
   createTransactionCommitReceipt,
   type TransactionCommitReceipt,
 } from "@/knowledge/changeset/ChangeSetTransaction";
+import {
+  ALL_KNOWLEDGE_FILE_MUTATIONS,
+  type ChangeSetValidator,
+  type KnowledgeFileStore,
+} from "@/knowledge/changeset/ChangeSetValidator";
 import {
   TRANSACTION_JOURNAL_VERSION,
   TransactionStorageRevisionConflictError,
@@ -10,13 +16,16 @@ import {
 } from "@/knowledge/changeset/TransactionStorage";
 import { IngestQueue, type IngestExecutor } from "@/knowledge/ingest/queue/IngestQueue";
 import {
+  INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
   type IngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import {
   createManifestCommitIntentDigest,
+  createManifestCommitPlanDigest,
   createSourceManifestDigest,
   type ManifestCommitIntent,
+  type ManifestCommitPlan,
 } from "@/knowledge/manifest/ManifestCommitIntent";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { SourceManifestRevisionConflictError } from "@/knowledge/manifest/SourceManifestStorage";
@@ -27,12 +36,17 @@ import type {
   SourceManifest,
 } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
-import { ReviewStorageRevisionConflictError } from "@/knowledge/review/ReviewStorage";
+import {
+  ReviewStorageRevisionConflictError,
+  type ChangeSetReviewSnapshot,
+} from "@/knowledge/review/ReviewStorage";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
+  KnowledgeApplyCommitAuthorityError,
   KnowledgeApplyCommitLedgerConflictError,
   KnowledgeApplyCommitManifestConflictError,
   KnowledgeApplyCommitProofError,
+  KnowledgeRuntimeApplyAuthorityPort,
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
   KnowledgeRuntimeInputRevisionAllocator,
@@ -146,7 +160,7 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
 /** Creates one empty valid queue snapshot at a caller-selected revision. */
 function createQueueSnapshot(revision: number, bundleId = "personal"): IngestQueueSnapshot {
   return {
-    version: 3 as const,
+    version: INGEST_QUEUE_VERSION,
     bundleId,
     revision,
     control: { status: "running" as const },
@@ -281,7 +295,12 @@ function createLegacyApplyingQueue(): IngestQueueSnapshot {
       attempt: 1,
       startedAt: 110,
       reviewedChangeSet: { changeSetId: "changeset-apply", changeSetDigest: HASH_A },
-      acceptedReview: { proposalDigest: HASH_A, recordRevision: 1, acceptedAt: 110 },
+      acceptedReview: {
+        proposalDigest: HASH_A,
+        recordRevision: 1,
+        manifestCommitIntentDigest: HASH_A,
+        acceptedAt: 110,
+      },
     },
   };
 }
@@ -408,6 +427,57 @@ function createRegisteredManifest(
   };
 }
 
+/**
+ * Reconstructs the proposal-time plan authorized by one synthetic ChangeSet.
+ *
+ * @param manifest - Exact Manifest read-set before the source compile
+ * @param changeSet - Proposed or accepted source compile payload
+ * @param inputRevision - Durable source observation revision
+ * @returns Strict plan whose digest can bind Review and transaction fixtures
+ */
+function createManifestCommitPlanFixture(
+  manifest: SourceManifest,
+  changeSet: KnowledgeChangeSet,
+  inputRevision: number
+): ManifestCommitPlan {
+  const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
+  if (!source) {
+    throw new Error("Expected a registered source fixture");
+  }
+  const baseGeneratedPages = (source.lastSuccessful?.generatedPages ?? []).map((page) => {
+    if (!page.contentHash) {
+      throw new Error("Expected content-addressed generated page fixture");
+    }
+    return { path: page.path, ownership: page.ownership, contentHash: page.contentHash };
+  });
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: manifest.bundleId,
+    sourceId: source.sourceId,
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision,
+    changeSetId: changeSet.id,
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    baseGeneratedPages,
+    mutations: changeSet.changes.map((change) => {
+      const base = baseGeneratedPages.find(
+        (page) => toWindowsPathKey(page.path) === toWindowsPathKey(change.path)
+      );
+      return {
+        changeId: change.id,
+        path: change.path,
+        operation: change.operation,
+        access: base ? ("authorized" as const) : ("create_only" as const),
+        ownership: base?.ownership ?? ("generated" as const),
+        wasTrackedByPrimarySource: base !== undefined,
+      };
+    }),
+  };
+}
+
 /** Creates exact committed journal and receipt proof against one Manifest read-set. */
 function createCommittedApplyProof(
   manifest: SourceManifest,
@@ -432,6 +502,11 @@ function createCommittedApplyProof(
     }
     return { path: page.path, ownership: page.ownership, contentHash: page.contentHash };
   });
+  const manifestCommitPlan = createManifestCommitPlanFixture(
+    manifest,
+    prepared.changeSet,
+    inputRevision
+  );
   const manifestCommitIntent: ManifestCommitIntent = {
     version: 1,
     kind: "source_compile",
@@ -440,7 +515,7 @@ function createCommittedApplyProof(
     sourceContentHash: HASH_A,
     pipelineFingerprint: HASH_B,
     inputRevision,
-    manifestCommitPlanDigest: HASH_A,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
     changeSetId: prepared.changeSetId,
     expectedManifestRevision: manifest.revision,
     expectedManifestDigest: createSourceManifestDigest(manifest),
@@ -508,12 +583,23 @@ function createTwoTargetPreparedApplyJournal(
     afterContent,
     afterHash,
   };
+  const changes = [...prepared.changeSet.changes, secondChange].sort((left, right) => {
+    const leftKey = toWindowsPathKey(left.path);
+    const rightKey = toWindowsPathKey(right.path);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
   const changeSet: KnowledgeChangeSet = {
     ...prepared.changeSet,
-    changes: [...prepared.changeSet.changes, secondChange],
+    changes,
   };
+  const manifestCommitPlan = createManifestCommitPlanFixture(
+    manifest,
+    changeSet,
+    prepared.jobClaim.inputRevision
+  );
   const manifestCommitIntent: ManifestCommitIntent = {
     ...prepared.manifestCommitIntent,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
     generatedPages: [
       ...prepared.manifestCommitIntent.generatedPages,
       { path: secondChange.path, ownership: "generated", contentHash: afterHash } as const,
@@ -612,6 +698,7 @@ function createSharedUpdateProof(manifest: SourceManifest): {
     status: "accepted",
     createdAt: 200,
   };
+  const manifestCommitPlan = createManifestCommitPlanFixture(manifest, changeSet, 2);
   const intent: ManifestCommitIntent = {
     version: 1,
     kind: "source_compile",
@@ -620,7 +707,7 @@ function createSharedUpdateProof(manifest: SourceManifest): {
     sourceContentHash: HASH_A,
     pipelineFingerprint: HASH_B,
     inputRevision: 2,
-    manifestCommitPlanDigest: HASH_A,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
     changeSetId: changeSet.id,
     expectedManifestRevision: manifest.revision,
     expectedManifestDigest: createSourceManifestDigest(manifest),
@@ -645,7 +732,7 @@ function createSharedUpdateProof(manifest: SourceManifest): {
     jobClaim: {
       jobId: "job-shared-update",
       attempt: 1,
-      startedAt: 190,
+      startedAt: 230,
       sourceId: "source-1",
       sourceContentHash: HASH_A,
       pipelineFingerprint: HASH_B,
@@ -671,12 +758,229 @@ function createSharedUpdateProof(manifest: SourceManifest): {
       },
     ],
     appliedCount: 1,
-    createdAt: 200,
+    createdAt: 230,
     updatedAt: 240,
     phase: "committed",
     committedAt: 240,
   };
   return { journal, receipt: createTransactionCommitReceipt(journal) };
+}
+
+/**
+ * Creates exact Queue, Review, and allocator slots for one transaction proof.
+ *
+ * @param manifest - Manifest used to reconstruct the immutable review plan
+ * @param journal - Transaction whose apply authority must remain durable
+ * @returns Shared-runtime slots accepted by the final atomic proof
+ */
+function createApplyAuthoritySlots(
+  manifest: SourceManifest,
+  journal: ChangeSetTransactionJournal
+): Pick<KnowledgeRuntimeStoreSnapshot, "queues" | "reviews" | "inputRevisions"> {
+  const proposal: KnowledgeChangeSet = { ...journal.changeSet, status: "proposed" };
+  const plan = createManifestCommitPlanFixture(manifest, proposal, journal.jobClaim.inputRevision);
+  const planDigest = createManifestCommitPlanDigest(plan);
+  if (planDigest !== journal.manifestCommitIntent.manifestCommitPlanDigest) {
+    throw new Error("Expected journal fixture to retain its exact Review plan digest");
+  }
+  const recordedAt = Math.max(proposal.createdAt, journal.jobClaim.startedAt - 20);
+  const acceptedAt = Math.max(recordedAt, journal.jobClaim.startedAt - 10);
+  if (acceptedAt > journal.jobClaim.startedAt) {
+    throw new Error("Expected Review acceptance to precede the applying claim");
+  }
+  const proposalDigest = createChangeSetTransactionDigest(proposal);
+  const review: ChangeSetReviewSnapshot = {
+    version: 2,
+    bundleId: journal.bundleId,
+    revision: 1,
+    records: [
+      {
+        changeSetId: journal.changeSetId,
+        proposal,
+        proposalDigest,
+        manifestCommitPlan: plan,
+        manifestCommitPlanDigest: planDigest,
+        jobClaim: {
+          jobId: journal.jobClaim.jobId,
+          sourceId: journal.jobClaim.sourceId,
+          sourceContentHash: journal.jobClaim.sourceContentHash,
+          pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+          inputRevision: journal.jobClaim.inputRevision,
+          attempt: journal.jobClaim.attempt,
+        },
+        recordedAt,
+        outcome: "accepted",
+        recordRevision: 1,
+        acceptedChangeSet: journal.changeSet,
+        acceptedDigest: journal.changeSetDigest,
+        manifestCommitIntent: journal.manifestCommitIntent,
+        manifestCommitIntentDigest: journal.manifestCommitIntentDigest,
+        acceptedAt,
+      },
+    ],
+  };
+  const queue: IngestQueueSnapshot = {
+    version: INGEST_QUEUE_VERSION,
+    bundleId: journal.bundleId,
+    revision: 1,
+    control: { status: "running" },
+    jobs: [
+      {
+        id: journal.jobClaim.jobId,
+        bundleId: journal.bundleId,
+        sourceId: journal.jobClaim.sourceId,
+        sourceContentHash: journal.jobClaim.sourceContentHash,
+        pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+        inputRevision: journal.jobClaim.inputRevision,
+        attempt: journal.jobClaim.attempt,
+        rerunRequested: false,
+        createdAt: Math.min(proposal.createdAt, recordedAt),
+        updatedAt: journal.jobClaim.startedAt,
+        status: "processing",
+        stage: "applying",
+        startedAt: journal.jobClaim.startedAt,
+      },
+    ],
+    reruns: [],
+    sourceHighWatermarks: [
+      {
+        sourceId: journal.jobClaim.sourceId,
+        sourceContentHash: journal.jobClaim.sourceContentHash,
+        pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+        inputRevision: journal.jobClaim.inputRevision,
+        observedAt: recordedAt,
+      },
+    ],
+    pendingReviews: [],
+    reviewRejections: [],
+    applyClaim: {
+      ...journal.jobClaim,
+      reviewedChangeSet: {
+        changeSetId: journal.changeSetId,
+        changeSetDigest: journal.changeSetDigest,
+      },
+      acceptedReview: {
+        proposalDigest,
+        recordRevision: 1,
+        manifestCommitIntentDigest: journal.manifestCommitIntentDigest,
+        acceptedAt,
+      },
+    },
+  };
+  return {
+    queues: [{ bundleId: journal.bundleId, value: queue }],
+    reviews: [{ bundleId: journal.bundleId, value: review }],
+    inputRevisions: [
+      {
+        bundleId: journal.bundleId,
+        sources: [
+          {
+            sourceId: journal.jobClaim.sourceId,
+            inputRevision: journal.jobClaim.inputRevision,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * Creates the Queue hand-off retained after Manifest success and before journal acknowledgement.
+ *
+ * @param journal - Exact committed transaction journal
+ * @param receipt - Exact commit receipt derived from the journal
+ * @param markerOverrides - Optional marker fields used by corruption tests
+ * @returns Strict completed Queue snapshot with one pending acknowledgement marker
+ */
+function createPendingApplyCommitQueue(
+  journal: ChangeSetTransactionJournal & { phase: "committed" },
+  receipt: TransactionCommitReceipt,
+  markerOverrides: Partial<NonNullable<IngestQueueSnapshot["applyCommit"]>> = {}
+): IngestQueueSnapshot {
+  const completedAt = Math.max(receipt.committedAt, journal.jobClaim.startedAt);
+  return {
+    version: INGEST_QUEUE_VERSION,
+    bundleId: journal.bundleId,
+    revision: 2,
+    control: { status: "paused", reason: "commit_pending_ack", pausedAt: completedAt },
+    jobs: [
+      {
+        id: journal.jobClaim.jobId,
+        bundleId: journal.bundleId,
+        sourceId: journal.jobClaim.sourceId,
+        sourceContentHash: journal.jobClaim.sourceContentHash,
+        pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+        inputRevision: journal.jobClaim.inputRevision,
+        attempt: journal.jobClaim.attempt,
+        rerunRequested: false,
+        createdAt: Math.min(journal.changeSet.createdAt, journal.jobClaim.startedAt),
+        updatedAt: completedAt,
+        status: "completed",
+        stage: "completed",
+        changeSetId: journal.changeSetId,
+        completedAt,
+      },
+    ],
+    reruns: [],
+    sourceHighWatermarks: [
+      {
+        sourceId: journal.jobClaim.sourceId,
+        sourceContentHash: journal.jobClaim.sourceContentHash,
+        pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+        inputRevision: journal.jobClaim.inputRevision,
+        observedAt: journal.jobClaim.startedAt,
+      },
+    ],
+    pendingReviews: [],
+    reviewRejections: [],
+    applyCommit: {
+      transactionId: receipt.transactionId,
+      changeSetId: receipt.changeSetId,
+      changeSetDigest: receipt.changeSetDigest,
+      commitRevision: receipt.commitRevision,
+      ...receipt.jobClaim,
+      committedAt: receipt.committedAt,
+      ...markerOverrides,
+    },
+  };
+}
+
+/**
+ * Creates a runtime-v2 envelope whose active transaction still depends on
+ * version-3 reviewed Queue authority that cannot prove its Manifest intent.
+ *
+ * @param manifest - Exact transaction Manifest read-set
+ * @param journal - Prepared or applying active transaction
+ * @returns Strict outer envelope containing a legacy Queue-v3 slot
+ */
+function createLegacyReviewedActiveState(
+  manifest: SourceManifest,
+  journal: ChangeSetTransactionJournal & { phase: "prepared" | "applying" }
+): KnowledgeRuntimeStoreSnapshot {
+  const authority = createApplyAuthoritySlots(manifest, journal);
+  const queue = authority.queues[0].value as IngestQueueSnapshot;
+  const claim = queue.applyClaim;
+  if (!claim?.acceptedReview) {
+    throw new Error("Expected reviewed apply authority fixture");
+  }
+  const { manifestCommitIntentDigest: _manifestCommitIntentDigest, ...legacyAcceptedReview } =
+    claim.acceptedReview;
+  void _manifestCommitIntentDigest;
+  const legacyQueue = {
+    ...queue,
+    version: 3,
+    applyClaim: {
+      ...claim,
+      acceptedReview: legacyAcceptedReview,
+    },
+  };
+  return {
+    ...createEmptyKnowledgeRuntimeStoreSnapshot(),
+    ...authority,
+    queues: [{ bundleId: journal.bundleId, value: legacyQueue }],
+    manifests: [{ bundleId: manifest.bundleId, value: manifest }],
+    activeTransaction: journal,
+  };
 }
 
 /** Creates one runtime whose active slot contains the supplied committed proof. */
@@ -693,8 +997,10 @@ async function createApplyHarness(
   const file = new MemoryAtomicRuntimeFile();
   const runtime = new KnowledgeRuntimeStore(file);
   await runtime.initialize();
+  const authority = createApplyAuthoritySlots(manifest, proof.journal);
   const state: KnowledgeRuntimeStoreSnapshot = {
     ...createEmptyKnowledgeRuntimeStoreSnapshot(),
+    ...authority,
     revision: 10,
     manifests: [{ bundleId: manifest.bundleId, value: manifest }],
     activeTransaction: proof.journal,
@@ -730,6 +1036,48 @@ async function createHarness(): Promise<{
     transaction: new KnowledgeRuntimeTransactionStorage(runtime),
     revisions: new KnowledgeRuntimeInputRevisionAllocator(runtime),
   };
+}
+
+/**
+ * Persists the exact reviewed Queue/Review/allocator authority for a prepared journal.
+ *
+ * @param harness - Initialized shared-runtime test facades
+ * @param manifest - Manifest used by the journal's immutable review plan
+ * @param journal - Prepared journal that will reserve the global transaction slot
+ */
+async function persistPreparedApplyAuthority(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  manifest: SourceManifest,
+  journal: ChangeSetTransactionJournal
+): Promise<void> {
+  const authority = createApplyAuthoritySlots(manifest, journal);
+  const queue = authority.queues[0].value as IngestQueueSnapshot;
+  const review = authority.reviews[0].value as ChangeSetReviewSnapshot;
+  const currentQueue = (await harness.queue.read(journal.bundleId)) as IngestQueueSnapshot | null;
+  const currentReview = (await harness.review.read(
+    journal.bundleId
+  )) as ChangeSetReviewSnapshot | null;
+  queue.revision = (currentQueue?.revision ?? 0) + 1;
+  review.revision = (currentReview?.revision ?? 0) + 1;
+  await harness.queue.write(journal.bundleId, queue, currentQueue?.revision ?? null);
+  await harness.review.write(journal.bundleId, review, currentReview?.revision ?? null);
+
+  const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+  const allocated =
+    state.inputRevisions
+      .find((candidate) => candidate.bundleId === journal.bundleId)
+      ?.sources.find((candidate) => candidate.sourceId === journal.jobClaim.sourceId)
+      ?.inputRevision ?? 0;
+  for (
+    let inputRevision = allocated;
+    inputRevision < journal.jobClaim.inputRevision;
+    inputRevision += 1
+  ) {
+    await harness.revisions.allocate({
+      bundleId: journal.bundleId,
+      sourceId: journal.jobClaim.sourceId,
+    });
+  }
 }
 
 describe("KnowledgeRuntimeStore", () => {
@@ -895,6 +1243,121 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await file.read()).toBe(before);
   });
 
+  it("blocks legacy reviewed prepared and applying recovery before any Wiki file access", async () => {
+    const manifest = createRegisteredManifest();
+    const prepared = createPreparedApplyJournal(manifest, "transaction-legacy-authority");
+    const journals: Array<ChangeSetTransactionJournal & { phase: "prepared" | "applying" }> = [
+      prepared,
+      { ...prepared, revision: 1, phase: "applying", updatedAt: prepared.updatedAt + 1 },
+    ];
+
+    for (const journal of journals) {
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(JSON.stringify(createLegacyReviewedActiveState(manifest, journal)));
+      const runtime = new KnowledgeRuntimeStore(file);
+      await runtime.initialize();
+      const before = await file.read();
+      let observations = 0;
+      let mutations = 0;
+      const fileStore: KnowledgeFileStore = {
+        mutationCapabilities: ALL_KNOWLEDGE_FILE_MUTATIONS,
+        /** Records any forbidden recovery observation. */
+        async observe() {
+          observations += 1;
+          return { kind: "missing" } as const;
+        },
+        /** Records any forbidden recovery mutation. */
+        async compareAndSwap() {
+          mutations += 1;
+          return { kind: "applied" } as const;
+        },
+      };
+      const transaction = new ChangeSetTransaction({
+        storage: new KnowledgeRuntimeTransactionStorage(runtime),
+        fileStore,
+        validator: {} as ChangeSetValidator,
+        authority: new KnowledgeRuntimeApplyAuthorityPort(runtime),
+      });
+
+      await expect(runtime.readActiveTransaction()).rejects.toMatchObject({
+        name: KnowledgeApplyCommitAuthorityError.name,
+        reason: "queue_review_unverified",
+      });
+      await expect(transaction.recoverOnStartup(createBundle())).rejects.toMatchObject({
+        name: KnowledgeApplyCommitAuthorityError.name,
+        reason: "queue_review_unverified",
+      });
+      expect({ observations, mutations }).toEqual({ observations: 0, mutations: 0 });
+      expect(await file.read()).toBe(before);
+    }
+  });
+
+  it("blocks stale-Manifest prepared and applying recovery before any Wiki file access", async () => {
+    const manifest = createRegisteredManifest();
+    const prepared = createPreparedApplyJournal(manifest, "transaction-stale-startup-manifest");
+    const journals: Array<ChangeSetTransactionJournal & { phase: "prepared" | "applying" }> = [
+      prepared,
+      { ...prepared, revision: 1, phase: "applying", updatedAt: prepared.updatedAt + 1 },
+    ];
+
+    for (const journal of journals) {
+      const authority = createApplyAuthoritySlots(manifest, journal);
+      const driftedManifest: SourceManifest = {
+        ...manifest,
+        revision: manifest.revision + 1,
+        entries: manifest.entries.map((entry) => ({
+          ...entry,
+          sourcePath: "Sources/Renamed.md",
+          sourceKey: "sources/renamed.md",
+        })),
+      };
+      const state: KnowledgeRuntimeStoreSnapshot = {
+        ...createEmptyKnowledgeRuntimeStoreSnapshot(),
+        ...authority,
+        revision: 8,
+        manifests: [{ bundleId: manifest.bundleId, value: driftedManifest }],
+        activeTransaction: journal,
+      };
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(JSON.stringify(state));
+      const runtime = new KnowledgeRuntimeStore(file);
+      await runtime.initialize();
+      const before = await file.read();
+      let observations = 0;
+      let mutations = 0;
+      const fileStore: KnowledgeFileStore = {
+        mutationCapabilities: ALL_KNOWLEDGE_FILE_MUTATIONS,
+        /** Records any forbidden recovery observation. */
+        async observe() {
+          observations += 1;
+          return { kind: "missing" } as const;
+        },
+        /** Records any forbidden recovery mutation. */
+        async compareAndSwap() {
+          mutations += 1;
+          return { kind: "applied" } as const;
+        },
+      };
+      const transaction = new ChangeSetTransaction({
+        storage: new KnowledgeRuntimeTransactionStorage(runtime),
+        fileStore,
+        validator: {} as ChangeSetValidator,
+        authority: new KnowledgeRuntimeApplyAuthorityPort(runtime),
+      });
+
+      await expect(runtime.readActiveTransaction()).rejects.toMatchObject({
+        name: KnowledgeApplyCommitManifestConflictError.name,
+        reason: "intent_invalid",
+      });
+      await expect(transaction.recoverOnStartup(createBundle())).rejects.toMatchObject({
+        name: KnowledgeApplyCommitManifestConflictError.name,
+        reason: "intent_invalid",
+      });
+      expect({ observations, mutations }).toEqual({ observations: 0, mutations: 0 });
+      expect(await file.read()).toBe(before);
+    }
+  });
+
   it("atomically advances the source Manifest and appends one content-addressed ledger record", async () => {
     const manifest = createRegisteredManifest();
     const harness = await createApplyHarness(manifest);
@@ -939,6 +1402,293 @@ describe("KnowledgeRuntimeStore", () => {
         manifestAfterDigest: createSourceManifestDigest(committedManifest),
         recordedAt: harness.receipt.committedAt,
       }),
+    ]);
+  });
+
+  it.each([
+    {
+      reason: "queue_missing" as const,
+      mutate(state: KnowledgeRuntimeStoreSnapshot): void {
+        state.queues = [];
+      },
+    },
+    {
+      reason: "queue_claim_mismatch" as const,
+      mutate(state: KnowledgeRuntimeStoreSnapshot): void {
+        const queue = state.queues[0].value as IngestQueueSnapshot;
+        queue.jobs[0].id = "job-other";
+        if (!queue.applyClaim) {
+          throw new Error("Expected apply claim fixture");
+        }
+        queue.applyClaim.jobId = "job-other";
+      },
+    },
+    {
+      reason: "queue_review_unverified" as const,
+      mutate(state: KnowledgeRuntimeStoreSnapshot): void {
+        const queue = state.queues[0].value as IngestQueueSnapshot;
+        if (!queue.applyClaim) {
+          throw new Error("Expected apply claim fixture");
+        }
+        delete queue.applyClaim.acceptedReview;
+        queue.applyClaim.legacyReview = {
+          kind: "legacy_unverified",
+          migratedFromVersion: 3,
+        };
+      },
+    },
+    {
+      reason: "review_missing" as const,
+      mutate(state: KnowledgeRuntimeStoreSnapshot): void {
+        state.reviews = [];
+      },
+    },
+    {
+      reason: "review_record_mismatch" as const,
+      mutate(state: KnowledgeRuntimeStoreSnapshot): void {
+        const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+        const record = review.records[0];
+        if (record.outcome !== "accepted") {
+          throw new Error("Expected accepted Review fixture");
+        }
+        record.acceptedAt += 1;
+      },
+    },
+    {
+      reason: "input_revision_missing" as const,
+      mutate(state: KnowledgeRuntimeStoreSnapshot): void {
+        state.inputRevisions = [];
+      },
+    },
+  ])("rejects $reason inside the atomic Manifest/ledger transform", async ({ reason, mutate }) => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    mutate(state);
+    harness.file.replaceContent(JSON.stringify(state));
+    const before = await harness.file.read();
+
+    await expect(
+      harness.port.recordCommitted(harness.journal, harness.receipt)
+    ).rejects.toMatchObject({
+      name: KnowledgeApplyCommitAuthorityError.name,
+      reason,
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("rejects an unreviewed apply until auto-apply policy has durable authorization", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    if (!queue.applyClaim) {
+      throw new Error("Expected apply claim fixture");
+    }
+    delete queue.applyClaim.reviewedChangeSet;
+    delete queue.applyClaim.acceptedReview;
+    harness.file.replaceContent(JSON.stringify(state));
+    const before = await harness.file.read();
+
+    await expect(
+      harness.port.recordCommitted(harness.journal, harness.receipt)
+    ).rejects.toMatchObject({
+      name: KnowledgeApplyCommitAuthorityError.name,
+      reason: "queue_review_unverified",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("allows a newer same-payload source observation while an older reviewed apply commits", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    queue.sourceHighWatermarks[0] = {
+      ...queue.sourceHighWatermarks[0],
+      inputRevision: 2,
+      observedAt: 155,
+    };
+    state.inputRevisions[0].sources[0].inputRevision = 3;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+
+    expect(
+      (JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot).applyCommits
+    ).toHaveLength(1);
+  });
+
+  it("allows an exact divergent rerun retained behind an applying reviewed claim", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    const applying = queue.jobs[0];
+    applying.rerunRequested = true;
+    applying.updatedAt = 155;
+    queue.reruns = [
+      {
+        jobId: "job-rerun",
+        sourceId: applying.sourceId,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: applying.pipelineFingerprint,
+        inputRevision: 2,
+        requestedAt: 155,
+        updatedAt: 155,
+      },
+    ];
+    queue.sourceHighWatermarks[0] = {
+      sourceId: applying.sourceId,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: applying.pipelineFingerprint,
+      inputRevision: 2,
+      observedAt: 155,
+    };
+    state.inputRevisions[0].sources[0].inputRevision = 2;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+
+    expect(
+      (JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot).applyCommits
+    ).toHaveLength(1);
+  });
+
+  it("allows an exact divergent successor promoted before failed-apply recovery commits", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    const applying = queue.jobs[0];
+    queue.control = {
+      status: "paused",
+      reason: "recovery_required",
+      pausedAt: 160,
+    };
+    queue.jobs = [
+      {
+        ...applying,
+        rerunRequested: false,
+        updatedAt: 160,
+        status: "failed",
+        stage: "applying",
+        failure: {
+          code: "interrupted_apply_requires_recovery",
+          message: "Interrupted apply requires transaction recovery",
+          retryable: false,
+          occurredAt: 160,
+        },
+      },
+      {
+        id: "job-rerun",
+        bundleId: applying.bundleId,
+        sourceId: applying.sourceId,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: applying.pipelineFingerprint,
+        inputRevision: 2,
+        attempt: 0,
+        rerunRequested: false,
+        createdAt: 160,
+        updatedAt: 160,
+        status: "pending",
+        stage: "queued",
+      },
+    ];
+    delete (queue.jobs[0] as unknown as { startedAt?: number }).startedAt;
+    queue.sourceHighWatermarks[0] = {
+      sourceId: applying.sourceId,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: applying.pipelineFingerprint,
+      inputRevision: 2,
+      observedAt: 160,
+    };
+    state.inputRevisions[0].sources[0].inputRevision = 2;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+
+    expect(
+      (JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot).applyCommits
+    ).toHaveLength(1);
+  });
+
+  it("keeps a latest rerun owned by a promoted successor while the old apply commits", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    const oldApply = queue.jobs[0];
+    queue.control = {
+      status: "paused",
+      reason: "recovery_required",
+      pausedAt: 170,
+    };
+    queue.jobs = [
+      {
+        ...oldApply,
+        rerunRequested: false,
+        updatedAt: 170,
+        status: "failed",
+        stage: "applying",
+        failure: {
+          code: "interrupted_apply_requires_recovery",
+          message: "Interrupted apply requires transaction recovery",
+          retryable: false,
+          occurredAt: 170,
+        },
+      },
+      {
+        id: "job-successor",
+        bundleId: oldApply.bundleId,
+        sourceId: oldApply.sourceId,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: oldApply.pipelineFingerprint,
+        inputRevision: 2,
+        attempt: 0,
+        rerunRequested: true,
+        createdAt: 155,
+        updatedAt: 170,
+        status: "pending",
+        stage: "queued",
+      },
+    ];
+    delete (queue.jobs[0] as unknown as { startedAt?: number }).startedAt;
+    queue.reruns = [
+      {
+        jobId: "job-latest",
+        sourceId: oldApply.sourceId,
+        sourceContentHash: HASH_B,
+        pipelineFingerprint: oldApply.pipelineFingerprint,
+        inputRevision: 3,
+        requestedAt: 160,
+        updatedAt: 170,
+      },
+    ];
+    queue.sourceHighWatermarks[0] = {
+      sourceId: oldApply.sourceId,
+      sourceContentHash: HASH_B,
+      pipelineFingerprint: oldApply.pipelineFingerprint,
+      inputRevision: 3,
+      observedAt: 170,
+    };
+    state.inputRevisions[0].sources[0].inputRevision = 3;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const executor: IngestExecutor = {
+      /** Produces no work; recovery never invokes this executor. */
+      async execute() {
+        return { kind: "no_changes", changeSetId: "changeset-unused" };
+      },
+    };
+    const runtimeQueue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(harness.runtime),
+      executor,
+      { clock: () => 250, jobIdFactory: () => "job-unused" }
+    );
+    await runtimeQueue.resolveApplyRecovery(harness.receipt);
+    const recovered = await runtimeQueue.load("personal");
+
+    expect(
+      recovered.jobs.filter((job) => !["failed", "completed", "cancelled"].includes(job.status))
+    ).toEqual([expect.objectContaining({ id: "job-successor", inputRevision: 2 })]);
+    expect(recovered.reruns).toEqual([
+      expect.objectContaining({ jobId: "job-latest", inputRevision: 3 }),
     ]);
   });
 
@@ -1017,6 +1767,70 @@ describe("KnowledgeRuntimeStore", () => {
       );
       expect(await file.read()).toBe(before);
     }
+  });
+
+  it("requires every pending Queue commit marker to match one exact apply-ledger record", async () => {
+    const manifest = createRegisteredManifest();
+    const harness = await createApplyHarness(manifest);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const valid = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    valid.activeTransaction = null;
+    valid.queues = [
+      {
+        bundleId: harness.journal.bundleId,
+        value: createPendingApplyCommitQueue(harness.journal, harness.receipt),
+      },
+    ];
+
+    const validFile = new MemoryAtomicRuntimeFile();
+    await validFile.initialize(JSON.stringify(valid));
+    await expect(new KnowledgeRuntimeStore(validFile).initialize()).resolves.toBeUndefined();
+
+    const scenarios = [
+      { name: "transaction", marker: { transactionId: "transaction-other" } },
+      { name: "ChangeSet digest", marker: { changeSetDigest: HASH_C } },
+      { name: "commit revision", marker: { commitRevision: harness.receipt.commitRevision + 1 } },
+      { name: "commit timestamp", marker: { committedAt: harness.receipt.committedAt - 1 } },
+    ] as const;
+    for (const scenario of scenarios) {
+      const state = JSON.parse(JSON.stringify(valid)) as KnowledgeRuntimeStoreSnapshot;
+      state.queues[0].value = createPendingApplyCommitQueue(
+        harness.journal,
+        harness.receipt,
+        scenario.marker
+      );
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(JSON.stringify(state));
+      const before = await file.read();
+
+      await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
+        KnowledgeRuntimeStoreCorruptError
+      );
+      expect(await file.read()).toBe(before);
+    }
+  });
+
+  it("rejects a pending Queue commit marker when no Manifest success ledger exists", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest);
+    const state: KnowledgeRuntimeStoreSnapshot = {
+      ...createEmptyKnowledgeRuntimeStoreSnapshot(),
+      queues: [
+        {
+          bundleId: proof.journal.bundleId,
+          value: createPendingApplyCommitQueue(proof.journal, proof.receipt),
+        },
+      ],
+      manifests: [{ bundleId: manifest.bundleId, value: manifest }],
+    };
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(JSON.stringify(state));
+    const before = await file.read();
+
+    await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
+      KnowledgeRuntimeStoreCorruptError
+    );
+    expect(await file.read()).toBe(before);
   });
 
   it("atomically propagates a shared-page after hash to every exact co-owner", async () => {
@@ -1147,6 +1961,9 @@ describe("KnowledgeRuntimeStore", () => {
     const later = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
     later.revision += 1;
     later.activeTransaction = null;
+    later.queues = [];
+    later.reviews = [];
+    later.inputRevisions = [];
     later.manifests = later.manifests.map((slot) => ({
       ...slot,
       value: {
@@ -1370,11 +2187,27 @@ describe("KnowledgeRuntimeStore", () => {
     ).rejects.toBeInstanceOf(SourceManifestRevisionConflictError);
   });
 
+  it("does not publish a prepared journal without exact Queue and Review authority", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const prepared = createPreparedApplyJournal(manifest, "transaction-missing-authority");
+    const before = await harness.file.read();
+
+    await expect(harness.transaction.writeActive(prepared, null)).rejects.toMatchObject({
+      name: KnowledgeApplyCommitAuthorityError.name,
+      reason: "queue_missing",
+    });
+    expect(await harness.file.read()).toBe(before);
+    await expect(harness.transaction.readActive()).resolves.toBeNull();
+  });
+
   it("does not publish a prepared journal after its Manifest read-set becomes stale", async () => {
     const harness = await createHarness();
     const manifest = createRegisteredManifest();
     await harness.manifest.write("personal", manifest, null);
     const prepared = createPreparedApplyJournal(manifest, "transaction-stale-prepare");
+    await persistPreparedApplyAuthority(harness, manifest, prepared);
     const renamed: SourceManifest = {
       ...manifest,
       revision: 2,
@@ -1393,6 +2226,99 @@ describe("KnowledgeRuntimeStore", () => {
     });
     expect(await harness.file.read()).toBe(before);
     await expect(harness.transaction.readActive()).resolves.toBeNull();
+  });
+
+  it("re-proves durable authority when prepared advances to applying", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const prepared = createPreparedApplyJournal(manifest, "transaction-prepare-to-apply");
+    await persistPreparedApplyAuthority(harness, manifest, prepared);
+    await harness.transaction.writeActive(prepared, null);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    state.reviews = [];
+    harness.file.replaceContent(JSON.stringify(state));
+    const before = await harness.file.read();
+    const applying: ChangeSetTransactionJournal = {
+      ...prepared,
+      revision: 1,
+      phase: "applying",
+      updatedAt: prepared.updatedAt + 1,
+    };
+
+    await expect(
+      harness.transaction.writeActive(applying, {
+        transactionId: prepared.transactionId,
+        revision: prepared.revision,
+      })
+    ).rejects.toMatchObject({
+      name: KnowledgeApplyCommitAuthorityError.name,
+      reason: "review_missing",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("preserves unfinished apply authority across Queue and Review mutations", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const prepared = createPreparedApplyJournal(manifest, "transaction-authority-preservation");
+    await persistPreparedApplyAuthority(harness, manifest, prepared);
+    await harness.transaction.writeActive(prepared, null);
+    const applying: ChangeSetTransactionJournal & { phase: "applying" } = {
+      ...prepared,
+      revision: 1,
+      phase: "applying",
+      updatedAt: prepared.updatedAt + 1,
+    };
+    await harness.transaction.writeActive(applying, {
+      transactionId: prepared.transactionId,
+      revision: prepared.revision,
+    });
+
+    const queue = (await harness.queue.read("personal")) as IngestQueueSnapshot;
+    const unreviewedQueue = JSON.parse(JSON.stringify(queue)) as IngestQueueSnapshot;
+    unreviewedQueue.revision += 1;
+    if (!unreviewedQueue.applyClaim) {
+      throw new Error("Expected apply claim fixture");
+    }
+    delete unreviewedQueue.applyClaim.reviewedChangeSet;
+    delete unreviewedQueue.applyClaim.acceptedReview;
+    const beforeQueue = await harness.file.read();
+    await expect(
+      harness.queue.write("personal", unreviewedQueue, queue.revision)
+    ).rejects.toMatchObject({
+      name: KnowledgeApplyCommitAuthorityError.name,
+      reason: "queue_review_unverified",
+    });
+    expect(await harness.file.read()).toBe(beforeQueue);
+
+    const review = (await harness.review.read("personal")) as ChangeSetReviewSnapshot;
+    const emptyReview: ChangeSetReviewSnapshot = {
+      ...review,
+      revision: review.revision + 1,
+      records: [],
+    };
+    const beforeReview = await harness.file.read();
+    await expect(
+      harness.review.write("personal", emptyReview, review.revision)
+    ).rejects.toMatchObject({
+      name: KnowledgeApplyCommitAuthorityError.name,
+      reason: "review_record_missing",
+    });
+    expect(await harness.file.read()).toBe(beforeReview);
+
+    const progressed: ChangeSetTransactionJournal & { phase: "applying" } = {
+      ...applying,
+      revision: 2,
+      appliedCount: applying.targets.length,
+      updatedAt: applying.updatedAt + 1,
+    };
+    await harness.transaction.writeActive(progressed, {
+      transactionId: applying.transactionId,
+      revision: applying.revision,
+    });
+    await expect(harness.transaction.readActive()).resolves.toEqual(progressed);
   });
 
   it("does not reserve an apply whose source input revision is already committed", async () => {
@@ -1424,8 +2350,10 @@ describe("KnowledgeRuntimeStore", () => {
     const file = new MemoryAtomicRuntimeFile();
     const runtime = new KnowledgeRuntimeStore(file);
     await runtime.initialize();
+    const authority = createApplyAuthoritySlots(manifest, prepared);
     const state: KnowledgeRuntimeStoreSnapshot = {
       ...createEmptyKnowledgeRuntimeStoreSnapshot(),
+      ...authority,
       revision: 8,
       manifests: [{ bundleId: "personal", value: manifest }],
       applyCommits: [
@@ -1457,6 +2385,7 @@ describe("KnowledgeRuntimeStore", () => {
     const manifest = createRegisteredManifest();
     await harness.manifest.write("personal", manifest, null);
     const prepared = createPreparedApplyJournal(manifest, "transaction-reservation");
+    await persistPreparedApplyAuthority(harness, manifest, prepared);
     const candidate: SourceManifest = {
       ...manifest,
       revision: 2,
@@ -1604,6 +2533,7 @@ describe("KnowledgeRuntimeStore", () => {
     const manifest = createRegisteredManifest();
     await harness.manifest.write("personal", manifest, null);
     const first = createPreparedApplyJournal(manifest, "transaction-1");
+    await persistPreparedApplyAuthority(harness, manifest, first);
     await harness.transaction.writeActive(first, null);
     const applying: ChangeSetTransactionJournal = {
       ...first,
@@ -1648,6 +2578,7 @@ describe("KnowledgeRuntimeStore", () => {
     await expect(harness.transaction.readActive()).resolves.toBeNull();
 
     const second = createPreparedApplyJournal(manifest, "transaction-2");
+    await persistPreparedApplyAuthority(harness, manifest, second);
     await harness.transaction.writeActive(second, null);
     await expect(
       harness.transaction.clearActive({ transactionId: first.transactionId, revision: 1 })
@@ -1674,6 +2605,7 @@ describe("KnowledgeRuntimeStore", () => {
     );
     expect(await initial.file.read()).toBe(initialBefore);
 
+    await persistPreparedApplyAuthority(initial, manifest, prepared);
     await initial.transaction.writeActive(prepared, null);
     const beforeReplacement = await initial.file.read();
     const payloadDrift: ChangeSetTransactionJournal = {
@@ -1740,6 +2672,7 @@ describe("KnowledgeRuntimeStore", () => {
     const manifest = createRegisteredManifest();
     await harness.manifest.write("personal", manifest, null);
     const prepared = createTwoTargetPreparedApplyJournal(manifest, "transaction-progress-skip");
+    await persistPreparedApplyAuthority(harness, manifest, prepared);
     await harness.transaction.writeActive(prepared, null);
     const applying: ChangeSetTransactionJournal = {
       ...prepared,

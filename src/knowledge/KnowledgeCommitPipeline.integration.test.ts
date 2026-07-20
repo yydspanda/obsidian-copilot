@@ -31,6 +31,7 @@ import type {
   KnowledgeCompileResult,
 } from "@/knowledge/compiler/CompilerModelPort";
 import { KnowledgeCompiler } from "@/knowledge/compiler/KnowledgeCompiler";
+import { IngestQueue, type IngestExecutor } from "@/knowledge/ingest/queue/IngestQueue";
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
   createFileContentHash,
@@ -51,8 +52,11 @@ import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRep
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
   KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
+  KnowledgeRuntimeApplyAuthorityPort,
   KnowledgeRuntimeApplyCommitManifestPort,
+  KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
+  KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
   KnowledgeRuntimeTransactionStorage,
@@ -344,19 +348,6 @@ function createReviewedChangeSet(proposal: KnowledgeChangeSet): KnowledgeChangeS
   };
 }
 
-/** Creates the exact queue-attempt ownership supplied to transaction apply. */
-function createTransactionJobClaim(): TransactionJobClaim {
-  return {
-    jobId: "job-1",
-    attempt: 1,
-    startedAt: 1_200,
-    sourceId: "source-1",
-    sourceContentHash: SOURCE_CONTENT_HASH,
-    pipelineFingerprint: PIPELINE_FINGERPRINT,
-    inputRevision: 1,
-  };
-}
-
 /** Creates the real apply-time validator over the in-memory Wiki file store. */
 function createApplyValidator(fileStore: KnowledgeFileStore): ChangeSetValidator {
   const artifact: TextArtifactObservation = {
@@ -406,12 +397,17 @@ describe("durable knowledge commit pipeline", () => {
     const runtime = new KnowledgeRuntimeStore(atomicFile);
     await runtime.initialize();
     const manifestStorage = new KnowledgeRuntimeManifestStorage(runtime);
+    const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
     const reviewStorage = new KnowledgeRuntimeReviewStorage(runtime);
     const transactionStorage = new KnowledgeRuntimeTransactionStorage(runtime);
     const applyCommitPort = new KnowledgeRuntimeApplyCommitManifestPort(runtime);
+    const inputRevisions = new KnowledgeRuntimeInputRevisionAllocator(runtime);
     const bundle = createBundle();
     const initialManifest = createInitialManifest(bundle.id);
     await manifestStorage.write(bundle.id, initialManifest, null);
+    await expect(
+      inputRevisions.allocate({ bundleId: bundle.id, sourceId: "source-1" })
+    ).resolves.toEqual({ inputRevision: 1 });
 
     const compiler = new KnowledgeCompiler({
       model: new DeterministicCompilerModel(),
@@ -474,16 +470,80 @@ describe("durable knowledge commit pipeline", () => {
       proposal.manifestCommitPlanDigest
     );
 
+    let queueTime = 1_050;
+    const queueExecutor: IngestExecutor = {
+      /** Hands the already-durable pending Review record to the Queue claim. */
+      async execute(context) {
+        return {
+          kind: "awaiting_review",
+          changeSetId: pending.changeSetId,
+          reviewDecision: {
+            outcome: "pending",
+            bundleId: bundle.id,
+            changeSetId: pending.changeSetId,
+            proposalDigest: pending.proposalDigest,
+            recordRevision: 0,
+            recordedAt: pending.recordedAt,
+            jobClaim: {
+              jobId: context.job.id,
+              sourceId: context.job.sourceId,
+              sourceContentHash: context.job.sourceContentHash,
+              pipelineFingerprint: context.job.pipelineFingerprint,
+              inputRevision: context.job.inputRevision,
+              attempt: context.job.attempt,
+            },
+          },
+        };
+      },
+    };
+    const queue = new IngestQueue(queueStorage, queueExecutor, {
+      clock: () => queueTime++,
+      jobIdFactory: () => "job-1",
+    });
+    await queue.enqueue({
+      bundleId: bundle.id,
+      sourceId: "source-1",
+      sourceContentHash: SOURCE_CONTENT_HASH,
+      pipelineFingerprint: PIPELINE_FINGERPRINT,
+      inputRevision: 1,
+    });
+    await expect(queue.runNext(bundle.id)).resolves.toMatchObject({
+      kind: "executed",
+      status: "awaiting_review",
+      jobId: "job-1",
+    });
+    const applyingJob = await queue.beginReviewApply(bundle.id, {
+      outcome: "accepted",
+      bundleId: bundle.id,
+      changeSetId: accepted.changeSetId,
+      proposalDigest: accepted.proposalDigest,
+      recordRevision: accepted.recordRevision,
+      acceptedDigest: accepted.acceptedDigest,
+      manifestCommitIntentDigest: accepted.manifestCommitIntentDigest,
+      acceptedAt: accepted.acceptedAt,
+      jobClaim: { ...accepted.jobClaim },
+    });
+    expect(applyingJob).toMatchObject({ status: "processing", stage: "applying" });
+
     const wikiFiles = new MemoryKnowledgeFileStore();
     let transactionTime = 1_300;
     const transaction = new ChangeSetTransaction({
       storage: transactionStorage,
       fileStore: wikiFiles,
       validator: createApplyValidator(wikiFiles),
+      authority: new KnowledgeRuntimeApplyAuthorityPort(runtime),
       now: () => transactionTime++,
       createTransactionId: () => "transaction-compiler-review-1",
     });
-    const jobClaim = createTransactionJobClaim();
+    const jobClaim: TransactionJobClaim = {
+      jobId: applyingJob.id,
+      attempt: applyingJob.attempt,
+      startedAt: applyingJob.startedAt,
+      sourceId: applyingJob.sourceId,
+      sourceContentHash: applyingJob.sourceContentHash,
+      pipelineFingerprint: applyingJob.pipelineFingerprint,
+      inputRevision: applyingJob.inputRevision,
+    };
     const receipt: TransactionCommitReceipt = await transaction.apply({
       changeSet: accepted.acceptedChangeSet,
       bundle,
@@ -535,8 +595,30 @@ describe("durable knowledge commit pipeline", () => {
       manifestAfterDigest: createSourceManifestDigest(committedManifest),
     });
 
+    await expect(queue.verifyApplyRecovery(receipt)).resolves.toMatchObject({
+      id: jobClaim.jobId,
+      status: "processing",
+      stage: "applying",
+    });
+    await expect(queue.resolveApplyRecovery(receipt)).resolves.toMatchObject({
+      id: jobClaim.jobId,
+      status: "completed",
+    });
+    const pendingAcknowledgement = await readRuntimeSnapshot(atomicFile);
+    expect(pendingAcknowledgement.applyCommits).toHaveLength(1);
+    expect(pendingAcknowledgement.queues[0].value).toMatchObject({
+      control: { status: "paused", reason: "commit_pending_ack" },
+      applyCommit: {
+        transactionId: receipt.transactionId,
+        changeSetDigest: receipt.changeSetDigest,
+        commitRevision: receipt.commitRevision,
+      },
+    });
+
     await expect(transaction.acknowledgeCommitted(receipt)).resolves.toBe(true);
     await expect(transaction.loadActive()).resolves.toBeNull();
+    await queue.finalizeApplyRecovery(bundle.id, receipt.transactionId);
+    await expect(queue.getPendingApplyCommit(bundle.id)).resolves.toBeNull();
     const clearedBytes = await atomicFile.read();
     await applyCommitPort.recordCommitted(committedJournal, receipt);
     await expect(atomicFile.read()).resolves.toBe(clearedBytes);

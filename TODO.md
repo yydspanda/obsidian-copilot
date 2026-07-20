@@ -54,6 +54,7 @@
 - [x] 收紧 Runtime v2 authority：普通 Manifest storage 不能创建/修改 `lastSuccessful` 或 reserved commit metadata，active transaction 锁住通用 Manifest CAS；shared page update 原子传播所有 co-owner hash，unsafe runtime-v1 状态保留原字节并 typed fail closed。
 - [x] 完成 Runtime v2 启动交叉校验：Manifest success 与 reserved metadata 必须双向存在并指向该 source 最新 ledger；source/hash/pipeline/input/intent/ChangeSet/time、Manifest revision/digest、连续 ledger 链与 Windows shared-page co-owner projection 任一撕裂均在启动时 fail closed。
 - [x] 在 prepared journal 发布前拒绝复用已入 ledger 的 transaction id，并把 durable transaction replacement 限定为 immutable payload 下的合法 prepared → applying → committed/recovery 状态迁移。
+- [x] 完成 Queue v4 与全写入周期原子授权复证：accepted apply claim 持久化最终 Manifest intent digest；直接 apply 在任何 target observation 前先复证完整 Queue/Review/allocator/Manifest read-set/source-order authority，prepared 发布、prepared → applying、启动读取 unfinished journal、每次共享 envelope mutation 与最终 Manifest+ledger callback 都重复或保留该证明；旧 v3 或 stale Manifest 在任何新 Wiki 文件访问前 fail closed。
 
 ## Pending Tasks 📋
 
@@ -80,7 +81,7 @@
 - [x] 实现 exact `transactionId/revision/changeSetDigest/intent/journal/receipt` 幂等的 `ApplyCommitManifestPort` adapter/ledger；同 identity 重放是 byte-preserving 单一逻辑成功，同 key 不同 digest fail closed。
 - [x] 将完整 post-compile `generatedPages`、ownership/authorization、Manifest revision/digest 与 per-source hash/pipeline/`inputRevision` 作为 durable plan/intent 写入 Review/transaction journal，并在 Runtime prepared reservation 与最终 commit 重复复证。
 - [ ] 将 schema、非 target link 与 source artifact 的 read-set 写入 journal，并在首次写入与恢复前复证；Manifest target authorization（revision、ownership、co-owner、sole-source、last-generated hash）子集已完成。完成其余 dependency 与 safe compare-delete 前真实 UI/apply 继续不启用 compiler delete。
-- [ ] 在 Manifest+ledger atomic callback 内重证 exact Queue apply claim、review identity 与 allocator/source high-watermark；当前 coordinator 的 Queue verify 与 Manifest transform 之间仍有竞争窗口，exact ledger replay 必须继续先于这些检查。
+- [x] 在 Manifest+ledger atomic callback 内重证 exact Queue apply claim、review identity 与 allocator/source high-watermark；coordinator 的早期 Queue verify 只作快速诊断，最终授权与 Manifest/ledger 同一原子 transform，exact ledger replay 继续最先返回。
 - [ ] 为 outer runtime revision 预留 transaction progress、Manifest/ledger、Queue marker、journal ack/release 所需容量，避免接近 `Number.MAX_SAFE_INTEGER` 时文件 CAS 后才耗尽 envelope revision。
 - [ ] 定义并实现 `no_changes` 的 durable source-success/Manifest revision 语义；当前无文件 ChangeSet 不产生 Manifest commit plan，不能静默当作已成功摄入。
 - [ ] 在真实写盘前决定 CAS 后、progress 前崩溃的 content ABA 策略：接受 content-addressed at-least-once，或增加 mutation-intent marker 并在精确 before 状态 fail closed。
@@ -141,10 +142,13 @@
 - ChangeSet journal v3 使用 Vault-global 单活动槽；完整 Bundle、accepted ChangeSet、精确 before/after、最终 Manifest intent/plan digest，以及 owning source id/hash/pipeline/input revision/job attempt/start 一并持久化；claim source 必须存在于 ChangeSet source refs。
 - 单文件写入只能通过 adapter 原子 compare-and-swap；全局 journal 提供可恢复语义，但 Obsidian Vault 不具备真正跨文件原子性。
 - 自动恢复只做幂等 roll-forward；divergent state 进入 sticky `recovery_required`，不自动 rollback 或覆盖用户编辑；committed marker 对后续用户修改保持权威。
-- Queue v3 保留 exact `applyClaim`、pending review anchor、review rejection tombstone 与 `commit_pending_ack` marker；审核 hand-off 固定为 durable pending record revision 0 → exact accepted/rejected record revision 1。accepted apply claim 同时绑定 proposal digest、accepted digest、review revision/time 与完整 job claim；启动恢复改为 failed 后仍原样保留。v1/v2 无法证明的 review/apply state以 `legacy_unverified` 明确 fail closed，等待真实 Review Store record 或人工恢复。
+- Queue v4 保留 exact `applyClaim`、pending review anchor、review rejection tombstone 与 `commit_pending_ack` marker；审核 hand-off 固定为 durable pending record revision 0 → exact accepted/rejected record revision 1。accepted apply claim 同时绑定 proposal digest、accepted digest、最终 Manifest intent digest、review revision/time 与完整 job claim；启动恢复改为 failed 后仍原样保留。v1/v2 无法证明的 review/apply state，以及 v3 已开始但未保存 intent digest 的审核 apply，都以 `legacy_unverified` 明确 fail closed，等待人工恢复。
 - Review 启动协调器只拥有 Review/Queue port：按 `recordedAt + changeSetId` 稳定扫描，pending/rejected 做 exact、可重放的 Queue 收敛；accepted 只返回供更高层 journal/ledger/no-journal 分类的 identity，绝不在启动时调用 `beginReviewApply`。每轮 mutation 后重读 Review revision，持续变化超过有界次数即 fail closed；返回 revision 仍须在最终 startup gate 复证。它尚未接入 plugin startup，不能据此开放 Studio。
 - applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，Queue 在 Manifest 之前仍保持 processing/applying。审核接受转换为新的 durable applying claim，不能直接完成 job。
-- 页面提交后的协议固定为只读 `queue claim verify`，再持久执行 `atomic manifest+ledger → queue marker → journal ack → queue release`；Manifest/ledger 写入按 exact transaction/revision/ChangeSet/intent/journal/receipt digest 幂等。Queue claim、Review identity 与 allocator/source high-watermark 尚待在同一 atomic callback 内再复证一次。
+- 页面提交后的协议固定为只读 `queue claim verify`，再持久执行 `atomic authority reproof+manifest+ledger → queue marker → journal ack → queue release`；最终 callback 从同一 runtime envelope 复证 Queue claim、accepted Review payload/intent 及 `allocator ≥ source high-watermark ≥ apply claim`，再按 exact transaction/revision/ChangeSet/intent/journal/receipt digest 幂等发布成功。较新的同内容观察可并存；较新的不同内容必须由 retained rerun 或启动恢复后 promoted successor 精确证明。
+- 每个 retained rerun 必须精确等于该 source 当前 high-watermark；终结旧 apply 时若已有同 source active successor，rerun 继续归 successor 所有，不能被重复提升为第二个 active job。
+- `commit_pending_ack` Queue marker 必须在每次 runtime parse 时与同一 transaction 的 apply ledger 精确匹配 source/hash/pipeline/input/ChangeSet/digest/revision/time；active journal 已清除但 ledger 缺失或 marker 撕裂时启动直接 fail closed。
+- 直接 `ChangeSetTransaction.apply` 在 target observation 前必须通过 runtime authority port 复证 Queue/Review/high-watermark/allocator 与 Manifest read-set/source commit ordering；prepared 发布在同一 shared-envelope transform 内重复证明以关闭预检竞争。prepared → applying、启动读取 prepared/applying journal 以及活动事务期间的每次 envelope mutation 都保留同一完整 reservation；Queue v3 缺少最终 intent digest或 Manifest 已漂移时，不会先观察或修改 Wiki 文件再到最终 ledger 才失败。
 - 清除 Queue marker 后仍保留 `startup_recovery` 暂停，必须由用户显式 resume backlog。
 - Compiler stage 1 只能从 caller-owned target catalog 读取/修改已知页；catalog 外路径只拥有 create-only 权限，resolver 必须使用 Windows 大小写不敏感 existence probe，既有内容不得送入生成模型。
 - Compiler delete 只允许 Manifest 标记为 generated、由当前 primary source 独占且当前 bytes 仍匹配 last-generated hash 的目标；该授权已进入 Review plan/journal intent，并在 Runtime reservation/commit 复证，但安全 compare-delete 与其余 semantic dependency 未完成，产品仍保持 reject-only。
@@ -158,7 +162,7 @@
 - 同一 accepted receipt 在 active applying claim 内重放不增加 revision/event；冲突 receipt fail closed。apply 已完成并清除 claim 后的晚到接受不重新 apply，而由未来 Review/Manifest 协调器判断 already-applied。
 - Compiler delete 的 Manifest ownership、source provenance 与 last-generated hash read-set 已持久复证；在原子 compare-delete、schema/link/source-artifact dependency 与 Windows 实机验收完成前仍始终以 `reject_only` 呈现。
 - Activity 的唯一事实源是 strict durable Queue snapshot；EventSink 只是 reload hint，`applyCommit`/`commit_pending_ack` 清除前 completed job 必须显示为 finalizing。
-- Queue v3 的 `reviewRejections` 为拒绝动作提供跨崩溃幂等和 identity conflict 防护；拒绝先持久化 Review Store，再转换 Queue job，不制造空 accepted ChangeSet。
+- Queue v3 引入、v4 保留的 `reviewRejections` 为拒绝动作提供跨崩溃幂等和 identity conflict 防护；拒绝先持久化 Review Store，再转换 Queue job，不制造空 accepted ChangeSet。
 - Knowledge Studio 只在 Windows Obsidian Desktop 注册。整个 Copilot 插件仍保留原有平台范围，因此 `manifest.json` 不改为 desktop-only；这不构成对其他平台 Knowledge Studio 的支持承诺。
 - 当前 Windows 启动只初始化插件私有 `knowledge-runtime-v1.json`（文件名稳定、outer schema v2）与 unavailable notice；Queue/Review/Manifest/Transaction facades、文件 writer、compiler、startup recovery 和 query coordinator 尚未连到 Studio，因此不会展示伪造任务、调用模型或写 Wiki。
 - `knowledge-runtime-v1.json` 是首期个人规模的共享 envelope：跨子系统 CAS 简单，但每次 mutation 都全量 parse/validate/stringify/rewrite，存在 O(envelope size) 写放大和共享腐坏故障域。真实长期使用前必须设 size/latency threshold、协调 terminal archive/compaction，并在超过门槛时分片；它不是产品必须永久保留的核心格式。
@@ -185,6 +189,7 @@
 - [x] G.2 Review startup coordinator 的 12 个定向测试通过：pending/rejected 收敛、重启幂等、accepted 零写入分类、Review revision 前进/持续 churn、并发 terminal decision 导致旧 Queue 操作失败后的 revision retry、稳定多记录排序、双 runtime pending/rejected 竞争、commit-then-throw 后置状态证明及 source identity 冲突；TypeScript `noEmit` 与变更文件 ESLint 通过。
 - [x] G.2a 集成后全仓回归通过：152 个 Jest suite / 2806 个测试、TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier check 与 `git diff --check`；既有 keychain/解密预期 console 输出不影响结果。
 - [x] G.2b durable Manifest plan/intent 与 atomic ledger 通过 13 个定向 Jest suite / 273 个测试；最终全仓回归 154 个 Jest suite / 2871 个测试全部通过，并通过 TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier 与 `git diff --check`。既有 keychain/解密预期 console 输出不影响结果。
+- [x] G.2c Queue v4 与 atomic apply-authority reproof 本轮通过 9 个定向 Jest suite / 234 个测试，以及全仓 154 个 Jest suite / 2894 个测试；覆盖 target observation 前 authority preflight、prepared/applying/startup 全 Manifest reservation、unfinished-journal 写前授权、Queue marker↔ledger、latest-rerun/source-ABA 与 existing-successor 回归，并通过 TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier 与 `git diff --check`。既有 keychain/解密预期 console 输出不影响结果。
 - [x] G.1 自动化回归覆盖完整文件排他发布、并发初始化、realpath/symlink containment、共享 envelope 无丢失并发更新、跨 runtime revision 续号、watcher-capture 乱序拒绝、全 slot corruption fail-closed、create/update CAS 竞争与 delete replay 分类。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 

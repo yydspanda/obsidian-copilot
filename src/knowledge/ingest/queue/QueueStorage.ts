@@ -10,7 +10,7 @@ import type {
 import { validateKnowledgeIngestJob } from "@/knowledge/model/validation";
 
 /** Current version of the persisted ingest queue snapshot. */
-export const INGEST_QUEUE_VERSION = 3 as const;
+export const INGEST_QUEUE_VERSION = 4 as const;
 
 /** Durable reason that prevents a Bundle queue from claiming more work. */
 export type IngestQueuePauseReason =
@@ -73,13 +73,14 @@ export interface IngestReviewedChangeSetIdentity {
 export interface IngestAcceptedReviewIdentity {
   proposalDigest: string;
   recordRevision: 1;
+  manifestCommitIntentDigest: string;
   acceptedAt: number;
 }
 
-/** Explicit fail-closed provenance for a reviewed apply claim migrated from version 2. */
+/** Explicit fail-closed provenance for a reviewed apply claim migrated without full authority. */
 export interface IngestLegacyReviewIdentity {
   kind: "legacy_unverified";
-  migratedFromVersion: 2;
+  migratedFromVersion: 2 | 3;
 }
 
 /** Exact active or interrupted applying claim, optionally bound to reviewed content. */
@@ -245,6 +246,35 @@ interface LegacyIngestQueueSnapshotV2 {
   applyCommit?: IngestApplyCommitMarker;
 }
 
+/** Version-3 accepted review identity before final Manifest intent was retained. */
+interface LegacyIngestAcceptedReviewIdentityV3 {
+  proposalDigest: string;
+  recordRevision: 1;
+  acceptedAt: number;
+}
+
+/** Version-3 apply claim before the final Manifest intent digest was retained. */
+interface LegacyIngestApplyClaimMarkerV3 extends IngestApplyJobClaim {
+  reviewedChangeSet?: IngestReviewedChangeSetIdentity;
+  acceptedReview?: LegacyIngestAcceptedReviewIdentityV3;
+  legacyReview?: IngestLegacyReviewIdentity;
+}
+
+/** Complete version-3 snapshot accepted only by the strict read migration. */
+interface LegacyIngestQueueSnapshotV3 {
+  version: 3;
+  bundleId: string;
+  revision: number;
+  control: IngestQueueControl;
+  jobs: KnowledgeIngestJob[];
+  reruns: IngestRerunRequest[];
+  sourceHighWatermarks: IngestSourceHighWatermark[];
+  pendingReviews: IngestPendingReview[];
+  reviewRejections: IngestReviewRejection[];
+  applyClaim?: LegacyIngestApplyClaimMarkerV3;
+  applyCommit?: IngestApplyCommitMarker;
+}
+
 const legacyQueueControlSchema: z.ZodType<LegacyIngestQueueControl> = z.discriminatedUnion(
   "status",
   [
@@ -320,12 +350,24 @@ const acceptedReviewIdentitySchema: z.ZodType<IngestAcceptedReviewIdentity> = z
   .object({
     proposalDigest: sha256Schema,
     recordRevision: z.literal(1),
+    manifestCommitIntentDigest: sha256Schema,
     acceptedAt: nonNegativeIntegerSchema,
   })
   .strict();
 
 const legacyReviewIdentitySchema: z.ZodType<IngestLegacyReviewIdentity> = z
-  .object({ kind: z.literal("legacy_unverified"), migratedFromVersion: z.literal(2) })
+  .object({
+    kind: z.literal("legacy_unverified"),
+    migratedFromVersion: z.union([z.literal(2), z.literal(3)]),
+  })
+  .strict();
+
+const legacyAcceptedReviewIdentityV3Schema: z.ZodType<LegacyIngestAcceptedReviewIdentityV3> = z
+  .object({
+    proposalDigest: sha256Schema,
+    recordRevision: z.literal(1),
+    acceptedAt: nonNegativeIntegerSchema,
+  })
   .strict();
 
 const applyClaimMarkerSchema: z.ZodType<IngestApplyClaimMarker> = z
@@ -339,6 +381,15 @@ const applyClaimMarkerSchema: z.ZodType<IngestApplyClaimMarker> = z
 
 const legacyApplyClaimMarkerSchema: z.ZodType<LegacyIngestApplyClaimMarker> = z
   .object({ ...applyJobClaimShape, reviewedChangeSet: reviewedChangeSetIdentitySchema.optional() })
+  .strict();
+
+const legacyApplyClaimMarkerV3Schema: z.ZodType<LegacyIngestApplyClaimMarkerV3> = z
+  .object({
+    ...applyJobClaimShape,
+    reviewedChangeSet: reviewedChangeSetIdentitySchema.optional(),
+    acceptedReview: legacyAcceptedReviewIdentityV3Schema.optional(),
+    legacyReview: legacyReviewIdentitySchema.optional(),
+  })
   .strict();
 
 const applyCommitMarkerSchema: z.ZodType<IngestApplyCommitMarker> = z
@@ -411,10 +462,27 @@ const legacyIngestQueueSnapshotV2Schema: z.ZodType<LegacyIngestQueueSnapshotV2> 
   })
   .strict();
 
+/** Strict read-only schema for a version-3 queue snapshot. */
+const legacyIngestQueueSnapshotV3Schema: z.ZodType<LegacyIngestQueueSnapshotV3> = z
+  .object({
+    version: z.literal(3),
+    bundleId: nonEmptyStringSchema,
+    revision: nonNegativeIntegerSchema,
+    control: queueControlSchema,
+    jobs: z.array(knowledgeIngestJobSchema),
+    reruns: z.array(rerunRequestSchema),
+    sourceHighWatermarks: z.array(sourceHighWatermarkSchema),
+    pendingReviews: z.array(pendingReviewSchema),
+    reviewRejections: z.array(reviewRejectionSchema),
+    applyClaim: legacyApplyClaimMarkerV3Schema.optional(),
+    applyCommit: applyCommitMarkerSchema.optional(),
+  })
+  .strict();
+
 /**
- * Strict runtime schema for a complete version-3 ingest queue snapshot.
+ * Strict runtime schema for a complete version-4 ingest queue snapshot.
  *
- * Version 3 intentionally has no extension bag. Every new persisted field
+ * Version 4 intentionally has no extension bag. Every new persisted field
  * requires another version and an explicit read migration.
  */
 export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
@@ -464,6 +532,18 @@ function isLegacyVersionOneSnapshot(value: unknown): boolean {
 function isLegacyVersionTwoSnapshot(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
     ? (value as { version?: unknown }).version === 2
+    : false;
+}
+
+/**
+ * Reports whether unknown persisted JSON declares the legacy version-3 format.
+ *
+ * @param value - Untrusted queue JSON
+ * @returns Whether the top-level version discriminator is exactly three
+ */
+function isLegacyVersionThreeSnapshot(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
+    ? (value as { version?: unknown }).version === 3
     : false;
 }
 
@@ -530,10 +610,10 @@ function deriveLegacyPendingReviews(
 }
 
 /**
- * Converts one strictly parsed version-1 snapshot into detached version-3 state.
+ * Converts one strictly parsed version-1 snapshot into detached version-4 state.
  *
  * @param legacy - Valid version-1 persisted queue
- * @returns Equivalent version-3 queue without review-rejection history
+ * @returns Equivalent version-4 queue without review-rejection history
  */
 function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueueSnapshot {
   const applying = legacy.jobs.find(
@@ -567,13 +647,13 @@ function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQ
 }
 
 /**
- * Converts one strictly parsed version-2 snapshot into detached version-3 state.
+ * Converts one strictly parsed version-2 snapshot into detached version-4 state.
  *
  * Version 2 predates durable review rejection identity, so migration starts
  * that append-only audit collection empty without inferring prior decisions.
  *
  * @param legacy - Valid version-2 persisted queue
- * @returns Equivalent version-3 queue
+ * @returns Equivalent version-4 queue
  */
 function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQueueSnapshot {
   return {
@@ -589,6 +669,81 @@ function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQ
           },
         }
       : {}),
+  };
+}
+
+/**
+ * Converts one strictly parsed version-3 snapshot into detached version-4 state.
+ *
+ * A reviewed apply already in progress cannot be bound to a final Manifest
+ * intent from version-3 bytes. Migration therefore preserves its ChangeSet
+ * identity but marks the review authorization as explicitly unverified.
+ *
+ * @param legacy - Valid version-3 persisted queue
+ * @returns Equivalent version-4 queue with fail-closed reviewed apply provenance
+ */
+function migrateVersionThreeSnapshot(
+  legacy: LegacyIngestQueueSnapshotV3
+): IngestQueueSnapshot | null {
+  const { applyClaim, ...snapshot } = legacy;
+  if (applyClaim) {
+    const hasReviewedChangeSet = applyClaim.reviewedChangeSet !== undefined;
+    const hasAcceptedReview = applyClaim.acceptedReview !== undefined;
+    const hasLegacyReview = applyClaim.legacyReview !== undefined;
+    const isDirectClaim = !hasReviewedChangeSet && !hasAcceptedReview && !hasLegacyReview;
+    const isDurableReviewedClaim = hasReviewedChangeSet && hasAcceptedReview && !hasLegacyReview;
+    const isLegacyReviewedClaim =
+      hasReviewedChangeSet &&
+      !hasAcceptedReview &&
+      hasLegacyReview &&
+      applyClaim.legacyReview?.migratedFromVersion === 2;
+    if (!isDirectClaim && !isDurableReviewedClaim && !isLegacyReviewedClaim) {
+      return null;
+    }
+    const owningJob = legacy.jobs.find((job) => job.id === applyClaim.jobId);
+    if (
+      isDurableReviewedClaim &&
+      applyClaim.acceptedReview &&
+      owningJob &&
+      (applyClaim.acceptedReview.acceptedAt < owningJob.createdAt ||
+        applyClaim.acceptedReview.acceptedAt > applyClaim.startedAt)
+    ) {
+      return null;
+    }
+  }
+  return {
+    ...snapshot,
+    version: INGEST_QUEUE_VERSION,
+    ...(applyClaim === undefined
+      ? {}
+      : applyClaim.reviewedChangeSet
+        ? {
+            applyClaim: {
+              jobId: applyClaim.jobId,
+              sourceId: applyClaim.sourceId,
+              sourceContentHash: applyClaim.sourceContentHash,
+              pipelineFingerprint: applyClaim.pipelineFingerprint,
+              inputRevision: applyClaim.inputRevision,
+              attempt: applyClaim.attempt,
+              startedAt: applyClaim.startedAt,
+              reviewedChangeSet: { ...applyClaim.reviewedChangeSet },
+              legacyReview:
+                applyClaim.legacyReview === undefined
+                  ? { kind: "legacy_unverified", migratedFromVersion: 3 }
+                  : { ...applyClaim.legacyReview },
+            },
+          }
+        : {
+            applyClaim: {
+              jobId: applyClaim.jobId,
+              sourceId: applyClaim.sourceId,
+              sourceContentHash: applyClaim.sourceContentHash,
+              pipelineFingerprint: applyClaim.pipelineFingerprint,
+              inputRevision: applyClaim.inputRevision,
+              attempt: applyClaim.attempt,
+              startedAt: applyClaim.startedAt,
+            },
+          }),
   };
 }
 
@@ -628,6 +783,28 @@ export function parseIngestQueueSnapshot(
     const legacyResult = legacyIngestQueueSnapshotV2Schema.safeParse(value);
     if (legacyResult.success) {
       return { ok: true, value: migrateVersionTwoSnapshot(legacyResult.data) };
+    }
+    return { ok: false, issues: mapSchemaIssues(legacyResult.error.issues) };
+  }
+
+  if (isLegacyVersionThreeSnapshot(value)) {
+    const legacyResult = legacyIngestQueueSnapshotV3Schema.safeParse(value);
+    if (legacyResult.success) {
+      const migrated = migrateVersionThreeSnapshot(legacyResult.data);
+      if (migrated) {
+        return { ok: true, value: migrated };
+      }
+      return {
+        ok: false,
+        issues: [
+          {
+            code: "queue_v3_review_authorization_invalid",
+            severity: "error",
+            field: "applyClaim",
+            message: "Version-3 reviewed apply authority cannot be migrated safely",
+          },
+        ],
+      };
     }
     return { ok: false, issues: mapSchemaIssues(legacyResult.error.issues) };
   }
@@ -1345,6 +1522,21 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
         "queue_rerun_redundant",
         field,
         "A rerun must describe a different source or pipeline version"
+      );
+    }
+    const highWatermark = snapshot.sourceHighWatermarks.find(
+      (candidate) => candidate.sourceId === rerun.sourceId
+    );
+    if (
+      highWatermark &&
+      (rerun.inputRevision !== highWatermark.inputRevision ||
+        !sourcePayloadMatches(rerun, highWatermark))
+    ) {
+      addError(
+        diagnostics,
+        "queue_rerun_not_latest_observation",
+        field,
+        "A retained rerun must exactly represent its source's latest observation"
       );
     }
   });

@@ -128,6 +128,13 @@ export interface PreparedChangeSet {
   validation: KnowledgeValidationSummary;
 }
 
+/** Strict accepted ChangeSet identity validated without reading Vault files. */
+export interface ValidatedChangeSetInput {
+  bundle: KnowledgeBundleConfig;
+  changeSet: KnowledgeChangeSet;
+  changeSetDigest: string;
+}
+
 /** Reports deterministic ChangeSet defects that must block every file write. */
 export class ChangeSetValidationError extends Error {
   /**
@@ -293,17 +300,18 @@ export class ChangeSetValidator {
   }
 
   /**
-   * Validates an accepted ChangeSet and captures every target pre-state.
+   * Strictly validates and detaches apply identity before any Vault file access.
    *
-   * No journal or Vault mutation occurs in this method. Any deterministic
-   * defect is returned as {@link ChangeSetValidationError}; unavailable I/O is
-   * reported separately so callers never reinterpret it as model output.
+   * This pure boundary lets a durable authority adapter prove the exact Bundle,
+   * accepted ChangeSet, and job input before target observations or semantic
+   * projection adapters run. {@link prepare} repeats this validation before it
+   * captures target pre-state.
    *
    * @param value - Unknown persisted or model-produced ChangeSet
    * @param bundleValue - Bundle whose Wiki boundary authorizes the write
-   * @returns Parsed, revalidated, deterministically ordered journal material
+   * @returns Detached accepted input and canonical digest
    */
-  async prepare(value: unknown, bundleValue: unknown): Promise<PreparedChangeSet> {
+  validateAcceptedInput(value: unknown, bundleValue: unknown): ValidatedChangeSetInput {
     const diagnostics: KnowledgeDiagnostic[] = [];
     const bundleValidation = validateKnowledgeBundleConfig(bundleValue);
     appendNestedDiagnostics(diagnostics, "bundle", bundleValidation.diagnostics);
@@ -344,6 +352,29 @@ export class ChangeSetValidator {
       throw new ChangeSetValidationError(diagnostics);
     }
 
+    return {
+      bundle,
+      changeSet,
+      changeSetDigest: createKnowledgeChangeSetDigest(changeSet),
+    };
+  }
+
+  /**
+   * Validates an accepted ChangeSet and captures every target pre-state.
+   *
+   * No journal or Vault mutation occurs in this method. Any deterministic
+   * defect is returned as {@link ChangeSetValidationError}; unavailable I/O is
+   * reported separately so callers never reinterpret it as model output.
+   *
+   * @param value - Unknown persisted or model-produced ChangeSet
+   * @param bundleValue - Bundle whose Wiki boundary authorizes the write
+   * @returns Parsed, revalidated, deterministically ordered journal material
+   */
+  async prepare(value: unknown, bundleValue: unknown): Promise<PreparedChangeSet> {
+    const diagnostics: KnowledgeDiagnostic[] = [];
+    const validated = this.validateAcceptedInput(value, bundleValue);
+    const { bundle, changeSet } = validated;
+
     const observations = await this.observeTargets(changeSet);
     const targets = changeSet.changes
       .map((change, index) => this.createTarget(change, observations[index], index, diagnostics))
@@ -377,7 +408,7 @@ export class ChangeSetValidator {
     return {
       bundle,
       changeSet,
-      changeSetDigest: createKnowledgeChangeSetDigest(changeSet),
+      changeSetDigest: validated.changeSetDigest,
       targets,
       validation: {
         okfValid: projection.okfValid,

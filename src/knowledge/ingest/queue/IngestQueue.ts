@@ -91,6 +91,7 @@ export interface IngestAcceptedReviewDecisionReceipt {
   proposalDigest: string;
   recordRevision: 1;
   acceptedDigest: string;
+  manifestCommitIntentDigest: string;
   acceptedAt: number;
   jobClaim: IngestReviewDecisionJobClaim;
 }
@@ -779,7 +780,10 @@ function promoteRerun(
   timestamp: number
 ): IngestQueueSnapshot {
   const rerun = snapshot.reruns.find((candidate) => candidate.sourceId === sourceId);
-  if (!rerun) {
+  const existingSuccessor = snapshot.jobs.some(
+    (job) => job.sourceId === sourceId && isActiveJob(job)
+  );
+  if (!rerun || existingSuccessor) {
     return snapshot;
   }
   return {
@@ -887,6 +891,7 @@ function snapshotAcceptedReviewDecision(value: unknown): IngestAcceptedReviewDec
   assertIdentifier(value.changeSetId, "reviewDecision.changeSetId");
   assertHash(value.proposalDigest, "reviewDecision.proposalDigest");
   assertHash(value.acceptedDigest, "reviewDecision.acceptedDigest");
+  assertHash(value.manifestCommitIntentDigest, "reviewDecision.manifestCommitIntentDigest");
   if (value.recordRevision !== 1) {
     throw new TypeError("reviewDecision.recordRevision must be one for a terminal record");
   }
@@ -900,6 +905,7 @@ function snapshotAcceptedReviewDecision(value: unknown): IngestAcceptedReviewDec
     proposalDigest: value.proposalDigest,
     recordRevision: 1,
     acceptedDigest: value.acceptedDigest,
+    manifestCommitIntentDigest: value.manifestCommitIntentDigest,
     acceptedAt: value.acceptedAt as number,
     jobClaim: snapshotReviewDecisionJobClaim(value.jobClaim),
   });
@@ -2133,6 +2139,7 @@ export class IngestQueue {
     const acceptedReviewIdentity = Object.freeze({
       proposalDigest: acceptedDecision.proposalDigest,
       recordRevision: acceptedDecision.recordRevision,
+      manifestCommitIntentDigest: acceptedDecision.manifestCommitIntentDigest,
       acceptedAt: acceptedDecision.acceptedAt,
     });
     const timestamp = this.now();
@@ -2161,6 +2168,8 @@ export class IngestQueue {
             claim.reviewedChangeSet.changeSetDigest === acceptedReview.changeSetDigest &&
             claim.acceptedReview?.proposalDigest === acceptedReviewIdentity.proposalDigest &&
             claim.acceptedReview.recordRevision === acceptedReviewIdentity.recordRevision &&
+            claim.acceptedReview.manifestCommitIntentDigest ===
+              acceptedReviewIdentity.manifestCommitIntentDigest &&
             claim.acceptedReview.acceptedAt === acceptedReviewIdentity.acceptedAt
           ) {
             return { value: false };
@@ -3289,6 +3298,7 @@ export class IngestQueue {
       "version" in raw &&
       raw.version !== 1 &&
       raw.version !== 2 &&
+      raw.version !== 3 &&
       raw.version !== INGEST_QUEUE_VERSION
     ) {
       throw new IngestQueueIncompatibleVersionError(bundleId, raw.version);

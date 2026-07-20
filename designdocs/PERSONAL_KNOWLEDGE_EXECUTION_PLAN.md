@@ -8,7 +8,7 @@ Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C/D/E/F/G foundations and the G.1 runtime adapter foundation are implemented; G.2a adds the review-only startup coordinator, and G.2b adds durable Manifest plan/intent plus the exact atomic Manifest/apply-ledger adapter. Review v2 now derives final intent from the immutable compiler plan, transaction journal v3 retains that intent and full source identity, and runtime envelope v2 reserves the exact Manifest read-set before page mutation and publishes Manifest success with its ledger in one transform. Generic Manifest storage cannot bypass that success path, unsafe v1 state fails closed, and shared-page hashes advance for every co-owner. These cores are still not assembled into plugin startup or Knowledge Studio; no-journal recovery, remaining semantic dependencies, full workflow wiring, and the Windows acceptance gate remain pending. Commit H follows only after G.2 safely enables the runtime workflow. Verification details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier still has only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D/E/F/G foundations and the G.1 runtime adapter foundation are implemented; G.2a adds the review-only startup coordinator, G.2b adds durable Manifest plan/intent plus the exact atomic Manifest/apply-ledger adapter, and G.2c adds Queue v4 with end-to-end durable apply-authority proofs. Review v2 now derives final intent from the immutable compiler plan, transaction journal v3 retains that intent and full source identity, and runtime envelope v2 re-proves Queue/Review/high-watermark/allocator plus Manifest read-set/source-order authority before the first target observation, again inside prepared publication, before entering applying, on unfinished startup recovery, across every shared-envelope mutation while the transaction is active, and when publishing Manifest success with its ledger. Pending Queue commit markers are bound to that ledger at startup. Generic Manifest storage cannot bypass the success path, unsafe legacy or stale-Manifest authority fails closed before new Wiki file access, and shared-page hashes advance for every co-owner. These cores are still not assembled into plugin startup or Knowledge Studio; no-journal recovery, remaining semantic dependencies, full workflow wiring, and the Windows acceptance gate remain pending. Commit H follows only after G.2 safely enables the runtime workflow. Verification details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier still has only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -180,8 +180,9 @@ Scope:
 - divergent file state 进入 sticky `recovery_required`，不自动 rollback、不覆盖并发用户编辑。
 - Transaction journal v3 将 source id、source hash、pipeline fingerprint、input revision 与 job attempt/start 绑定为完整 claim，并持久化回链 Review plan 的最终 Manifest intent；ChangeSet 必须引用该 source。
 - applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，不能直接把 durable Queue job 标为 completed。审核接受先进入新的 durable applying claim，同样走 transaction/coordinator。
-- Queue snapshot v3 以 exact `applyClaim`、pending review anchor、review rejection tombstone 和 `commit_pending_ack` marker 连接 Review Store、active/recovered apply 与 committed journal；审核路径绑定 proposal/accepted digest、terminal revision/time 和完整 job claim。v1/v2 无法证明的 review/apply identity 以 `legacy_unverified` 明确 fail closed。
-- 固定 `queue claim verify → atomic manifest+ledger → queue marker → journal ack → queue release` 的协议；当前首次核验仍是独立只读操作，尚待在 Manifest+ledger callback 内复证 Queue/Review identity 与 source high-watermark。
+- Queue snapshot v4 以 exact `applyClaim`、pending review anchor、review rejection tombstone 和 `commit_pending_ack` marker 连接 Review Store、active/recovered apply 与 committed journal；审核路径绑定 proposal/accepted/Manifest-intent digest、terminal revision/time 和完整 job claim。v1/v2 无法证明的 review/apply identity，以及 v3 缺失 intent digest 的在途审核，以 `legacy_unverified` 明确 fail closed。
+- 固定 `queue claim verify → atomic authority reproof+manifest+ledger → queue marker → journal ack → queue release` 的协议；最终 callback 已从同一 envelope 交叉验证 exact Queue claim、accepted Review payload/intent 及 allocator/source high-watermark，关闭独立只读核验后的竞争窗口。
+- 直接 apply 在任何 target observation 前先通过 authority port 复证 Queue/Review/high-watermark/allocator 与 Manifest read-set/source ordering；prepared journal 发布在同一 atomic transform 内重复证明。prepared → applying、启动读取 prepared/applying journal 和活动事务期间每次 shared-envelope mutation 都保留该完整 reservation；旧 v3 审核或 stale Manifest 事务在任何新文件 observation/mutation 前停止。Queue commit marker 还必须在 runtime parse 时精确匹配 success ledger，retained rerun 必须等于 source high-watermark。
 - 明确 Obsidian Vault API 不提供真正跨文件原子性。
 
 Exit criteria:
@@ -278,7 +279,7 @@ Verified in automated code-level tests:
 Remaining exit gates:
 
 - 在真实 Windows Obsidian test Vault 验证 `DataAdapter.process`/`Vault.process` 的双实例序列化、callback/返回值、插件重载、外部编辑、NTFS/OneDrive/junction 和 crash/power-loss 行为；自动化测试不能替代该结论。
-- startup Review reconciliation、Manifest target read-set 与 exact `ApplyCommitManifestPort` ledger 已完成 Core；仍需 schema/link/source-artifact read-set、Queue claim/Review identity/allocator-source high-watermark 的 commit-boundary atomic reproof、no-journal recovery、history compaction/size threshold 和 safe compare-and-delete，或继续保持 delete unavailable。
+- startup Review reconciliation、Manifest target read-set、exact `ApplyCommitManifestPort` ledger 与 commit-boundary Queue/Review/high-watermark 原子复证已完成 Core；仍需 schema/link/source-artifact read-set、no-journal recovery、history compaction/size threshold 和 safe compare-and-delete，或继续保持 delete unavailable。
 - 当前单 envelope 有 O(size) 写放大和共享故障域；长期使用前必须通过 size/latency benchmark 决定 archive 与分片。
 - 完成这些门槛前，不把基础代码称为可用 Golden Flow 或 production-ready durable adapter。
 
@@ -292,7 +293,9 @@ Scope:
 - 启动时先验证 runtime envelope，扫描 active journal、apply claim、commit marker 与 Review Store，再执行 pending-review reconciliation；完成前不能 claim 新任务。
 - 关闭 accepted apply claim 已落盘但 journal 尚未创建的窗口，提供 no-journal verify/continue/abandon；不能凭“没有 journal”自动推断未写盘。
 - 已 journal 化并复证 manifest ownership/last-generated hash target read-set；继续补 schema、non-target links 与 source artifact read-set。delete 保持 unavailable，不能为了过门槛降级为 read-then-delete。
-- 在 Manifest+ledger atomic callback 内再次复证 exact Queue apply claim、Review identity 与 source high-watermark，并为接近 safe-integer 上限的整条 transaction/manifest/queue/ack 序列预留 outer-envelope revision 容量。
+- [x] 在 Manifest+ledger atomic callback 内再次复证 exact Queue apply claim、Review identity 与 allocator/source high-watermark；exact ledger replay 仍最先返回，更新观察由 retained rerun 或 promoted successor 证明。
+- [x] 在直接 apply 的 target observation 前、prepared 发布、prepared → applying、unfinished startup recovery 与活动事务每次 shared-envelope mutation 中复证或保留完整 durable authority + Manifest reservation；Queue v3 缺失 intent digest 或 Manifest read-set 漂移时零 Wiki 文件访问，并在启动时交叉验证 Queue commit marker 与 exact ledger。
+- 为接近 safe-integer 上限的整条 transaction/manifest/queue/ack 序列预留 outer-envelope revision 容量。
 - 定义 `no_changes` 的 durable source-success 与 Manifest revision 语义；在有明确账本前不能把空 ChangeSet 当作成功摄入。
 - 为 `recovery_required` 提供显式 revalidate/continue/rollback/abandon core 与 UI，所有 divergent file state 继续 fail closed。
 - 定义 envelope size/latency guard、协调 terminal archive/compaction；超过门槛时暂停新 ingest，而不是让 Obsidian UI 无界阻塞。

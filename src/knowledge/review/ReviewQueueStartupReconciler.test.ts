@@ -13,6 +13,7 @@ import {
   type IngestExecutor,
 } from "@/knowledge/ingest/queue/IngestQueue";
 import {
+  INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
   parseIngestQueueSnapshot,
   type IngestQueueSnapshot,
@@ -174,7 +175,7 @@ class RecordingQueuePort implements ReviewQueueStartupQueuePort {
   /** Returns an empty queue when a test does not exercise rejection recovery. */
   async load(bundleId: string): Promise<IngestQueueSnapshot> {
     return {
-      version: 3,
+      version: INGEST_QUEUE_VERSION,
       bundleId,
       revision: 0,
       control: { status: "running" },
@@ -351,7 +352,7 @@ function createAcceptedRecord(
 /** Creates an interrupted non-applying queue attempt eligible for review recovery. */
 function createInterruptedQueueSnapshot(): IngestQueueSnapshot {
   return {
-    version: 3,
+    version: INGEST_QUEUE_VERSION,
     bundleId: BUNDLE_ID,
     revision: 1,
     control: { status: "running" },

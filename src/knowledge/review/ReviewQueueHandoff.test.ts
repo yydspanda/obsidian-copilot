@@ -199,6 +199,7 @@ function toAcceptedReceipt(
     proposalDigest: record.proposalDigest,
     recordRevision: record.recordRevision,
     acceptedDigest: record.acceptedDigest,
+    manifestCommitIntentDigest: record.manifestCommitIntentDigest,
     acceptedAt: record.acceptedAt,
     jobClaim: { ...record.jobClaim },
   };
@@ -345,6 +346,7 @@ describe("Review Store to ingest queue hand-off", () => {
       acceptedReview: {
         proposalDigest: accepted.proposalDigest,
         recordRevision: 1,
+        manifestCommitIntentDigest: accepted.manifestCommitIntentDigest,
         acceptedAt: 120,
       },
     });

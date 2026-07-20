@@ -109,6 +109,26 @@ export interface TransactionStorageToken {
 }
 
 /**
+ * Signals that durable transaction state lacks the authority required to read
+ * or advance an unfinished apply.
+ *
+ * Storage adapters may subclass this safe error so the transaction runtime can
+ * fail closed without hiding the actionable durable-precondition reason behind
+ * a generic infrastructure wrapper.
+ */
+export class TransactionStorageAuthorityError extends Error {
+  /**
+   * Creates a safe transaction authority failure.
+   *
+   * @param message - Sanitized durable-precondition description
+   */
+  constructor(message: string) {
+    super(message);
+    this.name = "TransactionStorageAuthorityError";
+  }
+}
+
+/**
  * Signals that the Vault-global transaction slot no longer matches a caller's token.
  */
 export class TransactionStorageRevisionConflictError extends Error {
