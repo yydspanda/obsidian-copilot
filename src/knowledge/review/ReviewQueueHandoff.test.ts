@@ -1,5 +1,9 @@
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
 import {
+  createManifestCommitPlanDigest,
+  type ManifestCommitPlan,
+} from "@/knowledge/manifest/ManifestCommitIntent";
+import {
   IngestQueue,
   type IngestAcceptedReviewDecisionReceipt,
   type IngestExecutionContext,
@@ -29,6 +33,7 @@ import {
 
 const SOURCE_HASH = "a".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
+const MANIFEST_HASH = "c".repeat(64);
 
 /**
  * Clones JSON-compatible durable state for adapter-isolation assertions.
@@ -126,6 +131,34 @@ function createProposal(context: IngestExecutionContext): KnowledgeChangeSet {
   };
 }
 
+/** Creates the strict Manifest plan owned by one integrated compiler proposal. */
+function createManifestCommitPlan(
+  context: IngestExecutionContext,
+  proposal: KnowledgeChangeSet
+): ManifestCommitPlan {
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: proposal.bundleId,
+    sourceId: context.job.sourceId,
+    sourceContentHash: context.job.sourceContentHash,
+    pipelineFingerprint: context.job.pipelineFingerprint,
+    inputRevision: context.job.inputRevision,
+    changeSetId: proposal.id,
+    expectedManifestRevision: 0,
+    expectedManifestDigest: MANIFEST_HASH,
+    baseGeneratedPages: [],
+    mutations: proposal.changes.map((change) => ({
+      changeId: change.id,
+      path: change.path,
+      operation: change.operation,
+      access: "create_only",
+      ownership: "generated",
+      wasTrackedByPrimarySource: false,
+    })),
+  };
+}
+
 /**
  * Converts a real pending Review Store record into the queue hand-off receipt.
  *
@@ -201,9 +234,12 @@ class ReviewPersistingExecutor implements IngestExecutor {
   /** {@inheritDoc IngestExecutor.execute} */
   async execute(context: IngestExecutionContext): Promise<IngestExecutionResult> {
     const proposal = createProposal(context);
+    const manifestCommitPlan = createManifestCommitPlan(context, proposal);
     const record = await this.reviews.saveProposal(context.job.bundleId, {
       proposal,
       proposalDigest: createChangeSetTransactionDigest(proposal),
+      manifestCommitPlan,
+      manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
       jobClaim: {
         jobId: context.job.id,
         sourceId: context.job.sourceId,

@@ -1,6 +1,18 @@
 import { z } from "zod";
 
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
+import {
+  createManifestCommitIntentDigest,
+  createManifestCommitPlanDigest,
+  manifestCommitIntentSchema,
+  manifestCommitPlanSchema,
+  projectManifestCommitIntent,
+  validateManifestCommitIntent,
+  validateManifestCommitPlan,
+  validateManifestCommitPlanForChangeSet,
+  type ManifestCommitIntent,
+  type ManifestCommitPlan,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import { knowledgeChangeSetSchema } from "@/knowledge/model/schemas";
 import type {
@@ -13,7 +25,7 @@ import type {
 import { validateKnowledgeChangeSet } from "@/knowledge/model/validation";
 
 /** Current durable review snapshot version. */
-export const CHANGESET_REVIEW_SNAPSHOT_VERSION = 1 as const;
+export const CHANGESET_REVIEW_SNAPSHOT_VERSION = 2 as const;
 
 /** Exact queue input and attempt that produced one review proposal. */
 export interface ChangeSetReviewJobClaim {
@@ -30,6 +42,8 @@ interface ChangeSetReviewRecordBase {
   changeSetId: string;
   proposal: KnowledgeChangeSet;
   proposalDigest: string;
+  manifestCommitPlan: ManifestCommitPlan;
+  manifestCommitPlanDigest: string;
   jobClaim: ChangeSetReviewJobClaim;
   recordedAt: number;
 }
@@ -46,6 +60,8 @@ export interface AcceptedChangeSetReviewRecord extends ChangeSetReviewRecordBase
   recordRevision: 1;
   acceptedChangeSet: KnowledgeChangeSet;
   acceptedDigest: string;
+  manifestCommitIntent: ManifestCommitIntent;
+  manifestCommitIntentDigest: string;
   acceptedAt: number;
 }
 
@@ -143,6 +159,8 @@ const reviewRecordBaseShape = {
   changeSetId: nonEmptyStringSchema,
   proposal: knowledgeChangeSetSchema,
   proposalDigest: sha256Schema,
+  manifestCommitPlan: manifestCommitPlanSchema,
+  manifestCommitPlanDigest: sha256Schema,
   jobClaim: changeSetReviewJobClaimSchema,
   recordedAt: nonNegativeSafeIntegerSchema,
 };
@@ -164,6 +182,8 @@ const changeSetReviewRecordSchema: z.ZodType<ChangeSetReviewRecord> = z.discrimi
         recordRevision: z.literal(1),
         acceptedChangeSet: knowledgeChangeSetSchema,
         acceptedDigest: sha256Schema,
+        manifestCommitIntent: manifestCommitIntentSchema,
+        manifestCommitIntentDigest: sha256Schema,
         acceptedAt: nonNegativeSafeIntegerSchema,
       })
       .strict(),
@@ -281,6 +301,133 @@ function hasAffirmativeValidation(changeSet: KnowledgeChangeSet): boolean {
 }
 
 /**
+ * Appends shared plan/ChangeSet diagnostics beneath their actual Review fields.
+ *
+ * @param diagnostics - Mutable destination collection
+ * @param field - Review record field prefix
+ * @param nested - Shared Manifest coverage diagnostics
+ */
+function appendManifestPlanCoverageDiagnostics(
+  diagnostics: KnowledgeDiagnostic[],
+  field: string,
+  nested: readonly KnowledgeDiagnostic[]
+): void {
+  for (const diagnostic of nested) {
+    const nestedField = diagnostic.field.startsWith("changeSet")
+      ? diagnostic.field.replace(/^changeSet/, "proposal")
+      : diagnostic.field
+        ? `manifestCommitPlan.${diagnostic.field}`
+        : "manifestCommitPlan";
+    diagnostics.push({
+      ...diagnostic,
+      field: `${field}.${nestedField}`,
+    });
+  }
+}
+
+/**
+ * Validates the immutable Manifest plan against its proposed ChangeSet and queue claim.
+ *
+ * @param record - Durable review record retaining the compiler-owned plan
+ * @param snapshot - Bundle-level review snapshot
+ * @param field - Record field prefix
+ * @param diagnostics - Mutable diagnostic collection
+ */
+function validateManifestPlanBinding(
+  record: ChangeSetReviewRecord,
+  snapshot: ChangeSetReviewSnapshot,
+  field: string,
+  diagnostics: KnowledgeDiagnostic[]
+): void {
+  const plan = record.manifestCommitPlan;
+  const planValidation = validateManifestCommitPlan(plan);
+  const coverage = validateManifestCommitPlanForChangeSet(plan, record.proposal);
+  appendManifestPlanCoverageDiagnostics(diagnostics, field, coverage.diagnostics);
+  if (
+    planValidation.valid &&
+    record.manifestCommitPlanDigest !== createManifestCommitPlanDigest(plan)
+  ) {
+    addError(
+      diagnostics,
+      "review_manifest_plan_digest_mismatch",
+      `${field}.manifestCommitPlanDigest`,
+      "Manifest commit plan digest must identify the exact persisted plan"
+    );
+  }
+  if (
+    plan.bundleId !== snapshot.bundleId ||
+    plan.changeSetId !== record.changeSetId ||
+    plan.sourceId !== record.jobClaim.sourceId ||
+    plan.sourceContentHash !== record.jobClaim.sourceContentHash ||
+    plan.pipelineFingerprint !== record.jobClaim.pipelineFingerprint ||
+    plan.inputRevision !== record.jobClaim.inputRevision
+  ) {
+    addError(
+      diagnostics,
+      "review_manifest_plan_identity_mismatch",
+      `${field}.manifestCommitPlan`,
+      "Manifest commit plan must match the Review, Bundle, exact source content, pipeline, and input revision"
+    );
+  }
+  if (record.proposal.operation !== "ingest") {
+    addError(
+      diagnostics,
+      "review_manifest_plan_operation_mismatch",
+      `${field}.proposal.operation`,
+      "A source-compile Manifest plan may accompany only an ingest proposal"
+    );
+  }
+}
+
+/**
+ * Validates the accepted Manifest intent against the exact reviewed payload.
+ *
+ * @param record - Durable accepted review record
+ * @param field - Record field prefix
+ * @param diagnostics - Mutable diagnostic collection
+ */
+function validateAcceptedManifestIntent(
+  record: AcceptedChangeSetReviewRecord,
+  field: string,
+  diagnostics: KnowledgeDiagnostic[]
+): void {
+  const intent = record.manifestCommitIntent;
+  const intentValidation = validateManifestCommitIntent(intent);
+  appendNested(diagnostics, `${field}.manifestCommitIntent`, intentValidation.diagnostics);
+  if (
+    intentValidation.valid &&
+    record.manifestCommitIntentDigest !== createManifestCommitIntentDigest(intent)
+  ) {
+    addError(
+      diagnostics,
+      "review_manifest_intent_digest_mismatch",
+      `${field}.manifestCommitIntentDigest`,
+      "Manifest commit intent digest must identify the exact accepted projection"
+    );
+  }
+  let expected: ManifestCommitIntent;
+  try {
+    expected = projectManifestCommitIntent(record.manifestCommitPlan, record.acceptedChangeSet);
+  } catch {
+    addError(
+      diagnostics,
+      "review_manifest_intent_projection_invalid",
+      `${field}.manifestCommitIntent`,
+      "Accepted ChangeSet cannot be projected from its immutable Manifest plan"
+    );
+    return;
+  }
+  if (!sameJson(intent, expected)) {
+    addError(
+      diagnostics,
+      "review_manifest_intent_projection_mismatch",
+      `${field}.manifestCommitIntent`,
+      "Persisted Manifest intent must equal the exact accepted ChangeSet projection"
+    );
+  }
+}
+
+/**
  * Validates one accepted payload against its immutable proposal provenance.
  *
  * Rewritten create/update contents are allowed, but target identity, path,
@@ -299,6 +446,7 @@ function validateAcceptedRecord(
 ): void {
   const accepted = record.acceptedChangeSet;
   const proposal = record.proposal;
+  validateAcceptedManifestIntent(record, field, diagnostics);
   appendNested(
     diagnostics,
     `${field}.acceptedChangeSet`,
@@ -498,6 +646,7 @@ export function validateChangeSetReviewSnapshot(
         "Proposal digest must identify the exact proposed ChangeSet"
       );
     }
+    validateManifestPlanBinding(record, snapshot, field, diagnostics);
     if (!record.proposal.sourceRefs.includes(record.jobClaim.sourceId)) {
       addError(
         diagnostics,
@@ -535,7 +684,7 @@ export function validateChangeSetReviewSnapshot(
 /**
  * Strictly parses one unknown review snapshot.
  *
- * @param value - Runtime value expected to contain a complete v1 snapshot
+ * @param value - Runtime value expected to contain a complete v2 snapshot
  * @returns Parsed snapshot or safe structural diagnostics
  */
 export function parseChangeSetReviewSnapshot(

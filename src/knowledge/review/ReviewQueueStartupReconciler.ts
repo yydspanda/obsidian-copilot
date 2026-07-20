@@ -47,6 +47,7 @@ export interface AcceptedReviewStartupIdentity {
   recordRevision: 1;
   recordedAt: number;
   acceptedDigest: string;
+  manifestCommitIntentDigest: string;
   acceptedAt: number;
   jobClaim: ChangeSetReviewJobClaim;
 }
@@ -149,6 +150,7 @@ function toAcceptedIdentity(
     recordRevision: record.recordRevision,
     recordedAt: record.recordedAt,
     acceptedDigest: record.acceptedDigest,
+    manifestCommitIntentDigest: record.manifestCommitIntentDigest,
     acceptedAt: record.acceptedAt,
     jobClaim: cloneJobClaim(record.jobClaim),
   };

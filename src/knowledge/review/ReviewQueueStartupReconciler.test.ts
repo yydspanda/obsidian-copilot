@@ -1,5 +1,11 @@
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
 import {
+  createManifestCommitIntentDigest,
+  createManifestCommitPlanDigest,
+  projectManifestCommitIntent,
+  type ManifestCommitPlan,
+} from "@/knowledge/manifest/ManifestCommitIntent";
+import {
   IngestQueue,
   IngestQueueTransitionError,
   type IngestPendingReviewDecisionReceipt,
@@ -36,6 +42,7 @@ const SOURCE_ID = "source-1";
 const SOURCE_HASH = "a".repeat(64);
 const OTHER_SOURCE_HASH = "c".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
+const MANIFEST_HASH = "d".repeat(64);
 
 /** Creates a detached JSON clone for in-memory adapter isolation. */
 function cloneJson<T>(value: T): T {
@@ -270,6 +277,34 @@ function createReviewJobClaim(sourceContentHash = SOURCE_HASH) {
   };
 }
 
+/** Creates a strict Manifest plan for one startup review proposal. */
+function createManifestCommitPlan(
+  proposal: KnowledgeChangeSet,
+  jobClaim = createReviewJobClaim()
+): ManifestCommitPlan {
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: proposal.bundleId,
+    sourceId: jobClaim.sourceId,
+    sourceContentHash: jobClaim.sourceContentHash,
+    pipelineFingerprint: jobClaim.pipelineFingerprint,
+    inputRevision: jobClaim.inputRevision,
+    changeSetId: proposal.id,
+    expectedManifestRevision: 0,
+    expectedManifestDigest: MANIFEST_HASH,
+    baseGeneratedPages: [],
+    mutations: proposal.changes.map((change) => ({
+      changeId: change.id,
+      path: change.path,
+      operation: change.operation,
+      access: "create_only",
+      ownership: "generated",
+      wasTrackedByPrimarySource: false,
+    })),
+  };
+}
+
 /** Creates one typed pending record for ordering and Review revision tests. */
 function createPendingRecord(
   changeSetId: string,
@@ -277,11 +312,15 @@ function createPendingRecord(
   recordedAt: number
 ): PendingChangeSetReviewRecord {
   const proposal = createProposal(changeSetId);
+  const jobClaim = { ...createReviewJobClaim(), jobId };
+  const manifestCommitPlan = createManifestCommitPlan(proposal, jobClaim);
   return {
     changeSetId,
     proposal,
     proposalDigest: createChangeSetTransactionDigest(proposal),
-    jobClaim: { ...createReviewJobClaim(), jobId },
+    manifestCommitPlan,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
+    jobClaim,
     recordedAt,
     outcome: "pending",
     recordRevision: 0,
@@ -293,12 +332,18 @@ function createAcceptedRecord(
   pending: PendingChangeSetReviewRecord
 ): AcceptedChangeSetReviewRecord {
   const acceptedChangeSet: KnowledgeChangeSet = { ...pending.proposal, status: "accepted" };
+  const manifestCommitIntent = projectManifestCommitIntent(
+    pending.manifestCommitPlan,
+    acceptedChangeSet
+  );
   return {
     ...pending,
     outcome: "accepted",
     recordRevision: 1,
     acceptedChangeSet,
     acceptedDigest: createChangeSetTransactionDigest(acceptedChangeSet),
+    manifestCommitIntent,
+    manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
     acceptedAt: pending.recordedAt + 1,
   };
 }
@@ -370,10 +415,14 @@ async function savePendingReview(
   options: { sourceContentHash?: string } = {}
 ): Promise<Extract<ChangeSetReviewRecord, { outcome: "pending" }>> {
   const proposal = createProposal();
+  const jobClaim = createReviewJobClaim(options.sourceContentHash);
+  const manifestCommitPlan = createManifestCommitPlan(proposal, jobClaim);
   const record = await reviews.saveProposal(BUNDLE_ID, {
     proposal,
     proposalDigest: createChangeSetTransactionDigest(proposal),
-    jobClaim: createReviewJobClaim(options.sourceContentHash),
+    manifestCommitPlan,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
+    jobClaim,
   });
   if (record.outcome !== "pending") {
     throw new Error("Test expected a pending review record");
@@ -516,6 +565,7 @@ describe("ReviewQueueStartupReconciler", () => {
             recordRevision: accepted.recordRevision,
             recordedAt: accepted.recordedAt,
             acceptedDigest: accepted.acceptedDigest,
+            manifestCommitIntentDigest: accepted.manifestCommitIntentDigest,
             acceptedAt: accepted.acceptedAt,
             jobClaim: accepted.jobClaim,
           },
@@ -529,13 +579,13 @@ describe("ReviewQueueStartupReconciler", () => {
     const pending = createPendingRecord("changeset-a", "job-a", 100);
     const accepted = createAcceptedRecord(pending);
     const revisionOne: ChangeSetReviewSnapshot = {
-      version: 1,
+      version: 2,
       bundleId: BUNDLE_ID,
       revision: 1,
       records: [pending],
     };
     const revisionTwo: ChangeSetReviewSnapshot = {
-      version: 1,
+      version: 2,
       bundleId: BUNDLE_ID,
       revision: 2,
       records: [accepted],
@@ -560,13 +610,13 @@ describe("ReviewQueueStartupReconciler", () => {
     const pending = createPendingRecord("changeset-a", "job-a", 100);
     const accepted = createAcceptedRecord(pending);
     const revisionOne: ChangeSetReviewSnapshot = {
-      version: 1,
+      version: 2,
       bundleId: BUNDLE_ID,
       revision: 1,
       records: [pending],
     };
     const revisionTwo: ChangeSetReviewSnapshot = {
-      version: 1,
+      version: 2,
       bundleId: BUNDLE_ID,
       revision: 2,
       records: [accepted],
@@ -593,7 +643,7 @@ describe("ReviewQueueStartupReconciler", () => {
     const recordB = createPendingRecord("changeset-b", "job-b", 100);
     const recordA = createPendingRecord("changeset-a", "job-a", 100);
     const snapshot: ChangeSetReviewSnapshot = {
-      version: 1,
+      version: 2,
       bundleId: BUNDLE_ID,
       revision: 3,
       records: [recordC, recordB, recordA],
@@ -622,7 +672,7 @@ describe("ReviewQueueStartupReconciler", () => {
       async load(): Promise<ChangeSetReviewSnapshot> {
         revision += 1;
         return {
-          version: 1,
+          version: 2,
           bundleId: BUNDLE_ID,
           revision,
           records: [],

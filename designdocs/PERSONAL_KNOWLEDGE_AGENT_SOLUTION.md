@@ -509,25 +509,25 @@ Manifest 只记录 durable source identity、最后成功提交和最后失败�
 
 两阶段编译的可执行 Core 位于 `src/knowledge/compiler/`。第一阶段只能从调用方按当前来源和 Manifest 选出的最小 target catalog 获得既有页权限；catalog 外路径只能做 Windows case-insensitive existence probe，确认缺失后才可成为 create。第二阶段只看到 runtime 绑定后的 create/update 最小 DTO，并以 `targetSetDigest + targetId` 返回 write/unchanged；模型不能提交路径、operation、hash、source refs、validation、status，也看不到 delete 原文或 ownership 授权。普通 claim 至少需要一条实际送模 evidence 的 material-valid `supports`，candidate validator 再确定性检查 OKF、links 与 citations，最终只生成 `proposed` ChangeSet。compiler source identity 包含 source adapter 单调分配的 `inputRevision`，所以来源内容 A→B→A 会产生新的 ChangeSet/review instance，而不会复用第一次 A 的审核身份。
 
-Delete 的授权比普通 write 更窄：目标必须由 Manifest 标记为当前 source 独占的 generated page，resolver 观察到的 bytes 必须仍匹配 last-generated hash。该判断在 Compiler Core 内防止过期或共享页面进入 proposal，但真实 apply 仍必须把 Manifest revision、ownership/sourceRefs 和 expected hash 作为 semantic read-set 写入 journal 并在写前复证；完成该边界前，产品 UI 不启用 compiler delete。
+Delete 的授权比普通 write 更窄：目标必须由 Manifest 标记为当前 source 独占的 generated page，resolver 观察到的 bytes 必须仍匹配 last-generated hash。该 target read-set 已由 Compiler plan、Review intent 和 transaction journal 持久化，并在 prepared reservation 与最终 Manifest commit 时复证；但安全 compare-and-delete 以及 schema、非 target link、source artifact 依赖仍未完成，因此产品 UI 继续不启用 compiler delete。
 
-审核使用独立 strict v1 Review Store 保存完整 proposal、canonical digest、queue job claim、record revision 以及 accepted/rejected 终态，不能只在 Queue 的 `awaiting_review` job 中保存一个 ChangeSet id。Queue 只有收到同 Bundle、同 exact job claim 的 durable pending receipt（revision 0）才进入 `awaiting_review`；接受/拒绝必须携带匹配 proposal digest 的 terminal receipt（revision 1）。`reconcilePendingReview` 用来收敛“Review Store 已落盘、Queue hand-off 未落盘”的崩溃窗口，旧版 `legacy_unverified` anchor 只能由真实 pending record 升级。UI 只提交 opaque change/block id；Core 按当前 snapshot token 精确重组选择后的文本，保留 proposal-owned change identity/order，重新计算 content hash 与 accepted ChangeSet digest，并重新运行 OKF、citation 与 link validator。accepted payload 与 proposal 的 Bundle、operation、provenance、citation 身份必须一致，delete 在 journalized authorization read-set 完成前 fail closed。`awaiting_review` 不能通用 Cancel，Reject 必须先写 Review Store；同一 accepted receipt 只在 active apply claim 内幂等，apply 完成后的晚到回执由未来 Review/Manifest 协调器判断 already-applied。Activity 只从 durable Queue snapshot 派生；EventSink 只触发 reload，commit marker 清除前显示 `finalizing` 而不是 `completed`。
+审核使用独立 strict v2 Review Store 保存完整 proposal、canonical digest、queue job claim、record revision、compiler-owned Manifest commit plan 以及 accepted/rejected 终态，不能只在 Queue 的 `awaiting_review` job 中保存一个 ChangeSet id。plan 绑定 Manifest revision/digest、完整 primary-source page projection、每个 target 的 ownership/authorization、source hash、pipeline fingerprint 与单调 `inputRevision`；Accept 只能由该 plan 与 accepted ChangeSet 纯投影出最终 Manifest intent，过滤文件或重写内容时会精确保留未接受页并重新绑定 after hash。Queue 只有收到同 Bundle、同 exact job claim 的 durable pending receipt（revision 0）才进入 `awaiting_review`；接受/拒绝必须携带匹配 proposal digest 的 terminal receipt（revision 1）。`reconcilePendingReview` 用来收敛“Review Store 已落盘、Queue hand-off 未落盘”的崩溃窗口，旧版 `legacy_unverified` anchor 只能由真实 pending record 升级。UI 只提交 opaque change/block id；Core 按当前 snapshot token 精确重组选择后的文本，保留 proposal-owned change identity/order，重新计算 content hash 与 accepted ChangeSet digest，并重新运行 OKF、citation 与 link validator。accepted payload 与 proposal 的 Bundle、operation、provenance、citation 身份必须一致。`awaiting_review` 不能通用 Cancel，Reject 必须先写 Review Store；同一 accepted receipt 只在 active apply claim 内幂等，apply 完成后的晚到回执由未来 Review/Manifest 协调器判断 already-applied。Activity 只从 durable Queue snapshot 派生；EventSink 只触发 reload，commit marker 清除前显示 `finalizing` 而不是 `completed`。
 
 Obsidian Vault API 不提供跨文件的真正原子事务。这里的“事务”指可恢复语义：在 Vault-global 单活动槽中记录完整 pre-state journal 和 staging plan，按 Windows 确定顺序执行单文件原子 compare-and-swap，写后复验，最后写 commit marker。失败或启动恢复只自动 roll-forward；文件状态既不等于精确 before、也不等于精确 after 时进入 sticky recovery gate，不自动 rollback 或覆盖用户编辑。文件观察者可能短暂看到中间状态，但只有 commit marker 完成后才允许后续成功账本推进。
 
-首期 runtime foundation 把 Queue、Review、Manifest、Vault-global active transaction、watcher-capture `inputRevision` 和预留 commit ledger 放进一个 strict `knowledge-runtime-v1.json` envelope。每次 mutation 通过一个同步 transform 全量解析、校验所有 slot、提升 envelope revision、序列化并替换，从而让不同 facade 共享同一 CAS 边界。source watcher 必须在开始异步读文件之前先取得 `inputRevision`；读取得晚的旧事件携带较低 revision，进入 Queue 时会被 source high-watermark 拒绝。首次文件初始化设计为使用同目录完整临时文件、handle flush 与排他 hard-link 发布；自动化竞争测试验证不会暴露 winning initializer 的空或半 JSON，真实 Windows 行为仍由后述验收门槛负责。
+首期 runtime foundation 把 Queue、Review、Manifest、Vault-global active transaction、watcher-capture `inputRevision` 和 apply ledger 放进 `knowledge-runtime-v1.json`。文件名保持稳定，strict outer envelope 已升级为 v2；v1 只有在没有 active transaction、apply/review recovery state、历史 Manifest success 或 reserved commit metadata 等无法补证的状态时才原子迁移，其余状态 typed fail closed 且保留原字节。v2 每次读取还会交叉验证 Manifest success、reserved metadata、该 source 最新 ledger、Manifest revision/digest 与共享页 co-owner projection，避免把撕裂账本延迟到下一次提交。每次 mutation 通过一个同步 transform 全量解析、校验所有 slot、提升 envelope revision、序列化并替换，从而让不同 facade 共享同一 CAS 边界。source watcher 必须在开始异步读文件之前先取得 `inputRevision`；读取得晚的旧事件携带较低 revision，进入 Queue 时会被 source high-watermark 拒绝。首次文件初始化设计为使用同目录完整临时文件、handle flush 与排他 hard-link 发布；自动化竞争测试验证不会暴露 winning initializer 的空或半 JSON，真实 Windows 行为仍由后述验收门槛负责。
 
 这个 envelope 只是个人规模 MVP 的实现，不是永久产品格式：Review/journal 包含全文时，每次小更新也会产生 O(envelope size) 的 parse、validate、clone、stringify 和 rewrite，并形成共享腐坏故障域。接入长期真实使用前必须测量 bytes、mutation latency 与 UI stall，定义 terminal archive/compaction 和 size threshold；超过门槛后拆成小型原子索引加独立 payload/Bundle 分片。当前 Windows adapter 仍依赖 Obsidian `DataAdapter.process`/`Vault.process` 作为 serialized transform/update 边界，尚未在真实 Windows Obsidian、NTFS/OneDrive、双实例、外部编辑和 crash/power-loss 场景完成验收，因此 UI 保持 fail closed，也不宣称 production-ready durability。
 
 文件 mutation capability 是 `KnowledgeFileStore` 本身的必填属性，由 validator 在任何文件观察、semantic adapter 或 transaction journal 之前复制并冻结。首个 Windows store 只声明 create/update；delete capability 固定为 false。旧 journal 的 delete replay仍可读取当前状态：已经 missing 返回 `already_after`，第三状态返回 conflict，只有当前仍精确等于 before、确实需要删除时才抛 unsupported，绝不退化为 read-then-delete。
 
-成功账本采用可重试的交接协议：committed journal 先与 Queue 中完整 source/hash/pipeline/input revision/job attempt claim 做只读精确核验；通过后记录幂等 Manifest 成功，再把 Queue job 与 `commit_pending_ack` marker 原子落盘，然后清除全局 journal，最后移除 Queue marker 并保留 `startup_recovery` 暂停。applying executor 必须返回 `completed + exact commitReceipt`，再由 `IngestQueue.runNext` 对外转换为 `commit_ready`，不能提前把 durable job 标为 completed；审核接受也先产生同时绑定 accepted ChangeSet id 与 canonical digest 的 durable `applyClaim`。任何一步崩溃都从 journal、`applyClaim` 或 Queue commit marker 继续；因此不会出现页面尚未提交而任务或 Manifest 已成功的状态，也不会把一个来源或一份审核结果记到另一个 job。Manifest adapter、Queue adapter 和 journal adapter 都必须提供各自契约要求的 durable CAS，普通的 read-then-write 不满足要求。
+成功账本采用可重试的交接协议：committed journal 先与 Queue 中完整 source/hash/pipeline/input revision/job attempt claim 做只读精确核验；通过后在 shared envelope 的同一次 transform 中更新完整 Manifest projection 与 append-only apply ledger，再把 Queue job 与 `commit_pending_ack` marker 原子落盘，然后清除全局 journal，最后移除 Queue marker 并保留 `startup_recovery` 暂停。ledger exact replay 在任何 active-journal/Manifest 检查前就是 byte-preserving no-op，同 transaction id 的不同 identity fail closed；已入 ledger 的 transaction id 也不能重新发布 prepared journal。首次 prepared journal 创建又在相同 atomic boundary 内预留 exact Manifest revision/digest、journal-bound source identity、ownership 和相对上次成功提交单调的 input revision；活动 journal 存在时，普通 Manifest CAS 被锁定，通用 Manifest storage 也不能创建或修改 `lastSuccessful` 与 runtime reserved metadata，从而使 `recordApplyCommit` 成为唯一成功账本路径。shared page update 会要求所有实际 owner 的 path/ownership/hash 一致，并在同一 Manifest transform 中传播新 hash，避免 co-owner projection 撕裂。applying executor 必须返回 `completed + exact commitReceipt`，再由 `IngestQueue.runNext` 对外转换为 `commit_ready`，不能提前把 durable job 标为 completed；审核接受也先产生同时绑定 accepted ChangeSet id 与 canonical digest 的 durable `applyClaim`。已有 journal、ledger 或 Queue marker 的断点可以按各自 exact identity 重试；但 Queue/Review identity 与 allocator/source high-watermark 尚未在 Manifest+ledger callback 内原子复证，accepted claim 尚未创建 journal 的窗口也仍需显式恢复，因此当前不能宣称任意断点都已自动收敛。Manifest adapter、Queue adapter 和 journal adapter 都必须提供各自契约要求的 durable CAS，普通的 read-then-write 不满足要求。
 
 G.2 的第一个独立 startup coordinator 只协调 Review Store 与 Queue。它按稳定顺序扫描 durable review records：pending 恢复 exact awaiting-review anchor；rejected 在必要时先恢复其 revision-0 predecessor，再重放 exact rejection；并发 runtime 或 adapter commit-then-throw 只有在重读后证明 exact pending/terminal state 时才被视为已收敛。每轮处理后再次读取 Review snapshot；revision 前进则从新 snapshot 重试，持续变化超过有界次数即 fail closed。accepted record 不触发 `beginReviewApply`，只输出 identity-only classification 输入；更高层必须重新加载完整 accepted payload，并把返回的 Review revision 与 journal/ledger/Queue 一起复证后才能允许显式 continue 或 abandon。该协调器没有 model、compiler 或 Wiki file port，因此自身不具备隐式执行能力，也尚未接入 plugin startup。
 
-审查同时确认：现有 committed journal 只保存本次 changed targets，Compiler 的 target ownership 和未改动页面集合没有进入 durable apply payload，因此不能把 receipt targets 当作完整 `lastSuccessful.generatedPages`。正式 Manifest ledger adapter 前必须先 journal 化完整 post-compile page projection、显式 ownership、Manifest revision/digest read-set 与 source `inputRevision`；Manifest 更新和 ledger append 必须在共享 runtime envelope 的同一次原子 transform 中完成。顺序调用 Repository 再 append ledger 会制造 crash window，按 `completedAt` 猜测新旧也不能替代单调 `inputRevision`。
+G.2b 已关闭“只凭 changed targets 猜 Manifest”的缺口：Compiler 输出 versioned Manifest commit plan，Review v2 保存包含 target authorization 的 plan 并投影 final intent，transaction journal v3 的 final intent 通过 plan digest 回链该授权，同时保存完整 post-compile page projection、显式 ownership、Manifest revision/digest read-set 与完整 source identity。Runtime 在文件 mutation 前复证并预留该 read-set，页面 committed 后再把 Manifest success 与 exact ledger 原子发布；顺序调用 Repository 再 append ledger 被明确禁止，单调 `inputRevision` 也不再由 `completedAt` 猜测。该 core 仍未接入 plugin startup/Studio，不等于 Golden Flow 已可用。
 
-在接入真实 Vault 写盘前还必须关闭三个边界：其一，把 schema、非 target link 和 source artifact 的 hash/read-set journal 化并在恢复前复证；其二，明确 CAS 已完成但 progress 尚未落盘时的 content ABA 策略；其三，为 accepted apply claim 已落盘、transaction journal 尚未创建的 crash window 提供显式 no-journal verify/continue/abandon。当前纯 core 采用 content-addressed at-least-once 判定，若用户在停机期间把文件精确恢复为 before bytes，恢复无法区分“尚未写入”与“用户撤销”；个人知识资产默认应优先考虑 mutation-intent marker 加 fail-closed，代价是更频繁的人工恢复。启动编排器还必须在重新 claim 前扫描 Review Store 并调用 `reconcilePendingReview`，否则旧 pending record 会与新 attempt 冲突。
+在接入真实 Vault 写盘前还必须关闭这些边界：把 schema、非 target link 和 source artifact 的 hash/read-set journal 化并在恢复前复证；在 Manifest+ledger 的 atomic callback 内再次复证 Queue `applyClaim`、Review identity 与 allocator/source high-watermark，关闭 coordinator 只读核验后的竞争窗口；明确 CAS 已完成但 progress 尚未落盘时的 content ABA 策略；为 accepted apply claim 已落盘、transaction journal 尚未创建的 crash window 提供显式 no-journal verify/continue/abandon；定义无文件 ChangeSet 的 durable source-success/Manifest revision 语义，不能把 `no_changes` 静默当作已摄入。极端 outer-envelope revision 接近 `MAX_SAFE_INTEGER` 时，还需为整条 transaction/manifest/queue/ack 序列预留 revision 容量。当前纯 core 采用 content-addressed at-least-once 判定，若用户在停机期间把文件精确恢复为 before bytes，恢复无法区分“尚未写入”与“用户撤销”；个人知识资产默认应优先考虑 mutation-intent marker 加 fail-closed，代价是更频繁的人工恢复。启动编排器还必须在重新 claim 前扫描 Review Store 并调用 `reconcilePendingReview`，否则旧 pending record 会与新 attempt 冲突。
 
 ### 6.2 知识层级
 
@@ -727,24 +727,25 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 ## 13. 持久化与数据所有权
 
-| 数据                              | 位置                                      | 角色                                                                     |
-| --------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ |
-| Raw Sources                       | 用户指定的 Vault Markdown、网页快照与附件 | 不可被 Agent 静默修改的来源资产                                          |
-| Compiled Wiki                     | OKF-compatible Markdown Bundle            | LLM 维护、人可阅读的复利知识层                                           |
-| Bundle Schema                     | 用户指定的 schema 文件                    | 页面结构和维护工作流                                                     |
-| `index.md` / `log.md`             | Wiki Bundle 保留文件                      | 渐进发现和变更时间线                                                     |
-| Source Manifest                   | 插件管理的版本化状态文件                  | source hash、pipeline fingerprint、ownership、受影响页面和运行结果       |
-| Ingest Queue                      | 插件管理的版本化任务文件                  | 暂停、取消、重试、rerun、source high-watermark、review anchor 与重启恢复 |
-| ChangeSet Review Store            | 插件管理的版本化审核文件                  | 完整 proposal、job claim、pending/accepted/rejected 终态与 CAS revision  |
-| Transaction Journal               | 插件管理的 Vault-global 短期恢复记录      | 保存 pre-state、提交进度、commit marker、幂等 roll-forward 与冲突 gate   |
-| 项目定义                          | Vault 中的 Project 配置/文件              | 范围和稳定项目上下文                                                     |
-| 聊天历史                          | Markdown chat 文件                        | 用户可读的会话记录                                                       |
-| Saved Memories                    | 用户配置的 memory 文件夹                  | 用户确认的长期偏好与事实                                                 |
-| Recent Conversations              | memory 文件夹中的滚动摘要                 | 非权威的回忆辅助                                                         |
-| Context Envelope                  | 运行态/消息元数据，未来可持久化紧凑快照   | 重现当轮模型上下文                                                       |
-| 索引与 embedding                  | 插件数据或后端缓存                        | 可重建的派生数据                                                         |
-| 工具执行记录                      | 消息元数据或轻量事件记录                  | 调试、权限与回放                                                         |
-| Temporal Graph Projection（可选） | 外部 Graphiti 服务                        | 可删除、可重建的时态关系查询投影，不是事实源                             |
+| 数据                              | 位置                                      | 角色                                                                          |
+| --------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------- |
+| Raw Sources                       | 用户指定的 Vault Markdown、网页快照与附件 | 不可被 Agent 静默修改的来源资产                                               |
+| Compiled Wiki                     | OKF-compatible Markdown Bundle            | LLM 维护、人可阅读的复利知识层                                                |
+| Bundle Schema                     | 用户指定的 schema 文件                    | 页面结构和维护工作流                                                          |
+| `index.md` / `log.md`             | Wiki Bundle 保留文件                      | 渐进发现和变更时间线                                                          |
+| Source Manifest                   | 插件管理的版本化状态文件                  | source hash、pipeline fingerprint、ownership、受影响页面和运行结果            |
+| Ingest Queue                      | 插件管理的版本化任务文件                  | 暂停、取消、重试、rerun、source high-watermark、review anchor 与重启恢复      |
+| ChangeSet Review Store            | 插件管理的版本化审核文件                  | 完整 proposal、Manifest plan/final intent、job claim、终态与 CAS revision     |
+| Transaction Journal               | 插件管理的 Vault-global 短期恢复记录      | 保存 pre-state、final intent/plan digest、提交进度、commit marker 与冲突 gate |
+| Apply Commit Ledger               | 插件私有 shared runtime envelope          | 保存 transaction/ChangeSet/intent/journal/receipt 与 Manifest 前后摘要        |
+| 项目定义                          | Vault 中的 Project 配置/文件              | 范围和稳定项目上下文                                                          |
+| 聊天历史                          | Markdown chat 文件                        | 用户可读的会话记录                                                            |
+| Saved Memories                    | 用户配置的 memory 文件夹                  | 用户确认的长期偏好与事实                                                      |
+| Recent Conversations              | memory 文件夹中的滚动摘要                 | 非权威的回忆辅助                                                              |
+| Context Envelope                  | 运行态/消息元数据，未来可持久化紧凑快照   | 重现当轮模型上下文                                                            |
+| 索引与 embedding                  | 插件数据或后端缓存                        | 可重建的派生数据                                                              |
+| 工具执行记录                      | 消息元数据或轻量事件记录                  | 调试、权限与回放                                                              |
+| Temporal Graph Projection（可选） | 外部 Graphiti 服务                        | 可删除、可重建的时态关系查询投影，不是事实源                                  |
 
 持久化原则：
 
@@ -756,7 +757,7 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 候选内容在接受前不进入索引和长期 memory。
 - 重启时只把非 applying 的遗留 processing 任务恢复为 pending，并默认等待用户恢复；applying 进入显式 recovery gate。
 - 终态归档必须协调 Queue job、pending/terminal review identity、Review Store、source high-watermark，或保留等价 tombstone。
-- Wiki 页面与 index/log 作为同一个 ChangeSet 写入；Manifest 和 Queue 通过 `manifest → queue marker → journal ack → queue release` 的持久协调顺序加入同一个成功语义。
+- Wiki 页面与 index/log 作为同一个 ChangeSet 写入；Manifest 和 Queue 通过 `atomic manifest+ledger → queue marker → journal ack → queue release` 的持久协调顺序加入同一个成功语义。
 - Graphiti 如被启用，只能通过 durable outbox 和 projection ledger 同步；删除投影不影响 Markdown 主数据。
 - 用户能通过普通文件操作查看、编辑、迁移或删除长期知识。
 
@@ -848,8 +849,8 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 建立可恢复的串行队列：去重、source high-watermark、rerun、暂停、取消、重试；重启后非 applying processing → pending，applying → recovery gate，并默认等待用户恢复。
 - 在 Chat 文件拖入中增加 `Use in this chat` / `Add to Knowledge` 分流，并建立最小 Knowledge Studio / Activity 表面。
 - 完成单来源两阶段 Ingest：先分析受影响页面，再生成限定目标集合的 concept/index/log ChangeSet。
-- 从现有 ApplyView 抽取纯 diff 展示组件，并由独立 Knowledge Review Core/UI 支持多文件 create/update、before hash、来源、校验和逐文件/逐块审核；delete 先展示为 rejection-only，直到其授权 read-set 可事务复证。
-- 通过 Vault-global transaction journal、确定性写入顺序、单文件 CAS 和 commit marker 应用 Wiki、index 和 log，再按持久交接顺序更新 manifest 与 Queue；失败可恢复，不修改 Raw Source。
+- 从现有 ApplyView 抽取纯 diff 展示组件，并由独立 Knowledge Review Core/UI 支持多文件 create/update、before hash、来源、校验和逐文件/逐块审核；delete 先展示为 rejection-only，直到 safe compare-delete 与其余 semantic dependency read-set 都可复证。
+- 通过 Vault-global transaction journal、确定性写入顺序、单文件 CAS 和 commit marker 应用 Wiki、index 和 log，再按 `atomic manifest+ledger → queue marker → journal ack → queue release` 更新成功状态；失败可恢复，不修改 Raw Source。
 - 复用 Search v3 回答新知识，显示可点击 citation，并支持从回答再次生成写回 ChangeSet。
 
 完成标准：用户能在同一条可见流程中完成“拖入一个 Markdown/PDF → 等待处理 → 审核多文件 diff → 写入 Wiki → 提问并跳到引用 → 重复摄入时显示 Up to date”，插件重启不会丢任务或形成半提交。

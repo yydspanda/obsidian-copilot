@@ -11,10 +11,16 @@ import {
   type TransactionTarget,
 } from "@/knowledge/changeset/TransactionStorage";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
+import {
+  createManifestCommitIntentDigest,
+  createSourceManifestDigest,
+  type ManifestCommitIntent,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import type {
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   KnowledgeFileChange,
+  SourceManifest,
 } from "@/knowledge/model/types";
 
 const OLD_B = "# Old B\n";
@@ -99,6 +105,45 @@ function createChangeSet(): KnowledgeChangeSet {
   };
 }
 
+/** Creates the exact final Manifest projection bound to the accepted test ChangeSet. */
+function createManifestCommitIntent(
+  changeSet: KnowledgeChangeSet = createChangeSet()
+): ManifestCommitIntent {
+  const manifest: SourceManifest = {
+    version: 1,
+    bundleId: changeSet.bundleId,
+    revision: 0,
+    entries: [
+      {
+        sourceId: "source-1",
+        sourceKey: "sources/source.md",
+        sourcePath: "Sources/source.md",
+        custody: "user_managed",
+      },
+    ],
+  };
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: changeSet.bundleId,
+    sourceId: "source-1",
+    sourceContentHash: SOURCE_CONTENT_HASH,
+    pipelineFingerprint: PIPELINE_FINGERPRINT,
+    inputRevision: 7,
+    manifestCommitPlanDigest: "c".repeat(64),
+    changeSetId: changeSet.id,
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    generatedPages: changeSet.changes
+      .filter((change) => change.operation !== "delete")
+      .map((change) => ({
+        path: change.path,
+        ownership: "generated" as const,
+        contentHash: change.afterHash,
+      })),
+  };
+}
+
 /** Creates deterministic transaction targets with exact pre- and post-state content. */
 function createTargets(): TransactionTarget[] {
   return [
@@ -133,6 +178,7 @@ function createTargets(): TransactionTarget[] {
 function createPreparedJournal(): ChangeSetTransactionJournal {
   const bundle = createBundle();
   const changeSet = createChangeSet();
+  const manifestCommitIntent = createManifestCommitIntent(changeSet);
   return {
     version: TRANSACTION_JOURNAL_VERSION,
     transactionId: "transaction-1",
@@ -141,6 +187,8 @@ function createPreparedJournal(): ChangeSetTransactionJournal {
     bundle,
     changeSetId: changeSet.id,
     changeSetDigest: createChangeSetTransactionDigest(changeSet),
+    manifestCommitIntent,
+    manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
     jobClaim: createJobClaim(),
     changeSet,
     targets: createTargets(),
@@ -259,7 +307,8 @@ describe("parseChangeSetTransactionJournal", () => {
   });
 
   it.each([
-    ["future version", { ...createPreparedJournal(), version: 3 }],
+    ["legacy version", { ...createPreparedJournal(), version: 2 }],
+    ["future version", { ...createPreparedJournal(), version: 4 }],
     ["root extension", { ...createPreparedJournal(), extension: true }],
     [
       "nested target extension",
@@ -370,6 +419,23 @@ describe("validateChangeSetTransactionJournal", () => {
     ).toContain("transaction_claim_source_ref_unknown");
   });
 
+  it("binds the final Manifest intent to the exact source content and pipeline claim", () => {
+    const prepared = createPreparedJournal();
+
+    expect(
+      diagnosticCodes({
+        ...prepared,
+        jobClaim: createJobClaim({ sourceContentHash: "c".repeat(64) }),
+      })
+    ).toContain("transaction_manifest_intent_claim_mismatch");
+    expect(
+      diagnosticCodes({
+        ...prepared,
+        jobClaim: createJobClaim({ pipelineFingerprint: "d".repeat(64) }),
+      })
+    ).toContain("transaction_manifest_intent_claim_mismatch");
+  });
+
   it("validates progress for every terminally meaningful phase", () => {
     const prepared = createPreparedJournal();
     expect(diagnosticCodes({ ...prepared, appliedCount: 1 })).toContain(
@@ -399,6 +465,20 @@ describe("validateChangeSetTransactionJournal", () => {
     expect(diagnosticCodes({ ...prepared, changeSetDigest: "f".repeat(64) })).toContain(
       "transaction_changeset_digest_mismatch"
     );
+  });
+
+  it("returns diagnostics instead of throwing for a structurally valid noncanonical intent", () => {
+    const prepared = createPreparedJournal();
+    const noncanonical = {
+      ...prepared,
+      manifestCommitIntent: {
+        ...prepared.manifestCommitIntent,
+        generatedPages: [...prepared.manifestCommitIntent.generatedPages].reverse(),
+      },
+    };
+
+    expect(() => validateChangeSetTransactionJournal(noncanonical)).not.toThrow();
+    expect(diagnosticCodes(noncanonical)).toContain("manifest_commit_pages_not_canonical");
   });
 
   it("requires the persisted Bundle identity to match the journal", () => {

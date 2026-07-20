@@ -1,4 +1,5 @@
 import type { SourceArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
+import type { ManifestCommitPlan } from "@/knowledge/manifest/ManifestCommitIntent";
 import type {
   ClaimCitation,
   GeneratedPageOwnership,
@@ -8,6 +9,7 @@ import type {
   KnowledgeFileChange,
   KnowledgeValidationSummary,
   SourceLocator,
+  SourceManifest,
 } from "@/knowledge/model/types";
 
 /** Current protocol version shared by both knowledge compiler model stages. */
@@ -70,6 +72,8 @@ export interface KnowledgeCompileInput {
   bundle: KnowledgeBundleConfig;
   operation: KnowledgeChangeSet["operation"];
   source: CompilerSourceIdentity;
+  /** Exact complete Manifest read-set used to authorize the final source projection. */
+  manifest: SourceManifest;
   schema: CompilerSchemaSnapshot;
   artifacts: SourceArtifactObservation[];
   evidence: CompilerEvidence[];
@@ -316,6 +320,8 @@ export interface KnowledgeCompileProposal {
   analysisDigest: string;
   targetSetDigest: string;
   proposalDigest: string;
+  manifestCommitPlan: ManifestCommitPlan;
+  manifestCommitPlanDigest: string;
   analysis: CompilerAnalysis;
   changeSet: KnowledgeChangeSet;
   diagnostics: KnowledgeDiagnostic[];

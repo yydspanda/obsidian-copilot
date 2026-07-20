@@ -1,7 +1,17 @@
 import { z } from "zod";
 
 import {
+  createTransactionCommitReceiptDigest,
+  transactionCommitReceiptMatchesJournal,
+  type TransactionCommitReceipt,
+} from "@/knowledge/changeset/ChangeSetTransaction";
+import type {
+  ApplyCommitManifestPort,
+  CommittedChangeSetTransactionJournal,
+} from "@/knowledge/changeset/ApplyCommitCoordinator";
+import {
   TransactionStorageRevisionConflictError,
+  createChangeSetTransactionJournalDigest,
   parseChangeSetTransactionJournal,
   validateChangeSetTransactionJournal,
   type ChangeSetTransactionJournal,
@@ -21,13 +31,28 @@ import {
   type QueueStorage,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import {
+  createManifestCommitIntentDigest,
+  createSourceManifestDigest,
+  validateManifestCommitIntentForCommit,
+  type ManifestCommitIntent,
+} from "@/knowledge/manifest/ManifestCommitIntent";
+import {
   SourceManifestRevisionConflictError,
   type SourceManifestStorage,
 } from "@/knowledge/manifest/SourceManifestStorage";
+import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import { parseSourceManifest } from "@/knowledge/model/schemas";
-import type { SourceManifest } from "@/knowledge/model/types";
+import type {
+  JsonValue,
+  KnowledgeDiagnostic,
+  SourceCompileSnapshot,
+  SourceManifest,
+  SourceManifestEntry,
+} from "@/knowledge/model/types";
 import { validateSourceManifest } from "@/knowledge/model/validation";
+import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import {
+  CHANGESET_REVIEW_SNAPSHOT_VERSION,
   ReviewStorageRevisionConflictError,
   parseChangeSetReviewSnapshot,
   validateChangeSetReviewSnapshot,
@@ -37,7 +62,14 @@ import {
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
-export const KNOWLEDGE_RUNTIME_STORE_VERSION = 1 as const;
+export const KNOWLEDGE_RUNTIME_STORE_VERSION = 2 as const;
+
+/** Previous outer-envelope format eligible for one constrained startup migration. */
+const LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION = 1 as const;
+
+/** Reserved Source Manifest extension containing monotonic runtime commit metadata. */
+export const KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY =
+  "obsidianCopilotKnowledgeRuntimeCommit" as const;
 
 /** One per-Bundle snapshot stored inside the atomic runtime envelope. */
 interface KnowledgeRuntimeBundleSlot {
@@ -57,16 +89,32 @@ interface KnowledgeRuntimeInputRevisionBundle {
   sources: KnowledgeRuntimeInputRevisionRecord[];
 }
 
+/** Runtime-owned monotonic source metadata stored through the Manifest extension bag. */
+interface KnowledgeRuntimeSourceCommitExtension {
+  version: 1;
+  inputRevision: number;
+  transactionId: string;
+  manifestIntentDigest: string;
+}
+
 /** Exact successful-commit identity reserved for the manifest ledger adapter. */
 export interface KnowledgeApplyCommitLedgerRecord {
   transactionId: string;
   commitRevision: number;
   bundleId: string;
   sourceId: string;
+  sourceContentHash: string;
+  pipelineFingerprint: string;
+  inputRevision: number;
   changeSetId: string;
   changeSetDigest: string;
+  manifestIntentDigest: string;
   journalDigest: string;
   receiptDigest: string;
+  manifestBeforeRevision: number;
+  manifestBeforeDigest: string;
+  manifestAfterRevision: number;
+  manifestAfterDigest: string;
   recordedAt: number;
 }
 
@@ -87,6 +135,18 @@ type RuntimeBundleCollection = "queues" | "reviews" | "manifests";
 interface RuntimeMutation<T> {
   next?: KnowledgeRuntimeStoreSnapshot;
   value: T;
+}
+
+/** Structurally strict legacy envelope read only by the startup migration. */
+interface LegacyKnowledgeRuntimeStoreSnapshot {
+  version: typeof LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION;
+  revision: number;
+  queues: KnowledgeRuntimeBundleSlot[];
+  reviews: KnowledgeRuntimeBundleSlot[];
+  manifests: KnowledgeRuntimeBundleSlot[];
+  activeTransaction: object | null;
+  inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
+  applyCommits: object[];
 }
 
 const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 0, {
@@ -116,17 +176,56 @@ const runtimeInputRevisionBundleSchema: z.ZodType<KnowledgeRuntimeInputRevisionB
   })
   .strict();
 
+const runtimeSourceCommitExtensionSchema: z.ZodType<KnowledgeRuntimeSourceCommitExtension> = z
+  .object({
+    version: z.literal(1),
+    inputRevision: z.number().int().safe().nonnegative(),
+    transactionId: nonEmptyStringSchema,
+    manifestIntentDigest: sha256Schema,
+  })
+  .strict();
+
 const applyCommitLedgerRecordSchema: z.ZodType<KnowledgeApplyCommitLedgerRecord> = z
   .object({
     transactionId: nonEmptyStringSchema,
     commitRevision: nonNegativeSafeIntegerSchema,
     bundleId: nonEmptyStringSchema,
     sourceId: nonEmptyStringSchema,
+    sourceContentHash: sha256Schema,
+    pipelineFingerprint: sha256Schema,
+    inputRevision: nonNegativeSafeIntegerSchema,
     changeSetId: nonEmptyStringSchema,
     changeSetDigest: sha256Schema,
+    manifestIntentDigest: sha256Schema,
     journalDigest: sha256Schema,
     receiptDigest: sha256Schema,
+    manifestBeforeRevision: nonNegativeSafeIntegerSchema,
+    manifestBeforeDigest: sha256Schema,
+    manifestAfterRevision: nonNegativeSafeIntegerSchema,
+    manifestAfterDigest: sha256Schema,
     recordedAt: nonNegativeSafeIntegerSchema,
+  })
+  .strict();
+
+const legacyKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<LegacyKnowledgeRuntimeStoreSnapshot> = z
+  .object({
+    version: z.literal(LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION),
+    revision: nonNegativeSafeIntegerSchema,
+    queues: z.array(runtimeBundleSlotSchema),
+    reviews: z.array(runtimeBundleSlotSchema),
+    manifests: z.array(runtimeBundleSlotSchema),
+    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    inputRevisions: z.array(runtimeInputRevisionBundleSchema),
+    applyCommits: z.array(z.record(z.unknown())),
+  })
+  .strict();
+
+const legacyEmptyReviewSnapshotSchema = z
+  .object({
+    version: z.literal(1),
+    bundleId: nonEmptyStringSchema,
+    revision: nonNegativeSafeIntegerSchema,
+    records: z.array(z.unknown()),
   })
   .strict();
 
@@ -179,6 +278,140 @@ export class KnowledgeRuntimeAtomicWriteError extends Error {
   constructor() {
     super("The knowledge runtime atomic file did not confirm the requested replacement");
     this.name = "KnowledgeRuntimeAtomicWriteError";
+  }
+}
+
+/** Stable reasons a legacy runtime cannot be upgraded without inventing recovery evidence. */
+export type KnowledgeRuntimeMigrationUnsafeReason =
+  | "active_transaction_present"
+  | "apply_commit_ledger_present"
+  | "review_records_present"
+  | "queue_review_state_present"
+  | "queue_apply_state_present"
+  | "queue_active_job_present"
+  | "manifest_success_present"
+  | "manifest_reserved_commit_metadata_present"
+  | "revision_overflow";
+
+/** Reports a valid v1 envelope whose durable work makes automatic migration unsafe. */
+export class KnowledgeRuntimeMigrationUnsafeError extends Error {
+  /**
+   * Creates a sanitized fail-closed migration error.
+   *
+   * @param reason - Stable unsafe-state category
+   * @param bundleId - Optional Bundle containing the unsafe subsystem state
+   */
+  constructor(
+    public readonly reason: KnowledgeRuntimeMigrationUnsafeReason,
+    public readonly bundleId?: string
+  ) {
+    super("The legacy knowledge runtime contains work that cannot be migrated automatically");
+    this.name = "KnowledgeRuntimeMigrationUnsafeError";
+  }
+}
+
+/** Stable failures while proving a committed journal and receipt at the atomic boundary. */
+export type KnowledgeApplyCommitProofErrorReason =
+  | "journal_invalid"
+  | "journal_not_committed"
+  | "receipt_mismatch"
+  | "active_journal_missing"
+  | "active_journal_mismatch";
+
+/** Reports missing or conflicting commit proof without retaining persisted payloads. */
+export class KnowledgeApplyCommitProofError extends Error {
+  /**
+   * Creates an exact proof failure.
+   *
+   * @param transactionId - Transaction whose commit proof was rejected
+   * @param reason - Stable proof failure category
+   */
+  constructor(
+    public readonly transactionId: string,
+    public readonly reason: KnowledgeApplyCommitProofErrorReason
+  ) {
+    super(`Transaction '${transactionId}' does not have exact durable commit proof`);
+    this.name = "KnowledgeApplyCommitProofError";
+  }
+}
+
+/** Reports reuse of one durable transaction id for a different commit identity. */
+export class KnowledgeApplyCommitLedgerConflictError extends Error {
+  /** Creates a fail-closed exact-ledger identity conflict. */
+  constructor(public readonly transactionId: string) {
+    super(`Transaction '${transactionId}' conflicts with its durable apply ledger record`);
+    this.name = "KnowledgeApplyCommitLedgerConflictError";
+  }
+}
+
+/** Stable Manifest/read-set failures that prevent a new ledger commit. */
+export type KnowledgeApplyCommitManifestConflictReason =
+  | "intent_invalid"
+  | "source_missing"
+  | "source_metadata_missing"
+  | "source_metadata_invalid"
+  | "input_revision_not_newer"
+  | "revision_overflow";
+
+/** Reports a fail-closed Manifest projection or source ordering conflict. */
+export class KnowledgeApplyCommitManifestConflictError extends Error {
+  /**
+   * Creates a sanitized Manifest commit conflict.
+   *
+   * @param bundleId - Bundle whose Manifest cannot accept the commit
+   * @param sourceId - Source whose successful projection was proposed
+   * @param reason - Stable conflict category
+   * @param diagnostics - Optional safe intent diagnostics
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly sourceId: string,
+    public readonly reason: KnowledgeApplyCommitManifestConflictReason,
+    public readonly diagnostics: readonly KnowledgeDiagnostic[] = []
+  ) {
+    super(`Source '${sourceId}' cannot commit its final Manifest projection in '${bundleId}'`);
+    this.name = "KnowledgeApplyCommitManifestConflictError";
+  }
+}
+
+/** Reports an ordinary Manifest writer blocked by the Vault-global transaction reservation. */
+export class KnowledgeRuntimeManifestReservationError extends Error {
+  /**
+   * Creates a sanitized active-transaction reservation conflict.
+   *
+   * @param bundleId - Bundle whose ordinary Manifest write was blocked
+   * @param transactionId - Active Vault-global transaction holding the reservation
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly transactionId: string
+  ) {
+    super(`Manifest writes for '${bundleId}' are reserved by transaction '${transactionId}'`);
+    this.name = "KnowledgeRuntimeManifestReservationError";
+  }
+}
+
+/** Stable protected Manifest state that generic storage writes may never mutate. */
+export type KnowledgeRuntimeManifestProtectedState =
+  | "last_successful"
+  | "reserved_commit_extension";
+
+/** Reports an attempt to bypass the atomic Manifest/ledger success path. */
+export class KnowledgeRuntimeManifestProtectedStateError extends Error {
+  /**
+   * Creates a typed protected-field write error.
+   *
+   * @param bundleId - Bundle whose Manifest write was rejected
+   * @param sourceId - Source containing the protected success state
+   * @param state - Protected state changed by the generic writer
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly sourceId: string,
+    public readonly state: KnowledgeRuntimeManifestProtectedState
+  ) {
+    super(`Source '${sourceId}' has protected commit state in Manifest '${bundleId}'`);
+    this.name = "KnowledgeRuntimeManifestProtectedStateError";
   }
 }
 
@@ -240,6 +473,7 @@ export function parseKnowledgeRuntimeStoreSnapshot(value: unknown): KnowledgeRun
  * @param snapshot - Structurally strict runtime envelope
  */
 function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): void {
+  const manifests = new Map<string, SourceManifest>();
   for (const slot of snapshot.queues) {
     const parsed = parseIngestQueueSnapshot(slot.value);
     if (
@@ -269,6 +503,7 @@ function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): vo
     ) {
       throw new KnowledgeRuntimeStoreCorruptError();
     }
+    manifests.set(slot.bundleId, parsed.value);
   }
   if (snapshot.activeTransaction !== null) {
     const parsed = parseChangeSetTransactionJournal(snapshot.activeTransaction);
@@ -276,6 +511,7 @@ function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): vo
       throw new KnowledgeRuntimeStoreCorruptError();
     }
   }
+  assertManifestLedgerSemantics(snapshot.applyCommits, manifests);
 }
 
 /**
@@ -324,11 +560,459 @@ function assertUniqueInputRevisionRecords(
  */
 function assertUniqueApplyCommits(records: readonly KnowledgeApplyCommitLedgerRecord[]): void {
   const transactionIds = new Set<string>();
+  const manifestRevisions = new Map<string, Set<number>>();
+  const sourceHistories = new Map<string, KnowledgeApplyCommitLedgerRecord[]>();
   for (const record of records) {
     if (transactionIds.has(record.transactionId)) {
       throw new KnowledgeRuntimeStoreCorruptError();
     }
+    if (
+      record.manifestBeforeRevision === Number.MAX_SAFE_INTEGER ||
+      record.manifestAfterRevision !== record.manifestBeforeRevision + 1 ||
+      record.manifestBeforeDigest === record.manifestAfterDigest
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    const revisions = manifestRevisions.get(record.bundleId) ?? new Set<number>();
+    if (revisions.has(record.manifestAfterRevision)) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    revisions.add(record.manifestAfterRevision);
+    manifestRevisions.set(record.bundleId, revisions);
+    const sourceKey = `${record.bundleId}\u0000${record.sourceId}`;
+    const history = sourceHistories.get(sourceKey) ?? [];
+    history.push(record);
+    sourceHistories.set(sourceKey, history);
     transactionIds.add(record.transactionId);
+  }
+  for (const history of sourceHistories.values()) {
+    history.sort((left, right) => left.manifestAfterRevision - right.manifestAfterRevision);
+    for (let index = 1; index < history.length; index += 1) {
+      if (history[index].inputRevision <= history[index - 1].inputRevision) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+}
+
+/**
+ * Requires every durable success projection to have one exact latest ledger proof.
+ *
+ * Historical records remain valid and do not need to equal the current Manifest
+ * digest after later ordinary Manifest writes or shared-page co-owner updates.
+ *
+ * @param records - Complete retained apply ledger
+ * @param manifests - Strict current Manifests keyed by Bundle
+ */
+function assertManifestLedgerSemantics(
+  records: readonly KnowledgeApplyCommitLedgerRecord[],
+  manifests: ReadonlyMap<string, SourceManifest>
+): void {
+  const histories = new Map<string, KnowledgeApplyCommitLedgerRecord[]>();
+  const bundleHistories = new Map<string, KnowledgeApplyCommitLedgerRecord[]>();
+
+  for (const record of records) {
+    const manifest = manifests.get(record.bundleId);
+    const source = manifest?.entries.find((entry) => entry.sourceId === record.sourceId);
+    if (!manifest || !source || record.manifestAfterRevision > manifest.revision) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    if (
+      record.manifestAfterRevision === manifest.revision &&
+      record.manifestAfterDigest !== createSourceManifestDigest(manifest)
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    const sourceKey = `${record.bundleId}\u0000${record.sourceId}`;
+    const sourceHistory = histories.get(sourceKey) ?? [];
+    sourceHistory.push(record);
+    histories.set(sourceKey, sourceHistory);
+    const bundleHistory = bundleHistories.get(record.bundleId) ?? [];
+    bundleHistory.push(record);
+    bundleHistories.set(record.bundleId, bundleHistory);
+  }
+
+  for (const history of bundleHistories.values()) {
+    history.sort((left, right) => left.manifestAfterRevision - right.manifestAfterRevision);
+    for (let index = 1; index < history.length; index += 1) {
+      const previous = history[index - 1];
+      const current = history[index];
+      if (
+        current.manifestBeforeRevision === previous.manifestAfterRevision &&
+        current.manifestBeforeDigest !== previous.manifestAfterDigest
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+
+  for (const manifest of manifests.values()) {
+    const generatedPages = new Map<
+      string,
+      { path: string; ownership: string; contentHash: string; sourceIds: Set<string> }
+    >();
+    for (const entry of manifest.entries) {
+      const success = entry.lastSuccessful;
+      const rawExtension = entry.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY];
+      const sourceKey = `${manifest.bundleId}\u0000${entry.sourceId}`;
+      const history = histories.get(sourceKey) ?? [];
+      if (!success || rawExtension === undefined) {
+        if (success !== undefined || rawExtension !== undefined || history.length > 0) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        continue;
+      }
+      for (const page of success.generatedPages) {
+        if (page.contentHash === undefined) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        const pathKey = toWindowsPathKey(page.path);
+        const existing = generatedPages.get(pathKey);
+        if (!existing) {
+          generatedPages.set(pathKey, {
+            path: page.path,
+            ownership: page.ownership,
+            contentHash: page.contentHash,
+            sourceIds: new Set([entry.sourceId]),
+          });
+          continue;
+        }
+        if (
+          existing.sourceIds.has(entry.sourceId) ||
+          existing.path !== page.path ||
+          existing.ownership !== page.ownership ||
+          existing.contentHash !== page.contentHash
+        ) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        existing.sourceIds.add(entry.sourceId);
+      }
+      const extension = runtimeSourceCommitExtensionSchema.safeParse(rawExtension);
+      if (!extension.success || history.length === 0) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const latest = [...history].sort(
+        (left, right) => right.manifestAfterRevision - left.manifestAfterRevision
+      )[0];
+      if (
+        extension.data.transactionId !== latest.transactionId ||
+        extension.data.inputRevision !== latest.inputRevision ||
+        extension.data.manifestIntentDigest !== latest.manifestIntentDigest ||
+        success.sourceContentHash !== latest.sourceContentHash ||
+        success.pipelineFingerprint !== latest.pipelineFingerprint ||
+        success.changeSetId !== latest.changeSetId ||
+        success.completedAt !== latest.recordedAt
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+    for (const page of generatedPages.values()) {
+      if (page.sourceIds.size > 1 && page.ownership !== "shared") {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+}
+
+/** Caller-derived ledger fields that identify an exact replay before Manifest mutation. */
+type KnowledgeApplyCommitLedgerIdentity = Omit<
+  KnowledgeApplyCommitLedgerRecord,
+  "manifestAfterRevision" | "manifestAfterDigest"
+>;
+
+/**
+ * Compares every caller-reconstructable field of one ledger record.
+ *
+ * @param record - Existing durable ledger record
+ * @param identity - Candidate identity derived from journal, receipt, and intent
+ * @returns Whether the call is an exact replay
+ */
+function applyCommitLedgerIdentityMatches(
+  record: KnowledgeApplyCommitLedgerRecord,
+  identity: KnowledgeApplyCommitLedgerIdentity
+): boolean {
+  return (
+    record.transactionId === identity.transactionId &&
+    record.commitRevision === identity.commitRevision &&
+    record.bundleId === identity.bundleId &&
+    record.sourceId === identity.sourceId &&
+    record.sourceContentHash === identity.sourceContentHash &&
+    record.pipelineFingerprint === identity.pipelineFingerprint &&
+    record.inputRevision === identity.inputRevision &&
+    record.changeSetId === identity.changeSetId &&
+    record.changeSetDigest === identity.changeSetDigest &&
+    record.manifestIntentDigest === identity.manifestIntentDigest &&
+    record.journalDigest === identity.journalDigest &&
+    record.receiptDigest === identity.receiptDigest &&
+    record.manifestBeforeRevision === identity.manifestBeforeRevision &&
+    record.manifestBeforeDigest === identity.manifestBeforeDigest &&
+    record.recordedAt === identity.recordedAt
+  );
+}
+
+/**
+ * Derives every replayable ledger field from exact committed proof.
+ *
+ * @param journal - Strict committed transaction journal
+ * @param receipt - Exact journal-derived public receipt
+ * @param intent - Final Manifest projection embedded in the journal
+ * @returns Deterministic ledger identity excluding first-commit after proof
+ */
+function createApplyCommitLedgerIdentity(
+  journal: CommittedChangeSetTransactionJournal,
+  receipt: TransactionCommitReceipt,
+  intent: ManifestCommitIntent
+): KnowledgeApplyCommitLedgerIdentity {
+  return {
+    transactionId: journal.transactionId,
+    commitRevision: journal.revision,
+    bundleId: journal.bundleId,
+    sourceId: journal.jobClaim.sourceId,
+    sourceContentHash: journal.jobClaim.sourceContentHash,
+    pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+    inputRevision: journal.jobClaim.inputRevision,
+    changeSetId: journal.changeSetId,
+    changeSetDigest: journal.changeSetDigest,
+    manifestIntentDigest: journal.manifestCommitIntentDigest,
+    journalDigest: createChangeSetTransactionJournalDigest(journal),
+    receiptDigest: createTransactionCommitReceiptDigest(receipt),
+    manifestBeforeRevision: intent.expectedManifestRevision,
+    manifestBeforeDigest: intent.expectedManifestDigest,
+    recordedAt: receipt.committedAt,
+  };
+}
+
+/**
+ * Reads strict runtime-owned monotonic metadata from one source entry.
+ *
+ * @param entry - Current registered source entry
+ * @param bundleId - Bundle used for sanitized typed errors
+ * @returns Parsed metadata, or null when the extension is absent
+ */
+function readSourceCommitExtension(
+  entry: SourceManifestEntry,
+  bundleId: string
+): KnowledgeRuntimeSourceCommitExtension | null {
+  const raw = entry.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY];
+  if (raw === undefined) {
+    return null;
+  }
+  const parsed = runtimeSourceCommitExtensionSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new KnowledgeApplyCommitManifestConflictError(
+      bundleId,
+      entry.sourceId,
+      "source_metadata_invalid"
+    );
+  }
+  return parsed.data;
+}
+
+/**
+ * Requires an incoming source observation to follow its last exact ledger commit.
+ *
+ * @param entry - Current registered source entry
+ * @param bundleId - Owning Bundle id
+ * @param inputRevision - Incoming durable source observation revision
+ * @param manifest - Actual current Manifest containing the source
+ * @param ledger - Complete retained exact-commit ledger
+ */
+function assertSourceInputRevisionCanCommit(
+  entry: SourceManifestEntry,
+  bundleId: string,
+  inputRevision: number,
+  manifest: SourceManifest,
+  ledger: readonly KnowledgeApplyCommitLedgerRecord[]
+): void {
+  const previous = readSourceCommitExtension(entry, bundleId);
+  if (entry.lastSuccessful !== undefined && previous === null) {
+    throw new KnowledgeApplyCommitManifestConflictError(
+      bundleId,
+      entry.sourceId,
+      "source_metadata_missing"
+    );
+  }
+  if (entry.lastSuccessful === undefined && previous !== null) {
+    throw new KnowledgeApplyCommitManifestConflictError(
+      bundleId,
+      entry.sourceId,
+      "source_metadata_invalid"
+    );
+  }
+  if (entry.lastSuccessful !== undefined && previous !== null) {
+    const proof = ledger.find((record) => record.transactionId === previous.transactionId);
+    if (
+      !proof ||
+      proof.bundleId !== bundleId ||
+      proof.sourceId !== entry.sourceId ||
+      proof.sourceContentHash !== entry.lastSuccessful.sourceContentHash ||
+      proof.pipelineFingerprint !== entry.lastSuccessful.pipelineFingerprint ||
+      proof.inputRevision !== previous.inputRevision ||
+      proof.manifestIntentDigest !== previous.manifestIntentDigest ||
+      proof.changeSetId !== entry.lastSuccessful.changeSetId ||
+      proof.recordedAt !== entry.lastSuccessful.completedAt ||
+      proof.manifestAfterRevision > manifest.revision ||
+      (proof.manifestAfterRevision === manifest.revision &&
+        proof.manifestAfterDigest !== createSourceManifestDigest(manifest))
+    ) {
+      throw new KnowledgeApplyCommitManifestConflictError(
+        bundleId,
+        entry.sourceId,
+        "source_metadata_invalid"
+      );
+    }
+  }
+  if (previous !== null && inputRevision <= previous.inputRevision) {
+    throw new KnowledgeApplyCommitManifestConflictError(
+      bundleId,
+      entry.sourceId,
+      "input_revision_not_newer"
+    );
+  }
+}
+
+/**
+ * Creates the complete next Manifest from a verified source-compile intent.
+ *
+ * @param manifest - Actual pre-commit Manifest observed atomically
+ * @param source - Registered primary source entry
+ * @param journal - Exact committed journal
+ * @param receipt - Exact journal-derived receipt
+ * @param intent - Valid final page projection
+ * @returns Strict candidate Manifest at the next revision
+ */
+function createCommittedSourceManifest(
+  manifest: SourceManifest,
+  source: SourceManifestEntry,
+  journal: CommittedChangeSetTransactionJournal,
+  receipt: TransactionCommitReceipt,
+  intent: ManifestCommitIntent
+): SourceManifest {
+  if (manifest.revision === Number.MAX_SAFE_INTEGER) {
+    throw new KnowledgeApplyCommitManifestConflictError(
+      manifest.bundleId,
+      source.sourceId,
+      "revision_overflow"
+    );
+  }
+  const snapshot: SourceCompileSnapshot = {
+    sourceContentHash: journal.jobClaim.sourceContentHash,
+    pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+    generatedPages: intent.generatedPages.map((page) => ({ ...page })),
+    changeSetId: journal.changeSetId,
+    completedAt: receipt.committedAt,
+  };
+  const extension: KnowledgeRuntimeSourceCommitExtension = {
+    version: 1,
+    inputRevision: journal.jobClaim.inputRevision,
+    transactionId: journal.transactionId,
+    manifestIntentDigest: journal.manifestCommitIntentDigest,
+  };
+  const nextEntry: SourceManifestEntry = {
+    ...source,
+    lastSuccessful: snapshot,
+    extensions: {
+      ...source.extensions,
+      [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: extension as unknown as JsonValue,
+    },
+  };
+  if (
+    nextEntry.lastFailure !== undefined &&
+    nextEntry.lastFailure.failure.occurredAt <= receipt.committedAt
+  ) {
+    delete nextEntry.lastFailure;
+  }
+  const writtenTargets = new Map(
+    journal.changeSet.changes.flatMap((change) =>
+      change.operation === "delete"
+        ? []
+        : [
+            [
+              toWindowsPathKey(change.path),
+              { contentHash: change.afterHash, sourceRefs: new Set(change.sourceRefs) },
+            ] as const,
+          ]
+    )
+  );
+  return {
+    ...manifest,
+    revision: manifest.revision + 1,
+    entries: manifest.entries.map((entry) => {
+      if (entry.sourceId === source.sourceId) {
+        return nextEntry;
+      }
+      if (!entry.lastSuccessful) {
+        return entry;
+      }
+      let changed = false;
+      const generatedPages = entry.lastSuccessful.generatedPages.map((page) => {
+        const written = writtenTargets.get(toWindowsPathKey(page.path));
+        if (!written || !written.sourceRefs.has(entry.sourceId)) {
+          return page;
+        }
+        changed = changed || page.contentHash !== written.contentHash;
+        return { ...page, contentHash: written.contentHash };
+      });
+      return changed
+        ? { ...entry, lastSuccessful: { ...entry.lastSuccessful, generatedPages } }
+        : entry;
+    }),
+  };
+}
+
+/**
+ * Compares optional JSON values independently of object insertion order.
+ *
+ * @param left - First optional JSON value
+ * @param right - Second optional JSON value
+ * @returns Whether absence or canonical JSON is exact
+ */
+function optionalJsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+  return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
+}
+
+/**
+ * Prevents generic Manifest storage from bypassing the exact success ledger path.
+ *
+ * @param current - Actual Manifest currently stored, or null before first creation
+ * @param candidate - Complete generic Manifest replacement
+ */
+function assertGenericManifestPreservesCommitState(
+  current: SourceManifest | null,
+  candidate: SourceManifest
+): void {
+  const currentEntries = new Map(
+    (current?.entries ?? []).map((entry) => [entry.sourceId, entry] as const)
+  );
+  const candidateEntries = new Map(
+    candidate.entries.map((entry) => [entry.sourceId, entry] as const)
+  );
+  const sourceIds = new Set([...currentEntries.keys(), ...candidateEntries.keys()]);
+  for (const sourceId of sourceIds) {
+    const before = currentEntries.get(sourceId);
+    const after = candidateEntries.get(sourceId);
+    if (!optionalJsonValuesEqual(before?.lastSuccessful, after?.lastSuccessful)) {
+      throw new KnowledgeRuntimeManifestProtectedStateError(
+        candidate.bundleId,
+        sourceId,
+        "last_successful"
+      );
+    }
+    if (
+      !optionalJsonValuesEqual(
+        before?.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY],
+        after?.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]
+      )
+    ) {
+      throw new KnowledgeRuntimeManifestProtectedStateError(
+        candidate.bundleId,
+        sourceId,
+        "reserved_commit_extension"
+      );
+    }
   }
 }
 
@@ -360,6 +1044,181 @@ function parseRuntimeText(text: string): KnowledgeRuntimeStoreSnapshot {
     throw new KnowledgeRuntimeStoreCorruptError();
   }
   return parseKnowledgeRuntimeStoreSnapshot(value);
+}
+
+/**
+ * Checks whether an unknown JSON value exposes named fields.
+ *
+ * @param value - Unknown parsed JSON value
+ * @returns Whether the value is a non-array record
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Parses exact runtime text without assuming its outer-envelope version.
+ *
+ * @param text - Complete persisted runtime text
+ * @returns Unknown parsed JSON value
+ */
+function parseUnknownRuntimeText(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+}
+
+/**
+ * Strictly validates one queue retained by a legacy outer envelope.
+ *
+ * @param slot - Legacy Bundle queue slot
+ * @returns Detached current queue snapshot
+ */
+function requireLegacyQueueSlot(slot: KnowledgeRuntimeBundleSlot): IngestQueueSnapshot {
+  const parsed = parseIngestQueueSnapshot(slot.value);
+  if (
+    !parsed.ok ||
+    !validateIngestQueueSnapshot(slot.value).valid ||
+    parsed.value.bundleId !== slot.bundleId
+  ) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return cloneJson(parsed.value);
+}
+
+/**
+ * Strictly validates one Manifest retained by a legacy outer envelope.
+ *
+ * @param slot - Legacy Bundle Manifest slot
+ */
+function assertLegacyManifestSlot(slot: KnowledgeRuntimeBundleSlot): void {
+  const parsed = parseSourceManifest(slot.value);
+  if (
+    !parsed.ok ||
+    !validateSourceManifest(slot.value).valid ||
+    parsed.value.bundleId !== slot.bundleId
+  ) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  for (const entry of parsed.value.entries) {
+    if (entry.lastSuccessful !== undefined) {
+      throw new KnowledgeRuntimeMigrationUnsafeError("manifest_success_present", slot.bundleId);
+    }
+    if (entry.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY] !== undefined) {
+      throw new KnowledgeRuntimeMigrationUnsafeError(
+        "manifest_reserved_commit_metadata_present",
+        slot.bundleId
+      );
+    }
+  }
+}
+
+/**
+ * Migrates one empty legacy Review slot without fabricating record-level intent.
+ *
+ * @param slot - Legacy outer-envelope Review slot
+ * @returns Strict empty Review-v2 slot
+ */
+function migrateLegacyReviewSlot(slot: KnowledgeRuntimeBundleSlot): KnowledgeRuntimeBundleSlot {
+  if (isRecord(slot.value) && slot.value.version === CHANGESET_REVIEW_SNAPSHOT_VERSION) {
+    const parsed = parseChangeSetReviewSnapshot(slot.value);
+    if (
+      !parsed.ok ||
+      !validateChangeSetReviewSnapshot(parsed.value).valid ||
+      parsed.value.bundleId !== slot.bundleId
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    if (parsed.value.records.length > 0) {
+      throw new KnowledgeRuntimeMigrationUnsafeError("review_records_present", slot.bundleId);
+    }
+    return { bundleId: slot.bundleId, value: cloneJson(parsed.value) };
+  }
+
+  const parsed = legacyEmptyReviewSnapshotSchema.safeParse(slot.value);
+  if (!parsed.success || parsed.data.bundleId !== slot.bundleId) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  if (parsed.data.records.length > 0) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("review_records_present", slot.bundleId);
+  }
+  return {
+    bundleId: slot.bundleId,
+    value: {
+      version: CHANGESET_REVIEW_SNAPSHOT_VERSION,
+      bundleId: parsed.data.bundleId,
+      revision: parsed.data.revision,
+      records: [],
+    },
+  };
+}
+
+/**
+ * Rejects Queue states whose in-flight review or apply evidence cannot be upgraded safely.
+ *
+ * @param snapshot - Strict Queue-v3 snapshot retained by runtime v1
+ */
+function assertLegacyQueueIsMigrationSafe(snapshot: IngestQueueSnapshot): void {
+  if (snapshot.pendingReviews.length > 0 || snapshot.reviewRejections.length > 0) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("queue_review_state_present", snapshot.bundleId);
+  }
+  if (snapshot.applyClaim !== undefined || snapshot.applyCommit !== undefined) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("queue_apply_state_present", snapshot.bundleId);
+  }
+  if (snapshot.jobs.some((job) => job.status === "awaiting_review" || job.stage === "applying")) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("queue_active_job_present", snapshot.bundleId);
+  }
+}
+
+/**
+ * Performs the only supported v1-to-v2 outer-envelope migration.
+ *
+ * The migration preserves Queue, Manifest, and input-revision payloads exactly,
+ * upgrades empty Review slots, and refuses all states carrying recovery work.
+ *
+ * @param value - Unknown parsed runtime JSON
+ * @returns Strict detached runtime-v2 snapshot
+ */
+function migrateLegacyRuntimeSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+  const parsed = legacyKnowledgeRuntimeStoreSnapshotSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  const legacy = parsed.data;
+  assertUniqueBundleSlots(legacy.queues);
+  assertUniqueBundleSlots(legacy.reviews);
+  assertUniqueBundleSlots(legacy.manifests);
+  assertUniqueInputRevisionRecords(legacy.inputRevisions);
+
+  if (legacy.activeTransaction !== null) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("active_transaction_present");
+  }
+  if (legacy.applyCommits.length > 0) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("apply_commit_ledger_present");
+  }
+  if (legacy.revision >= Number.MAX_SAFE_INTEGER - 1) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
+  }
+
+  for (const slot of legacy.queues) {
+    assertLegacyQueueIsMigrationSafe(requireLegacyQueueSlot(slot));
+  }
+  for (const slot of legacy.manifests) {
+    assertLegacyManifestSlot(slot);
+  }
+  const reviews = legacy.reviews.map(migrateLegacyReviewSlot);
+  return parseKnowledgeRuntimeStoreSnapshot({
+    version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+    revision: legacy.revision + 1,
+    queues: legacy.queues,
+    reviews,
+    manifests: legacy.manifests,
+    activeTransaction: null,
+    inputRevisions: legacy.inputRevisions,
+    applyCommits: [],
+  });
 }
 
 /**
@@ -442,6 +1301,7 @@ export class KnowledgeRuntimeStore {
   async initialize(): Promise<void> {
     const initial = JSON.stringify(createEmptyKnowledgeRuntimeStoreSnapshot());
     await this.file.initialize(initial);
+    await this.migrateLegacyStore();
     await this.readState();
   }
 
@@ -521,9 +1381,14 @@ export class KnowledgeRuntimeStore {
     const candidate = this.requireManifest(bundleId, manifest);
     this.assertNextBundleRevision(candidate.revision, expectedRevision, "manifest");
     await this.updateState((state) => {
+      if (state.activeTransaction !== null) {
+        const active = this.requireTransaction(state.activeTransaction);
+        throw new KnowledgeRuntimeManifestReservationError(bundleId, active.transactionId);
+      }
       const currentRaw = findBundleSlot(state, "manifests", bundleId);
-      const actualRevision =
-        currentRaw === null ? null : this.requireManifest(bundleId, currentRaw).revision;
+      const current = currentRaw === null ? null : this.requireManifest(bundleId, currentRaw);
+      assertGenericManifestPreservesCommitState(current, candidate);
+      const actualRevision = current?.revision ?? null;
       if (actualRevision !== expectedRevision) {
         throw new SourceManifestRevisionConflictError(bundleId, expectedRevision, actualRevision);
       }
@@ -532,6 +1397,143 @@ export class KnowledgeRuntimeStore {
           ...state,
           revision: nextStoreRevision(state),
           manifests: replaceBundleSlot(state.manifests, bundleId, candidate),
+        },
+        value: undefined,
+      };
+    });
+  }
+
+  /**
+   * Atomically records one exact page commit in both Source Manifest and apply ledger.
+   *
+   * Exact ledger replay is a byte-preserving no-op. A new transaction must
+   * re-prove the current active committed journal, receipt, Manifest read-set,
+   * complete final projection, and monotonic source observation in the same
+   * synchronous runtime-file transform that publishes both durable artifacts.
+   *
+   * @param journal - Complete committed transaction with final Manifest intent
+   * @param receipt - Exact public proof derived from the committed journal
+   */
+  async recordApplyCommit(
+    journal: CommittedChangeSetTransactionJournal,
+    receipt: TransactionCommitReceipt
+  ): Promise<void> {
+    let committed: CommittedChangeSetTransactionJournal;
+    try {
+      const parsed = this.requireTransaction(journal);
+      if (parsed.phase !== "committed") {
+        throw new KnowledgeApplyCommitProofError(journal.transactionId, "journal_not_committed");
+      }
+      committed = parsed;
+    } catch (error) {
+      if (error instanceof KnowledgeApplyCommitProofError) {
+        throw error;
+      }
+      throw new KnowledgeApplyCommitProofError(journal.transactionId, "journal_invalid");
+    }
+    if (!transactionCommitReceiptMatchesJournal(receipt, committed)) {
+      throw new KnowledgeApplyCommitProofError(committed.transactionId, "receipt_mismatch");
+    }
+    const intent = committed.manifestCommitIntent;
+    if (
+      committed.manifestCommitIntentDigest !== createManifestCommitIntentDigest(intent) ||
+      intent.bundleId !== committed.bundleId ||
+      intent.sourceId !== committed.jobClaim.sourceId ||
+      intent.sourceContentHash !== committed.jobClaim.sourceContentHash ||
+      intent.pipelineFingerprint !== committed.jobClaim.pipelineFingerprint ||
+      intent.inputRevision !== committed.jobClaim.inputRevision ||
+      intent.changeSetId !== committed.changeSetId
+    ) {
+      throw new KnowledgeApplyCommitProofError(committed.transactionId, "journal_invalid");
+    }
+    const identity = createApplyCommitLedgerIdentity(committed, receipt, intent);
+
+    await this.updateState((state) => {
+      const existing = state.applyCommits.find(
+        (record) => record.transactionId === committed.transactionId
+      );
+      if (existing) {
+        if (!applyCommitLedgerIdentityMatches(existing, identity)) {
+          throw new KnowledgeApplyCommitLedgerConflictError(committed.transactionId);
+        }
+        return { value: undefined };
+      }
+
+      if (state.activeTransaction === null) {
+        throw new KnowledgeApplyCommitProofError(committed.transactionId, "active_journal_missing");
+      }
+      const active = this.requireTransaction(state.activeTransaction);
+      if (
+        active.phase !== "committed" ||
+        active.transactionId !== committed.transactionId ||
+        active.revision !== committed.revision ||
+        createChangeSetTransactionJournalDigest(active) !== identity.journalDigest ||
+        !transactionCommitReceiptMatchesJournal(receipt, active)
+      ) {
+        throw new KnowledgeApplyCommitProofError(
+          committed.transactionId,
+          "active_journal_mismatch"
+        );
+      }
+
+      const currentRaw = findBundleSlot(state, "manifests", committed.bundleId);
+      const actualManifest =
+        currentRaw === null
+          ? {
+              version: 1 as const,
+              bundleId: committed.bundleId,
+              revision: 0,
+              entries: [],
+            }
+          : this.requireManifest(committed.bundleId, currentRaw);
+      const source = actualManifest.entries.find(
+        (entry) => entry.sourceId === committed.jobClaim.sourceId
+      );
+      if (!source) {
+        throw new KnowledgeApplyCommitManifestConflictError(
+          committed.bundleId,
+          committed.jobClaim.sourceId,
+          "source_missing"
+        );
+      }
+      const intentValidation = validateManifestCommitIntentForCommit(
+        intent,
+        actualManifest,
+        committed.changeSet,
+        committed.bundle
+      );
+      if (!intentValidation.valid) {
+        throw new KnowledgeApplyCommitManifestConflictError(
+          committed.bundleId,
+          committed.jobClaim.sourceId,
+          "intent_invalid",
+          intentValidation.diagnostics
+        );
+      }
+      assertSourceInputRevisionCanCommit(
+        source,
+        committed.bundleId,
+        committed.jobClaim.inputRevision,
+        actualManifest,
+        state.applyCommits
+      );
+      const nextManifest = this.requireManifest(
+        committed.bundleId,
+        createCommittedSourceManifest(actualManifest, source, committed, receipt, intent)
+      );
+      const ledgerRecord: KnowledgeApplyCommitLedgerRecord = {
+        ...identity,
+        manifestAfterRevision: nextManifest.revision,
+        manifestAfterDigest: createSourceManifestDigest(nextManifest),
+      };
+      return {
+        next: {
+          ...state,
+          revision: nextStoreRevision(state),
+          manifests: replaceBundleSlot(state.manifests, committed.bundleId, nextManifest),
+          applyCommits: [...state.applyCommits, ledgerRecord].sort((left, right) =>
+            compareIdentifiers(left.transactionId, right.transactionId)
+          ),
         },
         value: undefined,
       };
@@ -551,8 +1553,8 @@ export class KnowledgeRuntimeStore {
   ): Promise<void> {
     const candidate = this.requireTransaction(journal);
     if (expectedToken === null) {
-      if (candidate.revision !== 0) {
-        throw new TypeError("A new active transaction must begin at revision zero");
+      if (candidate.revision !== 0 || candidate.phase !== "prepared") {
+        throw new TypeError("A new active transaction must begin as prepared at revision zero");
       }
     } else if (
       candidate.transactionId !== expectedToken.transactionId ||
@@ -569,6 +1571,54 @@ export class KnowledgeRuntimeStore {
         : null;
       if (!sameTransactionToken(expectedToken, actualToken)) {
         throw new TransactionStorageRevisionConflictError(expectedToken, actualToken);
+      }
+      if (expectedToken === null) {
+        if (state.applyCommits.some((record) => record.transactionId === candidate.transactionId)) {
+          throw new KnowledgeApplyCommitLedgerConflictError(candidate.transactionId);
+        }
+        const manifestRaw = findBundleSlot(state, "manifests", candidate.bundleId);
+        const actualManifest =
+          manifestRaw === null
+            ? {
+                version: 1 as const,
+                bundleId: candidate.bundleId,
+                revision: 0,
+                entries: [],
+              }
+            : this.requireManifest(candidate.bundleId, manifestRaw);
+        const source = actualManifest.entries.find(
+          (entry) => entry.sourceId === candidate.jobClaim.sourceId
+        );
+        if (!source) {
+          throw new KnowledgeApplyCommitManifestConflictError(
+            candidate.bundleId,
+            candidate.jobClaim.sourceId,
+            "source_missing"
+          );
+        }
+        const intentValidation = validateManifestCommitIntentForCommit(
+          candidate.manifestCommitIntent,
+          actualManifest,
+          candidate.changeSet,
+          candidate.bundle
+        );
+        if (!intentValidation.valid) {
+          throw new KnowledgeApplyCommitManifestConflictError(
+            candidate.bundleId,
+            candidate.jobClaim.sourceId,
+            "intent_invalid",
+            intentValidation.diagnostics
+          );
+        }
+        assertSourceInputRevisionCanCommit(
+          source,
+          candidate.bundleId,
+          candidate.jobClaim.inputRevision,
+          actualManifest,
+          state.applyCommits
+        );
+      } else if (current) {
+        assertActiveTransactionTransition(current, candidate);
       }
       return {
         next: {
@@ -591,6 +1641,9 @@ export class KnowledgeRuntimeStore {
         : null;
       if (!sameTransactionToken(expectedToken, actualToken)) {
         throw new TransactionStorageRevisionConflictError(expectedToken, actualToken);
+      }
+      if (current?.phase !== "committed") {
+        throw new TypeError("Only a committed active transaction may be acknowledged and cleared");
       }
       return {
         next: {
@@ -647,6 +1700,36 @@ export class KnowledgeRuntimeStore {
         value: { inputRevision: nextRecord.inputRevision },
       };
     });
+  }
+
+  /** Migrates one provably idle v1 envelope through a single atomic transform. */
+  private async migrateLegacyStore(): Promise<void> {
+    let callbackCalled = false;
+    let expectedText: string | undefined;
+    const committedText = await this.file.process((currentText) => {
+      if (callbackCalled) {
+        throw new KnowledgeRuntimeAtomicWriteError();
+      }
+      callbackCalled = true;
+      const value = parseUnknownRuntimeText(currentText);
+      if (!isRecord(value)) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      if (value.version === KNOWLEDGE_RUNTIME_STORE_VERSION) {
+        parseKnowledgeRuntimeStoreSnapshot(value);
+        expectedText = currentText;
+        return currentText;
+      }
+      if (value.version !== LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      expectedText = JSON.stringify(migrateLegacyRuntimeSnapshot(value));
+      return expectedText;
+    });
+    if (!callbackCalled || expectedText === undefined || committedText !== expectedText) {
+      throw new KnowledgeRuntimeAtomicWriteError();
+    }
+    parseRuntimeText(committedText);
   }
 
   /** Reads and clones one subsystem Bundle slot. */
@@ -774,6 +1857,81 @@ function sameTransactionToken(
   );
 }
 
+/**
+ * Selects the immutable transaction material shared by every journal revision.
+ *
+ * @param journal - Strict active transaction journal
+ * @returns Canonicalizable immutable payload
+ */
+function selectActiveTransactionPayload(journal: ChangeSetTransactionJournal): JsonValue {
+  return {
+    version: journal.version,
+    transactionId: journal.transactionId,
+    bundleId: journal.bundleId,
+    bundle: journal.bundle as unknown as JsonValue,
+    changeSetId: journal.changeSetId,
+    changeSetDigest: journal.changeSetDigest,
+    manifestCommitIntent: journal.manifestCommitIntent as unknown as JsonValue,
+    manifestCommitIntentDigest: journal.manifestCommitIntentDigest,
+    jobClaim: journal.jobClaim as unknown as JsonValue,
+    changeSet: journal.changeSet as unknown as JsonValue,
+    targets: journal.targets as unknown as JsonValue,
+    createdAt: journal.createdAt,
+  };
+}
+
+/**
+ * Compares the immutable identity and payload of two active journal revisions.
+ *
+ * @param left - Current durable journal
+ * @param right - Candidate next journal
+ * @returns Whether only transaction progress fields may differ
+ */
+function sameActiveTransactionPayload(
+  left: ChangeSetTransactionJournal,
+  right: ChangeSetTransactionJournal
+): boolean {
+  return (
+    canonicalizeJson(selectActiveTransactionPayload(left)) ===
+    canonicalizeJson(selectActiveTransactionPayload(right))
+  );
+}
+
+/**
+ * Requires one active journal replacement to follow the transaction state machine.
+ *
+ * @param current - Exact current durable journal
+ * @param candidate - Strict next journal revision
+ */
+function assertActiveTransactionTransition(
+  current: ChangeSetTransactionJournal,
+  candidate: ChangeSetTransactionJournal
+): void {
+  if (
+    !sameActiveTransactionPayload(current, candidate) ||
+    candidate.updatedAt < current.updatedAt
+  ) {
+    throw new TypeError("An active transaction replacement must preserve its immutable payload");
+  }
+  const validTransition =
+    (current.phase === "prepared" &&
+      candidate.phase === "applying" &&
+      candidate.appliedCount === current.appliedCount) ||
+    (current.phase === "applying" &&
+      candidate.phase === "applying" &&
+      candidate.appliedCount === current.appliedCount + 1) ||
+    (current.phase === "applying" &&
+      candidate.phase === "committed" &&
+      current.appliedCount === current.targets.length &&
+      candidate.appliedCount === candidate.targets.length) ||
+    (current.phase === "applying" &&
+      candidate.phase === "recovery_required" &&
+      candidate.appliedCount === current.appliedCount);
+  if (!validTransition) {
+    throw new TypeError("An active transaction replacement violates the transaction state machine");
+  }
+}
+
 /** QueueStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeQueueStorage implements QueueStorage {
   /** Creates a queue facade over the shared runtime store. */
@@ -831,6 +1989,20 @@ export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {
     expectedRevision: number | null
   ): Promise<void> {
     return this.runtime.writeManifest(bundleId, manifest, expectedRevision);
+  }
+}
+
+/** ApplyCommitManifestPort facade backed by the shared atomic runtime envelope. */
+export class KnowledgeRuntimeApplyCommitManifestPort implements ApplyCommitManifestPort {
+  /** Creates an exact Manifest/ledger facade over the shared runtime store. */
+  constructor(private readonly runtime: KnowledgeRuntimeStore) {}
+
+  /** Atomically records one exact committed transaction and final source projection. */
+  recordCommitted(
+    journal: CommittedChangeSetTransactionJournal,
+    receipt: TransactionCommitReceipt
+  ): Promise<void> {
+    return this.runtime.recordApplyCommit(journal, receipt);
   }
 }
 

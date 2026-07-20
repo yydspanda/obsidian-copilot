@@ -1,6 +1,12 @@
 import { z } from "zod";
 
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
+import {
+  createManifestCommitIntentDigest,
+  manifestCommitIntentSchema,
+  validateManifestCommitIntent,
+  type ManifestCommitIntent,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { knowledgeBundleConfigSchema, knowledgeChangeSetSchema } from "@/knowledge/model/schemas";
 import type {
   JsonValue,
@@ -21,10 +27,10 @@ import { sha256 } from "@/utils/hash";
 /**
  * Current persisted transaction-journal version.
  *
- * Version 2 deliberately has no extension bag. Adding, removing, or renaming a
+ * Version 3 deliberately has no extension bag. Adding, removing, or renaming a
  * persisted field requires a new version and an explicit migration.
  */
-export const TRANSACTION_JOURNAL_VERSION = 2 as const;
+export const TRANSACTION_JOURNAL_VERSION = 3 as const;
 
 /** Exact Vault file state captured before or expected after one change. */
 export type TransactionFileState =
@@ -72,6 +78,8 @@ interface ChangeSetTransactionJournalBase {
   bundle: KnowledgeBundleConfig;
   changeSetId: string;
   changeSetDigest: string;
+  manifestCommitIntent: ManifestCommitIntent;
+  manifestCommitIntentDigest: string;
   jobClaim: TransactionJobClaim;
   changeSet: KnowledgeChangeSet;
   targets: TransactionTarget[];
@@ -230,6 +238,8 @@ const transactionJournalBaseShape = {
   bundle: knowledgeBundleConfigSchema,
   changeSetId: nonEmptyStringSchema,
   changeSetDigest: sha256Schema,
+  manifestCommitIntent: manifestCommitIntentSchema,
+  manifestCommitIntentDigest: sha256Schema,
   jobClaim: transactionJobClaimSchema,
   changeSet: knowledgeChangeSetSchema,
   targets: z.array(transactionTargetSchema).min(1),
@@ -238,7 +248,7 @@ const transactionJournalBaseShape = {
   updatedAt: nonNegativeIntegerSchema,
 };
 
-/** Strict version-2 schema for the complete active transaction journal. */
+/** Strict version-3 schema for the complete active transaction journal. */
 const changeSetTransactionJournalSchema: z.ZodType<ChangeSetTransactionJournal> =
   z.discriminatedUnion("phase", [
     z.object({ ...transactionJournalBaseShape, phase: z.literal("prepared") }).strict(),
@@ -267,6 +277,22 @@ const changeSetTransactionJournalSchema: z.ZodType<ChangeSetTransactionJournal> 
  */
 export function createChangeSetTransactionDigest(changeSet: KnowledgeChangeSet): string {
   return sha256(`knowledge-changeset-v1\n${canonicalizeJson(changeSet as unknown as JsonValue)}`);
+}
+
+/**
+ * Computes the canonical identity of one complete persisted transaction journal.
+ *
+ * @param journal - Complete journal whose exact durable identity is required
+ * @returns Namespaced lowercase SHA-256 digest
+ */
+export function createChangeSetTransactionJournalDigest(
+  journal: ChangeSetTransactionJournal
+): string {
+  return sha256(
+    `knowledge-transaction-journal-v${TRANSACTION_JOURNAL_VERSION}\n${canonicalizeJson(
+      journal as unknown as JsonValue
+    )}`
+  );
 }
 
 /**
@@ -552,6 +578,55 @@ export function validateChangeSetTransactionJournal(value: unknown): KnowledgeVa
       "ChangeSet digest must identify the exact embedded accepted ChangeSet"
     );
   }
+  const manifestCommitIntentValidation = validateManifestCommitIntent(
+    journal.manifestCommitIntent,
+    journal.bundle
+  );
+  appendNestedDiagnostics(diagnostics, "manifestCommitIntent", manifestCommitIntentValidation);
+  if (
+    manifestCommitIntentValidation.valid &&
+    journal.manifestCommitIntentDigest !==
+      createManifestCommitIntentDigest(journal.manifestCommitIntent)
+  ) {
+    addError(
+      diagnostics,
+      "transaction_manifest_intent_digest_mismatch",
+      "manifestCommitIntentDigest",
+      "Manifest intent digest must identify the exact embedded final projection"
+    );
+  }
+  if (
+    journal.manifestCommitIntent.bundleId !== journal.bundleId ||
+    journal.manifestCommitIntent.changeSetId !== journal.changeSetId
+  ) {
+    addError(
+      diagnostics,
+      "transaction_manifest_intent_identity_mismatch",
+      "manifestCommitIntent",
+      "Manifest intent Bundle and ChangeSet identities must match the journal"
+    );
+  }
+  if (
+    journal.manifestCommitIntent.sourceId !== journal.jobClaim.sourceId ||
+    journal.manifestCommitIntent.sourceContentHash !== journal.jobClaim.sourceContentHash ||
+    journal.manifestCommitIntent.pipelineFingerprint !== journal.jobClaim.pipelineFingerprint ||
+    journal.manifestCommitIntent.inputRevision !== journal.jobClaim.inputRevision
+  ) {
+    addError(
+      diagnostics,
+      "transaction_manifest_intent_claim_mismatch",
+      "manifestCommitIntent",
+      "Manifest intent source content, pipeline, and input revision must match the owning job claim"
+    );
+  }
+  if (journal.changeSet.operation !== "ingest") {
+    addError(
+      diagnostics,
+      "transaction_manifest_intent_operation_unsupported",
+      "changeSet.operation",
+      "Source-compile Manifest commits currently support only ingest ChangeSets"
+    );
+  }
 
   appendNestedDiagnostics(diagnostics, "bundle", validateKnowledgeBundleConfig(journal.bundle));
   appendNestedDiagnostics(
@@ -570,6 +645,9 @@ export function validateChangeSetTransactionJournal(value: unknown): KnowledgeVa
   }
 
   const changesById = new Map(journal.changeSet.changes.map((change) => [change.id, change]));
+  const manifestPagesByKey = new Map(
+    journal.manifestCommitIntent.generatedPages.map((page) => [toWindowsPathKey(page.path), page])
+  );
   const targetChangeIds = new Set<string>();
   journal.targets.forEach((target, index) => {
     const field = `targets.${index}`;
@@ -614,6 +692,28 @@ export function validateChangeSetTransactionJournal(value: unknown): KnowledgeVa
       return;
     }
     validateTargetAgainstChange(target, change, field, diagnostics);
+    const committedPage = manifestPagesByKey.get(target.windowsPathKey);
+    if (change.operation === "delete") {
+      if (committedPage) {
+        addError(
+          diagnostics,
+          "transaction_manifest_deleted_page_retained",
+          "manifestCommitIntent.generatedPages",
+          "A deleted transaction target cannot remain in the final Manifest projection"
+        );
+      }
+    } else if (
+      !committedPage ||
+      committedPage.path !== change.path ||
+      committedPage.contentHash !== change.afterHash
+    ) {
+      addError(
+        diagnostics,
+        "transaction_manifest_written_page_mismatch",
+        "manifestCommitIntent.generatedPages",
+        "Every written transaction target must have the exact final Manifest path and hash"
+      );
+    }
   });
 
   journal.changeSet.changes.forEach((change, index) => {

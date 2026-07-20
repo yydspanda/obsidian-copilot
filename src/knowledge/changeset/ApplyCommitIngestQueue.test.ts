@@ -28,10 +28,16 @@ import {
   type QueueStorage,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
+import {
+  createManifestCommitIntentDigest,
+  createSourceManifestDigest,
+  type ManifestCommitIntent,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import type {
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   KnowledgeIngestJob,
+  SourceManifest,
 } from "@/knowledge/model/types";
 
 const BUNDLE_ID = "personal";
@@ -98,12 +104,46 @@ function createChangeSet(): KnowledgeChangeSet {
   };
 }
 
+/** Creates the final source projection committed after the accepted ChangeSet. */
+function createManifestCommitIntent(changeSet: KnowledgeChangeSet): ManifestCommitIntent {
+  const manifest: SourceManifest = {
+    version: 1,
+    bundleId: changeSet.bundleId,
+    revision: 0,
+    entries: [
+      {
+        sourceId: SOURCE_ID,
+        sourceKey: "sources/source.md",
+        sourcePath: "Sources/source.md",
+        custody: "user_managed",
+      },
+    ],
+  };
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: changeSet.bundleId,
+    sourceId: SOURCE_ID,
+    sourceContentHash: SOURCE_CONTENT_HASH,
+    pipelineFingerprint: PIPELINE_FINGERPRINT,
+    inputRevision: INPUT_REVISION,
+    manifestCommitPlanDigest: "c".repeat(64),
+    changeSetId: changeSet.id,
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    generatedPages: [
+      { path: "Wiki/Generated page.md", ownership: "generated", contentHash: PAGE_HASH },
+    ],
+  };
+}
+
 /** Creates a complete version-2 committed journal from the real queue claim. */
 function createCommittedJournal(
   job: Readonly<Extract<KnowledgeIngestJob, { status: "processing" }>>,
   bundle: KnowledgeBundleConfig
 ): CommittedChangeSetTransactionJournal {
   const changeSet = createChangeSet();
+  const manifestCommitIntent = createManifestCommitIntent(changeSet);
   return {
     version: TRANSACTION_JOURNAL_VERSION,
     transactionId: TRANSACTION_ID,
@@ -112,6 +152,8 @@ function createCommittedJournal(
     bundle,
     changeSetId: changeSet.id,
     changeSetDigest: createChangeSetTransactionDigest(changeSet),
+    manifestCommitIntent,
+    manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
     jobClaim: {
       jobId: job.id,
       sourceId: job.sourceId,
@@ -423,7 +465,7 @@ describe("ApplyCommitCoordinator with the real IngestQueue", () => {
       jobId: JOB_ID,
       receipt: harness.receipt,
     });
-    expect(harness.transactionState.active?.version).toBe(2);
+    expect(harness.transactionState.active?.version).toBe(3);
     await expectCommitReadyQueue(harness);
 
     await expect(harness.coordinator.reconcile(harness.bundle)).resolves.toMatchObject({

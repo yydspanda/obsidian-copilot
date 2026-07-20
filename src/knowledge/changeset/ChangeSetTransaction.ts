@@ -1,11 +1,19 @@
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
+import {
+  createManifestCommitIntentDigest,
+  parseManifestCommitIntent,
+  validateManifestCommitIntent,
+  type ManifestCommitIntent,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { parseKnowledgeBundleConfig, parseKnowledgeChangeSet } from "@/knowledge/model/schemas";
 import type {
   JsonValue,
   KnowledgeBundleConfig,
+  KnowledgeChangeSet,
   KnowledgeDiagnostic,
 } from "@/knowledge/model/types";
 import { validateKnowledgeBundleConfig } from "@/knowledge/model/validation";
+import { sha256 } from "@/utils/hash";
 
 import {
   ChangeSetValidationError,
@@ -34,6 +42,8 @@ export interface ChangeSetTransactionApplyInput {
   changeSet: unknown;
   bundle: unknown;
   jobClaim: TransactionJobClaim;
+  manifestCommitIntent: unknown;
+  manifestCommitIntentDigest: string;
 }
 
 /** Content-addressed final state safe to copy into manifest bookkeeping. */
@@ -51,6 +61,19 @@ export interface TransactionCommitReceipt {
   jobClaim: TransactionJobClaim;
   committedAt: number;
   targets: TransactionCommittedTarget[];
+}
+
+/** Reports a malformed or mismatched final Manifest projection before file mutation. */
+export class ChangeSetTransactionManifestIntentValidationError extends Error {
+  /**
+   * Creates a fail-closed Manifest intent validation error.
+   *
+   * @param diagnostics - Safe deterministic intent diagnostics
+   */
+  constructor(public readonly diagnostics: readonly KnowledgeDiagnostic[]) {
+    super("The accepted Manifest commit intent is invalid");
+    this.name = "ChangeSetTransactionManifestIntentValidationError";
+  }
 }
 
 /** Startup result for the Vault-global transaction slot. */
@@ -370,7 +393,7 @@ function getActualHash(observation: KnowledgeFileObservation): string | undefine
  * @param journal - Valid committed journal
  * @returns Detached content-addressed commit proof
  */
-function createCommitReceipt(
+export function createTransactionCommitReceipt(
   journal: ChangeSetTransactionJournal & { phase: "committed" }
 ): TransactionCommitReceipt {
   return {
@@ -400,13 +423,25 @@ function createCommitReceipt(
  * @param journal - Current committed journal
  * @returns Whether every receipt field matches the journal-derived proof
  */
-function receiptMatchesJournal(
+export function transactionCommitReceiptMatchesJournal(
   receipt: TransactionCommitReceipt,
   journal: ChangeSetTransactionJournal & { phase: "committed" }
 ): boolean {
   return (
     canonicalizeJson(receipt as unknown as JsonValue) ===
-    canonicalizeJson(createCommitReceipt(journal) as unknown as JsonValue)
+    canonicalizeJson(createTransactionCommitReceipt(journal) as unknown as JsonValue)
+  );
+}
+
+/**
+ * Computes the canonical identity of one public transaction commit receipt.
+ *
+ * @param receipt - Content-addressed proof derived from a committed journal
+ * @returns Namespaced lowercase SHA-256 digest
+ */
+export function createTransactionCommitReceiptDigest(receipt: TransactionCommitReceipt): string {
+  return sha256(
+    `knowledge-transaction-receipt-v1\n${canonicalizeJson(receipt as unknown as JsonValue)}`
   );
 }
 
@@ -440,6 +475,84 @@ function parseRecoveryBundle(value: unknown): KnowledgeBundleConfig {
     throw new ChangeSetValidationError(validation.diagnostics);
   }
   return parsed.value;
+}
+
+/**
+ * Strictly parses and binds a final Manifest intent to one accepted apply request.
+ *
+ * @param value - Unknown intent supplied by the accepted review record
+ * @param digest - Caller-supplied exact intent digest
+ * @param changeSet - Validated accepted ChangeSet
+ * @param bundle - Validated Bundle write boundary
+ * @param jobClaim - Exact queue attempt that owns the apply
+ * @returns Detached final Manifest intent
+ */
+function parseApplyManifestCommitIntent(
+  value: unknown,
+  digest: string,
+  changeSet: KnowledgeChangeSet,
+  bundle: KnowledgeBundleConfig,
+  jobClaim: TransactionJobClaim
+): ManifestCommitIntent {
+  const parsed = parseManifestCommitIntent(value);
+  if (!parsed.ok) {
+    throw new ChangeSetTransactionManifestIntentValidationError(parsed.issues);
+  }
+  const validation = validateManifestCommitIntent(parsed.value, bundle);
+  const diagnostics = [...validation.diagnostics];
+  if (validation.valid && digest !== createManifestCommitIntentDigest(parsed.value)) {
+    diagnostics.push({
+      code: "transaction_manifest_intent_digest_mismatch",
+      severity: "error",
+      field: "manifestCommitIntentDigest",
+      message: "Manifest intent digest must identify the exact supplied final projection",
+    });
+  }
+  if (
+    parsed.value.bundleId !== bundle.id ||
+    parsed.value.changeSetId !== changeSet.id ||
+    parsed.value.sourceId !== jobClaim.sourceId ||
+    parsed.value.sourceContentHash !== jobClaim.sourceContentHash ||
+    parsed.value.pipelineFingerprint !== jobClaim.pipelineFingerprint ||
+    parsed.value.inputRevision !== jobClaim.inputRevision
+  ) {
+    diagnostics.push({
+      code: "transaction_manifest_intent_identity_mismatch",
+      severity: "error",
+      field: "manifestCommitIntent",
+      message:
+        "Manifest intent must match the Bundle, ChangeSet, exact source content, pipeline, and input revision",
+    });
+  }
+  if (changeSet.operation !== "ingest") {
+    diagnostics.push({
+      code: "transaction_manifest_intent_operation_unsupported",
+      severity: "error",
+      field: "changeSet.operation",
+      message: "Source-compile Manifest commits currently support only ingest ChangeSets",
+    });
+  }
+  if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
+    throw new ChangeSetTransactionManifestIntentValidationError(diagnostics);
+  }
+  return parsed.value;
+}
+
+/**
+ * Compares two final Manifest intents independently of object insertion order.
+ *
+ * @param left - First final intent
+ * @param right - Second final intent
+ * @returns Whether both carry identical canonical JSON
+ */
+function sameManifestCommitIntent(
+  left: ManifestCommitIntent,
+  right: ManifestCommitIntent
+): boolean {
+  return (
+    canonicalizeJson(left as unknown as JsonValue) ===
+    canonicalizeJson(right as unknown as JsonValue)
+  );
 }
 
 /** Vault-global durable ChangeSet transaction runtime. */
@@ -483,6 +596,13 @@ export class ChangeSetTransaction {
       }
 
       const prepared = await this.validator.prepare(input.changeSet, input.bundle);
+      const manifestCommitIntent = parseApplyManifestCommitIntent(
+        input.manifestCommitIntent,
+        input.manifestCommitIntentDigest,
+        prepared.changeSet,
+        prepared.bundle,
+        input.jobClaim
+      );
       const transactionId = this.createTransactionId();
       assertIdentifier(transactionId, "transactionId");
       const createdAt = this.readTimestamp(input.jobClaim.startedAt);
@@ -494,6 +614,8 @@ export class ChangeSetTransaction {
         bundle: prepared.bundle,
         changeSetId: prepared.changeSet.id,
         changeSetDigest: prepared.changeSetDigest,
+        manifestCommitIntent,
+        manifestCommitIntentDigest: input.manifestCommitIntentDigest,
         jobClaim: { ...input.jobClaim },
         changeSet: prepared.changeSet,
         targets: prepared.targets.map((target) => ({
@@ -508,7 +630,7 @@ export class ChangeSetTransaction {
       };
       await this.writeJournal(journal, null);
       const committed = await this.rollForward(journal);
-      return createCommitReceipt(committed);
+      return createTransactionCommitReceipt(committed);
     });
   }
 
@@ -532,7 +654,7 @@ export class ChangeSetTransaction {
         return {
           kind: "committed",
           action: "already_committed",
-          receipt: createCommitReceipt(journal),
+          receipt: createTransactionCommitReceipt(journal),
         };
       }
       if (journal.phase === "recovery_required") {
@@ -554,7 +676,7 @@ export class ChangeSetTransaction {
       return {
         kind: "committed",
         action: "rolled_forward",
-        receipt: createCommitReceipt(committed),
+        receipt: createTransactionCommitReceipt(committed),
       };
     });
   }
@@ -583,7 +705,10 @@ export class ChangeSetTransaction {
       if (!journal) {
         return false;
       }
-      if (journal.phase !== "committed" || !receiptMatchesJournal(receipt, journal)) {
+      if (
+        journal.phase !== "committed" ||
+        !transactionCommitReceiptMatchesJournal(receipt, journal)
+      ) {
         throw new ChangeSetTransactionIdentityConflictError(receipt.changeSetId);
       }
       try {
@@ -646,11 +771,24 @@ export class ChangeSetTransaction {
     if (!sameJobClaim(active.jobClaim, input.jobClaim)) {
       throw new ChangeSetTransactionClaimConflictError(active.transactionId);
     }
+    const manifestCommitIntent = parseApplyManifestCommitIntent(
+      input.manifestCommitIntent,
+      input.manifestCommitIntentDigest,
+      parsedChangeSet.value,
+      active.bundle,
+      input.jobClaim
+    );
+    if (
+      input.manifestCommitIntentDigest !== active.manifestCommitIntentDigest ||
+      !sameManifestCommitIntent(manifestCommitIntent, active.manifestCommitIntent)
+    ) {
+      throw new ChangeSetTransactionIdentityConflictError(active.changeSetId);
+    }
     if (active.phase === "recovery_required") {
       throw new ChangeSetTransactionRecoveryRequiredError(active.transactionId, active.conflicts);
     }
     if (active.phase === "committed") {
-      return createCommitReceipt(active);
+      return createTransactionCommitReceipt(active);
     }
 
     const parsedBundle = parseKnowledgeBundleConfig(input.bundle);
@@ -667,7 +805,7 @@ export class ChangeSetTransaction {
     if (!sameBundleConfig(parsedBundle.value, active.bundle)) {
       throw new ChangeSetTransactionBundleConflictError(active.bundleId);
     }
-    return createCommitReceipt(await this.rollForward(active));
+    return createTransactionCommitReceipt(await this.rollForward(active));
   }
 
   /**

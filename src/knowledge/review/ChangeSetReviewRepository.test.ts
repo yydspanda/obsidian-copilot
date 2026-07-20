@@ -1,4 +1,10 @@
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
+import {
+  createManifestCommitIntentDigest,
+  createManifestCommitPlanDigest,
+  projectManifestCommitIntent,
+  type ManifestCommitPlan,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeChangeSet, KnowledgeFileChange } from "@/knowledge/model/types";
 import {
@@ -22,6 +28,7 @@ import {
 
 const SOURCE_HASH = "a".repeat(64);
 const PIPELINE_HASH = "b".repeat(64);
+const MANIFEST_HASH = "c".repeat(64);
 
 /** Creates a JSON clone suitable for the strict test persistence adapter. */
 function cloneJson<T>(value: T): T {
@@ -121,11 +128,50 @@ function createProposal(
   };
 }
 
+/** Creates one strict complete Manifest plan for a proposed source compile. */
+function createManifestCommitPlan(
+  proposal: KnowledgeChangeSet,
+  jobClaim = createJobClaim()
+): ManifestCommitPlan {
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: proposal.bundleId,
+    sourceId: jobClaim.sourceId,
+    sourceContentHash: jobClaim.sourceContentHash,
+    pipelineFingerprint: jobClaim.pipelineFingerprint,
+    inputRevision: jobClaim.inputRevision,
+    changeSetId: proposal.id,
+    expectedManifestRevision: 0,
+    expectedManifestDigest: MANIFEST_HASH,
+    baseGeneratedPages: proposal.changes
+      .flatMap((change) =>
+        change.operation === "create"
+          ? []
+          : [{ path: change.path, ownership: "generated" as const, contentHash: change.beforeHash }]
+      )
+      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+    mutations: proposal.changes
+      .map((change) => ({
+        changeId: change.id,
+        path: change.path,
+        operation: change.operation,
+        access: change.operation === "create" ? ("create_only" as const) : ("authorized" as const),
+        ownership: "generated" as const,
+        wasTrackedByPrimarySource: change.operation !== "create",
+      }))
+      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+  };
+}
+
 /** Creates an exact proposal persistence command. */
 function createSaveInput(proposal = createProposal(), jobClaim = createJobClaim()) {
+  const manifestCommitPlan = createManifestCommitPlan(proposal, jobClaim);
   return {
     proposal,
     proposalDigest: createChangeSetTransactionDigest(proposal),
+    manifestCommitPlan,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
     jobClaim,
   };
 }
@@ -143,8 +189,10 @@ function createSeedSnapshot(
   proposal = createProposal(),
   overrides: Partial<ChangeSetReviewSnapshot["records"][number]> = {}
 ): ChangeSetReviewSnapshot {
+  const jobClaim = createJobClaim();
+  const manifestCommitPlan = createManifestCommitPlan(proposal, jobClaim);
   return {
-    version: 1,
+    version: 2,
     bundleId: proposal.bundleId,
     revision: 1,
     records: [
@@ -153,7 +201,9 @@ function createSeedSnapshot(
         recordRevision: 0,
         proposal,
         proposalDigest: createChangeSetTransactionDigest(proposal),
-        jobClaim: createJobClaim(),
+        manifestCommitPlan,
+        manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
+        jobClaim,
         recordedAt: 1000,
         outcome: "pending",
         ...overrides,
@@ -201,10 +251,46 @@ describe("ChangeSetReviewRepository", () => {
       )
     ).rejects.toBeInstanceOf(ChangeSetReviewIdentityConflictError);
 
+    const changedPlanInput = createSaveInput(original);
+    changedPlanInput.manifestCommitPlan = {
+      ...changedPlanInput.manifestCommitPlan,
+      expectedManifestDigest: "d".repeat(64),
+    };
+    changedPlanInput.manifestCommitPlanDigest = createManifestCommitPlanDigest(
+      changedPlanInput.manifestCommitPlan
+    );
+    await expect(repository.saveProposal("bundle-1", changedPlanInput)).rejects.toBeInstanceOf(
+      ChangeSetReviewIdentityConflictError
+    );
+
     const other = createProposal("changeset-2", [createFileChange("change-2")]);
     await expect(
       repository.saveProposal("bundle-1", createSaveInput(other, createJobClaim()))
     ).rejects.toBeInstanceOf(ChangeSetReviewIdentityConflictError);
+  });
+
+  it("rejects a Manifest plan bound to different source content or pipeline identity", async () => {
+    const storage = new MemoryReviewStorage();
+    const repository = new ChangeSetReviewRepository(storage, { clock: () => 1000 });
+
+    const sourceMismatch = createSaveInput();
+    sourceMismatch.jobClaim = {
+      ...sourceMismatch.jobClaim,
+      sourceContentHash: "d".repeat(64),
+    };
+    await expect(repository.saveProposal("bundle-1", sourceMismatch)).rejects.toBeInstanceOf(
+      ChangeSetReviewValidationError
+    );
+
+    const pipelineMismatch = createSaveInput();
+    pipelineMismatch.jobClaim = {
+      ...pipelineMismatch.jobClaim,
+      pipelineFingerprint: "d".repeat(64),
+    };
+    await expect(repository.saveProposal("bundle-1", pipelineMismatch)).rejects.toBeInstanceOf(
+      ChangeSetReviewValidationError
+    );
+    expect(storage.writes).toHaveLength(0);
   });
 
   it("accepts filtered and rewritten changes and replays the exact decision idempotently", async () => {
@@ -237,6 +323,19 @@ describe("ChangeSetReviewRepository", () => {
     expect(first).toMatchObject({ outcome: "accepted", recordRevision: 1 });
     expect(first.acceptedChangeSet.changes).toEqual([rewritten]);
     expect(first.acceptedDigest).toBe(createChangeSetTransactionDigest(accepted));
+    expect(first.manifestCommitIntent).toEqual(
+      projectManifestCommitIntent(pending.manifestCommitPlan, accepted)
+    );
+    expect(first.manifestCommitIntent.generatedPages).toEqual([
+      {
+        path: rewritten.path,
+        ownership: "generated",
+        contentHash: createFileContentHash("# User reviewed\n"),
+      },
+    ]);
+    expect(first.manifestCommitIntentDigest).toBe(
+      createManifestCommitIntentDigest(first.manifestCommitIntent)
+    );
     expect(replayed).toEqual(first);
     expect(storage.writes).toHaveLength(2);
     expect((await repository.load("bundle-1")).revision).toBe(2);
@@ -425,11 +524,16 @@ describe("ChangeSetReviewRepository", () => {
   });
 
   it("enforces incompatible version, Bundle identity, and strict persisted JSON", async () => {
-    const versionStorage = new MemoryReviewStorage();
-    versionStorage.seed("bundle-1", { ...createSeedSnapshot(), version: 2 } as never);
-    await expect(
-      new ChangeSetReviewRepository(versionStorage).load("bundle-1")
-    ).rejects.toBeInstanceOf(ChangeSetReviewIncompatibleVersionError);
+    for (const legacy of [
+      { version: 1, bundleId: "bundle-1", revision: 0, records: [] },
+      { ...createSeedSnapshot(), version: 1 },
+    ]) {
+      const versionStorage = new MemoryReviewStorage();
+      versionStorage.seed("bundle-1", legacy as never);
+      await expect(
+        new ChangeSetReviewRepository(versionStorage).load("bundle-1")
+      ).rejects.toBeInstanceOf(ChangeSetReviewIncompatibleVersionError);
+    }
 
     const bundleStorage = new MemoryReviewStorage();
     const otherProposal = createProposal();
@@ -440,7 +544,7 @@ describe("ChangeSetReviewRepository", () => {
     ).rejects.toBeInstanceOf(ChangeSetReviewBundleMismatchError);
 
     const malformedStorage = new MemoryReviewStorage();
-    malformedStorage.seed("bundle-1", { version: 1, bundleId: "bundle-1" } as never);
+    malformedStorage.seed("bundle-1", { version: 2, bundleId: "bundle-1" } as never);
     await expect(
       new ChangeSetReviewRepository(malformedStorage).load("bundle-1")
     ).rejects.toBeInstanceOf(ChangeSetReviewValidationError);
@@ -529,6 +633,8 @@ describe("ChangeSetReviewRepository", () => {
       .saveProposal("bundle-1", {
         proposal,
         proposalDigest: SOURCE_HASH,
+        manifestCommitPlan: createManifestCommitPlan(createProposal()),
+        manifestCommitPlanDigest: MANIFEST_HASH,
         jobClaim: createJobClaim(),
       })
       .catch((reason: unknown) => reason);

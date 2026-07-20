@@ -7,6 +7,7 @@ import {
   ChangeSetTransactionIncompatibleVersionError,
   ChangeSetTransactionInfrastructureError,
   ChangeSetTransactionJournalValidationError,
+  ChangeSetTransactionManifestIntentValidationError,
   ChangeSetTransactionRecoveryRequiredError,
   ChangeSetTransactionRevisionOverflowError,
   type TransactionCommitReceipt,
@@ -29,12 +30,18 @@ import {
   type TransactionStorageToken,
 } from "@/knowledge/changeset/TransactionStorage";
 import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
+import {
+  createManifestCommitIntentDigest,
+  createSourceManifestDigest,
+  type ManifestCommitIntent,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import type { TextArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
 import type {
   ClaimCitation,
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   KnowledgeFileChange,
+  SourceManifest,
 } from "@/knowledge/model/types";
 
 const SOURCE_HASH = "a".repeat(64);
@@ -274,6 +281,47 @@ function createChangeSet(id = "changeset-1"): KnowledgeChangeSet {
   };
 }
 
+/** Creates the final Manifest projection supplied by one accepted review record. */
+function createManifestCommitIntent(
+  changeSet: KnowledgeChangeSet,
+  jobClaim: TransactionJobClaim
+): ManifestCommitIntent {
+  const manifest: SourceManifest = {
+    version: 1,
+    bundleId: changeSet.bundleId,
+    revision: 0,
+    entries: [
+      {
+        sourceId: jobClaim.sourceId,
+        sourceKey: "sources/source.md",
+        sourcePath: "Sources/source.md",
+        custody: "user_managed",
+      },
+    ],
+  };
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: changeSet.bundleId,
+    sourceId: jobClaim.sourceId,
+    sourceContentHash: jobClaim.sourceContentHash,
+    pipelineFingerprint: jobClaim.pipelineFingerprint,
+    inputRevision: jobClaim.inputRevision,
+    manifestCommitPlanDigest: "e".repeat(64),
+    changeSetId: changeSet.id,
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    generatedPages: changeSet.changes
+      .filter((change) => change.operation !== "delete")
+      .map((change) => ({
+        path: change.path,
+        ownership: "generated" as const,
+        contentHash: change.afterHash,
+      }))
+      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+  };
+}
+
 /** Creates a validator whose artifact, OKF, and link checks succeed. */
 function createValidator(fileStore: KnowledgeFileStore): ChangeSetValidator {
   const artifact: TextArtifactObservation = {
@@ -314,10 +362,14 @@ function createTransaction(
 
 /** Creates the owning queue-attempt input for one ChangeSet. */
 function createApplyInput(changeSet = createChangeSet()) {
+  const jobClaim = createJobClaim();
+  const manifestCommitIntent = createManifestCommitIntent(changeSet, jobClaim);
   return {
     changeSet,
     bundle: createBundle(),
-    jobClaim: createJobClaim(),
+    jobClaim,
+    manifestCommitIntent,
+    manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
   };
 }
 
@@ -702,6 +754,75 @@ describe("ChangeSetTransaction", () => {
     }
   });
 
+  it("rejects a different final Manifest intent beside the same active ChangeSet", async () => {
+    const storage = new MemoryTransactionStorage();
+    storage.failure = { revision: 1, timing: "before" };
+    const files = new MemoryKnowledgeFileStore();
+    const transaction = createTransaction(storage, files);
+    const input = createApplyInput();
+    await expect(transaction.apply(input)).rejects.toBeInstanceOf(
+      ChangeSetTransactionInfrastructureError
+    );
+
+    const changedIntent: ManifestCommitIntent = {
+      ...input.manifestCommitIntent,
+      expectedManifestDigest: "f".repeat(64),
+    };
+    await expect(
+      transaction.apply({
+        ...input,
+        manifestCommitIntent: changedIntent,
+        manifestCommitIntentDigest: createManifestCommitIntentDigest(changedIntent),
+      })
+    ).rejects.toBeInstanceOf(ChangeSetTransactionIdentityConflictError);
+    expect(files.mutations).toEqual([]);
+  });
+
+  it.each([
+    ["source content hash", { sourceContentHash: "c".repeat(64) }],
+    ["pipeline fingerprint", { pipelineFingerprint: "d".repeat(64) }],
+  ] satisfies Array<[string, Partial<ManifestCommitIntent>]>)(
+    "rejects Manifest intent %s drift from the owning claim before persistence or file mutation",
+    async (_label, override) => {
+      const storage = new MemoryTransactionStorage();
+      const files = new MemoryKnowledgeFileStore();
+      const transaction = createTransaction(storage, files);
+      const input = createApplyInput();
+      const manifestCommitIntent = { ...input.manifestCommitIntent, ...override };
+
+      await expect(
+        transaction.apply({
+          ...input,
+          manifestCommitIntent,
+          manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
+        })
+      ).rejects.toBeInstanceOf(ChangeSetTransactionManifestIntentValidationError);
+      expect(files.mutations).toEqual([]);
+      expect(storage.writeHistory).toEqual([]);
+    }
+  );
+
+  it("normalizes a structurally valid but semantic-invalid Manifest intent to the typed boundary", async () => {
+    const storage = new MemoryTransactionStorage();
+    const files = new MemoryKnowledgeFileStore();
+    const transaction = createTransaction(storage, files);
+    const input = createApplyInput();
+    const manifestCommitIntent: ManifestCommitIntent = {
+      ...input.manifestCommitIntent,
+      generatedPages: [...input.manifestCommitIntent.generatedPages].reverse(),
+    };
+
+    await expect(
+      transaction.apply({
+        ...input,
+        manifestCommitIntent,
+        manifestCommitIntentDigest: input.manifestCommitIntentDigest,
+      })
+    ).rejects.toBeInstanceOf(ChangeSetTransactionManifestIntentValidationError);
+    expect(files.mutations).toEqual([]);
+    expect(storage.writeHistory).toEqual([]);
+  });
+
   it.each([
     ["source content hash", { sourceContentHash: "not-a-hash" }],
     ["pipeline fingerprint", { pipelineFingerprint: "not-a-hash" }],
@@ -736,12 +857,12 @@ describe("ChangeSetTransaction", () => {
     } catch (error) {
       rejection = error;
     }
-    expect(rejection).toBeInstanceOf(ChangeSetTransactionJournalValidationError);
-    if (!(rejection instanceof ChangeSetTransactionJournalValidationError)) {
-      throw new Error("Expected journal validation to reject the source mismatch");
+    expect(rejection).toBeInstanceOf(ChangeSetTransactionManifestIntentValidationError);
+    if (!(rejection instanceof ChangeSetTransactionManifestIntentValidationError)) {
+      throw new Error("Expected Manifest intent validation to reject the source mismatch");
     }
     expect(rejection.diagnostics.map(({ code }) => code)).toContain(
-      "transaction_claim_source_ref_unknown"
+      "transaction_manifest_intent_identity_mismatch"
     );
     expect(files.mutations).toEqual([]);
     expect(storage.writeHistory).toEqual([]);
@@ -751,7 +872,7 @@ describe("ChangeSetTransaction", () => {
   it("fails closed on incompatible or malformed persisted journals before file I/O", async () => {
     const incompatibleStorage = new MemoryTransactionStorage();
     incompatibleStorage.hasReadOverride = true;
-    incompatibleStorage.readOverride = { version: 3 };
+    incompatibleStorage.readOverride = { version: 2 };
     const incompatibleFiles = new MemoryKnowledgeFileStore();
     const incompatible = createTransaction(incompatibleStorage, incompatibleFiles);
 
@@ -762,7 +883,7 @@ describe("ChangeSetTransaction", () => {
 
     const malformedStorage = new MemoryTransactionStorage();
     malformedStorage.hasReadOverride = true;
-    malformedStorage.readOverride = { version: 2, transactionId: "broken" };
+    malformedStorage.readOverride = { version: 3, transactionId: "broken" };
     const malformedFiles = new MemoryKnowledgeFileStore();
     const malformed = createTransaction(malformedStorage, malformedFiles);
 

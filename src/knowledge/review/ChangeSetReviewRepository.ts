@@ -10,6 +10,13 @@ import {
   validateChangeSetReviewSnapshot,
 } from "@/knowledge/review/ReviewStorage";
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
+import {
+  createManifestCommitIntentDigest,
+  manifestCommitPlanSchema,
+  projectManifestCommitIntent,
+  validateManifestCommitPlan,
+  type ManifestCommitPlan,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import { parseKnowledgeChangeSet } from "@/knowledge/model/schemas";
 import type { JsonValue, KnowledgeChangeSet, KnowledgeDiagnostic } from "@/knowledge/model/types";
@@ -21,10 +28,12 @@ const DEFAULT_MAX_WRITE_ATTEMPTS = 3;
 export interface SaveChangeSetProposalInput {
   proposal: unknown;
   proposalDigest: string;
+  manifestCommitPlan: unknown;
+  manifestCommitPlanDigest: string;
   jobClaim: ChangeSetReviewJobClaim;
 }
 
-/** Reports persisted review JSON that does not satisfy the strict v1 contract. */
+/** Reports persisted review JSON that does not satisfy the strict v2 contract. */
 export class ChangeSetReviewValidationError extends Error {
   /**
    * Creates a safe review validation failure.
@@ -268,7 +277,7 @@ function assertDigest(value: string, field: string): void {
  * @returns Empty revision-zero review snapshot
  */
 function createEmptySnapshot(bundleId: string): ChangeSetReviewSnapshot {
-  return { version: 1, bundleId, revision: 0, records: [] };
+  return { version: 2, bundleId, revision: 0, records: [] };
 }
 
 /**
@@ -335,6 +344,38 @@ function parseChangeSetArgument(bundleId: string, value: unknown): KnowledgeChan
     throw new ChangeSetReviewValidationError(bundleId, semantic.diagnostics);
   }
   return parsed.value;
+}
+
+/**
+ * Strictly parses and semantically validates one compiler-owned Manifest plan.
+ *
+ * @param bundleId - Bundle used for safe error reporting
+ * @param value - Unknown plan supplied by the compiler orchestration boundary
+ * @returns Detached strict Manifest plan
+ */
+function parseManifestCommitPlanArgument(bundleId: string, value: unknown): ManifestCommitPlan {
+  const parsed = manifestCommitPlanSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new ChangeSetReviewValidationError(bundleId, [
+      {
+        code: "review_manifest_plan_schema_invalid",
+        severity: "error",
+        field: "manifestCommitPlan",
+        message: "Manifest commit plan structure does not satisfy the strict review contract",
+      },
+    ]);
+  }
+  const semantic = validateManifestCommitPlan(parsed.data);
+  if (!semantic.valid) {
+    throw new ChangeSetReviewValidationError(
+      bundleId,
+      semantic.diagnostics.map((diagnostic) => ({
+        ...diagnostic,
+        field: diagnostic.field ? `manifestCommitPlan.${diagnostic.field}` : "manifestCommitPlan",
+      }))
+    );
+  }
+  return parsed.data;
 }
 
 /**
@@ -442,19 +483,23 @@ export class ChangeSetReviewRepository {
   ): Promise<ChangeSetReviewRecord> {
     assertIdentifier(bundleId, "bundleId");
     assertDigest(input.proposalDigest, "proposalDigest");
+    assertDigest(input.manifestCommitPlanDigest, "manifestCommitPlanDigest");
     const proposal = parseChangeSetArgument(bundleId, input.proposal);
+    const manifestCommitPlan = parseManifestCommitPlanArgument(bundleId, input.manifestCommitPlan);
     const recordedAt = this.now();
     const pending: PendingChangeSetReviewRecord = {
       changeSetId: proposal.id,
       recordRevision: 0,
       proposal,
       proposalDigest: input.proposalDigest,
+      manifestCommitPlan,
+      manifestCommitPlanDigest: input.manifestCommitPlanDigest,
       jobClaim: { ...input.jobClaim },
       recordedAt,
       outcome: "pending",
     };
     this.cloneValidatedSnapshot(bundleId, {
-      version: 1,
+      version: 2,
       bundleId,
       revision: 0,
       records: [pending],
@@ -473,7 +518,9 @@ export class ChangeSetReviewRepository {
           existing &&
           existing.changeSetId === pending.changeSetId &&
           existing.proposalDigest === pending.proposalDigest &&
+          existing.manifestCommitPlanDigest === pending.manifestCommitPlanDigest &&
           sameJson(existing.proposal, pending.proposal) &&
+          sameJson(existing.manifestCommitPlan, pending.manifestCommitPlan) &&
           sameJobClaim(existing.jobClaim, pending.jobClaim)
         ) {
           return undefined;
@@ -530,12 +577,30 @@ export class ChangeSetReviewRepository {
         throw new ChangeSetReviewDecisionConflictError(changeSetId, "rejected");
       }
       this.assertExpectedRecordRevision(record, expectedRecordRevision);
+      let manifestCommitIntent;
+      try {
+        manifestCommitIntent = projectManifestCommitIntent(
+          record.manifestCommitPlan,
+          acceptedChangeSet
+        );
+      } catch {
+        throw new ChangeSetReviewValidationError(bundleId, [
+          {
+            code: "review_manifest_intent_projection_invalid",
+            severity: "error",
+            field: "manifestCommitIntent",
+            message: "Accepted ChangeSet cannot be projected from its immutable Manifest plan",
+          },
+        ]);
+      }
       const accepted: AcceptedChangeSetReviewRecord = {
         ...record,
         recordRevision: 1,
         outcome: "accepted",
         acceptedChangeSet,
         acceptedDigest,
+        manifestCommitIntent,
+        manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
         acceptedAt: Math.max(acceptedAt, record.recordedAt),
       };
       return replaceReviewRecord(current, accepted);
@@ -642,7 +707,7 @@ export class ChangeSetReviewRepository {
     if (raw === null) {
       return { snapshot: createEmptySnapshot(bundleId), expectedRevision: null };
     }
-    if (isRecord(raw) && "version" in raw && raw.version !== 1) {
+    if (isRecord(raw) && "version" in raw && raw.version !== 2) {
       throw new ChangeSetReviewIncompatibleVersionError(bundleId, sanitizeVersion(raw.version));
     }
     const snapshot = this.cloneValidatedSnapshot(bundleId, raw);
@@ -679,7 +744,7 @@ export class ChangeSetReviewRepository {
       }
       const next = this.cloneValidatedSnapshot(bundleId, {
         ...proposed,
-        version: 1,
+        version: 2,
         bundleId,
         revision: loaded.snapshot.revision + 1,
       });

@@ -27,6 +27,7 @@ import {
   createQuoteHash,
   createSourceContentHash,
 } from "@/knowledge/model/fingerprint";
+import type { SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 const SOURCE_TEXT = "The source says deterministic compilation is safer.";
@@ -34,6 +35,7 @@ const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_TEXT);
 const ARTIFACT_CONTENT_HASH = createFileContentHash(SOURCE_TEXT);
 const PIPELINE_FINGERPRINT = "b".repeat(64);
 const SCHEMA_CONTENT = "type: knowledge-schema\n";
+const DEFAULT_EXISTING_PAGE_HASH = createFileContentHash("default tracked page");
 const VALIDATION_SUCCESS = {
   validation: { okfValid: true, citationsValid: true, linksValid: true },
   diagnostics: [],
@@ -135,21 +137,70 @@ function createTargetAuthorization(
     contentPolicy: "grounded",
     ownership: "generated",
     sourceRefs: ["source-1"],
+    expectedContentHash: DEFAULT_EXISTING_PAGE_HASH,
     ...overrides,
+  };
+}
+
+/** Creates an exact Manifest read-set matching caller-owned target authorities. */
+function createManifest(
+  bundleId: string,
+  authorizations: readonly CompilerTargetAuthorization[]
+): SourceManifest {
+  const sourceIds = new Set<string>(["source-1"]);
+  authorizations.forEach((authorization) =>
+    authorization.sourceRefs.forEach((sourceId) => sourceIds.add(sourceId))
+  );
+  return {
+    version: 1,
+    bundleId,
+    revision: 0,
+    entries: [...sourceIds].sort().map((sourceId) => {
+      const pages = authorizations
+        .filter((authorization) => authorization.sourceRefs.includes(sourceId))
+        .map((authorization) => ({
+          path: authorization.path,
+          ownership: authorization.ownership,
+          contentHash: authorization.expectedContentHash ?? DEFAULT_EXISTING_PAGE_HASH,
+        }))
+        .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+      return {
+        sourceId,
+        sourceKey: `sources/${sourceId}.md`,
+        sourcePath: `Sources/${sourceId}.md`,
+        custody: "user_managed" as const,
+        ...(pages.length === 0
+          ? {}
+          : {
+              lastSuccessful: {
+                sourceContentHash: SOURCE_CONTENT_HASH,
+                pipelineFingerprint: PIPELINE_FINGERPRINT,
+                generatedPages: pages,
+                changeSetId: "previous-changeset",
+                completedAt: 1,
+              },
+            }),
+      };
+    }),
   };
 }
 
 /** Creates a valid deterministic compile input with optional top-level replacements. */
 function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): KnowledgeCompileInput {
+  const bundle = overrides.bundle ?? {
+    version: 1 as const,
+    id: "personal",
+    sourceRoots: ["Sources"],
+    wikiRoot: "Wiki",
+    schemaRef: "Config/knowledge-schema.md",
+    reviewMode: "always" as const,
+  };
+  const targetAuthorizations = overrides.targetAuthorizations ?? [
+    createTargetAuthorization("Wiki/Page.md"),
+  ];
+  const manifest = overrides.manifest ?? createManifest(bundle.id, targetAuthorizations);
   return {
-    bundle: {
-      version: 1,
-      id: "personal",
-      sourceRoots: ["Sources"],
-      wikiRoot: "Wiki",
-      schemaRef: "Config/knowledge-schema.md",
-      reviewMode: "always",
-    },
+    bundle,
     operation: "ingest",
     source: {
       sourceId: "source-1",
@@ -157,6 +208,7 @@ function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): Kno
       pipelineFingerprint: PIPELINE_FINGERPRINT,
       inputRevision: 1,
     },
+    manifest,
     schema: {
       path: "Config/knowledge-schema.md",
       content: SCHEMA_CONTENT,
@@ -185,7 +237,7 @@ function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): Kno
       },
     ],
     contextPages: [],
-    targetAuthorizations: [createTargetAuthorization("Wiki/Page.md")],
+    targetAuthorizations,
     createdAt: 1_000,
     ...overrides,
   };
@@ -651,6 +703,7 @@ describe("KnowledgeCompiler minimal generation disclosure", () => {
     const input = createCompileInput({
       targetAuthorizations: [
         createTargetAuthorization("Wiki/Update.md", {
+          ownership: "shared",
           sourceRefs: ["source-1", "source-historical"],
           expectedContentHash: createFileContentHash(updateContent),
         }),

@@ -35,10 +35,22 @@ import {
   type CompilerGenerationModelOutput,
 } from "@/knowledge/compiler/generationSchema";
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
+import {
+  createManifestCommitPlan,
+  createManifestCommitPlanDigest,
+  createSourceManifestDigest,
+  ManifestCommitValidationError,
+  type ManifestCommitPlan,
+  type ManifestCommitMutation,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
 import type { SourceArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
 import { validateSourceLocatorAgainstArtifact } from "@/knowledge/model/locatorMaterialValidation";
-import { knowledgeBundleConfigSchema, sourceLocatorSchema } from "@/knowledge/model/schemas";
+import {
+  knowledgeBundleConfigSchema,
+  sourceLocatorSchema,
+  sourceManifestSchema,
+} from "@/knowledge/model/schemas";
 import type {
   ClaimCitation,
   JsonValue,
@@ -50,6 +62,7 @@ import type {
 import {
   validateKnowledgeBundleConfig,
   validateKnowledgeChangeSet,
+  validateSourceManifest,
   validateVaultRelativePath,
 } from "@/knowledge/model/validation";
 import {
@@ -184,6 +197,7 @@ const knowledgeCompileInputSchema: z.ZodType<KnowledgeCompileInput> = z
     bundle: knowledgeBundleConfigSchema,
     operation: z.enum(["ingest", "query_writeback", "lint_fix"]),
     source: compilerSourceIdentitySchema,
+    manifest: sourceManifestSchema,
     schema: compilerSchemaSnapshotSchema,
     artifacts: z.array(sourceArtifactObservationSchema).min(1),
     evidence: z.array(compilerEvidenceSchema).min(1),
@@ -539,6 +553,50 @@ function validateCompileInput(
     validateKnowledgeBundleConfig(input.bundle).diagnostics,
     "bundle"
   );
+  diagnostics.push(
+    ...prefixDiagnostics(validateSourceManifest(input.manifest).diagnostics, "manifest")
+  );
+  if (input.operation !== "ingest") {
+    addDiagnostic(
+      diagnostics,
+      "error",
+      "compiler_manifest_operation_unsupported",
+      "operation",
+      "Durable Source Manifest compilation currently supports only ingest operations"
+    );
+  }
+  if (input.manifest.bundleId !== input.bundle.id) {
+    addDiagnostic(
+      diagnostics,
+      "error",
+      "compiler_manifest_bundle_mismatch",
+      "manifest.bundleId",
+      "Manifest read-set must belong to the selected Bundle"
+    );
+  }
+  const primaryManifestEntry = input.manifest.entries.find(
+    (entry) => entry.sourceId === input.source.sourceId
+  );
+  if (!primaryManifestEntry) {
+    addDiagnostic(
+      diagnostics,
+      "error",
+      "compiler_manifest_source_missing",
+      "source.sourceId",
+      "Primary compile source must already have a stable Manifest identity"
+    );
+  }
+  primaryManifestEntry?.lastSuccessful?.generatedPages.forEach((page, index) => {
+    if (page.contentHash === undefined) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_manifest_page_hash_missing",
+        `manifest.entries.lastSuccessful.generatedPages[${index}].contentHash`,
+        "Every page in the primary source projection requires its last committed content hash"
+      );
+    }
+  });
   validateCollectionLimit(diagnostics, "evidence", input.evidence.length, limits.maxEvidenceItems);
   validateCollectionLimit(
     diagnostics,
@@ -860,6 +918,84 @@ function validateCompileInput(
       );
     }
     authorizationKeys.add(key);
+
+    const primaryPage = primaryManifestEntry?.lastSuccessful?.generatedPages.find(
+      (page) => toWindowsPathKey(page.path) === key
+    );
+    if (!primaryPage) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_authorization_manifest_page_missing",
+        field,
+        "Existing target authorization must come from a page tracked by the primary source"
+      );
+      return;
+    }
+    if (
+      primaryPage.path !== authorization.path ||
+      primaryPage.ownership !== authorization.ownership
+    ) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_authorization_manifest_authority_mismatch",
+        `targetAuthorizations[${index}]`,
+        "Target path spelling and ownership must match the primary source Manifest"
+      );
+    }
+    if (
+      primaryPage.contentHash === undefined ||
+      authorization.expectedContentHash !== primaryPage.contentHash
+    ) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_authorization_manifest_hash_mismatch",
+        `targetAuthorizations[${index}].expectedContentHash`,
+        "Target authorization must retain the exact last committed Manifest content hash"
+      );
+    }
+    const trackedManifestPages = input.manifest.entries.flatMap((entry) =>
+      (entry.lastSuccessful?.generatedPages ?? [])
+        .filter((page) => toWindowsPathKey(page.path) === key)
+        .map((page) => ({ sourceId: entry.sourceId, page }))
+    );
+    const manifestOwners = trackedManifestPages.map(({ sourceId }) => sourceId).sort(compareText);
+    const authorizationOwners = [...authorization.sourceRefs].sort(compareText);
+    if (canonicalizeJson(manifestOwners) !== canonicalizeJson(authorizationOwners)) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_authorization_manifest_sources_mismatch",
+        `targetAuthorizations[${index}].sourceRefs`,
+        "Target source ownership must match every Manifest source tracking the page"
+      );
+    }
+    if (trackedManifestPages.length > 1 && primaryPage.ownership !== "shared") {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_authorization_manifest_coowner_ownership_invalid",
+        `targetAuthorizations[${index}].ownership`,
+        "A page tracked by multiple Manifest sources must use shared ownership"
+      );
+    }
+    trackedManifestPages.forEach(({ page }, trackedIndex) => {
+      if (
+        page.path !== primaryPage.path ||
+        page.ownership !== primaryPage.ownership ||
+        page.contentHash !== primaryPage.contentHash
+      ) {
+        addDiagnostic(
+          diagnostics,
+          "error",
+          "compiler_authorization_manifest_coowner_mismatch",
+          `targetAuthorizations[${index}].manifestOwners[${trackedIndex}]`,
+          "All Manifest sources tracking a page must agree on path, ownership, and content hash"
+        );
+      }
+    });
   });
 
   return diagnostics;
@@ -876,6 +1012,10 @@ function createCompileContextDigest(input: KnowledgeCompileInput): string {
     bundle: input.bundle,
     operation: input.operation,
     source: input.source,
+    manifest: {
+      revision: input.manifest.revision,
+      digest: createSourceManifestDigest(input.manifest),
+    },
     schema: { path: input.schema.path, contentHash: input.schema.contentHash },
     artifacts: input.artifacts.map((artifact) => ({
       kind: artifact.kind,
@@ -1232,6 +1372,11 @@ function normalizeAnalysis(
       authorization,
     ])
   );
+  const manifestTrackedPathKeys = new Set(
+    input.manifest.entries.flatMap((entry) =>
+      (entry.lastSuccessful?.generatedPages ?? []).map((page) => toWindowsPathKey(page.path))
+    )
+  );
   output.targets.forEach((target, index) => {
     const field = `targets[${index}].path`;
     diagnostics.push(
@@ -1312,6 +1457,15 @@ function normalizeAnalysis(
     claimIds.sort(compareText);
 
     const authorization = authorizationsByPath.get(toWindowsPathKey(target.path));
+    if (!authorization && manifestTrackedPathKeys.has(toWindowsPathKey(target.path))) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_target_manifest_authorization_missing",
+        field,
+        "A Manifest-tracked target requires explicit caller-owned authorization even when its file is missing"
+      );
+    }
     const access = authorization ? "authorized" : "create_only";
     const contentPolicy = authorization?.contentPolicy ?? "grounded";
     const ownership = authorization?.ownership ?? "new";
@@ -1619,6 +1773,16 @@ function bindTargetObservations(
         beforeHash,
       });
     } else {
+      if (target.expectedContentHash !== beforeHash) {
+        addDiagnostic(
+          diagnostics,
+          "error",
+          "compiler_write_content_changed",
+          `observations[${index}].content`,
+          "Write target no longer matches the Manifest's last committed content hash"
+        );
+        return;
+      }
       boundTargets.push({
         ...target,
         path: observation.path,
@@ -2169,12 +2333,67 @@ export class KnowledgeCompiler {
       return createFailure("candidate_validation", finalValidation.diagnostics);
     }
 
+    const boundTargetsByKey = new Map(
+      binding.targets.map((target) => [toWindowsPathKey(target.path), target])
+    );
+    const trackedPageKeys = new Set(
+      input.manifest.entries
+        .find((entry) => entry.sourceId === input.source.sourceId)
+        ?.lastSuccessful?.generatedPages.map((page) => toWindowsPathKey(page.path)) ?? []
+    );
+    const mutations: ManifestCommitMutation[] = [];
+    for (const change of changeSet.changes) {
+      const target = boundTargetsByKey.get(toWindowsPathKey(change.path));
+      if (!target) {
+        return createFailure("candidate_validation", [
+          {
+            code: "compiler_manifest_mutation_target_missing",
+            severity: "error",
+            field: "changeSet.changes",
+            message: "Every proposed change must retain its runtime-bound Manifest authority",
+          },
+        ]);
+      }
+      mutations.push({
+        changeId: change.id,
+        path: change.path,
+        operation: change.operation,
+        access: target.access,
+        ownership: target.ownership === "new" ? "generated" : target.ownership,
+        wasTrackedByPrimarySource: trackedPageKeys.has(toWindowsPathKey(change.path)),
+      });
+    }
+
+    let manifestCommitPlan: ManifestCommitPlan;
+    try {
+      manifestCommitPlan = createManifestCommitPlan({
+        bundle: input.bundle,
+        manifest: input.manifest,
+        sourceId: input.source.sourceId,
+        sourceContentHash: input.source.sourceContentHash,
+        pipelineFingerprint: input.source.pipelineFingerprint,
+        inputRevision: input.source.inputRevision,
+        changeSet,
+        mutations,
+      });
+    } catch (error) {
+      if (error instanceof ManifestCommitValidationError) {
+        return createFailure(
+          "candidate_validation",
+          prefixDiagnostics(error.diagnostics, "manifestCommitPlan")
+        );
+      }
+      throw error;
+    }
+
     return {
       kind: "proposed",
       compileContextDigest,
       analysisDigest,
       targetSetDigest,
       proposalDigest: createChangeSetTransactionDigest(changeSet),
+      manifestCommitPlan,
+      manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
       analysis,
       changeSet,
       diagnostics: [...compileDiagnostics, ...validationDiagnostics],

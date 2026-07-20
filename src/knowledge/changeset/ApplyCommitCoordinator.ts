@@ -1,6 +1,7 @@
-import type {
-  TransactionCommitReceipt,
-  TransactionRecoveryResult,
+import {
+  transactionCommitReceiptMatchesJournal,
+  type TransactionCommitReceipt,
+  type TransactionRecoveryResult,
 } from "@/knowledge/changeset/ChangeSetTransaction";
 import type { ChangeSetTransactionJournal } from "@/knowledge/changeset/TransactionStorage";
 import type {
@@ -161,59 +162,6 @@ export class ApplyCommitAcknowledgeError extends Error {
 }
 
 /**
- * Compares a journal target's after-state with one receipt target.
- *
- * @param journalTarget - Durable target retained in the transaction journal
- * @param receiptTarget - Content-addressed target exposed by the receipt
- * @returns Whether both describe the exact same post-commit path state
- */
-function targetMatchesReceipt(
-  journalTarget: ChangeSetTransactionJournal["targets"][number],
-  receiptTarget: TransactionCommitReceipt["targets"][number]
-): boolean {
-  if (
-    journalTarget.path !== receiptTarget.path ||
-    journalTarget.after.kind !== receiptTarget.kind
-  ) {
-    return false;
-  }
-  return (
-    journalTarget.after.kind === "missing" ||
-    (receiptTarget.kind === "file" && journalTarget.after.contentHash === receiptTarget.contentHash)
-  );
-}
-
-/**
- * Compares every public receipt field with its committed journal source.
- *
- * @param journal - Loaded committed journal
- * @param receipt - Receipt reported by startup transaction recovery
- * @returns Whether the receipt is exactly derived from the journal
- */
-function journalMatchesReceipt(
-  journal: CommittedChangeSetTransactionJournal,
-  receipt: TransactionCommitReceipt
-): boolean {
-  return (
-    journal.transactionId === receipt.transactionId &&
-    journal.revision === receipt.commitRevision &&
-    journal.bundleId === receipt.bundleId &&
-    journal.changeSetId === receipt.changeSetId &&
-    journal.changeSetDigest === receipt.changeSetDigest &&
-    journal.jobClaim.jobId === receipt.jobClaim.jobId &&
-    journal.jobClaim.attempt === receipt.jobClaim.attempt &&
-    journal.jobClaim.startedAt === receipt.jobClaim.startedAt &&
-    journal.jobClaim.sourceId === receipt.jobClaim.sourceId &&
-    journal.jobClaim.sourceContentHash === receipt.jobClaim.sourceContentHash &&
-    journal.jobClaim.pipelineFingerprint === receipt.jobClaim.pipelineFingerprint &&
-    journal.jobClaim.inputRevision === receipt.jobClaim.inputRevision &&
-    journal.committedAt === receipt.committedAt &&
-    journal.targets.length === receipt.targets.length &&
-    journal.targets.every((target, index) => targetMatchesReceipt(target, receipt.targets[index]))
-  );
-}
-
-/**
  * Coordinates crash-safe bookkeeping after a ChangeSet's page files commit.
  *
  * After a read-only exact queue-claim proof, persistence order is intentionally
@@ -277,7 +225,7 @@ export class ApplyCommitCoordinator {
     if (active.phase !== "committed") {
       throw new ApplyCommitIdentityError(receipt.transactionId, "journal_not_committed");
     }
-    if (!journalMatchesReceipt(active, receipt)) {
+    if (!transactionCommitReceiptMatchesJournal(receipt, active)) {
       throw new ApplyCommitIdentityError(receipt.transactionId, "receipt_mismatch");
     }
 

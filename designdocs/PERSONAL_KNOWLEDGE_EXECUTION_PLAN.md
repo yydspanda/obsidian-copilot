@@ -2,13 +2,13 @@
 
 Status: Active
 
-Last updated: 2026-07-17
+Last updated: 2026-07-20
 
 Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C/D/E/F/G foundations and the G.1 runtime adapter foundation are implemented, and G.2 has started with a review-only startup coordinator. G.1 adds a strict shared runtime envelope, Queue/Review/Manifest/Transaction/input-revision facades, safe first-file publication, and create/update file CAS code while deliberately leaving Knowledge Studio unavailable. The G.2 coordinator can converge durable pending and rejected Review Store hand-offs without a model or Wiki write; accepted records remain identity-only inputs for higher-level runtime classification. Exact apply-commit ledger, durable Manifest projection/read-set, no-journal recovery, full workflow wiring, and the Windows adapter acceptance gate remain pending. Commit H follows only after G.2 safely enables the runtime workflow. The current worktree passes 2,806 unit tests across 152 Jest suites, TypeScript `noEmit`, repository-wide ESLint, and changed-file Prettier checks; details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier still has only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D/E/F/G foundations and the G.1 runtime adapter foundation are implemented; G.2a adds the review-only startup coordinator, and G.2b adds durable Manifest plan/intent plus the exact atomic Manifest/apply-ledger adapter. Review v2 now derives final intent from the immutable compiler plan, transaction journal v3 retains that intent and full source identity, and runtime envelope v2 reserves the exact Manifest read-set before page mutation and publishes Manifest success with its ledger in one transform. Generic Manifest storage cannot bypass that success path, unsafe v1 state fails closed, and shared-page hashes advance for every co-owner. These cores are still not assembled into plugin startup or Knowledge Studio; no-journal recovery, remaining semantic dependencies, full workflow wiring, and the Windows acceptance gate remain pending. Commit H follows only after G.2 safely enables the runtime workflow. Verification details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier still has only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -178,24 +178,24 @@ Scope:
 - 完整 pre-state、accepted ChangeSet 和 Bundle boundary 进入 Vault-global 单活动 journal。
 - Windows deterministic write order、单文件原子 compare-and-swap、写后复验、commit marker 和幂等 startup roll-forward。
 - divergent file state 进入 sticky `recovery_required`，不自动 rollback、不覆盖并发用户编辑。
-- Transaction journal v2 将 source id、source hash、pipeline fingerprint、input revision 与 job attempt/start 绑定为完整 claim；ChangeSet 必须引用该 source。
+- Transaction journal v3 将 source id、source hash、pipeline fingerprint、input revision 与 job attempt/start 绑定为完整 claim，并持久化回链 Review plan 的最终 Manifest intent；ChangeSet 必须引用该 source。
 - applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，不能直接把 durable Queue job 标为 completed。审核接受先进入新的 durable applying claim，同样走 transaction/coordinator。
 - Queue snapshot v3 以 exact `applyClaim`、pending review anchor、review rejection tombstone 和 `commit_pending_ack` marker 连接 Review Store、active/recovered apply 与 committed journal；审核路径绑定 proposal/accepted digest、terminal revision/time 和完整 job claim。v1/v2 无法证明的 review/apply identity 以 `legacy_unverified` 明确 fail closed。
-- 固定 `queue claim verify → manifest → queue marker → journal ack → queue release` 的协议；前者只读，后四步持久且均可在崩溃后重试收敛。
+- 固定 `queue claim verify → atomic manifest+ledger → queue marker → journal ack → queue release` 的协议；当前首次核验仍是独立只读操作，尚待在 Manifest+ledger callback 内复证 Queue/Review identity 与 source high-watermark。
 - 明确 Obsidian Vault API 不提供真正跨文件原子性。
 
 Exit criteria:
 
 - 崩溃注入覆盖每个写入阶段。
-- 纯事务与协调器层已证明：页面 commit marker 之前不会推进任务或 Manifest 成功，任一账本断点均可重试。
+- 纯事务与协调器层已证明：页面 commit marker 之前不会推进任务或 Manifest 成功；已有 journal、ledger 或 Queue marker 持久证据的断点可按 exact identity 重试。
 - Raw Source target 永远被拒绝，除非未来出现独立显式动作契约。
 
 Runtime integration boundary before real Vault writes:
 
-- 首个真实 Windows adapter/UI 必须同步加入 Windows Desktop platform guard、非支持平台用户提示，并明确更新 `manifest.json` 的 desktop-only 决策与相应用户文档。
-- 实现 Windows/Vault `TransactionStorage`、`QueueStorage` 与 `KnowledgeFileStore.compareAndSwap` adapter；compare-and-delete 同样必须原子，不能用普通 read + delete 冒充。
-- 实现 `ApplyCommitManifestPort` 的 exact-idempotency adapter/ledger；必须按 transaction id/revision、ChangeSet digest 与 receipt 防重，且对同 key 不同 payload fail closed。
-- journal 化并复证 schema、非 target link、source artifact 和 manifest target authorization 的 semantic read-set，避免崩溃恢复时依赖已经漂移；在 ownership/sourceRefs/last-generated hash 可于 apply-time 复证前，不在真实 UI 启用 compiler delete。
+- Windows Desktop platform guard、非支持平台提示和 `manifest.json` 保持非 desktop-only 的代码/文档决定已完成；真实 Windows test Vault 验收仍是启用门槛。
+- Windows/Vault `TransactionStorage`、`QueueStorage` 与 create/update `KnowledgeFileStore.compareAndSwap` adapter 代码层已完成；仍须实机验证，compare-and-delete 也必须原子，不能用普通 read + delete 冒充。
+- [x] 实现 `ApplyCommitManifestPort` 的 exact-idempotency adapter/ledger；按 transaction id/revision、ChangeSet/intent/journal/receipt digest 防重，同 key 不同 payload fail closed，Manifest success 与 ledger 在一个 transform 中发布。
+- 已 journal 化并复证 Manifest target authorization（revision/digest、ownership/sourceRefs、last-generated hash）；仍需补 schema、非 target link 与 source artifact 的 semantic read-set，并在 safe compare-delete 完成前保持 compiler delete unavailable。
 - 在接入真实写盘前决定 mutation intent：当前 content-addressed at-least-once 恢复存在“CAS 后、progress 前崩溃，再被用户恢复为精确 before”这一 ABA 取舍。
 - 为 `recovery_required` 增加明确的重新校验、继续、回滚或放弃操作；在此之前冲突只保持 fail closed。
 - 在重新 claim startup backlog 前扫描 durable Review Store，并用 `reconcilePendingReview` 收敛“proposal 已落盘、Queue hand-off 未落盘”的旧 attempt。
@@ -278,20 +278,22 @@ Verified in automated code-level tests:
 Remaining exit gates:
 
 - 在真实 Windows Obsidian test Vault 验证 `DataAdapter.process`/`Vault.process` 的双实例序列化、callback/返回值、插件重载、外部编辑、NTFS/OneDrive/junction 和 crash/power-loss 行为；自动化测试不能替代该结论。
-- 实现 exact `ApplyCommitManifestPort` ledger、semantic read-set、startup Review reconciliation、no-journal recovery、history compaction/size threshold 和 safe compare-and-delete，或继续保持 delete unavailable。
+- startup Review reconciliation、Manifest target read-set 与 exact `ApplyCommitManifestPort` ledger 已完成 Core；仍需 schema/link/source-artifact read-set、Queue claim/Review identity/allocator-source high-watermark 的 commit-boundary atomic reproof、no-journal recovery、history compaction/size threshold 和 safe compare-and-delete，或继续保持 delete unavailable。
 - 当前单 envelope 有 O(size) 写放大和共享故障域；长期使用前必须通过 size/latency benchmark 决定 archive 与分片。
 - 完成这些门槛前，不把基础代码称为可用 Golden Flow 或 production-ready durable adapter。
 
-### Commit G.2 — Runtime Coordination and Recovery ← Next
+### Commit G.2 — Runtime Coordination and Recovery ← In progress
 
 Scope:
 
-- 实现 exact `ApplyCommitManifestPort` ledger，并把 queue/review/manifest/transaction facades、file store、compiler 与 startup coordinator 组装成 plugin singleton workflow。
+- [x] 实现 exact `ApplyCommitManifestPort` ledger；仍需把 queue/review/manifest/transaction facades、file store、compiler 与 startup coordinator 组装成 plugin singleton workflow。
 - 已完成独立的 Review startup coordinator Core：pending record 恢复 Queue anchor；rejected record 在需要时恢复 predecessor 后提交 exact rejection；accepted record 只作为后续 runtime classification identity，启动过程不会自动 apply。协调器用有界 Review revision 重读避免漏掉并发 terminal decision，并将稳定 observed revision 交给最终 startup gate 再复证。
-- 在 ledger adapter 前补齐 durable Manifest intent：必须含完整 post-compile pages、显式 ownership、Manifest revision/digest read-set 与 source `inputRevision`。当前 committed journal 只有 changed targets，不能安全推导完整 `lastSuccessful.generatedPages`。
+- [x] 补齐 durable Manifest plan/intent：包含完整 post-compile pages、显式 ownership/authorization、Manifest revision/digest read-set 与 source hash/pipeline/`inputRevision`；Review filter/rewrite 只从 immutable plan 投影，journal 不再从 changed targets 猜完整 `lastSuccessful.generatedPages`。
 - 启动时先验证 runtime envelope，扫描 active journal、apply claim、commit marker 与 Review Store，再执行 pending-review reconciliation；完成前不能 claim 新任务。
 - 关闭 accepted apply claim 已落盘但 journal 尚未创建的窗口，提供 no-journal verify/continue/abandon；不能凭“没有 journal”自动推断未写盘。
-- journal 化并复证 schema、non-target links、source artifact 与 manifest ownership/last-generated hash read-set；delete 可继续保持 unavailable，不能为了过门槛降级为 read-then-delete。
+- 已 journal 化并复证 manifest ownership/last-generated hash target read-set；继续补 schema、non-target links 与 source artifact read-set。delete 保持 unavailable，不能为了过门槛降级为 read-then-delete。
+- 在 Manifest+ledger atomic callback 内再次复证 exact Queue apply claim、Review identity 与 source high-watermark，并为接近 safe-integer 上限的整条 transaction/manifest/queue/ack 序列预留 outer-envelope revision 容量。
+- 定义 `no_changes` 的 durable source-success 与 Manifest revision 语义；在有明确账本前不能把空 ChangeSet 当作成功摄入。
 - 为 `recovery_required` 提供显式 revalidate/continue/rollback/abandon core 与 UI，所有 divergent file state 继续 fail closed。
 - 定义 envelope size/latency guard、协调 terminal archive/compaction；超过门槛时暂停新 ingest，而不是让 Obsidian UI 无界阻塞。
 - 把 file/projection adapter 的 malformed success、filesystem/runtime failure 映射为受控 infrastructure error，用户提示不包含内容、路径外数据或 credential。

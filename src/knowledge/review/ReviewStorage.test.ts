@@ -1,4 +1,10 @@
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
+import {
+  createManifestCommitIntentDigest,
+  createManifestCommitPlanDigest,
+  projectManifestCommitIntent,
+  type ManifestCommitPlan,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeChangeSet, KnowledgeFileChange } from "@/knowledge/model/types";
 import {
@@ -11,6 +17,7 @@ import {
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
+const HASH_C = "c".repeat(64);
 
 /** Creates the exact queue identity used by review fixtures. */
 function createJobClaim(jobId = "job-1"): ChangeSetReviewJobClaim {
@@ -56,25 +63,60 @@ function createProposal(
   };
 }
 
+/** Creates the complete Manifest read-set and mutation authority for one proposal. */
+function createManifestCommitPlan(
+  proposal: KnowledgeChangeSet,
+  jobClaim = createJobClaim()
+): ManifestCommitPlan {
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: proposal.bundleId,
+    sourceId: jobClaim.sourceId,
+    sourceContentHash: jobClaim.sourceContentHash,
+    pipelineFingerprint: jobClaim.pipelineFingerprint,
+    inputRevision: jobClaim.inputRevision,
+    changeSetId: proposal.id,
+    expectedManifestRevision: 0,
+    expectedManifestDigest: HASH_C,
+    baseGeneratedPages: proposal.changes.flatMap((change) =>
+      change.operation === "create"
+        ? []
+        : [{ path: change.path, ownership: "generated" as const, contentHash: change.beforeHash }]
+    ),
+    mutations: proposal.changes.map((change) => ({
+      changeId: change.id,
+      path: change.path,
+      operation: change.operation,
+      access: change.operation === "create" ? ("create_only" as const) : ("authorized" as const),
+      ownership: "generated" as const,
+      wasTrackedByPrimarySource: change.operation !== "create",
+    })),
+  };
+}
+
 /** Creates one pending record whose proposal digest is exact. */
 function createPendingRecord(
   proposal = createProposal(),
-  jobClaim = createJobClaim()
+  jobClaim = createJobClaim(),
+  manifestCommitPlan = createManifestCommitPlan(proposal, jobClaim)
 ): ChangeSetReviewRecord {
   return {
     changeSetId: proposal.id,
     recordRevision: 0,
     proposal,
     proposalDigest: createChangeSetTransactionDigest(proposal),
+    manifestCommitPlan,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
     jobClaim,
     recordedAt: 200,
     outcome: "pending",
   };
 }
 
-/** Creates a complete v1 snapshot around supplied records. */
+/** Creates a complete v2 snapshot around supplied records. */
 function createSnapshot(records: ChangeSetReviewRecord[]): ChangeSetReviewSnapshot {
-  return { version: 1, bundleId: "bundle-1", revision: 1, records };
+  return { version: 2, bundleId: "bundle-1", revision: 1, records };
 }
 
 /** Extracts stable diagnostic codes from one semantic validation result. */
@@ -104,7 +146,7 @@ describe("ReviewStorage contracts", () => {
         { ...createPendingRecord(), unexpected: true } as unknown as ChangeSetReviewRecord,
       ]),
     ],
-    ["wrong version", { ...createSnapshot([]), version: 2 }],
+    ["legacy version", { ...createSnapshot([]), version: 1 }],
     ["unsafe revision", { ...createSnapshot([]), revision: Number.MAX_SAFE_INTEGER + 1 }],
   ])("rejects structurally invalid %s", (_label, value) => {
     expect(parseChangeSetReviewSnapshot(value).ok).toBe(false);
@@ -146,6 +188,61 @@ describe("ReviewStorage contracts", () => {
         "review_proposal_identity_mismatch",
         "review_claim_source_unknown",
       ])
+    );
+  });
+
+  it("binds the exact Manifest plan to proposal, source, input revision, and digest", () => {
+    const wrongDigest = { ...createPendingRecord(), manifestCommitPlanDigest: HASH_A };
+    const wrongSource = createPendingRecord(
+      createProposal("changeset-source"),
+      createJobClaim("job-source")
+    );
+    wrongSource.manifestCommitPlan = {
+      ...wrongSource.manifestCommitPlan,
+      sourceId: "source-other",
+    };
+    wrongSource.manifestCommitPlanDigest = createManifestCommitPlanDigest(
+      wrongSource.manifestCommitPlan
+    );
+    const missingMutation = createPendingRecord(
+      createProposal("changeset-mutation"),
+      createJobClaim("job-mutation")
+    );
+    missingMutation.manifestCommitPlan = {
+      ...missingMutation.manifestCommitPlan,
+      mutations: [],
+    };
+
+    expect(diagnosticCodes(createSnapshot([wrongDigest, wrongSource, missingMutation]))).toEqual(
+      expect.arrayContaining([
+        "review_manifest_plan_digest_mismatch",
+        "review_manifest_plan_identity_mismatch",
+        "manifest_commit_change_unknown",
+      ])
+    );
+  });
+
+  it("rejects source content or pipeline drift even when source and input revision match", () => {
+    const sourceProposal = createProposal("changeset-source-content");
+    const sourceClaim = createJobClaim("job-source-content");
+    const sourcePlan = createManifestCommitPlan(sourceProposal, sourceClaim);
+    const sourceMismatch = createPendingRecord(
+      sourceProposal,
+      { ...sourceClaim, sourceContentHash: HASH_C },
+      sourcePlan
+    );
+    const pipelineProposal = createProposal("changeset-pipeline");
+    const pipelineClaim = createJobClaim("job-pipeline");
+    const pipelinePlan = createManifestCommitPlan(pipelineProposal, pipelineClaim);
+    const pipelineMismatch = createPendingRecord(
+      pipelineProposal,
+      { ...pipelineClaim, pipelineFingerprint: HASH_C },
+      pipelinePlan
+    );
+
+    const codes = diagnosticCodes(createSnapshot([sourceMismatch, pipelineMismatch]));
+    expect(codes.filter((code) => code === "review_manifest_plan_identity_mismatch")).toHaveLength(
+      2
     );
   });
 
@@ -192,6 +289,13 @@ describe("ReviewStorage contracts", () => {
       outcome: "accepted",
       acceptedChangeSet,
       acceptedDigest: createChangeSetTransactionDigest(acceptedChangeSet),
+      manifestCommitIntent: projectManifestCommitIntent(
+        pending.manifestCommitPlan,
+        acceptedChangeSet
+      ),
+      manifestCommitIntentDigest: createManifestCommitIntentDigest(
+        projectManifestCommitIntent(pending.manifestCommitPlan, acceptedChangeSet)
+      ),
       acceptedAt: 201,
     };
 
@@ -199,6 +303,66 @@ describe("ReviewStorage contracts", () => {
       valid: true,
       diagnostics: [],
     });
+    expect(accepted.manifestCommitIntent.generatedPages).toEqual([
+      {
+        path: update.path,
+        ownership: "generated",
+        contentHash: createFileContentHash(rewritten),
+      },
+    ]);
+  });
+
+  it("rejects an accepted Manifest intent that differs from the exact reviewed projection", () => {
+    const proposal = createProposal();
+    const pending = createPendingRecord(proposal);
+    const acceptedChangeSet: KnowledgeChangeSet = { ...proposal, status: "accepted" };
+    const projected = projectManifestCommitIntent(pending.manifestCommitPlan, acceptedChangeSet);
+    const mismatchedIntent = {
+      ...projected,
+      generatedPages: projected.generatedPages.map((page) => ({
+        ...page,
+        contentHash: HASH_B,
+      })),
+    };
+    const accepted: ChangeSetReviewRecord = {
+      ...pending,
+      recordRevision: 1,
+      outcome: "accepted",
+      acceptedChangeSet,
+      acceptedDigest: createChangeSetTransactionDigest(acceptedChangeSet),
+      manifestCommitIntent: mismatchedIntent,
+      manifestCommitIntentDigest: createManifestCommitIntentDigest(mismatchedIntent),
+      acceptedAt: 201,
+    };
+
+    expect(diagnosticCodes(createSnapshot([accepted]))).toContain(
+      "review_manifest_intent_projection_mismatch"
+    );
+  });
+
+  it("rejects accepted intent drift from the exact reviewed Manifest plan digest", () => {
+    const proposal = createProposal();
+    const pending = createPendingRecord(proposal);
+    const acceptedChangeSet: KnowledgeChangeSet = { ...proposal, status: "accepted" };
+    const projected = projectManifestCommitIntent(pending.manifestCommitPlan, acceptedChangeSet);
+    const mismatchedIntent = {
+      ...projected,
+      manifestCommitPlanDigest: "f".repeat(64),
+    };
+    const accepted: ChangeSetReviewRecord = {
+      ...pending,
+      recordRevision: 1,
+      outcome: "accepted",
+      acceptedChangeSet,
+      acceptedDigest: createChangeSetTransactionDigest(acceptedChangeSet),
+      manifestCommitIntent: mismatchedIntent,
+      manifestCommitIntentDigest: createManifestCommitIntentDigest(mismatchedIntent),
+      acceptedAt: 201,
+    };
+
+    expect(diagnosticCodes(createSnapshot([accepted]))).toContain(
+      "review_manifest_intent_projection_mismatch"
+    );
   });
 
   it("fails closed on accepted delete and accepted identity or provenance rewrites", () => {
@@ -212,6 +376,23 @@ describe("ReviewStorage contracts", () => {
     };
     const proposal = createProposal("changeset-delete", [deleteChange]);
     const pending = createPendingRecord(proposal);
+    pending.manifestCommitPlan = {
+      ...pending.manifestCommitPlan,
+      baseGeneratedPages: [
+        ...pending.manifestCommitPlan.baseGeneratedPages,
+        {
+          path: "Wiki/Keep.md",
+          ownership: "generated",
+          contentHash: HASH_B,
+        },
+      ],
+    };
+    pending.manifestCommitPlanDigest = createManifestCommitPlanDigest(pending.manifestCommitPlan);
+    const exactAcceptedChangeSet: KnowledgeChangeSet = { ...proposal, status: "accepted" };
+    const exactIntent = projectManifestCommitIntent(
+      pending.manifestCommitPlan,
+      exactAcceptedChangeSet
+    );
     const acceptedChangeSet: KnowledgeChangeSet = {
       ...proposal,
       status: "accepted",
@@ -224,6 +405,8 @@ describe("ReviewStorage contracts", () => {
       outcome: "accepted",
       acceptedChangeSet,
       acceptedDigest: createChangeSetTransactionDigest(acceptedChangeSet),
+      manifestCommitIntent: exactIntent,
+      manifestCommitIntentDigest: createManifestCommitIntentDigest(exactIntent),
       acceptedAt: 201,
     };
 
@@ -246,6 +429,11 @@ describe("ReviewStorage contracts", () => {
       outcome: "accepted",
       acceptedChangeSet,
       acceptedDigest: HASH_A,
+      manifestCommitIntent: projectManifestCommitIntent(
+        pending.manifestCommitPlan,
+        acceptedChangeSet
+      ),
+      manifestCommitIntentDigest: HASH_A,
       acceptedAt: 199,
     } as unknown as ChangeSetReviewRecord;
 

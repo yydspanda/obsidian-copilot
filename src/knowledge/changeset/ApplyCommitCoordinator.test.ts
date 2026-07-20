@@ -16,6 +16,11 @@ import {
   type ChangeSetTransactionJournal,
 } from "@/knowledge/changeset/TransactionStorage";
 import {
+  createManifestCommitIntentDigest,
+  createSourceManifestDigest,
+  type ManifestCommitIntent,
+} from "@/knowledge/manifest/ManifestCommitIntent";
+import {
   INGEST_QUEUE_VERSION,
   type IngestApplyCommitMarker,
   type IngestQueueSnapshot,
@@ -24,6 +29,7 @@ import type {
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   KnowledgeIngestJob,
+  SourceManifest,
 } from "@/knowledge/model/types";
 
 const DIGEST = "a".repeat(64);
@@ -77,10 +83,42 @@ function createChangeSet(): KnowledgeChangeSet {
   };
 }
 
+/** Creates the final complete Manifest projection carried by the committed journal. */
+function createManifestCommitIntent(changeSet: KnowledgeChangeSet): ManifestCommitIntent {
+  const manifest: SourceManifest = {
+    version: 1,
+    bundleId: changeSet.bundleId,
+    revision: 0,
+    entries: [
+      {
+        sourceId: "source-1",
+        sourceKey: "sources/source.md",
+        sourcePath: "Sources/source.md",
+        custody: "user_managed",
+      },
+    ],
+  };
+  return {
+    version: 1,
+    kind: "source_compile",
+    bundleId: changeSet.bundleId,
+    sourceId: "source-1",
+    sourceContentHash: "c".repeat(64),
+    pipelineFingerprint: "d".repeat(64),
+    inputRevision: 1,
+    manifestCommitPlanDigest: "e".repeat(64),
+    changeSetId: changeSet.id,
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    generatedPages: [{ path: "Wiki/Page.md", ownership: "generated", contentHash: CONTENT_HASH }],
+  };
+}
+
 /** Creates a complete committed journal for one applying job attempt. */
 function createCommittedJournal(): CommittedChangeSetTransactionJournal {
   const bundle = createBundle();
   const changeSet = createChangeSet();
+  const manifestCommitIntent = createManifestCommitIntent(changeSet);
   return {
     version: TRANSACTION_JOURNAL_VERSION,
     transactionId: "transaction-1",
@@ -89,6 +127,8 @@ function createCommittedJournal(): CommittedChangeSetTransactionJournal {
     bundle,
     changeSetId: changeSet.id,
     changeSetDigest: DIGEST,
+    manifestCommitIntent,
+    manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
     jobClaim: {
       jobId: "job-1",
       sourceId: "source-1",

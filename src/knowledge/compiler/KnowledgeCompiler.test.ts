@@ -26,10 +26,15 @@ import {
 import type { CompilerGenerationModelOutput } from "@/knowledge/compiler/generationSchema";
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
 import {
+  createManifestCommitPlanDigest,
+  createSourceManifestDigest,
+} from "@/knowledge/manifest/ManifestCommitIntent";
+import {
   createFileContentHash,
   createQuoteHash,
   createSourceContentHash,
 } from "@/knowledge/model/fingerprint";
+import type { SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 const SOURCE_TEXT = "The source says deterministic compilation is safer.";
@@ -37,6 +42,7 @@ const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_TEXT);
 const ARTIFACT_CONTENT_HASH = createFileContentHash(SOURCE_TEXT);
 const PIPELINE_FINGERPRINT = "b".repeat(64);
 const SCHEMA_CONTENT = "type: knowledge-schema\n";
+const DEFAULT_EXISTING_PAGE_HASH = createFileContentHash("default tracked page");
 const VALIDATION_SUCCESS = {
   validation: { okfValid: true, citationsValid: true, linksValid: true },
   diagnostics: [],
@@ -132,15 +138,18 @@ interface CompilerHarness {
 
 /** Creates a valid deterministic compile input with optional top-level replacements. */
 function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): KnowledgeCompileInput {
+  const bundle = overrides.bundle ?? {
+    version: 1 as const,
+    id: "personal",
+    sourceRoots: ["Sources"],
+    wikiRoot: "Wiki",
+    schemaRef: "Config/knowledge-schema.md",
+    reviewMode: "always" as const,
+  };
+  const targetAuthorizations = overrides.targetAuthorizations ?? [];
+  const manifest = overrides.manifest ?? createManifest(bundle.id, targetAuthorizations);
   return {
-    bundle: {
-      version: 1,
-      id: "personal",
-      sourceRoots: ["Sources"],
-      wikiRoot: "Wiki",
-      schemaRef: "Config/knowledge-schema.md",
-      reviewMode: "always",
-    },
+    bundle,
     operation: "ingest",
     source: {
       sourceId: "source-1",
@@ -148,6 +157,7 @@ function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): Kno
       pipelineFingerprint: PIPELINE_FINGERPRINT,
       inputRevision: 1,
     },
+    manifest,
     schema: {
       path: "Config/knowledge-schema.md",
       content: SCHEMA_CONTENT,
@@ -176,7 +186,7 @@ function createCompileInput(overrides: Partial<KnowledgeCompileInput> = {}): Kno
       },
     ],
     contextPages: [],
-    targetAuthorizations: [],
+    targetAuthorizations,
     createdAt: 1_000,
     ...overrides,
   };
@@ -193,7 +203,51 @@ function createTargetAuthorization(
     contentPolicy: "grounded",
     ownership: "generated",
     sourceRefs: ["source-1"],
+    expectedContentHash: DEFAULT_EXISTING_PAGE_HASH,
     ...overrides,
+  };
+}
+
+/** Creates an exact Manifest read-set matching caller-owned target authorities. */
+function createManifest(
+  bundleId: string,
+  authorizations: readonly CompilerTargetAuthorization[]
+): SourceManifest {
+  const sourceIds = new Set<string>(["source-1"]);
+  authorizations.forEach((authorization) =>
+    authorization.sourceRefs.forEach((sourceId) => sourceIds.add(sourceId))
+  );
+  return {
+    version: 1,
+    bundleId,
+    revision: 0,
+    entries: [...sourceIds].sort().map((sourceId) => {
+      const pages = authorizations
+        .filter((authorization) => authorization.sourceRefs.includes(sourceId))
+        .map((authorization) => ({
+          path: authorization.path,
+          ownership: authorization.ownership,
+          contentHash: authorization.expectedContentHash ?? DEFAULT_EXISTING_PAGE_HASH,
+        }))
+        .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+      return {
+        sourceId,
+        sourceKey: `sources/${sourceId}.md`,
+        sourcePath: `Sources/${sourceId}.md`,
+        custody: "user_managed" as const,
+        ...(pages.length === 0
+          ? {}
+          : {
+              lastSuccessful: {
+                sourceContentHash: SOURCE_CONTENT_HASH,
+                pipelineFingerprint: PIPELINE_FINGERPRINT,
+                generatedPages: pages,
+                changeSetId: "previous-changeset",
+                completedAt: 1,
+              },
+            }),
+      };
+    }),
   };
 }
 
@@ -329,7 +383,9 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     const newCreate = "---\ntype: concept\n---\n\n# Created\n";
     const newUpdate = "---\ntype: concept\n---\n\n# Updated\n";
     const targetAuthorizations = [
-      createTargetAuthorization("Wiki/Update.md"),
+      createTargetAuthorization("Wiki/Update.md", {
+        expectedContentHash: createFileContentHash(oldUpdate),
+      }),
       createTargetAuthorization("Wiki/Delete.md", {
         allowedIntents: ["delete"],
         contentPolicy: "structural",
@@ -421,6 +477,54 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
       expect(["target-create", "target-update", "target-delete"]).not.toContain(change.id);
     }
     expect(first.proposalDigest).toBe(createChangeSetTransactionDigest(first.changeSet));
+    expect(first.manifestCommitPlanDigest).toBe(
+      createManifestCommitPlanDigest(first.manifestCommitPlan)
+    );
+    expect(first.manifestCommitPlan).toMatchObject({
+      version: 1,
+      kind: "source_compile",
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: input.source.sourceContentHash,
+      pipelineFingerprint: input.source.pipelineFingerprint,
+      inputRevision: 1,
+      changeSetId: first.changeSet.id,
+      expectedManifestRevision: input.manifest.revision,
+      expectedManifestDigest: createSourceManifestDigest(input.manifest),
+    });
+    expect(first.manifestCommitPlan.baseGeneratedPages).toEqual([
+      {
+        path: "Wiki/Delete.md",
+        ownership: "generated",
+        contentHash: createFileContentHash(oldDelete),
+      },
+      {
+        path: "Wiki/Update.md",
+        ownership: "generated",
+        contentHash: createFileContentHash(oldUpdate),
+      },
+    ]);
+    expect(first.manifestCommitPlan.mutations).toEqual([
+      expect.objectContaining({
+        path: "Wiki/Create.md",
+        operation: "create",
+        ownership: "generated",
+        wasTrackedByPrimarySource: false,
+      }),
+      expect.objectContaining({
+        path: "Wiki/Delete.md",
+        operation: "delete",
+        ownership: "generated",
+        wasTrackedByPrimarySource: true,
+      }),
+      expect.objectContaining({
+        path: "Wiki/Update.md",
+        operation: "update",
+        ownership: "generated",
+        wasTrackedByPrimarySource: true,
+      }),
+    ]);
+    expect(nextObservation.manifestCommitPlanDigest).not.toBe(first.manifestCommitPlanDigest);
     expect(harness.validator.inputs[0].draft).not.toHaveProperty("status");
     expect(harness.validator.inputs[0].draft).not.toHaveProperty("validation");
     expect(harness.model.generationRequests).toHaveLength(3);
@@ -464,6 +568,30 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     ]);
   });
 
+  it("binds proposal identity and commit read-set to the exact Manifest revision", async () => {
+    const harness = createHarness();
+    const firstInput = createCompileInput();
+    const nextManifest = { ...firstInput.manifest, revision: firstInput.manifest.revision + 1 };
+
+    const first = requireProposal(
+      await harness.compiler.compile(firstInput, new AbortController().signal)
+    );
+    const next = requireProposal(
+      await harness.compiler.compile(
+        createCompileInput({ manifest: nextManifest }),
+        new AbortController().signal
+      )
+    );
+
+    expect(next.compileContextDigest).not.toBe(first.compileContextDigest);
+    expect(next.changeSet.id).not.toBe(first.changeSet.id);
+    expect(next.manifestCommitPlan.expectedManifestRevision).toBe(nextManifest.revision);
+    expect(next.manifestCommitPlan.expectedManifestDigest).toBe(
+      createSourceManifestDigest(nextManifest)
+    );
+    expect(next.manifestCommitPlanDigest).not.toBe(first.manifestCommitPlanDigest);
+  });
+
   it("returns no_changes without resolving or generating when analysis approves no targets", async () => {
     const harness = createHarness({ analyze: async () => createAnalysisOutput([]) });
 
@@ -495,7 +623,11 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     const result = requireNoChanges(
       await harness.compiler.compile(
         createCompileInput({
-          targetAuthorizations: [createTargetAuthorization("Wiki/Page.md")],
+          targetAuthorizations: [
+            createTargetAuthorization("Wiki/Page.md", {
+              expectedContentHash: createFileContentHash(existing),
+            }),
+          ],
         }),
         new AbortController().signal
       )
@@ -507,6 +639,108 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
 });
 
 describe("KnowledgeCompiler fail-closed analysis and generation", () => {
+  it.each([
+    {
+      name: "content hash",
+      code: "compiler_authorization_manifest_hash_mismatch",
+      mutate: (authorization: CompilerTargetAuthorization): CompilerTargetAuthorization => ({
+        ...authorization,
+        expectedContentHash: "f".repeat(64),
+      }),
+    },
+    {
+      name: "ownership",
+      code: "compiler_authorization_manifest_authority_mismatch",
+      mutate: (authorization: CompilerTargetAuthorization): CompilerTargetAuthorization => ({
+        ...authorization,
+        ownership: "shared",
+      }),
+    },
+    {
+      name: "source provenance",
+      code: "compiler_authorization_manifest_sources_mismatch",
+      mutate: (authorization: CompilerTargetAuthorization): CompilerTargetAuthorization => ({
+        ...authorization,
+        sourceRefs: ["source-1", "source-forged"],
+      }),
+    },
+  ])(
+    "rejects caller authorization drift in $name before model access",
+    async ({ code, mutate }) => {
+      const authority = createTargetAuthorization("Wiki/Page.md");
+      const manifest = createManifest("personal", [authority]);
+      const harness = createHarness();
+
+      const result = requireFailure(
+        await harness.compiler.compile(
+          createCompileInput({ manifest, targetAuthorizations: [mutate(authority)] }),
+          new AbortController().signal
+        )
+      );
+
+      expect(result.stage).toBe("input");
+      expect(diagnosticCodes(result)).toContain(code);
+      expect(harness.model.analysisRequests).toHaveLength(0);
+      expect(harness.resolver.requests).toHaveLength(0);
+    }
+  );
+
+  it("rejects an incomplete primary Manifest projection before model access", async () => {
+    const harness = createHarness();
+    const manifest = createManifest("personal", []);
+    manifest.entries[0].lastSuccessful = {
+      sourceContentHash: SOURCE_CONTENT_HASH,
+      pipelineFingerprint: PIPELINE_FINGERPRINT,
+      generatedPages: [{ path: "Wiki/Legacy.md", ownership: "generated" }],
+      changeSetId: "legacy-changeset",
+      completedAt: 1,
+    };
+
+    const result = requireFailure(
+      await harness.compiler.compile(createCompileInput({ manifest }), new AbortController().signal)
+    );
+
+    expect(result.stage).toBe("input");
+    expect(diagnosticCodes(result)).toContain("compiler_manifest_page_hash_missing");
+    expect(harness.model.analysisRequests).toHaveLength(0);
+    expect(harness.resolver.requests).toHaveLength(0);
+  });
+
+  it("rejects an unlisted Manifest-tracked missing target but permits an authorized repair", async () => {
+    const authority = createTargetAuthorization("Wiki/Page.md");
+    const manifest = createManifest("personal", [authority]);
+    const unlistedHarness = createHarness();
+
+    const rejected = requireFailure(
+      await unlistedHarness.compiler.compile(
+        createCompileInput({ manifest, targetAuthorizations: [] }),
+        new AbortController().signal
+      )
+    );
+
+    expect(rejected.stage).toBe("analysis");
+    expect(diagnosticCodes(rejected)).toContain("compiler_target_manifest_authorization_missing");
+    expect(unlistedHarness.resolver.requests).toHaveLength(0);
+    expect(unlistedHarness.model.generationRequests).toHaveLength(0);
+    expect(unlistedHarness.validator.inputs).toHaveLength(0);
+
+    const authorizedHarness = createHarness();
+    const repaired = requireProposal(
+      await authorizedHarness.compiler.compile(
+        createCompileInput({ manifest, targetAuthorizations: [authority] }),
+        new AbortController().signal
+      )
+    );
+    expect(repaired.changeSet.changes[0]).toMatchObject({
+      path: "Wiki/Page.md",
+      operation: "create",
+    });
+    expect(repaired.manifestCommitPlan.mutations[0]).toMatchObject({
+      access: "authorized",
+      wasTrackedByPrimarySource: true,
+    });
+  });
+
   it.each([
     {
       name: "strictly malformed output",
@@ -862,7 +1096,11 @@ describe("KnowledgeCompiler target resolver boundary", () => {
     const result = requireProposal(
       await harness.compiler.compile(
         createCompileInput({
-          targetAuthorizations: [createTargetAuthorization("Wiki/CaseAlias.md")],
+          targetAuthorizations: [
+            createTargetAuthorization("Wiki/CaseAlias.md", {
+              expectedContentHash: createFileContentHash(existing),
+            }),
+          ],
         }),
         new AbortController().signal
       )
