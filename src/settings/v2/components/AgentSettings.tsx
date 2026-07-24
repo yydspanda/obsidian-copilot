@@ -28,7 +28,7 @@ import { ConfiguredModelEnableList } from "./ConfiguredModelEnableList";
  * Explicit ordering for backend sub-tabs. Keeps Opencode → Claude → Codex
  * regardless of what `listBackendDescriptors()` returns.
  */
-const BACKEND_ORDER: BackendId[] = ["opencode", "claude", "codex"];
+const BACKEND_ORDER: BackendId[] = ["opencode", "claude", "codex", "pi"];
 
 /** Synthetic sub-tab id for the (non-backend) Quick Chat model curation. */
 const QUICK_CHAT_TAB_ID = "quickchat";

@@ -37,6 +37,7 @@ const PROVIDER_TYPE_BY_AGENT: Record<AgentType, ProviderType> = {
   claude: "anthropic",
   codex: "openai-compatible",
   opencode: "openai-compatible",
+  pi: "openai-compatible",
 };
 
 /**
