@@ -32,7 +32,11 @@ import type {
   KnowledgeCompileResult,
 } from "@/knowledge/compiler/CompilerModelPort";
 import { KnowledgeCompiler } from "@/knowledge/compiler/KnowledgeCompiler";
-import { IngestQueue, type IngestExecutor } from "@/knowledge/ingest/queue/IngestQueue";
+import {
+  IngestQueue,
+  IngestQueueStartupReleaseRequiredError,
+  type IngestExecutor,
+} from "@/knowledge/ingest/queue/IngestQueue";
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
   createFileContentHash,
@@ -50,6 +54,7 @@ import type {
 } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { KnowledgeStartupGate } from "@/knowledge/recovery/KnowledgeStartupGate";
+import { KnowledgeStartupReleaseCoordinator } from "@/knowledge/recovery/KnowledgeStartupRelease";
 import { NoJournalApplyRecoveryCoordinator } from "@/knowledge/recovery/NoJournalApplyRecovery";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
 import { ReviewQueueStartupReconciler } from "@/knowledge/review/ReviewQueueStartupReconciler";
@@ -63,6 +68,7 @@ import {
   KnowledgeRuntimeNoJournalApplyRecoveryPort,
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeReviewStorage,
+  KnowledgeRuntimeStartupReleasePort,
   KnowledgeRuntimeStore,
   KnowledgeRuntimeTransactionStorage,
   parseKnowledgeRuntimeStoreSnapshot,
@@ -517,8 +523,6 @@ describe("durable knowledge commit pipeline", () => {
       status: "awaiting_review",
       jobId: "job-1",
     });
-    await queue.pause(bundle.id, "startup gate integration fixture");
-
     const wikiFiles = new MemoryKnowledgeFileStore();
     let transactionTime = 1_300;
     const transaction = new ChangeSetTransaction({
@@ -545,6 +549,10 @@ describe("durable knowledge commit pipeline", () => {
       reviews: new ReviewQueueStartupReconciler({ reviews, queue }),
       accepted: recoveryPort,
     });
+    const startupRelease = new KnowledgeStartupReleaseCoordinator(
+      new KnowledgeRuntimeStartupReleasePort(runtime)
+    );
+    await queue.recoverOnStartup(bundle.id);
     const beforeAcceptedStartup = await atomicFile.read();
     const acceptedStartup = await startupGate.run(bundle);
     expect(acceptedStartup).toMatchObject({
@@ -570,10 +578,16 @@ describe("durable knowledge commit pipeline", () => {
     });
     expect(acceptedStartup.acceptedClassifications).toHaveLength(1);
     expect(acceptedStartup.attention).toHaveLength(1);
+    expect(acceptedStartup.queueSnapshot.control).toMatchObject({
+      status: "paused",
+      reason: "startup_recovery",
+    });
     await expect(atomicFile.read()).resolves.toBe(beforeAcceptedStartup);
     expect(wikiFiles.files.size).toBe(0);
 
-    await queue.resume(bundle.id);
+    await expect(queue.resume(bundle.id)).rejects.toBeInstanceOf(
+      IngestQueueStartupReleaseRequiredError
+    );
     const applyingJob = await queue.beginReviewApply(bundle.id, {
       outcome: "accepted",
       bundleId: bundle.id,
@@ -686,6 +700,13 @@ describe("durable knowledge commit pipeline", () => {
     await expect(transaction.loadActive()).resolves.toBeNull();
     await queue.finalizeApplyRecovery(bundle.id, receipt.transactionId);
     await expect(queue.getPendingApplyCommit(bundle.id)).resolves.toBeNull();
+    const clearStartup = await startupGate.run(bundle);
+    expect(clearStartup).toMatchObject({
+      disposition: "observed_clear",
+      queueSnapshot: { control: { status: "paused", reason: "startup_recovery" } },
+      acceptedClassifications: [{ kind: "committed", transactionId: receipt.transactionId }],
+      attention: [],
+    });
     const clearedBytes = await atomicFile.read();
     await applyCommitPort.recordCommitted(committedJournal, receipt);
     await expect(atomicFile.read()).resolves.toBe(clearedBytes);
@@ -708,6 +729,36 @@ describe("durable knowledge commit pipeline", () => {
     const advancedBytes = await atomicFile.read();
     await applyCommitPort.recordCommitted(committedJournal, receipt);
     await expect(atomicFile.read()).resolves.toBe(advancedBytes);
+    await expect(startupRelease.release(clearStartup)).resolves.toEqual({
+      kind: "observation_changed",
+      bundleId: bundle.id,
+      boundary: "runtime",
+    });
+    await expect(atomicFile.read()).resolves.toBe(advancedBytes);
+    await expect(queue.runNext(bundle.id)).resolves.toEqual({
+      kind: "paused",
+      reason: "startup_recovery",
+    });
+
+    const refreshedClear = await startupGate.run(bundle);
+    await expect(startupRelease.release(refreshedClear)).resolves.toMatchObject({
+      kind: "released",
+      bundleId: bundle.id,
+      queueSnapshot: { control: { status: "running" } },
+    });
+    const releasedBytes = await atomicFile.read();
+    await expect(startupRelease.release(refreshedClear)).resolves.toEqual({
+      kind: "observation_changed",
+      bundleId: bundle.id,
+      boundary: "runtime",
+    });
+    await expect(atomicFile.read()).resolves.toBe(releasedBytes);
+    const runningClear = await startupGate.run(bundle);
+    await expect(startupRelease.release(runningClear)).resolves.toMatchObject({
+      kind: "unchanged",
+      reason: "already_running",
+    });
+    await expect(atomicFile.read()).resolves.toBe(releasedBytes);
 
     const finalManifest = requireManifest(await manifestStorage.read(bundle.id));
     expect(finalManifest.revision).toBe(committedManifest.revision + 1);

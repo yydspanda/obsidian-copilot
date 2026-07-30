@@ -37,6 +37,7 @@ import type {
 } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { createNoJournalApplyRecoveryReference } from "@/knowledge/recovery/NoJournalApplyRecovery";
+import type { KnowledgeStartupReleaseRequest } from "@/knowledge/recovery/KnowledgeStartupRelease";
 import {
   ReviewStorageRevisionConflictError,
   type ChangeSetReviewSnapshot,
@@ -58,8 +59,11 @@ import {
   KnowledgeRuntimeManifestReservationError,
   KnowledgeRuntimeMigrationUnsafeError,
   KnowledgeRuntimeNoJournalApplyRecoveryPort,
+  KnowledgeRuntimeQueueObservationAuthorityError,
+  KnowledgeRuntimeQueueRecoveryGateProtectedError,
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeReviewStorage,
+  KnowledgeRuntimeStartupReleasePort,
   KnowledgeRuntimeStore,
   KnowledgeRuntimeStoreCorruptError,
   KnowledgeRuntimeTransactionStorage,
@@ -1031,6 +1035,7 @@ async function createHarness(): Promise<{
   review: KnowledgeRuntimeReviewStorage;
   manifest: KnowledgeRuntimeManifestStorage;
   recovery: KnowledgeRuntimeNoJournalApplyRecoveryPort;
+  release: KnowledgeRuntimeStartupReleasePort;
   transaction: KnowledgeRuntimeTransactionStorage;
   revisions: KnowledgeRuntimeInputRevisionAllocator;
 }> {
@@ -1044,8 +1049,37 @@ async function createHarness(): Promise<{
     review: new KnowledgeRuntimeReviewStorage(runtime),
     manifest: new KnowledgeRuntimeManifestStorage(runtime),
     recovery: new KnowledgeRuntimeNoJournalApplyRecoveryPort(runtime),
+    release: new KnowledgeRuntimeStartupReleasePort(runtime),
     transaction: new KnowledgeRuntimeTransactionStorage(runtime),
     revisions: new KnowledgeRuntimeInputRevisionAllocator(runtime),
+  };
+}
+
+/** Reads the current exact optimistic token for one startup release attempt. */
+async function createStartupReleaseRequest(
+  harness: { file: MemoryAtomicRuntimeFile },
+  bundleId = "personal"
+): Promise<KnowledgeStartupReleaseRequest> {
+  const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+  const queue = state.queues.find((slot) => slot.bundleId === bundleId)?.value as
+    | IngestQueueSnapshot
+    | undefined;
+  const review = state.reviews.find((slot) => slot.bundleId === bundleId)?.value as
+    | ChangeSetReviewSnapshot
+    | undefined;
+  return {
+    bundleId,
+    expectedRuntimeRevision: state.revision,
+    expectedReviewRevision: review?.revision ?? 0,
+    expectedQueueRevision: queue?.revision ?? 0,
+  };
+}
+
+/** Creates one empty Queue held behind the startup recovery gate. */
+function createStartupPausedQueue(revision: number, bundleId = "personal"): IngestQueueSnapshot {
+  return {
+    ...createQueueSnapshot(revision, bundleId),
+    control: { status: "paused", reason: "startup_recovery", pausedAt: 100 },
   };
 }
 
@@ -1068,11 +1102,6 @@ async function persistPreparedApplyAuthority(
   const currentReview = (await harness.review.read(
     journal.bundleId
   )) as ChangeSetReviewSnapshot | null;
-  queue.revision = (currentQueue?.revision ?? 0) + 1;
-  review.revision = (currentReview?.revision ?? 0) + 1;
-  await harness.queue.write(journal.bundleId, queue, currentQueue?.revision ?? null);
-  await harness.review.write(journal.bundleId, review, currentReview?.revision ?? null);
-
   const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
   const allocated =
     state.inputRevisions
@@ -1089,6 +1118,11 @@ async function persistPreparedApplyAuthority(
       sourceId: journal.jobClaim.sourceId,
     });
   }
+
+  queue.revision = (currentQueue?.revision ?? 0) + 1;
+  review.revision = (currentReview?.revision ?? 0) + 1;
+  await harness.queue.write(journal.bundleId, queue, currentQueue?.revision ?? null);
+  await harness.review.write(journal.bundleId, review, currentReview?.revision ?? null);
 }
 
 /**
@@ -1159,7 +1193,7 @@ function markNoJournalApplyFailed(state: KnowledgeRuntimeStoreSnapshot, recovere
     status: "paused",
     reason: "recovery_required",
     pausedAt: recoveredAt,
-    detail: "Interrupted apply requires recovery",
+    detail: "An interrupted apply must be recovered before queue resume",
   };
   queue.jobs = [
     {
@@ -1170,7 +1204,7 @@ function markNoJournalApplyFailed(state: KnowledgeRuntimeStoreSnapshot, recovere
       stage: "applying",
       failure: {
         code: "interrupted_apply_requires_recovery",
-        message: "Interrupted apply requires recovery",
+        message: "An interrupted apply requires transaction recovery before retry",
         retryable: false,
         occurredAt: recoveredAt,
       },
@@ -1413,6 +1447,483 @@ describe("KnowledgeRuntimeStore", () => {
     });
   });
 
+  it("atomically releases only the exact startup Queue control and revision", async () => {
+    const harness = await createHarness();
+    const paused = createStartupPausedQueue(1);
+    await harness.queue.write("personal", paused, null);
+    const request = await createStartupReleaseRequest(harness);
+    const before = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "released",
+      bundleId: "personal",
+      previousRuntimeRevision: before.revision,
+      runtimeRevision: before.revision + 1,
+      previousQueueRevision: 1,
+      queueSnapshot: {
+        ...paused,
+        revision: 2,
+        control: { status: "running" },
+      },
+    });
+
+    const after = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(after).toEqual({
+      ...before,
+      revision: before.revision + 1,
+      queues: [
+        {
+          bundleId: "personal",
+          value: { ...paused, revision: 2, control: { status: "running" } },
+        },
+      ],
+    });
+  });
+
+  it.each(["absent", "running"] as const)(
+    "keeps exact Runtime bytes when the target Queue is %s",
+    async (mode) => {
+      const harness = await createHarness();
+      if (mode === "running") {
+        await harness.queue.write("personal", createQueueSnapshot(1), null);
+      }
+      const request = await createStartupReleaseRequest(harness);
+      const before = await harness.file.read();
+
+      await expect(harness.release.release(request)).resolves.toMatchObject({
+        kind: "unchanged",
+        bundleId: "personal",
+        reason: mode === "absent" ? "queue_absent" : "already_running",
+      });
+      expect(await harness.file.read()).toBe(before);
+    }
+  );
+
+  it.each([
+    { boundary: "runtime", field: "expectedRuntimeRevision" },
+    { boundary: "review", field: "expectedReviewRevision" },
+    { boundary: "queue", field: "expectedQueueRevision" },
+  ] as const)(
+    "rejects a changed $boundary observation without rewriting bytes",
+    async (testCase) => {
+      const harness = await createHarness();
+      await harness.queue.write("personal", createStartupPausedQueue(1), null);
+      const current = await createStartupReleaseRequest(harness);
+      const request = { ...current, [testCase.field]: current[testCase.field] + 1 };
+      const before = await harness.file.read();
+
+      await expect(harness.release.release(request)).resolves.toEqual({
+        kind: "observation_changed",
+        bundleId: "personal",
+        boundary: testCase.boundary,
+      });
+      expect(await harness.file.read()).toBe(before);
+    }
+  );
+
+  it.each(["user", "rate_limit"] as const)(
+    "never overwrites a %s pause during startup release",
+    async (reason) => {
+      const harness = await createHarness();
+      const paused: IngestQueueSnapshot = {
+        ...createQueueSnapshot(1),
+        control: { status: "paused", reason, pausedAt: 100 },
+      };
+      await harness.queue.write("personal", paused, null);
+      const request = await createStartupReleaseRequest(harness);
+      const before = await harness.file.read();
+
+      await expect(harness.release.release(request)).resolves.toEqual({
+        kind: "blocked",
+        bundleId: "personal",
+        reason: "queue_pause_not_releasable",
+      });
+      expect(await harness.file.read()).toBe(before);
+    }
+  );
+
+  it.each(["running", "user"] as const)(
+    "rejects a generic startup-recovery to %s Queue write",
+    async (nextControl) => {
+      const harness = await createHarness();
+      const paused = createStartupPausedQueue(1);
+      await harness.queue.write("personal", paused, null);
+      const before = await harness.file.read();
+      const candidate: IngestQueueSnapshot = {
+        ...paused,
+        revision: 2,
+        control:
+          nextControl === "running"
+            ? { status: "running" }
+            : { status: "paused", reason: "user", pausedAt: 101 },
+      };
+
+      await expect(harness.queue.write("personal", candidate, 1)).rejects.toBeInstanceOf(
+        KnowledgeRuntimeQueueRecoveryGateProtectedError
+      );
+      expect(await harness.file.read()).toBe(before);
+    }
+  );
+
+  it("allows exact recovery strengthening but never a later generic running write", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const currentState = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const currentQueue = currentState.queues[0].value as IngestQueueSnapshot;
+    currentQueue.control = { status: "paused", reason: "startup_recovery", pausedAt: 200 };
+    harness.file.replaceContent(JSON.stringify(currentState));
+    const recoveredState = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    markNoJournalApplyFailed(recoveredState, 220);
+    const recoveredQueue = recoveredState.queues[0].value as IngestQueueSnapshot;
+
+    await expect(
+      harness.queue.write("personal", recoveredQueue, currentQueue.revision)
+    ).resolves.toBeUndefined();
+    await expect(harness.queue.read("personal")).resolves.toMatchObject({
+      revision: currentQueue.revision + 1,
+      control: { status: "paused", reason: "recovery_required" },
+      jobs: [expect.objectContaining({ status: "failed", stage: "applying" })],
+    });
+    const strengthenedBytes = await harness.file.read();
+    await expect(
+      harness.queue.write(
+        "personal",
+        createQueueSnapshot(recoveredQueue.revision + 1),
+        recoveredQueue.revision
+      )
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+    expect(await harness.file.read()).toBe(strengthenedBytes);
+  });
+
+  it("allows watcher rerun bookkeeping without weakening a startup apply claim", async () => {
+    const harness = await createNoJournalRecoveryHarness("transaction-startup-rerun");
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const currentQueue = state.queues[0].value as IngestQueueSnapshot;
+    currentQueue.control = { status: "paused", reason: "startup_recovery", pausedAt: 200 };
+    harness.file.replaceContent(JSON.stringify(state));
+    const claim = { ...currentQueue.applyClaim };
+    const applying = currentQueue.jobs[0];
+    const executor: IngestExecutor = {
+      /** Produces no changes; enqueue does not invoke this executor. */
+      execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+    };
+    const queue = new IngestQueue(harness.queue, executor, {
+      clock: () => 300,
+      jobIdFactory: () => "job-startup-rerun",
+    });
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: applying.sourceId,
+    });
+    expect(allocation.inputRevision).toBe(applying.inputRevision + 1);
+
+    await expect(
+      queue.enqueue({
+        bundleId: "personal",
+        sourceId: applying.sourceId,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: applying.pipelineFingerprint,
+        inputRevision: allocation.inputRevision,
+      })
+    ).resolves.toMatchObject({ kind: "rerun_scheduled", job: { id: applying.id } });
+    await expect(queue.load("personal")).resolves.toMatchObject({
+      control: { status: "paused", reason: "startup_recovery", pausedAt: 200 },
+      applyClaim: claim,
+      jobs: [
+        expect.objectContaining({
+          id: applying.id,
+          status: "processing",
+          stage: "applying",
+          startedAt: currentQueue.applyClaim?.startedAt,
+          rerunRequested: true,
+          updatedAt: 300,
+        }),
+      ],
+      reruns: [
+        expect.objectContaining({
+          jobId: "job-startup-rerun",
+          inputRevision: allocation.inputRevision,
+        }),
+      ],
+    });
+
+    const afterEnqueue = await queue.load("personal");
+    const beforeRollback = await harness.file.read();
+    const originalHighWatermark = currentQueue.sourceHighWatermarks.find(
+      (watermark) => watermark.sourceId === applying.sourceId
+    );
+    if (!originalHighWatermark) {
+      throw new Error("Expected original source high-watermark fixture");
+    }
+    const rolledBackObservation: IngestQueueSnapshot = {
+      ...afterEnqueue,
+      revision: afterEnqueue.revision + 1,
+      jobs: afterEnqueue.jobs.map((job) =>
+        job.id === applying.id
+          ? { ...job, rerunRequested: false, updatedAt: Math.max(job.updatedAt, 301) }
+          : job
+      ),
+      reruns: afterEnqueue.reruns.filter((rerun) => rerun.sourceId !== applying.sourceId),
+      sourceHighWatermarks: afterEnqueue.sourceHighWatermarks.map((watermark) =>
+        watermark.sourceId === applying.sourceId ? { ...originalHighWatermark } : watermark
+      ),
+    };
+    await expect(
+      harness.queue.write("personal", rolledBackObservation, afterEnqueue.revision)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueObservationAuthorityError);
+    expect(await harness.file.read()).toBe(beforeRollback);
+
+    const matchingAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: applying.sourceId,
+    });
+    expect(matchingAllocation.inputRevision).toBe(allocation.inputRevision + 1);
+    await expect(
+      queue.enqueue({
+        bundleId: "personal",
+        sourceId: applying.sourceId,
+        sourceContentHash: applying.sourceContentHash,
+        pipelineFingerprint: applying.pipelineFingerprint,
+        inputRevision: matchingAllocation.inputRevision,
+      })
+    ).resolves.toMatchObject({ kind: "updated", job: { id: applying.id } });
+    await expect(queue.load("personal")).resolves.toMatchObject({
+      control: { status: "paused", reason: "startup_recovery", pausedAt: 200 },
+      applyClaim: claim,
+      jobs: [
+        expect.objectContaining({
+          id: applying.id,
+          status: "processing",
+          stage: "applying",
+          rerunRequested: false,
+        }),
+      ],
+      reruns: [],
+      sourceHighWatermarks: [
+        expect.objectContaining({
+          sourceId: applying.sourceId,
+          sourceContentHash: applying.sourceContentHash,
+          inputRevision: matchingAllocation.inputRevision,
+        }),
+      ],
+    });
+  });
+
+  it("keeps the current failed apply claim sticky across same-reason Queue writes", async () => {
+    const harness = await createNoJournalRecoveryHarness("transaction-current-recovery");
+    const currentState = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    markNoJournalApplyFailed(currentState, 220);
+    harness.file.replaceContent(JSON.stringify(currentState));
+    const currentQueue = currentState.queues[0].value as IngestQueueSnapshot;
+
+    const replacementHarness = await createNoJournalRecoveryHarness(
+      "transaction-replacement-recovery"
+    );
+    const replacementState = JSON.parse(
+      await replacementHarness.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+    markNoJournalApplyFailed(replacementState, 220);
+    const replacementQueue = replacementState.queues[0].value as IngestQueueSnapshot;
+    replacementQueue.revision = currentQueue.revision + 1;
+    replacementQueue.control = { ...currentQueue.control };
+    const before = await harness.file.read();
+
+    await expect(
+      harness.queue.write("personal", replacementQueue, currentQueue.revision)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("rejects replacing a current recovery claim with an unrelated historical commit", async () => {
+    const history = await createApplyHarness(createRegisteredManifest());
+    await history.port.recordCommitted(history.journal, history.receipt);
+    const state = JSON.parse(await history.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const unrelated = await createNoJournalRecoveryHarness("transaction-current-unresolved");
+    const unrelatedState = JSON.parse(await unrelated.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    markNoJournalApplyFailed(unrelatedState, 220);
+    state.queues = unrelatedState.queues;
+    state.reviews = unrelatedState.reviews;
+    state.inputRevisions = unrelatedState.inputRevisions;
+    history.file.replaceContent(JSON.stringify(state));
+    const currentQueue = state.queues[0].value as IngestQueueSnapshot;
+    const historicalCandidate = createPendingApplyCommitQueue(history.journal, history.receipt);
+    historicalCandidate.revision = currentQueue.revision + 1;
+    const before = await history.file.read();
+
+    await expect(
+      new KnowledgeRuntimeQueueStorage(history.runtime).write(
+        "personal",
+        historicalCandidate,
+        currentQueue.revision
+      )
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+    expect(await history.file.read()).toBe(before);
+  });
+
+  it.each([
+    { state: "claimed", reason: "apply_claim_present" },
+    { state: "failed", reason: "failed_apply_present" },
+  ] as const)(
+    "blocks $state no-journal apply evidence without rewriting bytes",
+    async (testCase) => {
+      const harness = await createNoJournalRecoveryHarness();
+      if (testCase.state === "failed") {
+        const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+        markNoJournalApplyFailed(state, 220);
+        harness.file.replaceContent(JSON.stringify(state));
+      }
+      const request = await createStartupReleaseRequest(harness);
+      const before = await harness.file.read();
+
+      await expect(harness.release.release(request)).resolves.toEqual({
+        kind: "blocked",
+        bundleId: "personal",
+        reason: testCase.reason,
+      });
+      expect(await harness.file.read()).toBe(before);
+    }
+  );
+
+  it("blocks a Vault-global active transaction without rewriting bytes", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    state.activeTransaction = harness.journal;
+    harness.file.replaceContent(JSON.stringify(state));
+    const request = await createStartupReleaseRequest(harness);
+    const before = await harness.file.read();
+
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+      reason: "active_transaction_present",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("blocks another Bundle's apply recovery evidence without rewriting bytes", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    state.queues.push({ bundleId: "other", value: createStartupPausedQueue(1, "other") });
+    state.queues.sort((left, right) => left.bundleId.localeCompare(right.bundleId));
+    harness.file.replaceContent(JSON.stringify(state));
+    const request = await createStartupReleaseRequest(harness, "other");
+    const before = await harness.file.read();
+
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "other",
+      reason: "other_bundle_apply_recovery_present",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("blocks a pending acknowledgement marker without rewriting bytes", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    state.activeTransaction = null;
+    state.queues[0].value = createPendingApplyCommitQueue(harness.journal, harness.receipt);
+    harness.file.replaceContent(JSON.stringify(state));
+    const release = new KnowledgeRuntimeStartupReleasePort(harness.runtime);
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+    const request: KnowledgeStartupReleaseRequest = {
+      bundleId: "personal",
+      expectedRuntimeRevision: state.revision,
+      expectedReviewRevision: review.revision,
+      expectedQueueRevision: queue.revision,
+    };
+    const before = await harness.file.read();
+
+    const runningCandidate: IngestQueueSnapshot = {
+      ...queue,
+      revision: queue.revision + 1,
+      control: { status: "running" },
+    };
+    delete runningCandidate.applyCommit;
+    await expect(
+      new KnowledgeRuntimeQueueStorage(harness.runtime).write(
+        "personal",
+        runningCandidate,
+        queue.revision
+      )
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+    expect(await harness.file.read()).toBe(before);
+
+    const forgedFinalization: IngestQueueSnapshot = {
+      ...queue,
+      revision: queue.revision + 1,
+      control: {
+        status: "paused",
+        reason: "startup_recovery",
+        pausedAt: queue.applyCommit?.committedAt ?? 0,
+        detail: "Forged finalization metadata",
+      },
+    };
+    delete forgedFinalization.applyCommit;
+    await expect(
+      new KnowledgeRuntimeQueueStorage(harness.runtime).write(
+        "personal",
+        forgedFinalization,
+        queue.revision
+      )
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+    expect(await harness.file.read()).toBe(before);
+
+    await expect(release.release(request)).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+      reason: "apply_commit_present",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("serializes concurrent releases so only one Queue transition commits", async () => {
+    const harness = await createHarness();
+    await harness.queue.write("personal", createStartupPausedQueue(1), null);
+    const request = await createStartupReleaseRequest(harness);
+
+    const results = await Promise.all([
+      harness.release.release(request),
+      new KnowledgeRuntimeStartupReleasePort(harness.runtime).release(request),
+    ]);
+
+    expect(results.filter((result) => result.kind === "released")).toHaveLength(1);
+    expect(results.filter((result) => result.kind === "observation_changed")).toEqual([
+      { kind: "observation_changed", bundleId: "personal", boundary: "runtime" },
+    ]);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(state.revision).toBe(request.expectedRuntimeRevision + 1);
+    expect(state.queues[0].value).toMatchObject({
+      revision: request.expectedQueueRevision + 1,
+      control: { status: "running" },
+    });
+  });
+
+  it("requires a fresh Gate token after release commits but its caller observes failure", async () => {
+    const harness = await createHarness();
+    await harness.queue.write("personal", createStartupPausedQueue(1), null);
+    const request = await createStartupReleaseRequest(harness);
+    harness.file.throwAfterCommitOnNextWrite();
+
+    await expect(harness.release.release(request)).rejects.toThrow(
+      "Simulated post-commit transport failure"
+    );
+    const committed = await harness.file.read();
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "observation_changed",
+      bundleId: "personal",
+      boundary: "runtime",
+    });
+    expect(await harness.file.read()).toBe(committed);
+
+    const freshRequest = await createStartupReleaseRequest(harness);
+    await expect(harness.release.release(freshRequest)).resolves.toMatchObject({
+      kind: "unchanged",
+      reason: "already_running",
+    });
+    expect(await harness.file.read()).toBe(committed);
+  });
+
   it("includes the Vault-global transaction slot in the same recovery snapshot", async () => {
     const harness = await createNoJournalRecoveryHarness();
     const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
@@ -1442,7 +1953,7 @@ describe("KnowledgeRuntimeStore", () => {
     );
   });
 
-  it("keeps an accepted Review awaiting Queue apply classified as not started", async () => {
+  it("keeps an accepted Review not started and rejects a fabricated abandonment", async () => {
     const harness = await createNoJournalRecoveryHarness();
     const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
     const queue = state.queues[0].value as IngestQueueSnapshot;
@@ -1480,6 +1991,7 @@ describe("KnowledgeRuntimeStore", () => {
       },
     ];
     delete queue.applyClaim;
+    queue.control = { status: "paused", reason: "startup_recovery", pausedAt: 200 };
     harness.file.replaceContent(JSON.stringify(state));
 
     await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
@@ -1488,6 +2000,110 @@ describe("KnowledgeRuntimeStore", () => {
       bundleId: "personal",
       changeSetId: harness.journal.changeSetId,
       jobId: harness.journal.jobClaim.jobId,
+    });
+    const request = await createStartupReleaseRequest(harness);
+    const beforeRelease = await harness.file.read();
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+      reason: "accepted_review_unresolved",
+    });
+    expect(await harness.file.read()).toBe(beforeRelease);
+
+    const awaiting = queue.jobs[0];
+    const startedAt = Math.max(record.acceptedAt, awaiting.createdAt);
+    const abandonedAt = Math.max(startedAt, awaiting.updatedAt);
+    const fabricated: IngestQueueSnapshot = {
+      ...queue,
+      revision: queue.revision + 1,
+      jobs: [
+        {
+          id: awaiting.id,
+          bundleId: awaiting.bundleId,
+          sourceId: awaiting.sourceId,
+          sourceContentHash: awaiting.sourceContentHash,
+          pipelineFingerprint: awaiting.pipelineFingerprint,
+          inputRevision: awaiting.inputRevision,
+          attempt: awaiting.attempt,
+          rerunRequested: false,
+          createdAt: awaiting.createdAt,
+          updatedAt: abandonedAt,
+          status: "cancelled",
+          stage: "cancelled",
+          cancelledAt: abandonedAt,
+        },
+      ],
+      pendingReviews: [],
+      applyAbandonments: [
+        {
+          jobId: awaiting.id,
+          sourceId: awaiting.sourceId,
+          sourceContentHash: awaiting.sourceContentHash,
+          pipelineFingerprint: awaiting.pipelineFingerprint,
+          inputRevision: awaiting.inputRevision,
+          attempt: awaiting.attempt,
+          startedAt,
+          changeSetId: record.changeSetId,
+          changeSetDigest: record.acceptedDigest,
+          proposalDigest: record.proposalDigest,
+          recordRevision: record.recordRevision,
+          manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+          acceptedAt: record.acceptedAt,
+          abandonedAt,
+        },
+      ],
+    };
+    await expect(
+      harness.queue.write("personal", fabricated, queue.revision)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+    expect(await harness.file.read()).toBe(beforeRelease);
+
+    queue.control = { status: "running" };
+    harness.file.replaceContent(JSON.stringify(state));
+    const runningBefore = await harness.file.read();
+    const cancelledWithoutAbandonment: IngestQueueSnapshot = {
+      ...fabricated,
+      control: { status: "running" },
+      applyAbandonments: [],
+    };
+    await expect(
+      harness.queue.write("personal", cancelledWithoutAbandonment, queue.revision)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+    expect(await harness.file.read()).toBe(runningBefore);
+
+    const executor: IngestExecutor = {
+      /** Produces no changes; beginning an accepted apply does not invoke this executor. */
+      execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+    };
+    const runtimeQueue = new IngestQueue(harness.queue, executor, { clock: () => 300 });
+    await expect(
+      runtimeQueue.beginReviewApply("personal", {
+        outcome: "accepted",
+        bundleId: "personal",
+        changeSetId: record.changeSetId,
+        proposalDigest: record.proposalDigest,
+        recordRevision: record.recordRevision,
+        acceptedDigest: record.acceptedDigest,
+        manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+        acceptedAt: record.acceptedAt,
+        jobClaim: { ...record.jobClaim },
+      })
+    ).resolves.toMatchObject({
+      id: awaiting.id,
+      status: "processing",
+      stage: "applying",
+      startedAt: 300,
+    });
+    await expect(runtimeQueue.load("personal")).resolves.toMatchObject({
+      control: { status: "running" },
+      pendingReviews: [],
+      applyClaim: {
+        jobId: awaiting.id,
+        reviewedChangeSet: {
+          changeSetId: record.changeSetId,
+          changeSetDigest: record.acceptedDigest,
+        },
+      },
     });
   });
 
@@ -1681,6 +2297,14 @@ describe("KnowledgeRuntimeStore", () => {
     });
     await expect(harness.recovery.abandon(classification.candidate, 999)).resolves.toEqual(receipt);
     expect(await harness.file.read()).toBe(abandonedText);
+
+    const request = await createStartupReleaseRequest(harness);
+    await expect(harness.release.release(request)).resolves.toMatchObject({
+      kind: "released",
+      bundleId: "personal",
+      previousQueueRevision: queue.revision,
+      queueSnapshot: { control: { status: "running" } },
+    });
   });
 
   it("converges an abandonment after the atomic file commits and then rejects", async () => {
@@ -3344,6 +3968,28 @@ describe("KnowledgeRuntimeStore", () => {
     await expect(harness.revisions.allocate(request)).resolves.toEqual({ inputRevision: 2 });
     await expect(harness.revisions.allocate(request)).resolves.toEqual({ inputRevision: 3 });
     await expect(harness.revisions.allocate(request)).resolves.toEqual({ inputRevision: 4 });
+
+    const executor: IngestExecutor = {
+      /** Produces no changes; the rejected first enqueue never invokes this executor. */
+      execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+    };
+    const queue = new IngestQueue(harness.queue, executor, {
+      clock: () => 100,
+      jobIdFactory: () => "job-unallocated-observation",
+    });
+    const before = await harness.file.read();
+    for (const inputRevision of [0, 5]) {
+      await expect(
+        queue.enqueue({
+          bundleId: request.bundleId,
+          sourceId: request.sourceId,
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision,
+        })
+      ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueObservationAuthorityError);
+    }
+    expect(await harness.file.read()).toBe(before);
   });
 
   it("serializes concurrent observation allocation without duplicate revisions", async () => {

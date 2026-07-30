@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  createTransactionCommitReceipt,
   createTransactionCommitReceiptDigest,
   transactionCommitReceiptMatchesJournal,
   type ChangeSetTransactionApplyInput,
@@ -83,6 +84,12 @@ import {
   type NoJournalApplyRecoverySnapshotPort,
   type NoJournalApplyRecoveryStatePort,
 } from "@/knowledge/recovery/NoJournalApplyRecovery";
+import {
+  parseKnowledgeStartupReleaseRequest,
+  type KnowledgeStartupReleasePort,
+  type KnowledgeStartupReleaseRequest,
+  type KnowledgeStartupReleaseResult,
+} from "@/knowledge/recovery/KnowledgeStartupRelease";
 import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import {
   CHANGESET_REVIEW_SNAPSHOT_VERSION,
@@ -508,6 +515,24 @@ export class KnowledgeRuntimeManifestProtectedStateError extends Error {
   ) {
     super(`Source '${sourceId}' has protected commit state in Manifest '${bundleId}'`);
     this.name = "KnowledgeRuntimeManifestProtectedStateError";
+  }
+}
+
+/** Reports a generic Queue writer attempting to clear or weaken a recovery gate. */
+export class KnowledgeRuntimeQueueRecoveryGateProtectedError extends Error {
+  /** Creates a typed recovery-gate authority bypass failure. */
+  constructor(public readonly bundleId: string) {
+    super(`Queue '${bundleId}' cannot bypass protected recovery or review authority`);
+    this.name = "KnowledgeRuntimeQueueRecoveryGateProtectedError";
+  }
+}
+
+/** Reports a Queue observation that was not authorized by the shared revision allocator. */
+export class KnowledgeRuntimeQueueObservationAuthorityError extends Error {
+  /** Creates a typed source-observation authority failure. */
+  constructor(public readonly bundleId: string) {
+    super(`Queue '${bundleId}' contains an unallocated or regressing source observation`);
+    this.name = "KnowledgeRuntimeQueueObservationAuthorityError";
   }
 }
 
@@ -1995,6 +2020,608 @@ function createEmptyRuntimeQueueSnapshot(bundleId: string): IngestQueueSnapshot 
 }
 
 /**
+ * Creates the strict revision-zero Review Store observed before a Bundle has records.
+ *
+ * @param bundleId - Bundle whose Review slot is absent
+ * @returns Detached empty current-version Review snapshot
+ */
+function createEmptyRuntimeReviewSnapshot(bundleId: string): ChangeSetReviewSnapshot {
+  return {
+    version: CHANGESET_REVIEW_SNAPSHOT_VERSION,
+    bundleId,
+    revision: 0,
+    records: [],
+  };
+}
+
+/** Detects Queue state proving that startup write recovery is still unresolved. */
+function queueHasStartupWriteRecoveryEvidence(snapshot: IngestQueueSnapshot): boolean {
+  return (
+    snapshot.applyClaim !== undefined ||
+    snapshot.applyCommit !== undefined ||
+    (snapshot.control.status === "paused" &&
+      (snapshot.control.reason === "recovery_required" ||
+        snapshot.control.reason === "commit_pending_ack")) ||
+    snapshot.jobs.some(
+      (job) => job.status === "processing" || (job.status === "failed" && job.stage === "applying")
+    )
+  );
+}
+
+/** Selects accepted Review classifications that are terminal for startup release. */
+function acceptedClassificationIsTerminal(
+  classification: NoJournalApplyRecoveryClassification
+): boolean {
+  return classification.kind === "committed" || classification.kind === "abandoned";
+}
+
+/** Checks whether one Queue job retains the immutable identity of an apply claim. */
+function queueJobMatchesApplyClaim(
+  job: KnowledgeIngestJob | undefined,
+  claim: IngestApplyClaimMarker
+): job is KnowledgeIngestJob {
+  return (
+    job !== undefined &&
+    job.id === claim.jobId &&
+    job.sourceId === claim.sourceId &&
+    job.sourceContentHash === claim.sourceContentHash &&
+    job.pipelineFingerprint === claim.pipelineFingerprint &&
+    job.inputRevision === claim.inputRevision &&
+    job.attempt === claim.attempt &&
+    (job.status !== "processing" || job.startedAt === claim.startedAt)
+  );
+}
+
+/** Replaces one Queue job while preserving the order of every retained record. */
+function replaceRuntimeQueueJob(
+  snapshot: IngestQueueSnapshot,
+  replacement: KnowledgeIngestJob
+): IngestQueueSnapshot {
+  return {
+    ...snapshot,
+    jobs: snapshot.jobs.map((job) => (job.id === replacement.id ? replacement : job)),
+  };
+}
+
+/**
+ * Reconstructs the only legal accepted-Review claim transition.
+ *
+ * @param state - Shared Runtime envelope containing the authoritative Review
+ * @param current - Queue before the accepted claim is established
+ * @param candidate - Proposed next Queue revision
+ * @returns Whether candidate is the exact `beginReviewApply` projection
+ */
+function acceptedClaimProjectionMatches(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot
+): boolean {
+  const claim = candidate.applyClaim;
+  const controlAllowsBegin =
+    current.control.status === "running" ||
+    (current.control.status === "paused" && current.control.reason === "startup_recovery");
+  if (
+    !controlAllowsBegin ||
+    current.applyClaim !== undefined ||
+    claim === undefined ||
+    candidate.applyCommit !== undefined
+  ) {
+    return false;
+  }
+  const reviewRaw = findBundleSlot(state, "reviews", current.bundleId);
+  if (reviewRaw === null) {
+    return false;
+  }
+  const parsedReview = parseChangeSetReviewSnapshot(reviewRaw);
+  if (!parsedReview.ok || !validateChangeSetReviewSnapshot(parsedReview.value).valid) {
+    return false;
+  }
+  const record = parsedReview.value.records.find(
+    (candidateRecord): candidateRecord is AcceptedChangeSetReviewRecord =>
+      candidateRecord.outcome === "accepted" &&
+      queueClaimMatchesAcceptedRecord(claim, candidateRecord)
+  );
+  const currentJob = current.jobs.find((job) => job.id === claim.jobId);
+  const pending = current.pendingReviews.find((item) => item.jobId === claim.jobId);
+  if (
+    !record ||
+    !currentJob ||
+    currentJob.status !== "awaiting_review" ||
+    currentJob.stage !== "review" ||
+    currentJob.changeSetId !== record.changeSetId ||
+    !queueJobMatchesAcceptedRecord(currentJob, record) ||
+    pending?.kind !== "durable" ||
+    pending.changeSetId !== record.changeSetId ||
+    pending.proposalDigest !== record.proposalDigest ||
+    pending.reviewRecordRevision !== 0 ||
+    pending.recordedAt !== record.recordedAt ||
+    claim.startedAt < Math.max(currentJob.updatedAt, record.acceptedAt)
+  ) {
+    return false;
+  }
+
+  const applying: KnowledgeIngestJob = {
+    id: currentJob.id,
+    bundleId: currentJob.bundleId,
+    sourceId: currentJob.sourceId,
+    sourceContentHash: currentJob.sourceContentHash,
+    pipelineFingerprint: currentJob.pipelineFingerprint,
+    inputRevision: currentJob.inputRevision,
+    attempt: currentJob.attempt,
+    rerunRequested: currentJob.rerunRequested,
+    createdAt: currentJob.createdAt,
+    updatedAt: claim.startedAt,
+    status: "processing",
+    stage: "applying",
+    startedAt: claim.startedAt,
+  };
+  const expected: IngestQueueSnapshot = {
+    ...replaceRuntimeQueueJob(current, applying),
+    revision: current.revision + 1,
+    pendingReviews: current.pendingReviews.filter((item) => item.jobId !== claim.jobId),
+    applyClaim: {
+      jobId: applying.id,
+      sourceId: applying.sourceId,
+      sourceContentHash: applying.sourceContentHash,
+      pipelineFingerprint: applying.pipelineFingerprint,
+      inputRevision: applying.inputRevision,
+      attempt: applying.attempt,
+      startedAt: applying.startedAt,
+      reviewedChangeSet: {
+        changeSetId: record.changeSetId,
+        changeSetDigest: record.acceptedDigest,
+      },
+      acceptedReview: {
+        proposalDigest: record.proposalDigest,
+        recordRevision: record.recordRevision,
+        manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+        acceptedAt: record.acceptedAt,
+      },
+    },
+  };
+  return exactJsonValuesEqual(expected, candidate);
+}
+
+/**
+ * Preserves every accepted-but-not-started Queue anchor across generic writes.
+ *
+ * Watcher enqueue may update only the active job's rerun flag and monotonic
+ * timestamp. Starting one accepted apply is handled separately by the exact
+ * accepted-claim projection and therefore never reaches this comparison.
+ */
+function acceptedNotStartedAnchorsArePreserved(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot
+): boolean {
+  const reviewRaw = findBundleSlot(state, "reviews", current.bundleId);
+  if (reviewRaw === null) {
+    return true;
+  }
+  const parsedReview = parseChangeSetReviewSnapshot(reviewRaw);
+  if (!parsedReview.ok || !validateChangeSetReviewSnapshot(parsedReview.value).valid) {
+    return false;
+  }
+  for (const record of parsedReview.value.records) {
+    if (record.outcome !== "accepted") {
+      continue;
+    }
+    const currentJob = current.jobs.find((job) => job.id === record.jobClaim.jobId);
+    const currentPending = current.pendingReviews.find(
+      (pending) => pending.jobId === record.jobClaim.jobId
+    );
+    const isAcceptedNotStarted =
+      queueJobMatchesAcceptedRecord(currentJob, record) &&
+      currentJob.status === "awaiting_review" &&
+      currentJob.stage === "review" &&
+      currentJob.changeSetId === record.changeSetId &&
+      currentPending?.kind === "durable" &&
+      currentPending.changeSetId === record.changeSetId &&
+      currentPending.proposalDigest === record.proposalDigest &&
+      currentPending.reviewRecordRevision === 0 &&
+      currentPending.recordedAt === record.recordedAt &&
+      current.applyClaim?.jobId !== record.jobClaim.jobId;
+    if (!isAcceptedNotStarted) {
+      continue;
+    }
+    const candidateJob = candidate.jobs.find((job) => job.id === record.jobClaim.jobId);
+    const candidatePending = candidate.pendingReviews.find(
+      (pending) => pending.jobId === record.jobClaim.jobId
+    );
+    if (
+      !protectedQueueJobProjectionMatches(currentJob, candidateJob) ||
+      !exactJsonValuesEqual(currentPending, candidatePending)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Keeps durable source observations monotonic and bounded by their allocator.
+ *
+ * Every generic CAS must retain each existing high-watermark exactly at the
+ * same revision, or advance it to a revision the shared Runtime allocator has
+ * already issued without moving its timestamp back. A newly added source is
+ * allocator-bound as well, including the first durable Queue write.
+ */
+function queueSourceObservationsAreMonotonic(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot | null,
+  candidate: IngestQueueSnapshot
+): boolean {
+  const allocatedSources = new Map(
+    state.inputRevisions
+      .find((bundle) => bundle.bundleId === candidate.bundleId)
+      ?.sources.map((source) => [source.sourceId, source.inputRevision] as const) ?? []
+  );
+  const currentBySource = new Map(
+    (current?.sourceHighWatermarks ?? []).map(
+      (watermark) => [watermark.sourceId, watermark] as const
+    )
+  );
+  const candidateBySource = new Map(
+    candidate.sourceHighWatermarks.map((watermark) => [watermark.sourceId, watermark] as const)
+  );
+
+  for (const watermark of current?.sourceHighWatermarks ?? []) {
+    const next = candidateBySource.get(watermark.sourceId);
+    if (!next || next.inputRevision < watermark.inputRevision) {
+      return false;
+    }
+    if (next.inputRevision === watermark.inputRevision) {
+      if (!exactJsonValuesEqual(watermark, next)) {
+        return false;
+      }
+      continue;
+    }
+    if (
+      next.observedAt < watermark.observedAt ||
+      (allocatedSources.get(next.sourceId) ?? -1) < next.inputRevision
+    ) {
+      return false;
+    }
+  }
+
+  return candidate.sourceHighWatermarks.every((watermark) => {
+    return (
+      currentBySource.has(watermark.sourceId) ||
+      (watermark.inputRevision > 0 &&
+        (allocatedSources.get(watermark.sourceId) ?? -1) >= watermark.inputRevision)
+    );
+  });
+}
+
+/**
+ * Reconstructs startup recovery of one exact interrupted applying claim.
+ *
+ * @param current - Queue still carrying a processing apply behind the startup gate
+ * @param candidate - Proposed sticky recovery-required Queue revision
+ * @returns Whether candidate is the exact `recoverOnStartup` projection
+ */
+function startupApplyRecoveryProjectionMatches(
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot
+): boolean {
+  if (
+    candidate.control.status !== "paused" ||
+    candidate.control.reason !== "recovery_required" ||
+    current.applyClaim === undefined
+  ) {
+    return false;
+  }
+  const claim = current.applyClaim;
+  const applying = current.jobs.find((job) => job.id === claim.jobId);
+  if (
+    !queueJobMatchesApplyClaim(applying, claim) ||
+    applying.status !== "processing" ||
+    applying.stage !== "applying"
+  ) {
+    return false;
+  }
+  const recoveredAt = Math.max(candidate.control.pausedAt, applying.updatedAt);
+  const failed: KnowledgeIngestJob = {
+    id: applying.id,
+    bundleId: applying.bundleId,
+    sourceId: applying.sourceId,
+    sourceContentHash: applying.sourceContentHash,
+    pipelineFingerprint: applying.pipelineFingerprint,
+    inputRevision: applying.inputRevision,
+    attempt: applying.attempt,
+    rerunRequested: false,
+    createdAt: applying.createdAt,
+    updatedAt: recoveredAt,
+    status: "failed",
+    stage: "applying",
+    failure: {
+      code: "interrupted_apply_requires_recovery",
+      message: "An interrupted apply requires transaction recovery before retry",
+      retryable: false,
+      occurredAt: recoveredAt,
+    },
+  };
+  const recovered = promoteNoJournalRerun(
+    replaceRuntimeQueueJob(current, failed),
+    applying.sourceId,
+    recoveredAt
+  );
+  const expected: IngestQueueSnapshot = {
+    ...recovered,
+    revision: current.revision + 1,
+    control: {
+      status: "paused",
+      reason: "recovery_required",
+      pausedAt: candidate.control.pausedAt,
+      detail: "An interrupted apply must be recovered before queue resume",
+    },
+  };
+  return exactJsonValuesEqual(expected, candidate);
+}
+
+/**
+ * Compares recovery-owned job state while allowing only watcher bookkeeping.
+ *
+ * Processing and awaiting-review jobs may receive a newer source observation,
+ * which changes `rerunRequested` and monotonically advances `updatedAt` without
+ * changing apply/review authority. Failed and completed recovery evidence is
+ * terminal and remains byte-exact.
+ */
+function protectedQueueJobProjectionMatches(
+  current: KnowledgeIngestJob | undefined,
+  candidate: KnowledgeIngestJob | undefined
+): boolean {
+  if (!current || !candidate) {
+    return false;
+  }
+  if (current.status !== "processing" && current.status !== "awaiting_review") {
+    return exactJsonValuesEqual(current, candidate);
+  }
+  const {
+    rerunRequested: _currentRerunRequested,
+    updatedAt: currentUpdatedAt,
+    ...currentAuthority
+  } = current;
+  const {
+    rerunRequested: _candidateRerunRequested,
+    updatedAt: candidateUpdatedAt,
+    ...candidateAuthority
+  } = candidate;
+  void _currentRerunRequested;
+  void _candidateRerunRequested;
+  return (
+    candidateUpdatedAt >= currentUpdatedAt &&
+    exactJsonValuesEqual(currentAuthority, candidateAuthority)
+  );
+}
+
+/** Creates the Queue marker projected by one exact committed active journal. */
+function createRuntimeApplyCommitMarker(
+  journal: CommittedChangeSetTransactionJournal
+): NonNullable<IngestQueueSnapshot["applyCommit"]> {
+  const receipt = createTransactionCommitReceipt(journal);
+  return {
+    transactionId: receipt.transactionId,
+    changeSetId: receipt.changeSetId,
+    changeSetDigest: receipt.changeSetDigest,
+    commitRevision: receipt.commitRevision,
+    ...receipt.jobClaim,
+    committedAt: receipt.committedAt,
+  };
+}
+
+/**
+ * Reconstructs completion of the current claim from the exact committed journal.
+ *
+ * @param state - Shared envelope whose committed journal and ledger own the marker
+ * @param current - Queue carrying the applying claim
+ * @param candidate - Proposed commit-pending acknowledgement Queue revision
+ * @returns Whether candidate is the exact `resolveApplyRecovery` projection
+ */
+function applyCommitProjectionMatches(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot
+): boolean {
+  if (
+    candidate.control.status !== "paused" ||
+    candidate.control.reason !== "commit_pending_ack" ||
+    current.applyClaim === undefined ||
+    candidate.applyCommit === undefined ||
+    state.activeTransaction === null
+  ) {
+    return false;
+  }
+  const parsedJournal = parseChangeSetTransactionJournal(state.activeTransaction);
+  if (!parsedJournal.ok || parsedJournal.value.phase !== "committed") {
+    return false;
+  }
+  const journal = parsedJournal.value;
+  const marker = createRuntimeApplyCommitMarker(journal);
+  const claim = current.applyClaim;
+  const applying = current.jobs.find((job) => job.id === claim.jobId);
+  if (
+    journal.bundleId !== current.bundleId ||
+    !exactJsonValuesEqual(marker, candidate.applyCommit) ||
+    !queueClaimMatchesTransaction(claim, journal) ||
+    (claim.reviewedChangeSet !== undefined &&
+      (claim.reviewedChangeSet.changeSetId !== marker.changeSetId ||
+        claim.reviewedChangeSet.changeSetDigest !== marker.changeSetDigest)) ||
+    !queueJobMatchesApplyClaim(applying, claim) ||
+    (applying.status !== "processing" && applying.status !== "failed") ||
+    applying.stage !== "applying"
+  ) {
+    return false;
+  }
+  const completedAt = candidate.control.pausedAt;
+  if (completedAt < Math.max(marker.committedAt, applying.updatedAt)) {
+    return false;
+  }
+  const completed: KnowledgeIngestJob = {
+    id: applying.id,
+    bundleId: applying.bundleId,
+    sourceId: applying.sourceId,
+    sourceContentHash: applying.sourceContentHash,
+    pipelineFingerprint: applying.pipelineFingerprint,
+    inputRevision: applying.inputRevision,
+    attempt: applying.attempt,
+    rerunRequested: false,
+    createdAt: applying.createdAt,
+    updatedAt: completedAt,
+    status: "completed",
+    stage: "completed",
+    changeSetId: marker.changeSetId,
+    completedAt,
+  };
+  const promoted = promoteNoJournalRerun(
+    replaceRuntimeQueueJob(current, completed),
+    applying.sourceId,
+    completedAt
+  );
+  const expectedWithoutClaim: IngestQueueSnapshot = { ...promoted };
+  delete expectedWithoutClaim.applyClaim;
+  const expected: IngestQueueSnapshot = {
+    ...expectedWithoutClaim,
+    revision: current.revision + 1,
+    control: {
+      status: "paused",
+      reason: "commit_pending_ack",
+      pausedAt: completedAt,
+      detail: "Committed pages are waiting for durable journal acknowledgement",
+    },
+    applyCommit: marker,
+  };
+  return exactJsonValuesEqual(expected, candidate);
+}
+
+/**
+ * Reconstructs the only legal commit-marker finalization Queue revision.
+ *
+ * @param state - Shared envelope whose global journal must already be clear
+ * @param current - Queue retaining the exact pending acknowledgement marker
+ * @param candidate - Proposed startup-gated Queue after marker removal
+ * @returns Whether candidate is the exact `finalizeApplyRecovery` projection
+ */
+function applyCommitFinalizationProjectionMatches(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot
+): boolean {
+  if (
+    state.activeTransaction !== null ||
+    current.applyCommit === undefined ||
+    candidate.applyCommit !== undefined ||
+    candidate.control.status !== "paused" ||
+    candidate.control.reason !== "startup_recovery" ||
+    candidate.control.pausedAt < current.applyCommit.committedAt
+  ) {
+    return false;
+  }
+  const expectedWithoutMarker: IngestQueueSnapshot = { ...current };
+  delete expectedWithoutMarker.applyCommit;
+  const expected: IngestQueueSnapshot = {
+    ...expectedWithoutMarker,
+    revision: current.revision + 1,
+    control: {
+      status: "paused",
+      reason: "startup_recovery",
+      pausedAt: candidate.control.pausedAt,
+      detail: "Recovered apply committed; startup reconciliation must release the backlog",
+    },
+  };
+  return exactJsonValuesEqual(expected, candidate);
+}
+
+/** Preserves an existing claim or marker while a protected gate remains unchanged. */
+function protectedQueueEvidenceIsPreserved(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot
+): boolean {
+  if (current.control.status !== "paused") {
+    return false;
+  }
+  const anchorsPreserved = acceptedNotStartedAnchorsArePreserved(state, current, candidate);
+  if (current.control.reason === "startup_recovery") {
+    if (current.applyClaim === undefined) {
+      return candidate.applyClaim === undefined
+        ? anchorsPreserved
+        : acceptedClaimProjectionMatches(state, current, candidate);
+    }
+    const currentJob = current.jobs.find((job) => job.id === current.applyClaim?.jobId);
+    const candidateJob = candidate.jobs.find((job) => job.id === current.applyClaim?.jobId);
+    return (
+      anchorsPreserved &&
+      exactJsonValuesEqual(current.applyClaim, candidate.applyClaim) &&
+      protectedQueueJobProjectionMatches(currentJob, candidateJob)
+    );
+  }
+  if (current.control.reason === "recovery_required") {
+    const currentJob = current.jobs.find((job) => job.id === current.applyClaim?.jobId);
+    const candidateJob = candidate.jobs.find((job) => job.id === current.applyClaim?.jobId);
+    return (
+      anchorsPreserved &&
+      current.applyClaim !== undefined &&
+      exactJsonValuesEqual(current.applyClaim, candidate.applyClaim) &&
+      exactJsonValuesEqual(currentJob, candidateJob)
+    );
+  }
+  const currentJob = current.jobs.find((job) => job.id === current.applyCommit?.jobId);
+  const candidateJob = candidate.jobs.find((job) => job.id === current.applyCommit?.jobId);
+  return (
+    anchorsPreserved &&
+    current.applyCommit !== undefined &&
+    exactJsonValuesEqual(current.applyCommit, candidate.applyCommit) &&
+    exactJsonValuesEqual(currentJob, candidateJob)
+  );
+}
+
+/**
+ * Keeps all Runtime recovery gates monotonic across the generic Queue CAS facade.
+ *
+ * Queue validation proves the evidence required by recovery/commit controls,
+ * while the outer Runtime parse additionally binds every commit marker to its
+ * exact ledger. Only the dedicated release transform may reach `running`.
+ */
+function protectedQueueControlTransitionIsAllowed(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot | null,
+  candidate: IngestQueueSnapshot
+): boolean {
+  if (
+    current?.control.status !== "paused" ||
+    (current.control.reason !== "startup_recovery" &&
+      current.control.reason !== "recovery_required" &&
+      current.control.reason !== "commit_pending_ack")
+  ) {
+    return true;
+  }
+  if (candidate.control.status !== "paused") {
+    return false;
+  }
+  if (candidate.control.reason === current.control.reason) {
+    return (
+      exactJsonValuesEqual(current.control, candidate.control) &&
+      protectedQueueEvidenceIsPreserved(state, current, candidate)
+    );
+  }
+  if (
+    current.control.reason === "startup_recovery" &&
+    candidate.control.reason === "recovery_required"
+  ) {
+    return startupApplyRecoveryProjectionMatches(current, candidate);
+  }
+  if (
+    (current.control.reason === "startup_recovery" ||
+      current.control.reason === "recovery_required") &&
+    candidate.control.reason === "commit_pending_ack"
+  ) {
+    return applyCommitProjectionMatches(state, current, candidate);
+  }
+  return applyCommitFinalizationProjectionMatches(state, current, candidate);
+}
+
+/**
  * Sorts accepted Reviews independently of persisted insertion order.
  *
  * @param left - First immutable accepted record
@@ -2098,10 +2725,30 @@ export class KnowledgeRuntimeStore {
     this.assertNextBundleRevision(candidate.revision, expectedRevision, "queue");
     await this.updateState((state) => {
       const currentRaw = findBundleSlot(state, "queues", bundleId);
-      const actualRevision =
-        currentRaw === null ? null : this.requireQueueSnapshot(bundleId, currentRaw).revision;
+      const current = currentRaw === null ? null : this.requireQueueSnapshot(bundleId, currentRaw);
+      const actualRevision = current?.revision ?? null;
       if (actualRevision !== expectedRevision) {
         throw new IngestQueueRevisionConflictError(bundleId, expectedRevision, actualRevision);
+      }
+      const abandonmentHistoryPreserved =
+        current === null
+          ? candidate.applyAbandonments.length === 0
+          : exactJsonValuesEqual(current.applyAbandonments, candidate.applyAbandonments);
+      if (!abandonmentHistoryPreserved) {
+        throw new KnowledgeRuntimeQueueRecoveryGateProtectedError(bundleId);
+      }
+      const acceptedAnchorsPreserved =
+        current === null ||
+        acceptedNotStartedAnchorsArePreserved(state, current, candidate) ||
+        acceptedClaimProjectionMatches(state, current, candidate);
+      if (!acceptedAnchorsPreserved) {
+        throw new KnowledgeRuntimeQueueRecoveryGateProtectedError(bundleId);
+      }
+      if (!protectedQueueControlTransitionIsAllowed(state, current, candidate)) {
+        throw new KnowledgeRuntimeQueueRecoveryGateProtectedError(bundleId);
+      }
+      if (!queueSourceObservationsAreMonotonic(state, current, candidate)) {
+        throw new KnowledgeRuntimeQueueObservationAuthorityError(bundleId);
       }
       return {
         next: {
@@ -2239,12 +2886,7 @@ export class KnowledgeRuntimeStore {
     const reviewRaw = findBundleSlot(state, "reviews", bundleId);
     const review =
       reviewRaw === null
-        ? {
-            version: CHANGESET_REVIEW_SNAPSHOT_VERSION,
-            bundleId,
-            revision: 0,
-            records: [],
-          }
+        ? createEmptyRuntimeReviewSnapshot(bundleId)
         : this.requireReviewSnapshot(bundleId, reviewRaw);
     if (review.revision !== expectedReviewRevision) {
       return {
@@ -2286,6 +2928,230 @@ export class KnowledgeRuntimeStore {
         classifications,
       },
     };
+  }
+
+  /**
+   * Atomically releases one exact startup-recovery pause after repeating every proof.
+   *
+   * The optimistic Gate result is never authority. Runtime, Review, and Queue
+   * revisions, all Bundle recovery evidence, the Vault-global transaction,
+   * and every accepted Review classification are checked in the same atomic
+   * transform that changes only the target Queue control and revisions.
+   *
+   * @param requestValue - Narrow optimistic observation derived from an observed-clear Gate result
+   * @returns Released, unchanged, stale, or blocked without ambiguous partial state
+   */
+  async releaseStartupRecovery(
+    requestValue: KnowledgeStartupReleaseRequest
+  ): Promise<KnowledgeStartupReleaseResult> {
+    const request = parseKnowledgeStartupReleaseRequest(requestValue);
+    return this.updateState<KnowledgeStartupReleaseResult>((state) => {
+      if (state.revision !== request.expectedRuntimeRevision) {
+        return {
+          value: {
+            kind: "observation_changed",
+            bundleId: request.bundleId,
+            boundary: "runtime",
+          },
+        };
+      }
+
+      const reviewRaw = findBundleSlot(state, "reviews", request.bundleId);
+      const review =
+        reviewRaw === null
+          ? createEmptyRuntimeReviewSnapshot(request.bundleId)
+          : this.requireReviewSnapshot(request.bundleId, reviewRaw);
+      if (review.revision !== request.expectedReviewRevision) {
+        return {
+          value: {
+            kind: "observation_changed",
+            bundleId: request.bundleId,
+            boundary: "review",
+          },
+        };
+      }
+
+      const queueRaw = findBundleSlot(state, "queues", request.bundleId);
+      const queue =
+        queueRaw === null
+          ? createEmptyRuntimeQueueSnapshot(request.bundleId)
+          : this.requireQueueSnapshot(request.bundleId, queueRaw);
+      if (queue.revision !== request.expectedQueueRevision) {
+        return {
+          value: {
+            kind: "observation_changed",
+            bundleId: request.bundleId,
+            boundary: "queue",
+          },
+        };
+      }
+
+      if (state.activeTransaction !== null) {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "active_transaction_present",
+          },
+        };
+      }
+
+      for (const slot of state.queues) {
+        if (slot.bundleId === request.bundleId) continue;
+        const otherQueue = this.requireQueueSnapshot(slot.bundleId, slot.value);
+        if (queueHasStartupWriteRecoveryEvidence(otherQueue)) {
+          return {
+            value: {
+              kind: "blocked",
+              bundleId: request.bundleId,
+              reason: "other_bundle_apply_recovery_present",
+            },
+          };
+        }
+      }
+
+      if (queue.applyCommit !== undefined) {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "apply_commit_present",
+          },
+        };
+      }
+      if (queue.jobs.some((job) => job.status === "failed" && job.stage === "applying")) {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "failed_apply_present",
+          },
+        };
+      }
+      if (queue.applyClaim !== undefined) {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "apply_claim_present",
+          },
+        };
+      }
+      if (queue.jobs.some((job) => job.status === "processing")) {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "processing_job_present",
+          },
+        };
+      }
+      if (queue.jobs.some((job) => job.status === "paused")) {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "paused_job_present",
+          },
+        };
+      }
+
+      for (const slot of state.reviews) {
+        const candidateReview =
+          slot.bundleId === request.bundleId
+            ? review
+            : this.requireReviewSnapshot(slot.bundleId, slot.value);
+        const acceptedRecords = candidateReview.records.filter(
+          (record): record is AcceptedChangeSetReviewRecord => record.outcome === "accepted"
+        );
+        for (const record of acceptedRecords) {
+          const classification = this.classifyAcceptedApplyState(
+            state,
+            candidateReview.bundleId,
+            record
+          );
+          if (!acceptedClassificationIsTerminal(classification)) {
+            return {
+              value: {
+                kind: "blocked",
+                bundleId: request.bundleId,
+                reason:
+                  candidateReview.bundleId === request.bundleId
+                    ? "accepted_review_unresolved"
+                    : "other_bundle_apply_recovery_present",
+              },
+            };
+          }
+        }
+      }
+
+      if (queueRaw === null) {
+        return {
+          value: {
+            kind: "unchanged",
+            bundleId: request.bundleId,
+            reason: "queue_absent",
+            runtimeRevision: state.revision,
+            reviewRevision: review.revision,
+            queueSnapshot: queue,
+          },
+        };
+      }
+      if (queue.control.status === "running") {
+        return {
+          value: {
+            kind: "unchanged",
+            bundleId: request.bundleId,
+            reason: "already_running",
+            runtimeRevision: state.revision,
+            reviewRevision: review.revision,
+            queueSnapshot: queue,
+          },
+        };
+      }
+      if (queue.control.reason !== "startup_recovery") {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "queue_pause_not_releasable",
+          },
+        };
+      }
+      if (
+        state.revision === Number.MAX_SAFE_INTEGER ||
+        queue.revision === Number.MAX_SAFE_INTEGER
+      ) {
+        return {
+          value: {
+            kind: "blocked",
+            bundleId: request.bundleId,
+            reason: "revision_overflow",
+          },
+        };
+      }
+
+      const nextQueue: IngestQueueSnapshot = {
+        ...queue,
+        revision: queue.revision + 1,
+        control: { status: "running" },
+      };
+      return {
+        next: {
+          ...state,
+          revision: state.revision + 1,
+          queues: replaceBundleSlot(state.queues, request.bundleId, nextQueue),
+        },
+        value: {
+          kind: "released",
+          bundleId: request.bundleId,
+          previousRuntimeRevision: state.revision,
+          runtimeRevision: state.revision + 1,
+          previousQueueRevision: queue.revision,
+          queueSnapshot: cloneJson(nextQueue),
+        },
+      };
+    });
   }
 
   /**
@@ -3524,6 +4390,17 @@ export class KnowledgeRuntimeNoJournalApplyRecoveryPort
     abandonedAt: number
   ): Promise<NoJournalApplyAbandonReceipt> {
     return this.runtime.abandonNoJournalApply(reference, abandonedAt);
+  }
+}
+
+/** Conditional startup release facade backed by the shared atomic runtime envelope. */
+export class KnowledgeRuntimeStartupReleasePort implements KnowledgeStartupReleasePort {
+  /** Creates a startup release facade over the shared runtime store. */
+  constructor(private readonly runtime: KnowledgeRuntimeStore) {}
+
+  /** Re-proves and conditionally releases one exact startup-recovery observation. */
+  release(request: KnowledgeStartupReleaseRequest): Promise<KnowledgeStartupReleaseResult> {
+    return this.runtime.releaseStartupRecovery(request);
   }
 }
 

@@ -13,6 +13,7 @@ import {
   IngestQueueRecoveryRequiredError,
   IngestQueueReviewBundleMismatchError,
   IngestQueueRevisionOverflowError,
+  IngestQueueStartupReleaseRequiredError,
   IngestQueueTransitionError,
   IngestQueueValidationError,
   IngestQueueWriteConflictExhaustedError,
@@ -1557,6 +1558,38 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     expect(paused.applyClaim).toBeUndefined();
   });
 
+  it("starts one accepted review explicitly under startup recovery without releasing backlog", async () => {
+    const harness = createHarness(async () => createAwaitingReviewResult());
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    await expect(harness.queue.recoverOnStartup("personal")).resolves.toMatchObject({
+      control: { status: "paused", reason: "startup_recovery" },
+      jobs: [expect.objectContaining({ status: "awaiting_review" })],
+    });
+    await expect(harness.queue.resume("personal")).rejects.toBeInstanceOf(
+      IngestQueueStartupReleaseRequiredError
+    );
+
+    await expect(
+      harness.queue.beginReviewApply("personal", createAcceptedReviewDecision())
+    ).resolves.toMatchObject({ status: "processing", stage: "applying" });
+    const applying = harness.storage.getSnapshot("personal");
+    expect(applying).toMatchObject({
+      control: { status: "paused", reason: "startup_recovery" },
+      jobs: [expect.objectContaining({ status: "processing", stage: "applying" })],
+      applyClaim: { jobId: "job-1" },
+    });
+    await expect(
+      harness.queue.beginReviewApply("personal", createAcceptedReviewDecision())
+    ).rejects.toBeInstanceOf(IngestQueueRecoveryRequiredError);
+
+    await expect(harness.queue.recoverOnStartup("personal")).resolves.toMatchObject({
+      control: { status: "paused", reason: "recovery_required" },
+      jobs: [expect.objectContaining({ status: "failed", stage: "applying" })],
+      applyClaim: { jobId: "job-1" },
+    });
+  });
+
   it("durably rejects one exact review and replays the same decision idempotently", async () => {
     const harness = createHarness(async () => createAwaitingReviewResult());
     await harness.queue.enqueue(createRequest());
@@ -1830,7 +1863,19 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     const again = await harness.queue.recoverOnStartup("personal");
     expect(again.revision).toBe(5);
 
-    await harness.queue.resume("personal");
+    await expect(harness.queue.resume("personal")).rejects.toBeInstanceOf(
+      IngestQueueStartupReleaseRequiredError
+    );
+    const beforeRelease = harness.storage.getSnapshot("personal");
+    await expect(
+      harness.queue.pause("personal", "Cannot launder startup recovery")
+    ).resolves.toEqual(beforeRelease);
+    expect(harness.storage.getSnapshot("personal")).toEqual(beforeRelease);
+    harness.storage.seed("personal", {
+      ...beforeRelease,
+      revision: beforeRelease.revision + 1,
+      control: { status: "running" },
+    });
     await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
       status: "completed",
     });
@@ -2148,7 +2193,15 @@ describe("IngestQueue concurrency and adapter failures", () => {
       jobs: [expect.objectContaining({ status: "pending" })],
     });
 
-    await harness.queue.resume("personal");
+    await expect(harness.queue.resume("personal")).rejects.toBeInstanceOf(
+      IngestQueueStartupReleaseRequiredError
+    );
+    const beforeRelease = harness.storage.getSnapshot("personal");
+    harness.storage.seed("personal", {
+      ...beforeRelease,
+      revision: beforeRelease.revision + 1,
+      control: { status: "running" },
+    });
     await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
       status: "completed",
     });

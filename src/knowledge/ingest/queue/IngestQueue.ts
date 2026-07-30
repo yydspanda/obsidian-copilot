@@ -416,6 +416,19 @@ export class IngestQueueRecoveryRequiredError extends Error {
   }
 }
 
+/** Reports an attempt to bypass the shared-runtime startup release authority. */
+export class IngestQueueStartupReleaseRequiredError extends Error {
+  /**
+   * Creates a startup conditional-release gate failure.
+   *
+   * @param bundleId - Bundle whose startup pause requires atomic Runtime release
+   */
+  constructor(public readonly bundleId: string) {
+    super(`Bundle queue '${bundleId}' requires atomic startup release before resume`);
+    this.name = "IngestQueueStartupReleaseRequiredError";
+  }
+}
+
 /** Reports an apply receipt that cannot own the selected durable queue job. */
 export class IngestQueueApplyCommitConflictError extends Error {
   /**
@@ -1605,7 +1618,9 @@ export class IngestQueue {
       return this.mutate<PauseMutationValue>(bundleId, (current) => {
         if (
           current.control.status === "paused" &&
-          ["recovery_required", "commit_pending_ack"].includes(current.control.reason)
+          ["startup_recovery", "recovery_required", "commit_pending_ack"].includes(
+            current.control.reason
+          )
         ) {
           return { value: { changed: false } };
         }
@@ -1686,6 +1701,9 @@ export class IngestQueue {
           current.control.reason === "commit_pending_ack"
         ) {
           throw new IngestQueueApplyCommitPendingError(bundleId);
+        }
+        if (current.control.status === "paused" && current.control.reason === "startup_recovery") {
+          throw new IngestQueueStartupReleaseRequiredError(bundleId);
         }
         const hasApplyRecoveryFailure = current.jobs.some(
           (job) => job.status === "failed" && job.stage === "applying"
@@ -2154,7 +2172,12 @@ export class IngestQueue {
             "apply a review decision for a different queue claim"
           );
         }
+        const isStartupRecoveryPaused =
+          current.control.status === "paused" && current.control.reason === "startup_recovery";
         if (job.status === "processing" && job.stage === "applying") {
+          if (isStartupRecoveryPaused) {
+            throw new IngestQueueRecoveryRequiredError(bundleId);
+          }
           const claim = current.applyClaim;
           if (
             claim &&
@@ -2190,7 +2213,7 @@ export class IngestQueue {
         ) {
           throw new IngestQueueApplyCommitPendingError(bundleId);
         }
-        if (current.control.status === "paused") {
+        if (current.control.status === "paused" && !isStartupRecoveryPaused) {
           throw new IngestQueueTransitionError(
             job.id,
             jobState(job),
@@ -2465,7 +2488,7 @@ export class IngestQueue {
    * Releases a commit-pending queue only after the journal slot is durably clear.
    *
    * This method deliberately leaves the backlog under `startup_recovery` pause,
-   * requiring an explicit resume after startup reconciliation.
+   * requiring a fresh Gate observation and conditional Runtime release.
    *
    * @param bundleId - Stable Bundle identifier
    * @param transactionId - Exact acknowledged transaction identifier
@@ -2504,7 +2527,7 @@ export class IngestQueue {
               status: "paused",
               reason: "startup_recovery",
               pausedAt: Math.max(timestamp, marker.committedAt),
-              detail: "Recovered apply committed; resume the backlog explicitly",
+              detail: "Recovered apply committed; startup reconciliation must release the backlog",
             },
           },
           value: true,
