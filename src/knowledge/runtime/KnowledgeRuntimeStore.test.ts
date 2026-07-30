@@ -36,6 +36,7 @@ import type {
   SourceManifest,
 } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import { createNoJournalApplyRecoveryReference } from "@/knowledge/recovery/NoJournalApplyRecovery";
 import {
   ReviewStorageRevisionConflictError,
   type ChangeSetReviewSnapshot,
@@ -1369,6 +1370,78 @@ describe("KnowledgeRuntimeStore", () => {
     });
   });
 
+  it("loads Queue and every accepted classification from one exact runtime snapshot", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const review = (await harness.review.read("personal")) as ChangeSetReviewSnapshot;
+    const before = await harness.file.read();
+
+    const loaded = await harness.recovery.loadSnapshot("personal", review.revision);
+
+    expect(loaded).toMatchObject({
+      kind: "loaded",
+      snapshot: {
+        bundleId: "personal",
+        runtimeRevision: 10,
+        reviewRevision: review.revision,
+        queueSnapshot: { bundleId: "personal" },
+        classifications: [{ kind: "requires_decision" }],
+      },
+    });
+    await expect(harness.recovery.loadSnapshot("personal", review.revision + 1)).resolves.toEqual({
+      kind: "review_revision_changed",
+      bundleId: "personal",
+      runtimeRevision: 10,
+      expectedReviewRevision: review.revision + 1,
+      actualReviewRevision: review.revision,
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("returns an atomic revision-zero recovery snapshot before Queue or Review slots exist", async () => {
+    const harness = await createHarness();
+
+    await expect(harness.recovery.loadSnapshot("personal", 0)).resolves.toEqual({
+      kind: "loaded",
+      snapshot: {
+        bundleId: "personal",
+        runtimeRevision: 0,
+        reviewRevision: 0,
+        queueSnapshot: createQueueSnapshot(0),
+        globalTransaction: null,
+        classifications: [],
+      },
+    });
+  });
+
+  it("includes the Vault-global transaction slot in the same recovery snapshot", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+    state.activeTransaction = harness.journal;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await expect(harness.recovery.loadSnapshot("personal", review.revision)).resolves.toMatchObject(
+      {
+        kind: "loaded",
+        snapshot: {
+          globalTransaction: {
+            transactionId: harness.journal.transactionId,
+            bundleId: harness.journal.bundleId,
+            changeSetId: harness.journal.changeSetId,
+            phase: "prepared",
+          },
+          classifications: [
+            {
+              kind: "active",
+              transactionId: harness.journal.transactionId,
+              phase: "prepared",
+            },
+          ],
+        },
+      }
+    );
+  });
+
   it("keeps an accepted Review awaiting Queue apply classified as not started", async () => {
     const harness = await createNoJournalRecoveryHarness();
     const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
@@ -1411,6 +1484,7 @@ describe("KnowledgeRuntimeStore", () => {
 
     await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
       kind: "accepted_not_started",
+      reference: createNoJournalApplyRecoveryReference("personal", harness.identity),
       bundleId: "personal",
       changeSetId: harness.journal.changeSetId,
       jobId: harness.journal.jobClaim.jobId,

@@ -40,6 +40,7 @@ export * from "@/knowledge/review/ReviewDecision";
 export * from "@/knowledge/review/ReviewQueueStartupReconciler";
 export * from "@/knowledge/review/ReviewStorage";
 export * from "@/knowledge/recovery/NoJournalApplyRecovery";
+export * from "@/knowledge/recovery/KnowledgeStartupGate";
 export * from "@/knowledge/runtime/AtomicRuntimeFile";
 export * from "@/knowledge/runtime/KnowledgeRuntimeStore";
 export * from "@/knowledge/ui/KnowledgeStudioController";

@@ -30,6 +30,7 @@ import type {
   SourceInputRevisionAllocator,
 } from "@/knowledge/ingest/InputRevisionAllocator";
 import {
+  INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
   parseIngestQueueSnapshot,
   validateIngestQueueSnapshot,
@@ -72,12 +73,15 @@ import {
   validateSourceManifest,
 } from "@/knowledge/model/validation";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
-import type {
-  NoJournalApplyAbandonReceipt,
-  NoJournalApplyRecoveryCandidate,
-  NoJournalApplyRecoveryClassification,
-  NoJournalApplyRecoveryReference,
-  NoJournalApplyRecoveryStatePort,
+import {
+  createNoJournalApplyRecoveryReference,
+  type NoJournalApplyAbandonReceipt,
+  type NoJournalApplyRecoveryCandidate,
+  type NoJournalApplyRecoveryClassification,
+  type NoJournalApplyRecoveryReference,
+  type NoJournalApplyRecoverySnapshotLoadResult,
+  type NoJournalApplyRecoverySnapshotPort,
+  type NoJournalApplyRecoveryStatePort,
 } from "@/knowledge/recovery/NoJournalApplyRecovery";
 import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import {
@@ -90,7 +94,6 @@ import {
   type ReviewStorage,
 } from "@/knowledge/review/ReviewStorage";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
-import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
 export const KNOWLEDGE_RUNTIME_STORE_VERSION = 2 as const;
@@ -1123,37 +1126,7 @@ function createNoJournalApplyRecoveryId(
   bundleId: string,
   record: AcceptedChangeSetReviewRecord
 ): string {
-  const material: JsonValue = {
-    version: 1,
-    bundleId,
-    changeSetId: record.changeSetId,
-    proposalDigest: record.proposalDigest,
-    recordedAt: record.recordedAt,
-    acceptedDigest: record.acceptedDigest,
-    manifestCommitIntentDigest: record.manifestCommitIntentDigest,
-    acceptedAt: record.acceptedAt,
-    jobClaim: { ...record.jobClaim },
-  };
-  return `knowledge-no-journal-${sha256(
-    `obsidian-copilot-knowledge-no-journal-apply-recovery-v1\n${canonicalizeJson(material)}`
-  )}`;
-}
-
-/**
- * Creates the public opaque reference for one accepted record.
- *
- * @param bundleId - Bundle containing the accepted record
- * @param record - Exact immutable accepted Review record
- * @returns Detached recovery reference
- */
-function createNoJournalApplyRecoveryReference(
-  bundleId: string,
-  record: AcceptedChangeSetReviewRecord
-): NoJournalApplyRecoveryReference {
-  return {
-    bundleId,
-    recoveryId: createNoJournalApplyRecoveryId(bundleId, record),
-  };
+  return createNoJournalApplyRecoveryReference(bundleId, record).recoveryId;
 }
 
 /**
@@ -2000,6 +1973,43 @@ function compareIdentifiers(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+/**
+ * Creates the strict revision-zero Queue observed before a Bundle has durable work.
+ *
+ * @param bundleId - Bundle whose Queue slot is absent
+ * @returns Detached empty current-version Queue snapshot
+ */
+function createEmptyRuntimeQueueSnapshot(bundleId: string): IngestQueueSnapshot {
+  return {
+    version: INGEST_QUEUE_VERSION,
+    bundleId,
+    revision: 0,
+    control: { status: "running" },
+    jobs: [],
+    reruns: [],
+    sourceHighWatermarks: [],
+    pendingReviews: [],
+    reviewRejections: [],
+    applyAbandonments: [],
+  };
+}
+
+/**
+ * Sorts accepted Reviews independently of persisted insertion order.
+ *
+ * @param left - First immutable accepted record
+ * @param right - Second immutable accepted record
+ * @returns Stable timestamp then identifier ordering
+ */
+function compareAcceptedReviewRecords(
+  left: AcceptedChangeSetReviewRecord,
+  right: AcceptedChangeSetReviewRecord
+): number {
+  return (
+    left.recordedAt - right.recordedAt || compareIdentifiers(left.changeSetId, right.changeSetId)
+  );
+}
+
 /** Requires a non-empty runtime identifier. */
 function assertIdentifier(value: string, field: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -2203,6 +2213,79 @@ export class KnowledgeRuntimeStore {
     const state = await this.readState();
     const record = this.requireAcceptedReviewByStartupIdentity(state, identity);
     return this.classifyAcceptedApplyState(state, identity.bundleId, record);
+  }
+
+  /**
+   * Atomically classifies every accepted Review at one expected Review revision.
+   *
+   * Queue state, accepted records, active journal, commit ledger, and every
+   * returned classification come from the same runtime-envelope read. The
+   * runtime revision is only an optimistic display token; later actions still
+   * re-resolve their opaque reference and repeat full durable authority proof.
+   *
+   * @param bundleId - Bundle whose accepted Reviews must be classified
+   * @param expectedReviewRevision - Review revision reconciled by the startup coordinator
+   * @returns One atomic recovery snapshot or an explicit Review revision miss
+   */
+  async loadNoJournalApplyRecoverySnapshot(
+    bundleId: string,
+    expectedReviewRevision: number
+  ): Promise<NoJournalApplyRecoverySnapshotLoadResult> {
+    assertIdentifier(bundleId, "bundleId");
+    if (!Number.isSafeInteger(expectedReviewRevision) || expectedReviewRevision < 0) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(bundleId, "request_invalid");
+    }
+    const state = await this.readState();
+    const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+    const review =
+      reviewRaw === null
+        ? {
+            version: CHANGESET_REVIEW_SNAPSHOT_VERSION,
+            bundleId,
+            revision: 0,
+            records: [],
+          }
+        : this.requireReviewSnapshot(bundleId, reviewRaw);
+    if (review.revision !== expectedReviewRevision) {
+      return {
+        kind: "review_revision_changed",
+        bundleId,
+        runtimeRevision: state.revision,
+        expectedReviewRevision,
+        actualReviewRevision: review.revision,
+      };
+    }
+
+    const queueRaw = findBundleSlot(state, "queues", bundleId);
+    const queueSnapshot =
+      queueRaw === null
+        ? createEmptyRuntimeQueueSnapshot(bundleId)
+        : this.requireQueueSnapshot(bundleId, queueRaw);
+    const activeTransaction =
+      state.activeTransaction === null ? null : this.requireTransaction(state.activeTransaction);
+    const classifications = review.records
+      .filter((record): record is AcceptedChangeSetReviewRecord => record.outcome === "accepted")
+      .sort(compareAcceptedReviewRecords)
+      .map((record) => this.classifyAcceptedApplyState(state, bundleId, record));
+    return {
+      kind: "loaded",
+      snapshot: {
+        bundleId,
+        runtimeRevision: state.revision,
+        reviewRevision: review.revision,
+        queueSnapshot,
+        globalTransaction:
+          activeTransaction === null
+            ? null
+            : {
+                transactionId: activeTransaction.transactionId,
+                bundleId: activeTransaction.bundleId,
+                changeSetId: activeTransaction.changeSetId,
+                phase: activeTransaction.phase,
+              },
+        classifications,
+      },
+    };
   }
 
   /**
@@ -3030,6 +3113,7 @@ export class KnowledgeRuntimeStore {
     ) {
       return {
         kind: "accepted_not_started",
+        reference,
         bundleId,
         changeSetId: record.changeSetId,
         jobId: record.jobClaim.jobId,
@@ -3407,13 +3491,23 @@ export class KnowledgeRuntimeApplyAuthorityPort implements ChangeSetTransactionA
 }
 
 /** No-journal recovery state facade backed by the shared atomic runtime envelope. */
-export class KnowledgeRuntimeNoJournalApplyRecoveryPort implements NoJournalApplyRecoveryStatePort {
+export class KnowledgeRuntimeNoJournalApplyRecoveryPort
+  implements NoJournalApplyRecoveryStatePort, NoJournalApplyRecoverySnapshotPort
+{
   /** Creates a no-journal recovery facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
   /** Classifies one accepted Review identity from one atomic runtime snapshot. */
   classify(identity: AcceptedReviewStartupIdentity): Promise<NoJournalApplyRecoveryClassification> {
     return this.runtime.classifyNoJournalApplyRecovery(identity);
+  }
+
+  /** Loads every accepted classification from one exact runtime-envelope revision. */
+  loadSnapshot(
+    bundleId: string,
+    expectedReviewRevision: number
+  ): Promise<NoJournalApplyRecoverySnapshotLoadResult> {
+    return this.runtime.loadNoJournalApplyRecoverySnapshot(bundleId, expectedReviewRevision);
   }
 
   /** Reloads and fully re-proves one continuation without observing Wiki files. */

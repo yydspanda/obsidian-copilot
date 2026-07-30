@@ -121,6 +121,7 @@ describe("NoJournalApplyRecoveryCoordinator", () => {
     const identity = createIdentity();
     const classification: NoJournalApplyRecoveryClassification = {
       kind: "accepted_not_started",
+      reference: createReference(),
       bundleId: identity.bundleId,
       changeSetId: identity.changeSetId,
       jobId: identity.jobClaim.jobId,

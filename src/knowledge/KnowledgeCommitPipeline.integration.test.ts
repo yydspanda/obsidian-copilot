@@ -3,6 +3,7 @@ import {
   createTransactionCommitReceiptDigest,
   type TransactionCommitReceipt,
 } from "@/knowledge/changeset/ChangeSetTransaction";
+import { ApplyCommitCoordinator } from "@/knowledge/changeset/ApplyCommitCoordinator";
 import {
   ALL_KNOWLEDGE_FILE_MUTATIONS,
   ChangeSetValidator,
@@ -48,9 +49,10 @@ import type {
   SourceManifest,
 } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import { KnowledgeStartupGate } from "@/knowledge/recovery/KnowledgeStartupGate";
 import { NoJournalApplyRecoveryCoordinator } from "@/knowledge/recovery/NoJournalApplyRecovery";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
-import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
+import { ReviewQueueStartupReconciler } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
   KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
@@ -515,6 +517,63 @@ describe("durable knowledge commit pipeline", () => {
       status: "awaiting_review",
       jobId: "job-1",
     });
+    await queue.pause(bundle.id, "startup gate integration fixture");
+
+    const wikiFiles = new MemoryKnowledgeFileStore();
+    let transactionTime = 1_300;
+    const transaction = new ChangeSetTransaction({
+      storage: transactionStorage,
+      fileStore: wikiFiles,
+      validator: createApplyValidator(wikiFiles),
+      authority: new KnowledgeRuntimeApplyAuthorityPort(runtime),
+      now: () => transactionTime++,
+      createTransactionId: () => "transaction-compiler-review-1",
+    });
+    const recoveryPort = new KnowledgeRuntimeNoJournalApplyRecoveryPort(runtime);
+    const noJournalRecovery = new NoJournalApplyRecoveryCoordinator({
+      state: recoveryPort,
+      transaction,
+      now: () => transactionTime++,
+    });
+    const startupGate = new KnowledgeStartupGate({
+      queue,
+      applyCommit: new ApplyCommitCoordinator({
+        transaction,
+        queue,
+        manifest: applyCommitPort,
+      }),
+      reviews: new ReviewQueueStartupReconciler({ reviews, queue }),
+      accepted: recoveryPort,
+    });
+    const beforeAcceptedStartup = await atomicFile.read();
+    const acceptedStartup = await startupGate.run(bundle);
+    expect(acceptedStartup).toMatchObject({
+      bundleId: bundle.id,
+      disposition: "attention_required",
+      applyCommit: { kind: "none" },
+      reviewReconciliations: [],
+      acceptedClassifications: [
+        {
+          kind: "accepted_not_started",
+          bundleId: bundle.id,
+          jobId: "job-1",
+          changeSetId: accepted.changeSetId,
+        },
+      ],
+      attention: [
+        {
+          kind: "accepted_not_started",
+          jobId: "job-1",
+          changeSetId: accepted.changeSetId,
+        },
+      ],
+    });
+    expect(acceptedStartup.acceptedClassifications).toHaveLength(1);
+    expect(acceptedStartup.attention).toHaveLength(1);
+    await expect(atomicFile.read()).resolves.toBe(beforeAcceptedStartup);
+    expect(wikiFiles.files.size).toBe(0);
+
+    await queue.resume(bundle.id);
     const applyingJob = await queue.beginReviewApply(bundle.id, {
       outcome: "accepted",
       bundleId: bundle.id,
@@ -531,36 +590,20 @@ describe("durable knowledge commit pipeline", () => {
       control: { status: "paused", reason: "recovery_required" },
       jobs: [expect.objectContaining({ id: applyingJob.id, status: "failed", stage: "applying" })],
     });
-
-    const wikiFiles = new MemoryKnowledgeFileStore();
-    let transactionTime = 1_300;
-    const transaction = new ChangeSetTransaction({
-      storage: transactionStorage,
-      fileStore: wikiFiles,
-      validator: createApplyValidator(wikiFiles),
-      authority: new KnowledgeRuntimeApplyAuthorityPort(runtime),
-      now: () => transactionTime++,
-      createTransactionId: () => "transaction-compiler-review-1",
+    const startup = await startupGate.run(bundle);
+    expect(startup).toMatchObject({
+      disposition: "attention_required",
+      attention: [
+        {
+          kind: "no_journal_decision_required",
+          jobId: applyingJob.id,
+          changeSetId: accepted.changeSetId,
+        },
+      ],
     });
-    const startupIdentity: AcceptedReviewStartupIdentity = {
-      bundleId: bundle.id,
-      changeSetId: accepted.changeSetId,
-      proposalDigest: accepted.proposalDigest,
-      recordRevision: accepted.recordRevision,
-      recordedAt: accepted.recordedAt,
-      acceptedDigest: accepted.acceptedDigest,
-      manifestCommitIntentDigest: accepted.manifestCommitIntentDigest,
-      acceptedAt: accepted.acceptedAt,
-      jobClaim: { ...accepted.jobClaim },
-    };
-    const noJournalRecovery = new NoJournalApplyRecoveryCoordinator({
-      state: new KnowledgeRuntimeNoJournalApplyRecoveryPort(runtime),
-      transaction,
-      now: () => transactionTime++,
-    });
-    const recoveryState = await noJournalRecovery.classify(startupIdentity);
-    if (recoveryState.kind !== "requires_decision") {
-      throw new Error(`Expected no-journal recovery, received '${recoveryState.kind}'`);
+    const recoveryState = startup.acceptedClassifications[0];
+    if (recoveryState?.kind !== "requires_decision") {
+      throw new Error(`Expected no-journal recovery, received '${recoveryState?.kind}'`);
     }
     const jobClaim: TransactionJobClaim = {
       jobId: applyingJob.id,
