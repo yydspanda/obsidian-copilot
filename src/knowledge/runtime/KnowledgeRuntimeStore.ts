@@ -27,6 +27,12 @@ import {
 } from "@/knowledge/changeset/TransactionStorage";
 import type {
   AllocateSourceInputRevisionRequest,
+  BindSourceInputObservationRequest,
+  BindSourceInputObservationResult,
+  BoundSourceInputObservation,
+  SourceInputObservationBinder,
+  SourceInputObservationRecoveryWork,
+  SourceInputObservationSettlement,
   SourceInputRevisionAllocation,
   SourceInputRevisionAllocator,
 } from "@/knowledge/ingest/InputRevisionAllocator";
@@ -38,6 +44,8 @@ import {
   type IngestApplyAbandonment,
   type IngestApplyClaimMarker,
   type IngestQueueSnapshot,
+  type IngestSourceHighWatermark,
+  type QueueWriteAuthority,
   type QueueStorage,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import {
@@ -103,7 +111,10 @@ import {
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
-export const KNOWLEDGE_RUNTIME_STORE_VERSION = 2 as const;
+export const KNOWLEDGE_RUNTIME_STORE_VERSION = 3 as const;
+
+/** Previous runtime envelope with an allocator floor but no observation journal. */
+const PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION = 2 as const;
 
 /** Previous outer-envelope format eligible for one constrained startup migration. */
 const LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION = 1 as const;
@@ -118,10 +129,59 @@ interface KnowledgeRuntimeBundleSlot {
   value: object;
 }
 
-/** Latest monotonic observation revision allocated for one source. */
+/** One allocated source observation retained until explicit archival. */
+export type KnowledgeRuntimeSourceObservationRecord =
+  | {
+      observationToken: string;
+      captureId: string;
+      inputRevision: number;
+      allocatedAt: number;
+      status: "allocated";
+    }
+  | {
+      observationToken: string;
+      captureId: string;
+      inputRevision: number;
+      allocatedAt: number;
+      status: "bound";
+      sourceContentHash: string;
+      pipelineFingerprint: string;
+      boundAt: number;
+    }
+  | {
+      observationToken: string;
+      captureId: string;
+      inputRevision: number;
+      allocatedAt: number;
+      status: "consumed";
+      sourceContentHash: string;
+      pipelineFingerprint: string;
+      boundAt: number;
+      settledAt: number;
+      queueRevision: number;
+    }
+  | {
+      observationToken: string;
+      captureId: string;
+      inputRevision: number;
+      allocatedAt: number;
+      status: "superseded";
+      sourceContentHash?: string;
+      pipelineFingerprint?: string;
+      boundAt?: number;
+      settledAt: number;
+      supersededByInputRevision: number;
+    };
+
+/** Latest allocator floor and durable observation journal for one source. */
 export interface KnowledgeRuntimeInputRevisionRecord {
   sourceId: string;
   inputRevision: number;
+  /** Revisions at or below this migration fence have no invented observation token. */
+  managedAfterRevision: number;
+  /** Exact Queue watermark trusted only because it existed during v2 migration. */
+  legacyCheckpoint?: IngestSourceHighWatermark;
+  observations: KnowledgeRuntimeSourceObservationRecord[];
 }
 
 /** Per-Bundle input-revision namespace retained across application restarts. */
@@ -162,6 +222,7 @@ export interface KnowledgeApplyCommitLedgerRecord {
 /** Complete strict state committed through one atomic plaintext file. */
 export interface KnowledgeRuntimeStoreSnapshot {
   version: typeof KNOWLEDGE_RUNTIME_STORE_VERSION;
+  runtimeId: string;
   revision: number;
   queues: KnowledgeRuntimeBundleSlot[];
   reviews: KnowledgeRuntimeBundleSlot[];
@@ -169,6 +230,18 @@ export interface KnowledgeRuntimeStoreSnapshot {
   activeTransaction: object | null;
   inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
+}
+
+/** Scalar allocator state used by runtime versions 1 and 2. */
+interface PreviousKnowledgeRuntimeInputRevisionRecord {
+  sourceId: string;
+  inputRevision: number;
+}
+
+/** Per-Bundle scalar allocator namespace used by runtime versions 1 and 2. */
+interface PreviousKnowledgeRuntimeInputRevisionBundle {
+  bundleId: string;
+  sources: PreviousKnowledgeRuntimeInputRevisionRecord[];
 }
 
 type RuntimeBundleCollection = "queues" | "reviews" | "manifests";
@@ -186,14 +259,27 @@ interface LegacyKnowledgeRuntimeStoreSnapshot {
   reviews: KnowledgeRuntimeBundleSlot[];
   manifests: KnowledgeRuntimeBundleSlot[];
   activeTransaction: object | null;
-  inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
+  inputRevisions: PreviousKnowledgeRuntimeInputRevisionBundle[];
   applyCommits: object[];
+}
+
+/** Strict runtime-v2 envelope read only by the v2-to-v3 migration. */
+interface PreviousKnowledgeRuntimeStoreSnapshot {
+  version: typeof PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION;
+  revision: number;
+  queues: KnowledgeRuntimeBundleSlot[];
+  reviews: KnowledgeRuntimeBundleSlot[];
+  manifests: KnowledgeRuntimeBundleSlot[];
+  activeTransaction: object | null;
+  inputRevisions: PreviousKnowledgeRuntimeInputRevisionBundle[];
+  applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
 const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 0, {
   message: "Expected a non-empty string",
 });
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const opaqueIdSchema = z.string().regex(/^[a-f0-9]{32}$/);
 const nonNegativeSafeIntegerSchema = z.number().int().safe().nonnegative();
 
 const runtimeBundleSlotSchema: z.ZodType<KnowledgeRuntimeBundleSlot> = z
@@ -203,10 +289,99 @@ const runtimeBundleSlotSchema: z.ZodType<KnowledgeRuntimeBundleSlot> = z
   })
   .strict();
 
+const previousRuntimeInputRevisionRecordSchema: z.ZodType<PreviousKnowledgeRuntimeInputRevisionRecord> =
+  z
+    .object({
+      sourceId: nonEmptyStringSchema,
+      inputRevision: z.number().int().safe().positive(),
+    })
+    .strict();
+
+const previousRuntimeInputRevisionBundleSchema: z.ZodType<PreviousKnowledgeRuntimeInputRevisionBundle> =
+  z
+    .object({
+      bundleId: nonEmptyStringSchema,
+      sources: z.array(previousRuntimeInputRevisionRecordSchema),
+    })
+    .strict();
+
+const runtimeAllocatedObservationSchema = z
+  .object({
+    observationToken: opaqueIdSchema,
+    captureId: nonEmptyStringSchema,
+    inputRevision: z.number().int().safe().positive(),
+    allocatedAt: nonNegativeSafeIntegerSchema,
+    status: z.literal("allocated"),
+  })
+  .strict();
+
+const runtimeBoundObservationSchema = z
+  .object({
+    observationToken: opaqueIdSchema,
+    captureId: nonEmptyStringSchema,
+    inputRevision: z.number().int().safe().positive(),
+    allocatedAt: nonNegativeSafeIntegerSchema,
+    status: z.literal("bound"),
+    sourceContentHash: sha256Schema,
+    pipelineFingerprint: sha256Schema,
+    boundAt: nonNegativeSafeIntegerSchema,
+  })
+  .strict();
+
+const runtimeConsumedObservationSchema = z
+  .object({
+    observationToken: opaqueIdSchema,
+    captureId: nonEmptyStringSchema,
+    inputRevision: z.number().int().safe().positive(),
+    allocatedAt: nonNegativeSafeIntegerSchema,
+    status: z.literal("consumed"),
+    sourceContentHash: sha256Schema,
+    pipelineFingerprint: sha256Schema,
+    boundAt: nonNegativeSafeIntegerSchema,
+    settledAt: nonNegativeSafeIntegerSchema,
+    queueRevision: z.number().int().safe().positive(),
+  })
+  .strict();
+
+const runtimeSupersededObservationSchema = z
+  .object({
+    observationToken: opaqueIdSchema,
+    captureId: nonEmptyStringSchema,
+    inputRevision: z.number().int().safe().positive(),
+    allocatedAt: nonNegativeSafeIntegerSchema,
+    status: z.literal("superseded"),
+    sourceContentHash: sha256Schema.optional(),
+    pipelineFingerprint: sha256Schema.optional(),
+    boundAt: nonNegativeSafeIntegerSchema.optional(),
+    settledAt: nonNegativeSafeIntegerSchema,
+    supersededByInputRevision: z.number().int().safe().positive(),
+  })
+  .strict();
+
+const runtimeSourceObservationSchema: z.ZodType<KnowledgeRuntimeSourceObservationRecord> =
+  z.discriminatedUnion("status", [
+    runtimeAllocatedObservationSchema,
+    runtimeBoundObservationSchema,
+    runtimeConsumedObservationSchema,
+    runtimeSupersededObservationSchema,
+  ]);
+
 const runtimeInputRevisionRecordSchema: z.ZodType<KnowledgeRuntimeInputRevisionRecord> = z
   .object({
     sourceId: nonEmptyStringSchema,
     inputRevision: z.number().int().safe().positive(),
+    managedAfterRevision: nonNegativeSafeIntegerSchema,
+    legacyCheckpoint: z
+      .object({
+        sourceId: nonEmptyStringSchema,
+        sourceContentHash: sha256Schema,
+        pipelineFingerprint: sha256Schema,
+        inputRevision: z.number().int().safe().positive(),
+        observedAt: nonNegativeSafeIntegerSchema,
+      })
+      .strict()
+      .optional(),
+    observations: z.array(runtimeSourceObservationSchema),
   })
   .strict();
 
@@ -256,10 +431,24 @@ const legacyKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<LegacyKnowledgeRuntim
     reviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
     activeTransaction: z.union([z.record(z.unknown()), z.null()]),
-    inputRevisions: z.array(runtimeInputRevisionBundleSchema),
+    inputRevisions: z.array(previousRuntimeInputRevisionBundleSchema),
     applyCommits: z.array(z.record(z.unknown())),
   })
   .strict();
+
+const previousKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<PreviousKnowledgeRuntimeStoreSnapshot> =
+  z
+    .object({
+      version: z.literal(PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION),
+      revision: nonNegativeSafeIntegerSchema,
+      queues: z.array(runtimeBundleSlotSchema),
+      reviews: z.array(runtimeBundleSlotSchema),
+      manifests: z.array(runtimeBundleSlotSchema),
+      activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+      inputRevisions: z.array(previousRuntimeInputRevisionBundleSchema),
+      applyCommits: z.array(applyCommitLedgerRecordSchema),
+    })
+    .strict();
 
 const legacyEmptyReviewSnapshotSchema = z
   .object({
@@ -273,6 +462,7 @@ const legacyEmptyReviewSnapshotSchema = z
 const knowledgeRuntimeStoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshot> = z
   .object({
     version: z.literal(KNOWLEDGE_RUNTIME_STORE_VERSION),
+    runtimeId: opaqueIdSchema,
     revision: nonNegativeSafeIntegerSchema,
     queues: z.array(runtimeBundleSlotSchema),
     reviews: z.array(runtimeBundleSlotSchema),
@@ -553,10 +743,62 @@ export class SourceInputRevisionOverflowError extends Error {
   }
 }
 
+/** Reports reuse of one caller capture id for a different source identity. */
+export class SourceInputCaptureConflictError extends Error {
+  /** Creates a sanitized capture-identity conflict. */
+  constructor() {
+    super("The source observation capture id is already bound to another identity");
+    this.name = "SourceInputCaptureConflictError";
+  }
+}
+
+/** Reports an unknown, malformed, or cross-runtime observation capability. */
+export class SourceInputObservationTokenError extends Error {
+  /** Creates a sanitized opaque-token failure. */
+  constructor() {
+    super("The source observation capability is invalid or unknown");
+    this.name = "SourceInputObservationTokenError";
+  }
+}
+
+/** Reports a second, different payload submitted for one observation token. */
+export class SourceInputObservationBindingConflictError extends Error {
+  /** Creates a sanitized first-write-wins binding conflict. */
+  constructor() {
+    super("The source observation capability is already bound to a different payload");
+    this.name = "SourceInputObservationBindingConflictError";
+  }
+}
+
+/** Reports a cryptographically improbable runtime-generated token collision. */
+export class SourceInputObservationTokenCollisionError extends Error {
+  /** Creates a stable fail-closed token collision. */
+  constructor() {
+    super("The source observation capability generator produced a duplicate token");
+    this.name = "SourceInputObservationTokenCollisionError";
+  }
+}
+
+/** Runtime seams used for secure ids and deterministic observation timestamps. */
+export interface KnowledgeRuntimeStoreOptions {
+  clock?: () => number;
+  opaqueIdFactory?: () => string;
+}
+
+/** Generates one browser-compatible 128-bit opaque identifier. */
+function createSecureOpaqueId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 /** Creates the first empty strict runtime envelope. */
-export function createEmptyKnowledgeRuntimeStoreSnapshot(): KnowledgeRuntimeStoreSnapshot {
+export function createEmptyKnowledgeRuntimeStoreSnapshot(
+  runtimeId = createSecureOpaqueId()
+): KnowledgeRuntimeStoreSnapshot {
   return {
     version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+    runtimeId,
     revision: 0,
     queues: [],
     reviews: [],
@@ -636,6 +878,7 @@ function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): vo
   }
   assertManifestLedgerSemantics(snapshot.applyCommits, manifests);
   assertQueueApplyCommitLedgerSemantics(snapshot.applyCommits, queues);
+  assertObservationJournalSemantics(snapshot, queues);
 }
 
 /**
@@ -659,7 +902,10 @@ function assertUniqueBundleSlots(slots: readonly KnowledgeRuntimeBundleSlot[]): 
  * @param bundles - Strictly shaped input revision namespaces
  */
 function assertUniqueInputRevisionRecords(
-  bundles: readonly KnowledgeRuntimeInputRevisionBundle[]
+  bundles: readonly {
+    bundleId: string;
+    sources: readonly { sourceId: string }[];
+  }[]
 ): void {
   const bundleIds = new Set<string>();
   for (const bundle of bundles) {
@@ -673,6 +919,171 @@ function assertUniqueInputRevisionRecords(
         throw new KnowledgeRuntimeStoreCorruptError();
       }
       sourceIds.add(source.sourceId);
+    }
+  }
+}
+
+/**
+ * Cross-validates allocator floors, observation journals, and Queue watermarks.
+ *
+ * @param snapshot - Strict current runtime envelope
+ * @param queues - Already parsed Queue slots indexed by Bundle
+ */
+function assertObservationJournalSemantics(
+  snapshot: KnowledgeRuntimeStoreSnapshot,
+  queues: ReadonlyMap<string, IngestQueueSnapshot>
+): void {
+  const captureIds = new Set<string>();
+  const observationTokens = new Set<string>();
+  for (const bundle of snapshot.inputRevisions) {
+    const queue = queues.get(bundle.bundleId);
+    for (const source of bundle.sources) {
+      if (source.managedAfterRevision > source.inputRevision) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      if (
+        source.legacyCheckpoint !== undefined &&
+        (source.legacyCheckpoint.sourceId !== source.sourceId ||
+          source.legacyCheckpoint.inputRevision > source.managedAfterRevision)
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      let expectedRevision = source.managedAfterRevision + 1;
+      let activeBoundRevision: number | undefined;
+      let highestBindingRevision: number | undefined;
+      let highestConsumed:
+        | Extract<KnowledgeRuntimeSourceObservationRecord, { status: "consumed" }>
+        | undefined;
+      let previousConsumedQueueRevision = 0;
+      for (const observation of source.observations) {
+        if (
+          observation.inputRevision !== expectedRevision ||
+          observation.inputRevision > source.inputRevision ||
+          observation.allocatedAt >
+            ("boundAt" in observation && observation.boundAt !== undefined
+              ? observation.boundAt
+              : Number.MAX_SAFE_INTEGER) ||
+          captureIds.has(observation.captureId) ||
+          observationTokens.has(observation.observationToken)
+        ) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        captureIds.add(observation.captureId);
+        observationTokens.add(observation.observationToken);
+        if (observation.status === "bound") {
+          if (activeBoundRevision !== undefined) {
+            throw new KnowledgeRuntimeStoreCorruptError();
+          }
+          activeBoundRevision = observation.inputRevision;
+        }
+        if (
+          observation.status === "bound" ||
+          observation.status === "consumed" ||
+          (observation.status === "superseded" &&
+            observation.sourceContentHash !== undefined &&
+            observation.pipelineFingerprint !== undefined &&
+            observation.boundAt !== undefined)
+        ) {
+          highestBindingRevision = observation.inputRevision;
+        }
+        if (
+          observation.status === "consumed" &&
+          (observation.boundAt > observation.settledAt ||
+            observation.queueRevision > (queue?.revision ?? 0) ||
+            observation.queueRevision <= previousConsumedQueueRevision)
+        ) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        if (observation.status === "consumed") {
+          highestConsumed = observation;
+          previousConsumedQueueRevision = observation.queueRevision;
+        }
+        if (observation.status === "superseded") {
+          const hasAnyBinding =
+            observation.sourceContentHash !== undefined ||
+            observation.pipelineFingerprint !== undefined ||
+            observation.boundAt !== undefined;
+          const hasCompleteBinding =
+            observation.sourceContentHash !== undefined &&
+            observation.pipelineFingerprint !== undefined &&
+            observation.boundAt !== undefined;
+          if (
+            (hasAnyBinding && !hasCompleteBinding) ||
+            observation.supersededByInputRevision <= observation.inputRevision ||
+            observation.supersededByInputRevision > source.inputRevision ||
+            observation.allocatedAt > observation.settledAt ||
+            (observation.boundAt !== undefined && observation.boundAt > observation.settledAt)
+          ) {
+            throw new KnowledgeRuntimeStoreCorruptError();
+          }
+        }
+        expectedRevision += 1;
+      }
+      if (expectedRevision !== source.inputRevision + 1) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const observationsByRevision = new Map(
+        source.observations.map((observation) => [observation.inputRevision, observation] as const)
+      );
+      for (const observation of source.observations) {
+        if (
+          highestBindingRevision !== undefined &&
+          observation.inputRevision < highestBindingRevision &&
+          (observation.status === "allocated" || observation.status === "bound")
+        ) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        if (observation.status === "superseded") {
+          const target = observationsByRevision.get(observation.supersededByInputRevision);
+          const targetHasBinding =
+            target !== undefined &&
+            (target.status === "bound" ||
+              target.status === "consumed" ||
+              (target.status === "superseded" &&
+                target.sourceContentHash !== undefined &&
+                target.pipelineFingerprint !== undefined &&
+                target.boundAt !== undefined));
+          if (!targetHasBinding) {
+            throw new KnowledgeRuntimeStoreCorruptError();
+          }
+        }
+      }
+      const highWatermark = queue?.sourceHighWatermarks.find(
+        (candidate) => candidate.sourceId === source.sourceId
+      );
+      if (highWatermark === undefined) {
+        if (highestConsumed !== undefined || source.legacyCheckpoint !== undefined) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        continue;
+      }
+      if (highWatermark.inputRevision > source.inputRevision) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const highWatermarkMatchesManagedConsumption =
+        highestConsumed !== undefined &&
+        highestConsumed.inputRevision === highWatermark.inputRevision &&
+        highestConsumed.sourceContentHash === highWatermark.sourceContentHash &&
+        highestConsumed.pipelineFingerprint === highWatermark.pipelineFingerprint;
+      const highWatermarkMatchesMigrationCheckpoint =
+        highestConsumed === undefined &&
+        exactJsonValuesEqual(source.legacyCheckpoint, highWatermark);
+      if (!highWatermarkMatchesManagedConsumption && !highWatermarkMatchesMigrationCheckpoint) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      if (activeBoundRevision !== undefined && activeBoundRevision <= highWatermark.inputRevision) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+  for (const [bundleId, queue] of queues) {
+    const sources = snapshot.inputRevisions.find(
+      (candidate) => candidate.bundleId === bundleId
+    )?.sources;
+    for (const highWatermark of queue.sourceHighWatermarks) {
+      if (!sources?.some((source) => source.sourceId === highWatermark.sourceId)) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
     }
   }
 }
@@ -1939,15 +2350,100 @@ function assertLegacyQueueIsMigrationSafe(snapshot: IngestQueueSnapshot): void {
 }
 
 /**
- * Performs the only supported v1-to-v2 outer-envelope migration.
+ * Adds the v3 observation journal without inventing tokens for legacy inputs.
  *
- * The migration preserves Queue, Manifest, and input-revision payloads exactly,
+ * @param value - Strictly shaped runtime-v2 JSON
+ * @param runtimeId - New stable runtime identity generated outside the transform
+ * @returns Strict detached runtime-v3 snapshot
+ */
+function migratePreviousRuntimeSnapshot(
+  value: unknown,
+  runtimeId: string
+): KnowledgeRuntimeStoreSnapshot {
+  const parsed = previousKnowledgeRuntimeStoreSnapshotSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  const previous = parsed.data;
+  assertUniqueBundleSlots(previous.queues);
+  assertUniqueBundleSlots(previous.reviews);
+  assertUniqueBundleSlots(previous.manifests);
+  assertUniqueInputRevisionRecords(previous.inputRevisions);
+  assertUniqueApplyCommits(previous.applyCommits);
+  if (previous.revision === Number.MAX_SAFE_INTEGER) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
+  }
+  const queues = new Map<string, IngestQueueSnapshot>();
+  for (const slot of previous.queues) {
+    const queue = parseIngestQueueSnapshot(slot.value);
+    if (
+      !queue.ok ||
+      !validateIngestQueueSnapshot(queue.value).valid ||
+      queue.value.bundleId !== slot.bundleId
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    queues.set(slot.bundleId, queue.value);
+  }
+  for (const [bundleId, queue] of queues) {
+    const previousSources = previous.inputRevisions.find(
+      (candidate) => candidate.bundleId === bundleId
+    )?.sources;
+    for (const watermark of queue.sourceHighWatermarks) {
+      const allocated = previousSources?.find(
+        (candidate) => candidate.sourceId === watermark.sourceId
+      );
+      if (!allocated || allocated.inputRevision < watermark.inputRevision) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+  const inputRevisions: KnowledgeRuntimeInputRevisionBundle[] = previous.inputRevisions.map(
+    (bundle) => {
+      const queue = queues.get(bundle.bundleId);
+      return {
+        bundleId: bundle.bundleId,
+        sources: bundle.sources.map((source) => {
+          const legacyCheckpoint = queue?.sourceHighWatermarks.find(
+            (candidate) => candidate.sourceId === source.sourceId
+          );
+          return {
+            sourceId: source.sourceId,
+            inputRevision: source.inputRevision,
+            managedAfterRevision: source.inputRevision,
+            ...(legacyCheckpoint === undefined
+              ? {}
+              : { legacyCheckpoint: cloneJson(legacyCheckpoint) }),
+            observations: [],
+          };
+        }),
+      };
+    }
+  );
+  return parseKnowledgeRuntimeStoreSnapshot({
+    ...previous,
+    version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+    runtimeId,
+    revision: previous.revision + 1,
+    inputRevisions,
+  });
+}
+
+/**
+ * Performs the constrained v1 migration and adds the v3 observation journal.
+ *
+ * The migration preserves Queue, Manifest, and scalar allocator floors,
  * upgrades empty Review slots, and refuses all states carrying recovery work.
+ * Both format changes occur inside one atomic file transform.
  *
  * @param value - Unknown parsed runtime JSON
- * @returns Strict detached runtime-v2 snapshot
+ * @param runtimeId - New stable runtime identity generated outside the transform
+ * @returns Strict detached runtime-v3 snapshot
  */
-function migrateLegacyRuntimeSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+function migrateLegacyRuntimeSnapshot(
+  value: unknown,
+  runtimeId: string
+): KnowledgeRuntimeStoreSnapshot {
   const parsed = legacyKnowledgeRuntimeStoreSnapshotSchema.safeParse(value);
   if (!parsed.success) {
     throw new KnowledgeRuntimeStoreCorruptError();
@@ -1975,16 +2471,17 @@ function migrateLegacyRuntimeSnapshot(value: unknown): KnowledgeRuntimeStoreSnap
     assertLegacyManifestSlot(slot);
   }
   const reviews = legacy.reviews.map(migrateLegacyReviewSlot);
-  return parseKnowledgeRuntimeStoreSnapshot({
-    version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-    revision: legacy.revision + 1,
+  const previous: PreviousKnowledgeRuntimeStoreSnapshot = {
+    version: PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION,
+    revision: legacy.revision,
     queues: legacy.queues,
     reviews,
     manifests: legacy.manifests,
     activeTransaction: null,
     inputRevisions: legacy.inputRevisions,
     applyCommits: [],
-  });
+  };
+  return migratePreviousRuntimeSnapshot(previous, runtimeId);
 }
 
 /**
@@ -2239,23 +2736,27 @@ function acceptedNotStartedAnchorsArePreserved(
 }
 
 /**
- * Keeps durable source observations monotonic and bounded by their allocator.
+ * Keeps Queue observations monotonic and consumes their exact bound journal entries.
  *
- * Every generic CAS must retain each existing high-watermark exactly at the
- * same revision, or advance it to a revision the shared Runtime allocator has
- * already issued without moving its timestamp back. A newly added source is
- * allocator-bound as well, including the first durable Queue write.
+ * Every advance requires a first-write-wins binding for the same Bundle,
+ * source, revision, content hash, and pipeline fingerprint. Queue replacement,
+ * bound-to-consumed transition, and older-observation supersession are then
+ * committed by the caller in the same shared-envelope transform.
+ *
+ * @param state - Current strict runtime envelope
+ * @param current - Current Queue slot, or null before its first write
+ * @param candidate - Candidate next Queue snapshot
+ * @param settledAt - Runtime-owned settlement time
+ * @param authority - Opaque capability presented by the enqueue caller
+ * @returns Updated observation journals, or null when authority is invalid
  */
-function queueSourceObservationsAreMonotonic(
+function consumeQueueSourceObservations(
   state: KnowledgeRuntimeStoreSnapshot,
   current: IngestQueueSnapshot | null,
-  candidate: IngestQueueSnapshot
-): boolean {
-  const allocatedSources = new Map(
-    state.inputRevisions
-      .find((bundle) => bundle.bundleId === candidate.bundleId)
-      ?.sources.map((source) => [source.sourceId, source.inputRevision] as const) ?? []
-  );
+  candidate: IngestQueueSnapshot,
+  settledAt: number,
+  authority?: QueueWriteAuthority
+): KnowledgeRuntimeInputRevisionBundle[] | null {
   const currentBySource = new Map(
     (current?.sourceHighWatermarks ?? []).map(
       (watermark) => [watermark.sourceId, watermark] as const
@@ -2268,29 +2769,85 @@ function queueSourceObservationsAreMonotonic(
   for (const watermark of current?.sourceHighWatermarks ?? []) {
     const next = candidateBySource.get(watermark.sourceId);
     if (!next || next.inputRevision < watermark.inputRevision) {
-      return false;
+      return null;
     }
     if (next.inputRevision === watermark.inputRevision) {
       if (!exactJsonValuesEqual(watermark, next)) {
-        return false;
+        return null;
       }
       continue;
     }
-    if (
-      next.observedAt < watermark.observedAt ||
-      (allocatedSources.get(next.sourceId) ?? -1) < next.inputRevision
-    ) {
-      return false;
+    if (next.observedAt < watermark.observedAt) {
+      return null;
     }
   }
-
-  return candidate.sourceHighWatermarks.every((watermark) => {
-    return (
-      currentBySource.has(watermark.sourceId) ||
-      (watermark.inputRevision > 0 &&
-        (allocatedSources.get(watermark.sourceId) ?? -1) >= watermark.inputRevision)
+  let inputRevisions = state.inputRevisions;
+  for (const watermark of candidate.sourceHighWatermarks) {
+    const previous = currentBySource.get(watermark.sourceId);
+    if (previous && previous.inputRevision === watermark.inputRevision) {
+      continue;
+    }
+    const source = inputRevisions
+      .find((bundle) => bundle.bundleId === candidate.bundleId)
+      ?.sources.find((candidateSource) => candidateSource.sourceId === watermark.sourceId);
+    const observation = source?.observations.find(
+      (candidateObservation) => candidateObservation.inputRevision === watermark.inputRevision
     );
-  });
+    if (
+      !source ||
+      !observation ||
+      observation.status !== "bound" ||
+      authority?.kind !== "source_observation" ||
+      authority.observationToken !== observation.observationToken ||
+      observation.sourceContentHash !== watermark.sourceContentHash ||
+      observation.pipelineFingerprint !== watermark.pipelineFingerprint
+    ) {
+      return null;
+    }
+    const observations: KnowledgeRuntimeSourceObservationRecord[] = source.observations.map(
+      (candidateObservation) => {
+        if (candidateObservation.observationToken === observation.observationToken) {
+          return {
+            ...observation,
+            status: "consumed" as const,
+            settledAt: Math.max(settledAt, observation.boundAt),
+            queueRevision: candidate.revision,
+          };
+        }
+        if (
+          candidateObservation.inputRevision < observation.inputRevision &&
+          (candidateObservation.status === "allocated" || candidateObservation.status === "bound")
+        ) {
+          return {
+            observationToken: candidateObservation.observationToken,
+            captureId: candidateObservation.captureId,
+            inputRevision: candidateObservation.inputRevision,
+            allocatedAt: candidateObservation.allocatedAt,
+            status: "superseded" as const,
+            ...(candidateObservation.status === "bound"
+              ? {
+                  sourceContentHash: candidateObservation.sourceContentHash,
+                  pipelineFingerprint: candidateObservation.pipelineFingerprint,
+                  boundAt: candidateObservation.boundAt,
+                }
+              : {}),
+            settledAt: Math.max(
+              settledAt,
+              candidateObservation.allocatedAt,
+              candidateObservation.status === "bound" ? candidateObservation.boundAt : 0
+            ),
+            supersededByInputRevision: observation.inputRevision,
+          };
+        }
+        return candidateObservation;
+      }
+    );
+    inputRevisions = replaceInputRevisionSource(inputRevisions, candidate.bundleId, {
+      ...source,
+      observations,
+    });
+  }
+  return inputRevisions;
 }
 
 /**
@@ -2666,6 +3223,48 @@ function replaceBundleSlot(
   ).sort((left, right) => compareIdentifiers(left.bundleId, right.bundleId));
 }
 
+/** Replaces one source journal while retaining deterministic Bundle/source ordering. */
+function replaceInputRevisionSource(
+  bundles: readonly KnowledgeRuntimeInputRevisionBundle[],
+  bundleId: string,
+  source: KnowledgeRuntimeInputRevisionRecord
+): KnowledgeRuntimeInputRevisionBundle[] {
+  const bundle = bundles.find((candidate) => candidate.bundleId === bundleId);
+  const nextBundle: KnowledgeRuntimeInputRevisionBundle = {
+    bundleId,
+    sources: (bundle
+      ? bundle.sources.some((candidate) => candidate.sourceId === source.sourceId)
+        ? bundle.sources.map((candidate) =>
+            candidate.sourceId === source.sourceId ? source : candidate
+          )
+        : [...bundle.sources, source]
+      : [source]
+    ).sort((left, right) => compareIdentifiers(left.sourceId, right.sourceId)),
+  };
+  return (
+    bundle
+      ? bundles.map((candidate) => (candidate.bundleId === bundleId ? nextBundle : candidate))
+      : [...bundles, nextBundle]
+  ).sort((left, right) => compareIdentifiers(left.bundleId, right.bundleId));
+}
+
+/** Reconstructs a Queue-safe bound observation from runtime-owned identity. */
+function createBoundSourceInputObservation(
+  bundleId: string,
+  sourceId: string,
+  observation: Extract<KnowledgeRuntimeSourceObservationRecord, { status: "bound" | "consumed" }>
+): BoundSourceInputObservation {
+  return {
+    bundleId,
+    sourceId,
+    captureId: observation.captureId,
+    inputRevision: observation.inputRevision,
+    observationToken: observation.observationToken,
+    sourceContentHash: observation.sourceContentHash,
+    pipelineFingerprint: observation.pipelineFingerprint,
+  };
+}
+
 /**
  * Reads one Bundle slot from a detached runtime snapshot.
  *
@@ -2699,13 +3298,28 @@ function nextStoreRevision(state: KnowledgeRuntimeStoreSnapshot): number {
  * Owns one Vault-private atomic envelope and exposes strict subsystem operations.
  */
 export class KnowledgeRuntimeStore {
+  private readonly clock: () => number;
+  private readonly opaqueIdFactory: () => string;
+
   /** Creates a runtime store over an atomic plaintext-file implementation. */
-  constructor(private readonly file: AtomicRuntimeFile) {}
+  constructor(
+    private readonly file: AtomicRuntimeFile,
+    options: KnowledgeRuntimeStoreOptions = {}
+  ) {
+    this.clock = options.clock ?? Date.now;
+    this.opaqueIdFactory = options.opaqueIdFactory ?? createSecureOpaqueId;
+  }
 
   /** Initializes and validates the durable runtime file without overwriting it. */
   async initialize(): Promise<void> {
-    const initial = JSON.stringify(createEmptyKnowledgeRuntimeStoreSnapshot());
-    await this.file.initialize(initial);
+    try {
+      await this.file.read();
+    } catch {
+      const initial = JSON.stringify(
+        createEmptyKnowledgeRuntimeStoreSnapshot(this.nextOpaqueId("runtimeId"))
+      );
+      await this.file.initialize(initial);
+    }
     await this.migrateLegacyStore();
     await this.readState();
   }
@@ -2719,10 +3333,12 @@ export class KnowledgeRuntimeStore {
   async writeQueue(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
-    expectedRevision: number | null
+    expectedRevision: number | null,
+    authority?: QueueWriteAuthority
   ): Promise<void> {
     const candidate = this.requireQueueSnapshot(bundleId, snapshot);
     this.assertNextBundleRevision(candidate.revision, expectedRevision, "queue");
+    const settledAt = this.now();
     await this.updateState((state) => {
       const currentRaw = findBundleSlot(state, "queues", bundleId);
       const current = currentRaw === null ? null : this.requireQueueSnapshot(bundleId, currentRaw);
@@ -2747,7 +3363,14 @@ export class KnowledgeRuntimeStore {
       if (!protectedQueueControlTransitionIsAllowed(state, current, candidate)) {
         throw new KnowledgeRuntimeQueueRecoveryGateProtectedError(bundleId);
       }
-      if (!queueSourceObservationsAreMonotonic(state, current, candidate)) {
+      const inputRevisions = consumeQueueSourceObservations(
+        state,
+        current,
+        candidate,
+        settledAt,
+        authority
+      );
+      if (inputRevisions === null) {
         throw new KnowledgeRuntimeQueueObservationAuthorityError(bundleId);
       }
       return {
@@ -2755,6 +3378,7 @@ export class KnowledgeRuntimeStore {
           ...state,
           revision: nextStoreRevision(state),
           queues: replaceBundleSlot(state.queues, bundleId, candidate),
+          inputRevisions,
         },
         value: undefined,
       };
@@ -3054,6 +3678,24 @@ export class KnowledgeRuntimeStore {
             reason: "paused_job_present",
           },
         };
+      }
+
+      for (const bundle of state.inputRevisions) {
+        const hasBoundObservation = bundle.sources.some((source) =>
+          source.observations.some((observation) => observation.status === "bound")
+        );
+        if (hasBoundObservation) {
+          return {
+            value: {
+              kind: "blocked",
+              bundleId: request.bundleId,
+              reason:
+                bundle.bundleId === request.bundleId
+                  ? "source_observation_pending"
+                  : "other_bundle_apply_recovery_present",
+            },
+          };
+        }
       }
 
       for (const slot of state.reviews) {
@@ -3588,6 +4230,44 @@ export class KnowledgeRuntimeStore {
   ): Promise<SourceInputRevisionAllocation> {
     this.assertInputRevisionRequest(request);
     return this.updateState<SourceInputRevisionAllocation>((state) => {
+      for (const candidateBundle of state.inputRevisions) {
+        for (const candidateSource of candidateBundle.sources) {
+          const replay = candidateSource.observations.find(
+            (observation) => observation.captureId === request.captureId
+          );
+          if (!replay) {
+            continue;
+          }
+          if (
+            candidateBundle.bundleId !== request.bundleId ||
+            candidateSource.sourceId !== request.sourceId
+          ) {
+            throw new SourceInputCaptureConflictError();
+          }
+          return {
+            value: {
+              bundleId: request.bundleId,
+              sourceId: request.sourceId,
+              captureId: replay.captureId,
+              inputRevision: replay.inputRevision,
+              observationToken: replay.observationToken,
+            },
+          };
+        }
+      }
+      const observationToken = this.nextOpaqueId("observationToken");
+      const allocatedAt = this.now();
+      if (
+        state.inputRevisions.some((candidateBundle) =>
+          candidateBundle.sources.some((candidateSource) =>
+            candidateSource.observations.some(
+              (observation) => observation.observationToken === observationToken
+            )
+          )
+        )
+      ) {
+        throw new SourceInputObservationTokenCollisionError();
+      }
       const bundle = state.inputRevisions.find(
         (candidate) => candidate.bundleId === request.bundleId
       );
@@ -3598,37 +4278,305 @@ export class KnowledgeRuntimeStore {
       const nextRecord: KnowledgeRuntimeInputRevisionRecord = {
         sourceId: request.sourceId,
         inputRevision: current ? current.inputRevision + 1 : 1,
+        managedAfterRevision: current?.managedAfterRevision ?? 0,
+        ...(current?.legacyCheckpoint === undefined
+          ? {}
+          : { legacyCheckpoint: current.legacyCheckpoint }),
+        observations: [
+          ...(current?.observations ?? []),
+          {
+            observationToken,
+            captureId: request.captureId,
+            inputRevision: current ? current.inputRevision + 1 : 1,
+            allocatedAt,
+            status: "allocated" as const,
+          },
+        ],
       };
-      const nextBundle: KnowledgeRuntimeInputRevisionBundle = {
-        bundleId: request.bundleId,
-        sources: (bundle
-          ? bundle.sources.some((source) => source.sourceId === request.sourceId)
-            ? bundle.sources.map((source) =>
-                source.sourceId === request.sourceId ? nextRecord : source
-              )
-            : [...bundle.sources, nextRecord]
-          : [nextRecord]
-        ).sort((left, right) => compareIdentifiers(left.sourceId, right.sourceId)),
-      };
-      const inputRevisions = (
-        bundle
-          ? state.inputRevisions.map((candidate) =>
-              candidate.bundleId === request.bundleId ? nextBundle : candidate
-            )
-          : [...state.inputRevisions, nextBundle]
-      ).sort((left, right) => compareIdentifiers(left.bundleId, right.bundleId));
       return {
         next: {
           ...state,
           revision: nextStoreRevision(state),
-          inputRevisions,
+          inputRevisions: replaceInputRevisionSource(
+            state.inputRevisions,
+            request.bundleId,
+            nextRecord
+          ),
         },
-        value: { inputRevision: nextRecord.inputRevision },
+        value: {
+          bundleId: request.bundleId,
+          sourceId: request.sourceId,
+          captureId: request.captureId,
+          inputRevision: nextRecord.inputRevision,
+          observationToken,
+        },
       };
     });
   }
 
-  /** Migrates one provably idle v1 envelope through a single atomic transform. */
+  /** Atomically binds one allocated capability to the exact observed payload. */
+  async bindInputObservation(
+    request: BindSourceInputObservationRequest
+  ): Promise<BindSourceInputObservationResult> {
+    this.assertObservationBindingRequest(request);
+    return this.updateState<BindSourceInputObservationResult>((state) => {
+      for (const bundle of state.inputRevisions) {
+        for (const source of bundle.sources) {
+          const current = source.observations.find(
+            (observation) => observation.observationToken === request.observationToken
+          );
+          if (!current) {
+            continue;
+          }
+          if (current.status === "superseded") {
+            if (
+              current.sourceContentHash !== undefined &&
+              (current.sourceContentHash !== request.sourceContentHash ||
+                current.pipelineFingerprint !== request.pipelineFingerprint)
+            ) {
+              throw new SourceInputObservationBindingConflictError();
+            }
+            return {
+              value: {
+                kind: "superseded",
+                bundleId: bundle.bundleId,
+                sourceId: source.sourceId,
+                captureId: current.captureId,
+                inputRevision: current.inputRevision,
+                supersededByInputRevision: current.supersededByInputRevision,
+              },
+            };
+          }
+          if (current.status === "bound" || current.status === "consumed") {
+            if (
+              current.sourceContentHash !== request.sourceContentHash ||
+              current.pipelineFingerprint !== request.pipelineFingerprint
+            ) {
+              throw new SourceInputObservationBindingConflictError();
+            }
+            return {
+              value: {
+                kind: current.status === "consumed" ? "already_consumed" : "ready",
+                observation: createBoundSourceInputObservation(
+                  bundle.bundleId,
+                  source.sourceId,
+                  current
+                ),
+              },
+            };
+          }
+          const boundAt = this.now();
+          const effectiveBoundAt = Math.max(boundAt, current.allocatedAt);
+          const observations: KnowledgeRuntimeSourceObservationRecord[] = source.observations.map(
+            (observation) => {
+              if (observation.observationToken === current.observationToken) {
+                return {
+                  ...observation,
+                  status: "bound" as const,
+                  sourceContentHash: request.sourceContentHash,
+                  pipelineFingerprint: request.pipelineFingerprint,
+                  boundAt: effectiveBoundAt,
+                };
+              }
+              if (
+                observation.inputRevision < current.inputRevision &&
+                (observation.status === "allocated" || observation.status === "bound")
+              ) {
+                const observationBoundAt =
+                  observation.status === "bound" ? observation.boundAt : undefined;
+                return {
+                  observationToken: observation.observationToken,
+                  captureId: observation.captureId,
+                  inputRevision: observation.inputRevision,
+                  allocatedAt: observation.allocatedAt,
+                  status: "superseded" as const,
+                  ...(observation.status === "bound"
+                    ? {
+                        sourceContentHash: observation.sourceContentHash,
+                        pipelineFingerprint: observation.pipelineFingerprint,
+                        boundAt: observation.boundAt,
+                      }
+                    : {}),
+                  settledAt: Math.max(
+                    effectiveBoundAt,
+                    observation.allocatedAt,
+                    observationBoundAt ?? 0
+                  ),
+                  supersededByInputRevision: current.inputRevision,
+                };
+              }
+              return observation;
+            }
+          );
+          const nextSource: KnowledgeRuntimeInputRevisionRecord = { ...source, observations };
+          const bound = observations.find(
+            (observation) => observation.observationToken === current.observationToken
+          );
+          if (!bound || bound.status !== "bound") {
+            throw new KnowledgeRuntimeStoreCorruptError();
+          }
+          return {
+            next: {
+              ...state,
+              revision: nextStoreRevision(state),
+              inputRevisions: replaceInputRevisionSource(
+                state.inputRevisions,
+                bundle.bundleId,
+                nextSource
+              ),
+            },
+            value: {
+              kind: "ready",
+              observation: createBoundSourceInputObservation(
+                bundle.bundleId,
+                source.sourceId,
+                bound
+              ),
+            },
+          };
+        }
+      }
+      throw new SourceInputObservationTokenError();
+    });
+  }
+
+  /** Reconciles one observation against the atomically persisted Queue watermark. */
+  async settleInputObservation(
+    observationToken: string
+  ): Promise<SourceInputObservationSettlement> {
+    this.assertObservationToken(observationToken);
+    return this.updateState<SourceInputObservationSettlement>((state) => {
+      for (const bundle of state.inputRevisions) {
+        for (const source of bundle.sources) {
+          const current = source.observations.find(
+            (observation) => observation.observationToken === observationToken
+          );
+          if (!current) {
+            continue;
+          }
+          if (current.status === "allocated" || current.status === "bound") {
+            const queueRaw = findBundleSlot(state, "queues", bundle.bundleId);
+            const queue =
+              queueRaw === null ? null : this.requireQueueSnapshot(bundle.bundleId, queueRaw);
+            const highWatermark = queue?.sourceHighWatermarks.find(
+              (candidate) => candidate.sourceId === source.sourceId
+            );
+            if (current.status === "allocated" || highWatermark === undefined) {
+              return { value: { kind: "pending" } };
+            }
+            if (highWatermark.inputRevision < current.inputRevision) {
+              return { value: { kind: "pending" } };
+            }
+            const settledAt = this.now();
+            let terminal: KnowledgeRuntimeSourceObservationRecord;
+            let value: SourceInputObservationSettlement;
+            if (highWatermark.inputRevision === current.inputRevision) {
+              if (queue === null) {
+                throw new KnowledgeRuntimeStoreCorruptError();
+              }
+              if (
+                highWatermark.sourceContentHash !== current.sourceContentHash ||
+                highWatermark.pipelineFingerprint !== current.pipelineFingerprint
+              ) {
+                throw new KnowledgeRuntimeStoreCorruptError();
+              }
+              terminal = {
+                ...current,
+                status: "consumed",
+                settledAt: Math.max(settledAt, current.boundAt),
+                queueRevision: queue.revision,
+              };
+              value = { kind: "consumed", queueRevision: queue.revision };
+            } else {
+              terminal = {
+                ...current,
+                status: "superseded",
+                settledAt: Math.max(settledAt, current.boundAt),
+                supersededByInputRevision: highWatermark.inputRevision,
+              };
+              value = {
+                kind: "superseded",
+                supersededByInputRevision: highWatermark.inputRevision,
+              };
+            }
+            const nextSource = {
+              ...source,
+              observations: source.observations.map((observation) =>
+                observation.observationToken === observationToken ? terminal : observation
+              ),
+            };
+            return {
+              next: {
+                ...state,
+                revision: nextStoreRevision(state),
+                inputRevisions: replaceInputRevisionSource(
+                  state.inputRevisions,
+                  bundle.bundleId,
+                  nextSource
+                ),
+              },
+              value,
+            };
+          }
+          return {
+            value:
+              current.status === "consumed"
+                ? { kind: "consumed", queueRevision: current.queueRevision }
+                : {
+                    kind: "superseded",
+                    supersededByInputRevision: current.supersededByInputRevision,
+                  },
+          };
+        }
+      }
+      throw new SourceInputObservationTokenError();
+    });
+  }
+
+  /** Loads stable pending source-observation work for restart recovery. */
+  async loadInputObservationRecoveryWork(
+    bundleId: string
+  ): Promise<SourceInputObservationRecoveryWork[]> {
+    assertIdentifier(bundleId, "bundleId");
+    const state = await this.readState();
+    const bundle = state.inputRevisions.find((candidate) => candidate.bundleId === bundleId);
+    if (!bundle) {
+      return [];
+    }
+    return bundle.sources.flatMap((source): SourceInputObservationRecoveryWork[] =>
+      source.observations.flatMap((observation): SourceInputObservationRecoveryWork[] => {
+        if (observation.status === "allocated") {
+          return [
+            {
+              kind: "allocated",
+              allocation: {
+                bundleId,
+                sourceId: source.sourceId,
+                captureId: observation.captureId,
+                inputRevision: observation.inputRevision,
+                observationToken: observation.observationToken,
+              },
+            },
+          ];
+        }
+        if (observation.status === "bound") {
+          return [
+            {
+              kind: "bound",
+              observation: createBoundSourceInputObservation(
+                bundleId,
+                source.sourceId,
+                observation
+              ),
+            },
+          ];
+        }
+        return [];
+      })
+    );
+  }
+
+  /** Migrates a supported v1/v2 envelope through one atomic transform. */
   private async migrateLegacyStore(): Promise<void> {
     let callbackCalled = false;
     let expectedText: string | undefined;
@@ -3646,10 +4594,16 @@ export class KnowledgeRuntimeStore {
         expectedText = currentText;
         return currentText;
       }
+      if (value.version === PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION) {
+        const runtimeId = this.nextOpaqueId("runtimeId");
+        expectedText = JSON.stringify(migratePreviousRuntimeSnapshot(value, runtimeId));
+        return expectedText;
+      }
       if (value.version !== LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION) {
         throw new KnowledgeRuntimeStoreCorruptError();
       }
-      expectedText = JSON.stringify(migrateLegacyRuntimeSnapshot(value));
+      const runtimeId = this.nextOpaqueId("runtimeId");
+      expectedText = JSON.stringify(migrateLegacyRuntimeSnapshot(value, runtimeId));
       return expectedText;
     });
     if (!callbackCalled || expectedText === undefined || committedText !== expectedText) {
@@ -4193,6 +5147,43 @@ export class KnowledgeRuntimeStore {
   private assertInputRevisionRequest(request: AllocateSourceInputRevisionRequest): void {
     assertIdentifier(request.bundleId, "bundleId");
     assertIdentifier(request.sourceId, "sourceId");
+    assertIdentifier(request.captureId, "captureId");
+  }
+
+  /** Validates one source binding request before durable state access. */
+  private assertObservationBindingRequest(request: BindSourceInputObservationRequest): void {
+    this.assertObservationToken(request.observationToken);
+    if (
+      !sha256Schema.safeParse(request.sourceContentHash).success ||
+      !sha256Schema.safeParse(request.pipelineFingerprint).success
+    ) {
+      throw new TypeError("Source observation hashes must be lowercase SHA-256 values");
+    }
+  }
+
+  /** Validates one opaque observation token without revealing persisted state. */
+  private assertObservationToken(observationToken: string): void {
+    if (!opaqueIdSchema.safeParse(observationToken).success) {
+      throw new SourceInputObservationTokenError();
+    }
+  }
+
+  /** Returns one validated runtime-owned timestamp. */
+  private now(): number {
+    const timestamp = this.clock();
+    if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
+      throw new TypeError("Runtime clock must return a non-negative safe integer");
+    }
+    return timestamp;
+  }
+
+  /** Returns one validated 128-bit opaque identifier from the injected factory. */
+  private nextOpaqueId(field: string): string {
+    const value = this.opaqueIdFactory();
+    if (!opaqueIdSchema.safeParse(value).success) {
+      throw new TypeError(`${field} factory must return 32 lowercase hexadecimal characters`);
+    }
+    return value;
   }
 }
 
@@ -4299,9 +5290,10 @@ export class KnowledgeRuntimeQueueStorage implements QueueStorage {
   write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
-    expectedRevision: number | null
+    expectedRevision: number | null,
+    authority?: QueueWriteAuthority
   ): Promise<void> {
-    return this.runtime.writeQueue(bundleId, snapshot, expectedRevision);
+    return this.runtime.writeQueue(bundleId, snapshot, expectedRevision, authority);
   }
 }
 
@@ -4450,5 +5442,26 @@ export class KnowledgeRuntimeInputRevisionAllocator implements SourceInputRevisi
   /** Allocates one strictly newer source observation revision. */
   allocate(request: AllocateSourceInputRevisionRequest): Promise<SourceInputRevisionAllocation> {
     return this.runtime.allocateInputRevision(request);
+  }
+}
+
+/** Source-observation binding facade backed by the shared atomic envelope. */
+export class KnowledgeRuntimeInputObservationBinder implements SourceInputObservationBinder {
+  /** Creates a binding facade over the shared runtime store. */
+  constructor(private readonly runtime: KnowledgeRuntimeStore) {}
+
+  /** Binds one opaque allocation token to exact source and pipeline hashes. */
+  bind(request: BindSourceInputObservationRequest): Promise<BindSourceInputObservationResult> {
+    return this.runtime.bindInputObservation(request);
+  }
+
+  /** Reconciles one observation after Queue enqueue or an uncertain result. */
+  settle(observationToken: string): Promise<SourceInputObservationSettlement> {
+    return this.runtime.settleInputObservation(observationToken);
+  }
+
+  /** Loads pending allocations and bound observations for restart recovery. */
+  loadRecoveryWork(bundleId: string): Promise<SourceInputObservationRecoveryWork[]> {
+    return this.runtime.loadInputObservationRecoveryWork(bundleId);
   }
 }

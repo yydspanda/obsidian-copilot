@@ -21,6 +21,7 @@ export type KnowledgeStartupReleaseBlockedReason =
   | "failed_apply_present"
   | "processing_job_present"
   | "paused_job_present"
+  | "source_observation_pending"
   | "accepted_review_unresolved"
   | "queue_pause_not_releasable"
   | "revision_overflow";

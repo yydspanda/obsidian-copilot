@@ -15,6 +15,7 @@ import {
   type ChangeSetTransactionJournal,
 } from "@/knowledge/changeset/TransactionStorage";
 import { IngestQueue, type IngestExecutor } from "@/knowledge/ingest/queue/IngestQueue";
+import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import {
   INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
@@ -53,6 +54,7 @@ import {
   KnowledgeRuntimeApplyAuthorityPort,
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
+  KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeManifestProtectedStateError,
@@ -69,6 +71,9 @@ import {
   KnowledgeRuntimeTransactionStorage,
   KNOWLEDGE_RUNTIME_STORE_VERSION,
   KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
+  SourceInputCaptureConflictError,
+  SourceInputObservationBindingConflictError,
+  SourceInputObservationTokenError,
   SourceInputRevisionOverflowError,
   createEmptyKnowledgeRuntimeStoreSnapshot,
   type KnowledgeApplyCommitLedgerRecord,
@@ -78,6 +83,13 @@ import {
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
+let captureSequence = 0;
+
+/** Creates one distinct retry identity for a source-observation allocation. */
+function createCaptureRequest(bundleId = "personal", sourceId = "source-1") {
+  captureSequence += 1;
+  return { bundleId, sourceId, captureId: `capture-${captureSequence}` };
+}
 
 /** In-memory atomic file that serializes synchronous transforms for unit tests. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
@@ -86,7 +98,7 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private misreportNextWrite = false;
   private repeatNextTransform = false;
   private skipNextTransform = false;
-  private throwAfterNextCommit = false;
+  private throwAfterCommitCountdown = 0;
 
   /** Creates the initial content only when the memory file is absent. */
   async initialize(initialContent: string): Promise<void> {
@@ -125,8 +137,11 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
         transform(this.content);
       }
       this.content = next;
-      if (this.throwAfterNextCommit) {
-        this.throwAfterNextCommit = false;
+      if (this.throwAfterCommitCountdown > 0) {
+        this.throwAfterCommitCountdown -= 1;
+      }
+      if (this.throwAfterCommitCountdown === 0 && this.throwAfterCommitArmed) {
+        this.throwAfterCommitArmed = false;
         throw new Error("Simulated post-commit transport failure");
       }
       if (this.misreportNextWrite) {
@@ -161,7 +176,15 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
 
   /** Commits the next transformed bytes and then rejects the caller. */
   throwAfterCommitOnNextWrite(): void {
-    this.throwAfterNextCommit = true;
+    this.throwAfterCommitOnNthWrite(1);
+  }
+
+  private throwAfterCommitArmed = false;
+
+  /** Commits and rejects the selected future process boundary. */
+  throwAfterCommitOnNthWrite(writeNumber: number): void {
+    this.throwAfterCommitCountdown = writeNumber;
+    this.throwAfterCommitArmed = true;
   }
 }
 
@@ -887,6 +910,9 @@ function createApplyAuthoritySlots(
           {
             sourceId: journal.jobClaim.sourceId,
             inputRevision: journal.jobClaim.inputRevision,
+            managedAfterRevision: journal.jobClaim.inputRevision,
+            legacyCheckpoint: queue.sourceHighWatermarks[0],
+            observations: [],
           },
         ],
       },
@@ -938,7 +964,7 @@ function createPendingApplyCommitQueue(
         sourceContentHash: journal.jobClaim.sourceContentHash,
         pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
         inputRevision: journal.jobClaim.inputRevision,
-        observedAt: journal.jobClaim.startedAt,
+        observedAt: Math.max(journal.changeSet.createdAt, journal.jobClaim.startedAt - 20),
       },
     ],
     pendingReviews: [],
@@ -1038,6 +1064,7 @@ async function createHarness(): Promise<{
   release: KnowledgeRuntimeStartupReleasePort;
   transaction: KnowledgeRuntimeTransactionStorage;
   revisions: KnowledgeRuntimeInputRevisionAllocator;
+  observations: KnowledgeRuntimeInputObservationBinder;
 }> {
   const file = new MemoryAtomicRuntimeFile();
   const runtime = new KnowledgeRuntimeStore(file);
@@ -1052,6 +1079,7 @@ async function createHarness(): Promise<{
     release: new KnowledgeRuntimeStartupReleasePort(runtime),
     transaction: new KnowledgeRuntimeTransactionStorage(runtime),
     revisions: new KnowledgeRuntimeInputRevisionAllocator(runtime),
+    observations: new KnowledgeRuntimeInputObservationBinder(runtime),
   };
 }
 
@@ -1108,20 +1136,35 @@ async function persistPreparedApplyAuthority(
       .find((candidate) => candidate.bundleId === journal.bundleId)
       ?.sources.find((candidate) => candidate.sourceId === journal.jobClaim.sourceId)
       ?.inputRevision ?? 0;
+  let observationToken: string | undefined;
   for (
     let inputRevision = allocated;
     inputRevision < journal.jobClaim.inputRevision;
     inputRevision += 1
   ) {
-    await harness.revisions.allocate({
+    const allocation = await harness.revisions.allocate({
       bundleId: journal.bundleId,
       sourceId: journal.jobClaim.sourceId,
+      captureId: `authority-${journal.transactionId}-${inputRevision + 1}`,
     });
+    if (allocation.inputRevision === journal.jobClaim.inputRevision) {
+      observationToken = allocation.observationToken;
+      await harness.observations.bind({
+        observationToken: allocation.observationToken,
+        sourceContentHash: journal.jobClaim.sourceContentHash,
+        pipelineFingerprint: journal.jobClaim.pipelineFingerprint,
+      });
+    }
   }
 
   queue.revision = (currentQueue?.revision ?? 0) + 1;
   review.revision = (currentReview?.revision ?? 0) + 1;
-  await harness.queue.write(journal.bundleId, queue, currentQueue?.revision ?? null);
+  await harness.queue.write(
+    journal.bundleId,
+    queue,
+    currentQueue?.revision ?? null,
+    observationToken === undefined ? undefined : { kind: "source_observation", observationToken }
+  );
   await harness.review.write(journal.bundleId, review, currentReview?.revision ?? null);
 }
 
@@ -1214,6 +1257,69 @@ function markNoJournalApplyFailed(state: KnowledgeRuntimeStoreSnapshot, recovere
   state.revision += 1;
 }
 
+/**
+ * Adds strict v3 observation records for a Queue watermark assembled by an
+ * authority-focused fixture instead of the production hand-off facade.
+ */
+function recordFixtureWatermarkAsConsumed(
+  state: KnowledgeRuntimeStoreSnapshot,
+  bundleId = "personal"
+): void {
+  const queue = state.queues.find((slot) => slot.bundleId === bundleId)?.value as
+    | IngestQueueSnapshot
+    | undefined;
+  const bundle = state.inputRevisions.find((candidate) => candidate.bundleId === bundleId);
+  if (!queue || !bundle) {
+    throw new Error("Expected Queue and allocator fixture");
+  }
+  for (const watermark of queue.sourceHighWatermarks) {
+    const source = bundle.sources.find((candidate) => candidate.sourceId === watermark.sourceId);
+    if (!source) {
+      throw new Error("Expected source allocator fixture");
+    }
+    for (
+      let inputRevision = source.managedAfterRevision + source.observations.length + 1;
+      inputRevision <= source.inputRevision;
+      inputRevision += 1
+    ) {
+      captureSequence += 1;
+      const identity = captureSequence.toString(16).padStart(32, "0");
+      if (inputRevision < watermark.inputRevision) {
+        source.observations.push({
+          observationToken: identity,
+          captureId: `fixture-superseded-${captureSequence}`,
+          inputRevision,
+          allocatedAt: watermark.observedAt,
+          status: "superseded",
+          settledAt: watermark.observedAt,
+          supersededByInputRevision: watermark.inputRevision,
+        });
+      } else if (inputRevision === watermark.inputRevision) {
+        source.observations.push({
+          observationToken: identity,
+          captureId: `fixture-consumed-${captureSequence}`,
+          inputRevision,
+          allocatedAt: watermark.observedAt,
+          status: "consumed",
+          sourceContentHash: watermark.sourceContentHash,
+          pipelineFingerprint: watermark.pipelineFingerprint,
+          boundAt: watermark.observedAt,
+          settledAt: watermark.observedAt,
+          queueRevision: queue.revision,
+        });
+      } else {
+        source.observations.push({
+          observationToken: identity,
+          captureId: `fixture-allocated-${captureSequence}`,
+          inputRevision,
+          allocatedAt: watermark.observedAt,
+          status: "allocated",
+        });
+      }
+    }
+  }
+}
+
 describe("KnowledgeRuntimeStore", () => {
   it("initializes once and preserves an existing valid envelope", async () => {
     const harness = await createHarness();
@@ -1232,14 +1338,30 @@ describe("KnowledgeRuntimeStore", () => {
 
     await runtime.initialize();
 
-    expect(JSON.parse(await file.read())).toEqual({
+    const migrated = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(migrated.runtimeId).toMatch(/^[a-f0-9]{32}$/);
+    expect(migrated).toEqual({
       ...legacy,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+      runtimeId: migrated.runtimeId,
       revision: 8,
       reviews: [
         {
           bundleId: "personal",
           value: { version: 2, bundleId: "personal", revision: 3, records: [] },
+        },
+      ],
+      inputRevisions: [
+        {
+          bundleId: "personal",
+          sources: [
+            {
+              sourceId: "source-1",
+              inputRevision: 9,
+              managedAfterRevision: 9,
+              observations: [],
+            },
+          ],
         },
       ],
     });
@@ -1253,8 +1375,9 @@ describe("KnowledgeRuntimeStore", () => {
       new KnowledgeRuntimeInputRevisionAllocator(runtime).allocate({
         bundleId: "personal",
         sourceId: "source-1",
+        captureId: "migration-next-capture",
       })
-    ).resolves.toEqual({ inputRevision: 10 });
+    ).resolves.toMatchObject({ inputRevision: 10 });
   });
 
   it("keeps exact bytes and revision when initialize repeats after migration", async () => {
@@ -1267,6 +1390,117 @@ describe("KnowledgeRuntimeStore", () => {
     await runtime.initialize();
 
     expect(await file.read()).toBe(migrated);
+  });
+
+  it("migrates runtime v2 with active authority into a fenced observation journal", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest);
+    const authority = createApplyAuthoritySlots(manifest, proof.journal);
+    const previous = {
+      version: 2,
+      revision: 7,
+      queues: authority.queues,
+      reviews: authority.reviews,
+      manifests: [{ bundleId: manifest.bundleId, value: manifest }],
+      activeTransaction: proof.journal,
+      inputRevisions: [
+        {
+          bundleId: proof.journal.bundleId,
+          sources: [
+            {
+              sourceId: proof.journal.jobClaim.sourceId,
+              inputRevision: proof.journal.jobClaim.inputRevision,
+            },
+          ],
+        },
+      ],
+      applyCommits: [],
+    };
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(JSON.stringify(previous));
+    const runtime = new KnowledgeRuntimeStore(file);
+
+    await runtime.initialize();
+
+    const migrated = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const authorityQueue = authority.queues[0].value as IngestQueueSnapshot;
+    expect(migrated).toMatchObject({
+      version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+      revision: 8,
+      activeTransaction: { transactionId: proof.journal.transactionId },
+      inputRevisions: [
+        {
+          bundleId: proof.journal.bundleId,
+          sources: [
+            {
+              sourceId: proof.journal.jobClaim.sourceId,
+              inputRevision: 1,
+              managedAfterRevision: 1,
+              legacyCheckpoint: authorityQueue.sourceHighWatermarks[0],
+              observations: [],
+            },
+          ],
+        },
+      ],
+    });
+    await expect(
+      new KnowledgeRuntimeInputRevisionAllocator(runtime).allocate({
+        bundleId: proof.journal.bundleId,
+        sourceId: proof.journal.jobClaim.sourceId,
+        captureId: "post-v2-migration-capture",
+      })
+    ).resolves.toMatchObject({ inputRevision: 2 });
+  });
+
+  it("replays a committed v2 migration without generating a second runtime identity", async () => {
+    const previous = {
+      version: 2,
+      revision: 7,
+      queues: [],
+      reviews: [],
+      manifests: [],
+      activeTransaction: null,
+      inputRevisions: [],
+      applyCommits: [],
+    };
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(JSON.stringify(previous));
+    file.throwAfterCommitOnNextWrite();
+    const runtime = new KnowledgeRuntimeStore(file);
+
+    await expect(runtime.initialize()).rejects.toThrow("Simulated post-commit transport failure");
+    const committed = await file.read();
+    await expect(runtime.initialize()).resolves.toBeUndefined();
+
+    expect(await file.read()).toBe(committed);
+    expect(JSON.parse(committed)).toMatchObject({
+      version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+      revision: 8,
+    });
+  });
+
+  it("fails v2 migration when a Queue watermark has no allocator floor", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest);
+    const authority = createApplyAuthoritySlots(manifest, proof.journal);
+    const previous = {
+      version: 2,
+      revision: 7,
+      queues: authority.queues,
+      reviews: authority.reviews,
+      manifests: [{ bundleId: manifest.bundleId, value: manifest }],
+      activeTransaction: proof.journal,
+      inputRevisions: [],
+      applyCommits: [],
+    };
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(JSON.stringify(previous));
+    const before = await file.read();
+
+    await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
+      KnowledgeRuntimeStoreCorruptError
+    );
+    expect(await file.read()).toBe(before);
   });
 
   it.each([
@@ -1613,8 +1847,14 @@ describe("KnowledgeRuntimeStore", () => {
     const allocation = await harness.revisions.allocate({
       bundleId: "personal",
       sourceId: applying.sourceId,
+      captureId: "startup-rerun-divergent",
     });
     expect(allocation.inputRevision).toBe(applying.inputRevision + 1);
+    await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: applying.pipelineFingerprint,
+    });
 
     await expect(
       queue.enqueue({
@@ -1623,6 +1863,7 @@ describe("KnowledgeRuntimeStore", () => {
         sourceContentHash: HASH_C,
         pipelineFingerprint: applying.pipelineFingerprint,
         inputRevision: allocation.inputRevision,
+        observationToken: allocation.observationToken,
       })
     ).resolves.toMatchObject({ kind: "rerun_scheduled", job: { id: applying.id } });
     await expect(queue.load("personal")).resolves.toMatchObject({
@@ -1675,8 +1916,14 @@ describe("KnowledgeRuntimeStore", () => {
     const matchingAllocation = await harness.revisions.allocate({
       bundleId: "personal",
       sourceId: applying.sourceId,
+      captureId: "startup-rerun-matching",
     });
     expect(matchingAllocation.inputRevision).toBe(allocation.inputRevision + 1);
+    await harness.observations.bind({
+      observationToken: matchingAllocation.observationToken,
+      sourceContentHash: applying.sourceContentHash,
+      pipelineFingerprint: applying.pipelineFingerprint,
+    });
     await expect(
       queue.enqueue({
         bundleId: "personal",
@@ -1684,6 +1931,7 @@ describe("KnowledgeRuntimeStore", () => {
         sourceContentHash: applying.sourceContentHash,
         pipelineFingerprint: applying.pipelineFingerprint,
         inputRevision: matchingAllocation.inputRevision,
+        observationToken: matchingAllocation.observationToken,
       })
     ).resolves.toMatchObject({ kind: "updated", job: { id: applying.id } });
     await expect(queue.load("personal")).resolves.toMatchObject({
@@ -2473,6 +2721,7 @@ describe("KnowledgeRuntimeStore", () => {
       observedAt: 220,
     };
     state.inputRevisions[0].sources[0].inputRevision = 3;
+    recordFixtureWatermarkAsConsumed(state);
     harness.file.replaceContent(JSON.stringify(state));
 
     const classification = await harness.recovery.classify(harness.identity);
@@ -2723,12 +2972,15 @@ describe("KnowledgeRuntimeStore", () => {
     harness.file.replaceContent(JSON.stringify(state));
     const before = await harness.file.read();
 
-    await expect(
-      harness.port.recordCommitted(harness.journal, harness.receipt)
-    ).rejects.toMatchObject({
-      name: KnowledgeApplyCommitAuthorityError.name,
-      reason,
-    });
+    const result = expect(harness.port.recordCommitted(harness.journal, harness.receipt)).rejects;
+    if (reason === "input_revision_missing" || reason === "queue_missing") {
+      await result.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+    } else {
+      await result.toMatchObject({
+        name: KnowledgeApplyCommitAuthorityError.name,
+        reason,
+      });
+    }
     expect(await harness.file.read()).toBe(before);
   });
 
@@ -2763,6 +3015,7 @@ describe("KnowledgeRuntimeStore", () => {
       observedAt: 155,
     };
     state.inputRevisions[0].sources[0].inputRevision = 3;
+    recordFixtureWatermarkAsConsumed(state);
     harness.file.replaceContent(JSON.stringify(state));
 
     await harness.port.recordCommitted(harness.journal, harness.receipt);
@@ -2798,6 +3051,7 @@ describe("KnowledgeRuntimeStore", () => {
       observedAt: 155,
     };
     state.inputRevisions[0].sources[0].inputRevision = 2;
+    recordFixtureWatermarkAsConsumed(state);
     harness.file.replaceContent(JSON.stringify(state));
 
     await harness.port.recordCommitted(harness.journal, harness.receipt);
@@ -2855,6 +3109,7 @@ describe("KnowledgeRuntimeStore", () => {
       observedAt: 160,
     };
     state.inputRevisions[0].sources[0].inputRevision = 2;
+    recordFixtureWatermarkAsConsumed(state);
     harness.file.replaceContent(JSON.stringify(state));
 
     await harness.port.recordCommitted(harness.journal, harness.receipt);
@@ -2923,6 +3178,7 @@ describe("KnowledgeRuntimeStore", () => {
       observedAt: 170,
     };
     state.inputRevisions[0].sources[0].inputRevision = 3;
+    recordFixtureWatermarkAsConsumed(state);
     harness.file.replaceContent(JSON.stringify(state));
 
     await harness.port.recordCommitted(harness.journal, harness.receipt);
@@ -3959,15 +4215,11 @@ describe("KnowledgeRuntimeStore", () => {
 
   it("allocates every captured observation monotonically before asynchronous source reads", async () => {
     const harness = await createHarness();
-    const request = {
-      bundleId: "personal",
-      sourceId: "source-1",
-    };
-
-    await expect(harness.revisions.allocate(request)).resolves.toEqual({ inputRevision: 1 });
-    await expect(harness.revisions.allocate(request)).resolves.toEqual({ inputRevision: 2 });
-    await expect(harness.revisions.allocate(request)).resolves.toEqual({ inputRevision: 3 });
-    await expect(harness.revisions.allocate(request)).resolves.toEqual({ inputRevision: 4 });
+    for (const inputRevision of [1, 2, 3, 4]) {
+      await expect(harness.revisions.allocate(createCaptureRequest())).resolves.toMatchObject({
+        inputRevision,
+      });
+    }
 
     const executor: IngestExecutor = {
       /** Produces no changes; the rejected first enqueue never invokes this executor. */
@@ -3978,11 +4230,11 @@ describe("KnowledgeRuntimeStore", () => {
       jobIdFactory: () => "job-unallocated-observation",
     });
     const before = await harness.file.read();
-    for (const inputRevision of [0, 5]) {
+    for (const inputRevision of [0, 4, 5]) {
       await expect(
         queue.enqueue({
-          bundleId: request.bundleId,
-          sourceId: request.sourceId,
+          bundleId: "personal",
+          sourceId: "source-1",
           sourceContentHash: HASH_A,
           pipelineFingerprint: HASH_B,
           inputRevision,
@@ -3992,11 +4244,486 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await harness.file.read()).toBe(before);
   });
 
-  it("serializes concurrent observation allocation without duplicate revisions", async () => {
+  it("replays an exact capture id after a post-commit allocation failure", async () => {
     const harness = await createHarness();
     const request = {
       bundleId: "personal",
       sourceId: "source-1",
+      captureId: "retryable-capture",
+    };
+    harness.file.throwAfterCommitOnNextWrite();
+
+    await expect(harness.revisions.allocate(request)).rejects.toThrow(
+      "Simulated post-commit transport failure"
+    );
+    const committed = await harness.file.read();
+    const replay = await harness.revisions.allocate(request);
+
+    expect(replay).toMatchObject({ ...request, inputRevision: 1 });
+    expect(replay.observationToken).toMatch(/^[a-f0-9]{32}$/);
+    expect(await harness.file.read()).toBe(committed);
+  });
+
+  it("rejects capture-id identity reuse without changing durable bytes", async () => {
+    const harness = await createHarness();
+    await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "identity-conflict-capture",
+    });
+    const before = await harness.file.read();
+
+    await expect(
+      harness.revisions.allocate({
+        bundleId: "other",
+        sourceId: "source-2",
+        captureId: "identity-conflict-capture",
+      })
+    ).rejects.toBeInstanceOf(SourceInputCaptureConflictError);
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("binds first-write-wins and rejects forged or conflicting tokens", async () => {
+    const harness = await createHarness();
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "binding-capture",
+    });
+    const request = {
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    };
+
+    await expect(harness.observations.bind(request)).resolves.toMatchObject({
+      kind: "ready",
+      observation: {
+        bundleId: "personal",
+        sourceId: "source-1",
+        captureId: "binding-capture",
+        inputRevision: 1,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      },
+    });
+    const bound = await harness.file.read();
+    await expect(harness.observations.bind(request)).resolves.toMatchObject({ kind: "ready" });
+    expect(await harness.file.read()).toBe(bound);
+
+    await expect(
+      harness.observations.bind({ ...request, sourceContentHash: HASH_C })
+    ).rejects.toBeInstanceOf(SourceInputObservationBindingConflictError);
+    await expect(
+      harness.observations.bind({ ...request, observationToken: "f".repeat(32) })
+    ).rejects.toBeInstanceOf(SourceInputObservationTokenError);
+    expect(await harness.file.read()).toBe(bound);
+  });
+
+  it("serializes conflicting concurrent bindings with exactly one winner", async () => {
+    const harness = await createHarness();
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "concurrent-binding-capture",
+    });
+
+    const results = await Promise.allSettled([
+      harness.observations.bind({
+        observationToken: allocation.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      }),
+      harness.observations.bind({
+        observationToken: allocation.observationToken,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: HASH_B,
+      }),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const rejected = results.find((result) => result.status === "rejected");
+    if (rejected?.status !== "rejected") {
+      throw new Error("Expected one rejected conflicting binding");
+    }
+    expect(rejected.reason).toBeInstanceOf(SourceInputObservationBindingConflictError);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(state.inputRevisions[0].sources[0].observations[0]).toMatchObject({ status: "bound" });
+  });
+
+  it("atomically consumes an exact binding when Queue advances its watermark", async () => {
+    const harness = await createHarness();
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "atomic-consume-capture",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") {
+      throw new Error("Expected a Queue-ready source observation");
+    }
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Produces no changes; this test only exercises source hand-off. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-atomic-consume" }
+    );
+
+    const { observationToken: _observationToken, ...forgedWithoutToken } = bound.observation;
+    void _observationToken;
+    const beforeForgery = await harness.file.read();
+    await expect(queue.enqueue(forgedWithoutToken)).rejects.toBeInstanceOf(
+      KnowledgeRuntimeQueueObservationAuthorityError
+    );
+    await expect(
+      queue.enqueue({ ...bound.observation, observationToken: "f".repeat(32) })
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueObservationAuthorityError);
+    expect(await harness.file.read()).toBe(beforeForgery);
+    await expect(queue.enqueue(bound.observation)).resolves.toMatchObject({ kind: "enqueued" });
+    await expect(harness.observations.settle(allocation.observationToken)).resolves.toEqual({
+      kind: "consumed",
+      queueRevision: 1,
+    });
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(state.inputRevisions[0].sources[0].observations).toEqual([
+      expect.objectContaining({
+        observationToken: allocation.observationToken,
+        status: "consumed",
+        queueRevision: 1,
+      }),
+    ]);
+  });
+
+  it("lets a bound read commit while a newer allocation is still unbound", async () => {
+    const harness = await createHarness();
+    const older = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "bound-before-new-allocation",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: older.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "newer-unbound-allocation",
+    });
+    if (bound.kind !== "ready") {
+      throw new Error("Expected the older read to remain bound");
+    }
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Produces no changes; this test only exercises source ordering. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-bound-before-newer" }
+    );
+
+    await expect(queue.enqueue(bound.observation)).resolves.toMatchObject({ kind: "enqueued" });
+    await expect(harness.observations.settle(older.observationToken)).resolves.toEqual({
+      kind: "consumed",
+      queueRevision: 1,
+    });
+  });
+
+  it("reconciles Queue commit-then-throw without duplicating a job or revision", async () => {
+    const harness = await createHarness();
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "queue-post-commit-capture",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") {
+      throw new Error("Expected a Queue-ready source observation");
+    }
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Produces no changes; this test only exercises source hand-off. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-post-commit" }
+    );
+    harness.file.throwAfterCommitOnNextWrite();
+
+    await expect(queue.enqueue(bound.observation)).rejects.toThrow(
+      "Simulated post-commit transport failure"
+    );
+    await expect(harness.observations.settle(allocation.observationToken)).resolves.toEqual({
+      kind: "consumed",
+      queueRevision: 1,
+    });
+    const committed = await harness.file.read();
+    await expect(queue.enqueue(bound.observation)).resolves.toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-post-commit" },
+    });
+    await expect(harness.observations.settle(allocation.observationToken)).resolves.toEqual({
+      kind: "consumed",
+      queueRevision: 1,
+    });
+    expect(await harness.file.read()).toBe(committed);
+  });
+
+  it("keeps commit-then-throw recovery behind the narrow production hand-off facade", async () => {
+    const harness = await createHarness();
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Produces no changes; this test only exercises the watcher hand-off facade. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-handoff-facade" }
+    );
+    const handoff = new SourceObservationHandoff(harness.revisions, harness.observations, queue);
+    const allocation = await handoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "handoff-facade-capture",
+    });
+    harness.file.throwAfterCommitOnNthWrite(2);
+
+    await expect(
+      handoff.commit({
+        observationToken: allocation.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      observation: { captureId: "handoff-facade-capture" },
+      queueRevision: 1,
+    });
+    await expect(queue.load("personal")).resolves.toMatchObject({
+      revision: 1,
+      jobs: [{ id: "job-handoff-facade" }],
+    });
+  });
+
+  it("recovers a bind commit acknowledgement loss through the narrow hand-off", async () => {
+    const harness = await createHarness();
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Produces no changes; this test only exercises source hand-off. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-bind-retry" }
+    );
+    const handoff = new SourceObservationHandoff(harness.revisions, harness.observations, queue);
+    const allocation = await handoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "bind-post-commit-capture",
+    });
+    harness.file.throwAfterCommitOnNextWrite();
+
+    await expect(
+      handoff.commit({
+        observationToken: allocation.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      observation: { captureId: "bind-post-commit-capture" },
+      queueRevision: 1,
+    });
+    await expect(queue.load("personal")).resolves.toMatchObject({
+      revision: 1,
+      jobs: [{ id: "job-bind-retry" }],
+    });
+  });
+
+  it("replays a historical consumed capture without calling Queue or fresh entropy", async () => {
+    const harness = await createHarness();
+    let jobSequence = 0;
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Produces no changes; this test only exercises source hand-off. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => `job-${++jobSequence}` }
+    );
+    const handoff = new SourceObservationHandoff(harness.revisions, harness.observations, queue);
+    const firstRequest = {
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "historical-capture-a",
+    };
+    const first = await handoff.allocate(firstRequest);
+    await handoff.commit({
+      observationToken: first.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    const second = await handoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "historical-capture-b",
+    });
+    await handoff.commit({
+      observationToken: second.observationToken,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_B,
+    });
+
+    const reconstructed = new KnowledgeRuntimeStore(harness.file, {
+      clock: () => {
+        throw new Error("Replay must not read the clock");
+      },
+      opaqueIdFactory: () => {
+        throw new Error("Replay must not generate an id");
+      },
+    });
+    await reconstructed.initialize();
+    let queueCalls = 0;
+    const replay = new SourceObservationHandoff(
+      new KnowledgeRuntimeInputRevisionAllocator(reconstructed),
+      new KnowledgeRuntimeInputObservationBinder(reconstructed),
+      {
+        /** Fails if a terminal replay incorrectly reaches Queue. */
+        enqueue: async () => {
+          queueCalls += 1;
+          throw new Error("Terminal replay must not call Queue");
+        },
+      }
+    );
+    const replayedAllocation = await replay.allocate(firstRequest);
+
+    await expect(
+      replay.commit({
+        observationToken: replayedAllocation.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      observation: {
+        captureId: "historical-capture-a",
+        inputRevision: 1,
+        sourceContentHash: HASH_A,
+      },
+      queueRevision: 1,
+    });
+    expect(queueCalls).toBe(0);
+    await expect(queue.load("personal")).resolves.toMatchObject({
+      revision: 2,
+      sourceHighWatermarks: [{ inputRevision: 2, sourceContentHash: HASH_C }],
+    });
+  });
+
+  it("enumerates bound restart work and removes it only after exact Queue consumption", async () => {
+    const harness = await createHarness();
+    const boundAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-z",
+      captureId: "restart-bound-capture",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: boundAllocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") {
+      throw new Error("Expected restart work to be bound");
+    }
+    const allocated = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-a",
+      captureId: "restart-allocated-capture",
+    });
+
+    const reconstructed = new KnowledgeRuntimeStore(harness.file);
+    await reconstructed.initialize();
+    const observations = new KnowledgeRuntimeInputObservationBinder(reconstructed);
+    const queue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(reconstructed),
+      {
+        /** Produces no changes; this test only exercises restart recovery. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-restart-recovery" }
+    );
+    const handoff = new SourceObservationHandoff(
+      new KnowledgeRuntimeInputRevisionAllocator(reconstructed),
+      observations,
+      queue
+    );
+    await expect(handoff.loadRecoveryWork("personal")).resolves.toEqual([
+      { kind: "allocated", allocation: allocated },
+      { kind: "bound", observation: bound.observation },
+    ]);
+
+    await handoff.commit({
+      observationToken: bound.observation.observationToken,
+      sourceContentHash: bound.observation.sourceContentHash,
+      pipelineFingerprint: bound.observation.pipelineFingerprint,
+    });
+
+    await expect(handoff.loadRecoveryWork("personal")).resolves.toEqual([
+      { kind: "allocated", allocation: allocated },
+    ]);
+  });
+
+  it("blocks startup release while a bound observation still needs Queue settlement", async () => {
+    const harness = await createHarness();
+    await harness.queue.write("personal", createStartupPausedQueue(1), null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "startup-bound-observation",
+    });
+    await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    const request = await createStartupReleaseRequest(harness);
+    const before = await harness.file.read();
+
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+      reason: "source_observation_pending",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("serializes concurrent observation allocation without duplicate revisions", async () => {
+    const harness = await createHarness();
+
+    const allocations = await Promise.all([
+      harness.revisions.allocate(createCaptureRequest()),
+      harness.revisions.allocate(createCaptureRequest()),
+      harness.revisions.allocate(createCaptureRequest()),
+    ]);
+
+    expect(allocations.map(({ inputRevision }) => inputRevision).sort()).toEqual([1, 2, 3]);
+  });
+
+  it("returns one capability for concurrent retries of the same capture", async () => {
+    const harness = await createHarness();
+    const request = {
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "concurrent-identical-capture",
     };
 
     const allocations = await Promise.all([
@@ -4005,27 +4732,29 @@ describe("KnowledgeRuntimeStore", () => {
       harness.revisions.allocate(request),
     ]);
 
-    expect(allocations.map(({ inputRevision }) => inputRevision).sort()).toEqual([1, 2, 3]);
+    expect(allocations).toEqual([allocations[0], allocations[0], allocations[0]]);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(state.inputRevisions[0].sources[0].observations).toHaveLength(1);
   });
 
   it("preserves allocation across runtime reconstruction and isolates Bundle/source namespaces", async () => {
     const harness = await createHarness();
-    await harness.revisions.allocate({ bundleId: "personal", sourceId: "source-1" });
-    await harness.revisions.allocate({ bundleId: "personal", sourceId: "source-1" });
+    await harness.revisions.allocate(createCaptureRequest("personal", "source-1"));
+    await harness.revisions.allocate(createCaptureRequest("personal", "source-1"));
 
     const reconstructedRuntime = new KnowledgeRuntimeStore(harness.file);
     await reconstructedRuntime.initialize();
     const reconstructed = new KnowledgeRuntimeInputRevisionAllocator(reconstructedRuntime);
 
     await expect(
-      reconstructed.allocate({ bundleId: "personal", sourceId: "source-1" })
-    ).resolves.toEqual({ inputRevision: 3 });
+      reconstructed.allocate(createCaptureRequest("personal", "source-1"))
+    ).resolves.toMatchObject({ inputRevision: 3 });
     await expect(
-      reconstructed.allocate({ bundleId: "personal", sourceId: "source-2" })
-    ).resolves.toEqual({ inputRevision: 1 });
+      reconstructed.allocate(createCaptureRequest("personal", "source-2"))
+    ).resolves.toMatchObject({ inputRevision: 1 });
     await expect(
-      reconstructed.allocate({ bundleId: "another", sourceId: "source-1" })
-    ).resolves.toEqual({ inputRevision: 1 });
+      reconstructed.allocate(createCaptureRequest("another", "source-1"))
+    ).resolves.toMatchObject({ inputRevision: 1 });
   });
 
   it("lets Queue reject an older read that completes after a newer captured event", async () => {
@@ -4042,11 +4771,26 @@ describe("KnowledgeRuntimeStore", () => {
     const older = await harness.revisions.allocate({
       bundleId: "personal",
       sourceId: "source-1",
+      captureId: "ordering-older",
     });
     const newer = await harness.revisions.allocate({
       bundleId: "personal",
       sourceId: "source-1",
+      captureId: "ordering-newer",
     });
+
+    await harness.observations.bind({
+      observationToken: newer.observationToken,
+      sourceContentHash: HASH_B,
+      pipelineFingerprint: HASH_A,
+    });
+    await expect(
+      harness.observations.bind({
+        observationToken: older.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_A,
+      })
+    ).resolves.toMatchObject({ kind: "superseded" });
 
     await queue.enqueue({
       bundleId: "personal",
@@ -4054,6 +4798,7 @@ describe("KnowledgeRuntimeStore", () => {
       sourceContentHash: HASH_B,
       pipelineFingerprint: HASH_A,
       inputRevision: newer.inputRevision,
+      observationToken: newer.observationToken,
     });
     await queue.enqueue({
       bundleId: "personal",
@@ -4061,6 +4806,7 @@ describe("KnowledgeRuntimeStore", () => {
       sourceContentHash: HASH_A,
       pipelineFingerprint: HASH_A,
       inputRevision: older.inputRevision,
+      observationToken: older.observationToken,
     });
 
     const snapshot = await queue.load("personal");
@@ -4100,7 +4846,14 @@ describe("KnowledgeRuntimeStore", () => {
       inputRevisions: [
         {
           bundleId: "personal",
-          sources: [{ sourceId: "source-1", inputRevision: Number.MAX_SAFE_INTEGER }],
+          sources: [
+            {
+              sourceId: "source-1",
+              inputRevision: Number.MAX_SAFE_INTEGER,
+              managedAfterRevision: Number.MAX_SAFE_INTEGER,
+              observations: [],
+            },
+          ],
         },
       ],
     };
@@ -4108,7 +4861,11 @@ describe("KnowledgeRuntimeStore", () => {
     const before = await harness.file.read();
 
     await expect(
-      harness.revisions.allocate({ bundleId: "personal", sourceId: "source-1" })
+      harness.revisions.allocate({
+        bundleId: "personal",
+        sourceId: "source-1",
+        captureId: "overflow-capture",
+      })
     ).rejects.toBeInstanceOf(SourceInputRevisionOverflowError);
     expect(await harness.file.read()).toBe(before);
   });
@@ -4130,6 +4887,7 @@ describe("KnowledgeRuntimeStore", () => {
       harness.revisions.allocate({
         bundleId: "personal",
         sourceId: "source-1",
+        captureId: "corrupt-store-capture",
       })
     ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
   });
@@ -4150,6 +4908,140 @@ describe("KnowledgeRuntimeStore", () => {
     await expect(harness.runtime.readQueue("personal")).rejects.toBeInstanceOf(
       KnowledgeRuntimeStoreCorruptError
     );
+  });
+
+  it("rejects observation journals that no Runtime API transition can produce", async () => {
+    const harness = await createHarness();
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Produces no changes; this test only assembles valid consumed history. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-journal-semantics" }
+    );
+    const handoff = new SourceObservationHandoff(harness.revisions, harness.observations, queue);
+    const first = await handoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "journal-first",
+    });
+    await handoff.commit({
+      observationToken: first.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    const second = await handoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "journal-second",
+    });
+    await handoff.commit({
+      observationToken: second.observationToken,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_B,
+    });
+    const valid = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const validSource = valid.inputRevisions[0]?.sources[0];
+    const validQueue = valid.queues[0]?.value as IngestQueueSnapshot | undefined;
+    const firstRecord = validSource?.observations[0];
+    const secondRecord = validSource?.observations[1];
+    if (!validSource || !validQueue || !firstRecord || !secondRecord) {
+      throw new Error("Expected two consumed source observations");
+    }
+
+    const olderAllocated = JSON.parse(JSON.stringify(valid)) as KnowledgeRuntimeStoreSnapshot;
+    olderAllocated.inputRevisions[0].sources[0].observations[0] = {
+      observationToken: firstRecord.observationToken,
+      captureId: firstRecord.captureId,
+      inputRevision: firstRecord.inputRevision,
+      allocatedAt: firstRecord.allocatedAt,
+      status: "allocated",
+    };
+
+    const impossibleSupersession = JSON.parse(
+      JSON.stringify(valid)
+    ) as KnowledgeRuntimeStoreSnapshot;
+    impossibleSupersession.queues = [];
+    impossibleSupersession.inputRevisions[0].sources[0].observations = [
+      {
+        observationToken: firstRecord.observationToken,
+        captureId: firstRecord.captureId,
+        inputRevision: firstRecord.inputRevision,
+        allocatedAt: firstRecord.allocatedAt,
+        status: "superseded",
+        settledAt: 100,
+        supersededByInputRevision: secondRecord.inputRevision,
+      },
+      {
+        observationToken: secondRecord.observationToken,
+        captureId: secondRecord.captureId,
+        inputRevision: secondRecord.inputRevision,
+        allocatedAt: secondRecord.allocatedAt,
+        status: "allocated",
+      },
+    ];
+
+    const rolledBackWatermark = JSON.parse(JSON.stringify(valid)) as KnowledgeRuntimeStoreSnapshot;
+    const rollbackQueue = rolledBackWatermark.queues[0].value as IngestQueueSnapshot;
+    rollbackQueue.sourceHighWatermarks = [
+      {
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 1,
+        observedAt: 100,
+      },
+    ];
+    rollbackQueue.jobs[0] = {
+      ...rollbackQueue.jobs[0],
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+    };
+
+    const managedFallback = JSON.parse(
+      JSON.stringify(rolledBackWatermark)
+    ) as KnowledgeRuntimeStoreSnapshot;
+    const fallbackSource = managedFallback.inputRevisions[0].sources[0];
+    fallbackSource.managedAfterRevision = 1;
+    fallbackSource.legacyCheckpoint = {
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      observedAt: 100,
+    };
+    fallbackSource.observations = [fallbackSource.observations[1]];
+
+    const reversedConsumptionRevisions = JSON.parse(
+      JSON.stringify(valid)
+    ) as KnowledgeRuntimeStoreSnapshot;
+    const reversedObservations =
+      reversedConsumptionRevisions.inputRevisions[0].sources[0].observations;
+    const earlierConsumption = reversedObservations[0];
+    const laterConsumption = reversedObservations[1];
+    if (earlierConsumption.status !== "consumed" || laterConsumption.status !== "consumed") {
+      throw new Error("Expected two consumed observations");
+    }
+    earlierConsumption.queueRevision = 2;
+    laterConsumption.queueRevision = 1;
+
+    for (const corrupt of [
+      olderAllocated,
+      impossibleSupersession,
+      rolledBackWatermark,
+      managedFallback,
+      reversedConsumptionRevisions,
+    ]) {
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(JSON.stringify(corrupt));
+      const runtime = new KnowledgeRuntimeStore(file);
+
+      await expect(runtime.readQueue("personal")).rejects.toBeInstanceOf(
+        KnowledgeRuntimeStoreCorruptError
+      );
+    }
   });
 
   it("blocks unrelated writes for every embedded corruption class without changing bytes", async () => {
@@ -4269,7 +5161,10 @@ describe("KnowledgeRuntimeStore", () => {
         },
       },
       { name: "unknown top-level field", value: { ...base, unexpected: true } },
-      { name: "unsupported version", value: { ...base, version: 3 } },
+      {
+        name: "unsupported version",
+        value: { ...base, version: KNOWLEDGE_RUNTIME_STORE_VERSION + 1 },
+      },
     ];
 
     for (const scenario of scenarios) {
@@ -4280,7 +5175,11 @@ describe("KnowledgeRuntimeStore", () => {
       const before = await file.read();
 
       await expect(
-        allocator.allocate({ bundleId: "unrelated", sourceId: scenario.name })
+        allocator.allocate({
+          bundleId: "unrelated",
+          sourceId: scenario.name,
+          captureId: `corruption-${scenario.name}`,
+        })
       ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
       expect(await file.read()).toBe(before);
     }

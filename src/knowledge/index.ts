@@ -16,6 +16,7 @@ export * from "@/knowledge/ingest/queue/IngestQueue";
 export * from "@/knowledge/ingest/queue/QueueStorage";
 export * from "@/knowledge/ingest/queue/RetryPolicy";
 export * from "@/knowledge/ingest/InputRevisionAllocator";
+export * from "@/knowledge/ingest/SourceObservationHandoff";
 export * from "@/knowledge/manifest/ManifestCommitIntent";
 export * from "@/knowledge/manifest/freshness";
 export * from "@/knowledge/manifest/SourceManifestRepository";

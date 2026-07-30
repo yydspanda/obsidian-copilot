@@ -157,6 +157,12 @@ export interface IngestQueueSnapshot {
   applyCommit?: IngestApplyCommitMarker;
 }
 
+/** Narrow out-of-band capability authorizing one source-watermark advance. */
+export interface QueueWriteAuthority {
+  kind: "source_observation";
+  observationToken: string;
+}
+
 /**
  * Signals that queue state changed after a read and before its full snapshot write.
  */
@@ -201,11 +207,13 @@ export interface QueueStorage {
    * @param bundleId - Stable Bundle identifier
    * @param snapshot - Complete next queue revision
    * @param expectedRevision - Previously observed revision, or null for create
+   * @param authority - Optional adapter-private authority for a source observation
    */
   write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
-    expectedRevision: number | null
+    expectedRevision: number | null,
+    authority?: QueueWriteAuthority
   ): Promise<void>;
 }
 

@@ -63,6 +63,7 @@ import {
   KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
   KnowledgeRuntimeApplyAuthorityPort,
   KnowledgeRuntimeApplyCommitManifestPort,
+  KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeNoJournalApplyRecoveryPort,
@@ -413,12 +414,23 @@ describe("durable knowledge commit pipeline", () => {
     const transactionStorage = new KnowledgeRuntimeTransactionStorage(runtime);
     const applyCommitPort = new KnowledgeRuntimeApplyCommitManifestPort(runtime);
     const inputRevisions = new KnowledgeRuntimeInputRevisionAllocator(runtime);
+    const inputObservations = new KnowledgeRuntimeInputObservationBinder(runtime);
     const bundle = createBundle();
     const initialManifest = createInitialManifest(bundle.id);
     await manifestStorage.write(bundle.id, initialManifest, null);
+    const allocation = await inputRevisions.allocate({
+      bundleId: bundle.id,
+      sourceId: "source-1",
+      captureId: "pipeline-source-1-capture-1",
+    });
+    expect(allocation).toMatchObject({ inputRevision: 1 });
     await expect(
-      inputRevisions.allocate({ bundleId: bundle.id, sourceId: "source-1" })
-    ).resolves.toEqual({ inputRevision: 1 });
+      inputObservations.bind({
+        observationToken: allocation.observationToken,
+        sourceContentHash: SOURCE_CONTENT_HASH,
+        pipelineFingerprint: PIPELINE_FINGERPRINT,
+      })
+    ).resolves.toMatchObject({ kind: "ready" });
 
     const compiler = new KnowledgeCompiler({
       model: new DeterministicCompilerModel(),
@@ -517,6 +529,7 @@ describe("durable knowledge commit pipeline", () => {
       sourceContentHash: SOURCE_CONTENT_HASH,
       pipelineFingerprint: PIPELINE_FINGERPRINT,
       inputRevision: 1,
+      observationToken: allocation.observationToken,
     });
     await expect(queue.runNext(bundle.id)).resolves.toMatchObject({
       kind: "executed",

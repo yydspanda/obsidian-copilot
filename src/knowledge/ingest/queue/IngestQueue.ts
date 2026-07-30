@@ -25,6 +25,7 @@ import {
   type IngestReviewedChangeSetIdentity,
   type IngestRerunRequest,
   type IngestSourceHighWatermark,
+  type QueueWriteAuthority,
   type QueueStorage,
   validateIngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
@@ -54,6 +55,8 @@ export interface EnqueueIngestRequest {
   pipelineFingerprint: string;
   /** Durable, per-source monotonic revision allocated before enqueue. */
   inputRevision: number;
+  /** Opaque Runtime capability required by the production Queue adapter. */
+  observationToken?: string;
 }
 
 /** Observable result of durable source-level enqueue deduplication. */
@@ -1289,7 +1292,7 @@ export class IngestQueue {
     const timestamp = this.now();
     const reservedJobId = this.nextJobId();
     const mutation = await this.getBundleMutex(request.bundleId).runExclusive(async () => {
-      return this.mutate<EnqueueMutationValue>(request.bundleId, (current) => {
+      return this.mutateSourceObservation<EnqueueMutationValue>(request, (current) => {
         const active = current.jobs.find(
           (job) => isActiveJob(job) && job.sourceId === request.sourceId
         );
@@ -3221,6 +3224,9 @@ export class IngestQueue {
     if (!Number.isSafeInteger(request.inputRevision) || request.inputRevision < 0) {
       throw new TypeError("inputRevision must be a non-negative safe integer");
     }
+    if (request.observationToken !== undefined) {
+      assertIdentifier(request.observationToken, "observationToken");
+    }
   }
 
   /**
@@ -3335,6 +3341,24 @@ export class IngestQueue {
   }
 
   /**
+   * Applies one enqueue mutation with its out-of-band observation capability.
+   *
+   * @param request - Source observation carrying Bundle and optional Runtime token
+   * @param transform - Deterministic Queue transform
+   * @returns Detached current or newly persisted snapshot and operation value
+   */
+  private mutateSourceObservation<T>(
+    request: Pick<EnqueueIngestRequest, "bundleId" | "observationToken">,
+    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T>
+  ): Promise<MutationResult<T>> {
+    const authority: QueueWriteAuthority | undefined =
+      request.observationToken === undefined
+        ? undefined
+        : { kind: "source_observation", observationToken: request.observationToken };
+    return this.mutate(request.bundleId, transform, authority);
+  }
+
+  /**
    * Applies one immutable mutation with bounded optimistic conflict retries.
    *
    * @param bundleId - Stable Bundle identifier
@@ -3343,7 +3367,8 @@ export class IngestQueue {
    */
   private async mutate<T>(
     bundleId: string,
-    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T>
+    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T>,
+    authority?: QueueWriteAuthority
   ): Promise<MutationResult<T>> {
     assertIdentifier(bundleId, "bundleId");
     let lastConflict: IngestQueueRevisionConflictError | undefined;
@@ -3366,7 +3391,7 @@ export class IngestQueue {
         revision: loaded.snapshot.revision + 1,
       });
       try {
-        await this.storage.write(bundleId, next, loaded.expectedRevision);
+        await this.storage.write(bundleId, next, loaded.expectedRevision, authority);
         return {
           snapshot: this.cloneValidatedSnapshot(bundleId, next),
           value: proposal.value,
