@@ -2,6 +2,7 @@ import type { KnowledgeIngestJob } from "@/knowledge/model/types";
 import {
   INGEST_QUEUE_VERSION,
   parseIngestQueueSnapshot,
+  type IngestApplyAbandonment,
   type IngestApplyClaimMarker,
   type IngestApplyCommitMarker,
   type IngestQueueSnapshot,
@@ -199,6 +200,34 @@ function createApplyClaimMarker(
 }
 
 /**
+ * Creates exact durable proof that an accepted apply was abandoned before journaling.
+ *
+ * @param overrides - Optional abandonment fields to replace
+ * @returns Strict apply-abandonment tombstone
+ */
+function createApplyAbandonment(
+  overrides: Partial<IngestApplyAbandonment> = {}
+): IngestApplyAbandonment {
+  return {
+    jobId: "job-1",
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision: 1,
+    attempt: 1,
+    startedAt: 120,
+    changeSetId: "changeset-review",
+    changeSetDigest: HASH_C,
+    proposalDigest: HASH_B,
+    recordRevision: 1,
+    manifestCommitIntentDigest: HASH_A,
+    acceptedAt: 110,
+    abandonedAt: 130,
+    ...overrides,
+  };
+}
+
+/**
  * Derives one highest source observation for a synthetic storage snapshot.
  *
  * @param jobs - Durable test jobs
@@ -245,6 +274,7 @@ function createSnapshot(overrides: Partial<IngestQueueSnapshot> = {}): IngestQue
     sourceHighWatermarks: overrides.sourceHighWatermarks ?? deriveTestHighWatermarks(jobs, reruns),
     pendingReviews: overrides.pendingReviews ?? [],
     reviewRejections: overrides.reviewRejections ?? [],
+    applyAbandonments: overrides.applyAbandonments ?? [],
   };
 }
 
@@ -299,6 +329,9 @@ describe("parseIngestQueueSnapshot", () => {
     const missingReviewRejections = { ...createSnapshot() } as Record<string, unknown>;
     delete missingReviewRejections.reviewRejections;
     expect(parseIngestQueueSnapshot(missingReviewRejections).ok).toBe(false);
+    const missingApplyAbandonments = { ...createSnapshot() } as Record<string, unknown>;
+    delete missingApplyAbandonments.applyAbandonments;
+    expect(parseIngestQueueSnapshot(missingApplyAbandonments).ok).toBe(false);
   });
 
   it("strictly migrates version 1 reads into detached current state", () => {
@@ -317,6 +350,7 @@ describe("parseIngestQueueSnapshot", () => {
     if (parsed.ok) {
       expect(parsed.value.version).toBe(INGEST_QUEUE_VERSION);
       expect(parsed.value.reviewRejections).toEqual([]);
+      expect(parsed.value.applyAbandonments).toEqual([]);
       expect("applyCommit" in parsed.value).toBe(false);
       expect(parsed.value).not.toBe(legacy);
       expect(parsed.value.jobs[0]).not.toBe(legacy.jobs[0]);
@@ -370,6 +404,7 @@ describe("parseIngestQueueSnapshot", () => {
     if (parsed.ok) {
       expect(parsed.value.version).toBe(INGEST_QUEUE_VERSION);
       expect(parsed.value.reviewRejections).toEqual([]);
+      expect(parsed.value.applyAbandonments).toEqual([]);
       expect(parsed.value).not.toBe(legacy);
     }
     expect(
@@ -403,8 +438,10 @@ describe("parseIngestQueueSnapshot", () => {
       jobs: [applying],
       applyClaim: createApplyClaimMarker(),
     });
+    const { applyAbandonments: _applyAbandonments, ...legacyCurrent } = current;
+    void _applyAbandonments;
     const legacy = {
-      ...current,
+      ...legacyCurrent,
       version: 3,
       applyClaim: {
         ...createApplyClaimMarker(),
@@ -425,6 +462,9 @@ describe("parseIngestQueueSnapshot", () => {
     });
     const parsed = parseIngestQueueSnapshot(legacy);
     expect(parsed.ok && validateIngestQueueSnapshot(parsed.value).valid).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.applyAbandonments).toEqual([]);
+    }
 
     expect(
       parseIngestQueueSnapshot({
@@ -465,8 +505,24 @@ describe("parseIngestQueueSnapshot", () => {
     ).toBe(false);
   });
 
+  it("strictly migrates version 4 reads with empty apply-abandonment history", () => {
+    const current = createSnapshot();
+    const { applyAbandonments: _applyAbandonments, ...withoutAbandonments } = current;
+    const legacy = { ...withoutAbandonments, version: 4 };
+    void _applyAbandonments;
+
+    expect(parseIngestQueueSnapshot(legacy)).toEqual({ ok: true, value: current });
+    expect(
+      parseIngestQueueSnapshot({
+        ...legacy,
+        applyAbandonments: [createApplyAbandonment()],
+      }).ok
+    ).toBe(false);
+    expect(parseIngestQueueSnapshot({ ...legacy, unexpected: true }).ok).toBe(false);
+  });
+
   it("rejects unsupported versions and illegal job discriminants", () => {
-    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 5 }).ok).toBe(false);
+    expect(parseIngestQueueSnapshot({ ...createSnapshot(), version: 6 }).ok).toBe(false);
     expect(
       parseIngestQueueSnapshot({
         ...createSnapshot(),
@@ -580,6 +636,33 @@ describe("parseIngestQueueSnapshot", () => {
       }).ok
     ).toBe(false);
   });
+
+  it("strictly parses exact apply-abandonment identity", () => {
+    const abandoned = createSnapshot({
+      jobs: [createCancelledReviewJob()],
+      applyAbandonments: [createApplyAbandonment()],
+    });
+
+    expect(parseIngestQueueSnapshot(abandoned).ok).toBe(true);
+    expect(
+      parseIngestQueueSnapshot({
+        ...abandoned,
+        applyAbandonments: [createApplyAbandonment({ manifestCommitIntentDigest: "not-a-hash" })],
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...abandoned,
+        applyAbandonments: [createApplyAbandonment({ recordRevision: 2 } as never)],
+      }).ok
+    ).toBe(false);
+    expect(
+      parseIngestQueueSnapshot({
+        ...abandoned,
+        applyAbandonments: [{ ...createApplyAbandonment(), unexpected: true }],
+      }).ok
+    ).toBe(false);
+  });
 });
 
 describe("validateIngestQueueSnapshot", () => {
@@ -604,6 +687,141 @@ describe("validateIngestQueueSnapshot", () => {
     });
 
     expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("accepts one exact durable abandonment for a cancelled accepted apply", () => {
+    const snapshot = createSnapshot({
+      jobs: [createCancelledReviewJob()],
+      applyAbandonments: [createApplyAbandonment()],
+    });
+
+    expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("requires unique apply-abandonment job and ChangeSet identities", () => {
+    const codes = diagnosticCodes(
+      createSnapshot({
+        jobs: [createCancelledReviewJob()],
+        applyAbandonments: [createApplyAbandonment(), createApplyAbandonment()],
+      })
+    );
+
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        "queue_apply_abandonment_job_duplicate",
+        "queue_apply_abandonment_changeset_duplicate",
+      ])
+    );
+  });
+
+  it("requires an abandonment to own the exact cancelled queue attempt", () => {
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createPendingJob()],
+          applyAbandonments: [createApplyAbandonment()],
+        })
+      )
+    ).toContain("queue_apply_abandonment_job_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [createCancelledReviewJob()],
+          applyAbandonments: [createApplyAbandonment({ sourceContentHash: HASH_C })],
+        })
+      )
+    ).toContain("queue_apply_abandonment_job_invalid");
+  });
+
+  it("requires monotonic accepted, started, and abandoned timestamps", () => {
+    const job = createCancelledReviewJob();
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [job],
+          applyAbandonments: [createApplyAbandonment({ acceptedAt: 99 })],
+        })
+      )
+    ).toContain("queue_apply_abandonment_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [job],
+          applyAbandonments: [createApplyAbandonment({ acceptedAt: 121 })],
+        })
+      )
+    ).toContain("queue_apply_abandonment_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [job],
+          applyAbandonments: [createApplyAbandonment({ startedAt: 131 })],
+        })
+      )
+    ).toContain("queue_apply_abandonment_timestamp_invalid");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [job],
+          applyAbandonments: [createApplyAbandonment({ abandonedAt: 129 })],
+        })
+      )
+    ).toContain("queue_apply_abandonment_timestamp_mismatch");
+  });
+
+  it("rejects abandonment conflicts with active, committed, pending, or rejected state", () => {
+    const cancelled = createCancelledReviewJob();
+    const reviewedChangeSet = {
+      changeSetId: "changeset-review",
+      changeSetDigest: HASH_C,
+    };
+    const acceptedReview = {
+      proposalDigest: HASH_B,
+      recordRevision: 1 as const,
+      manifestCommitIntentDigest: HASH_A,
+      acceptedAt: 110,
+    };
+
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [cancelled],
+          applyAbandonments: [createApplyAbandonment()],
+          applyClaim: createApplyClaimMarker({ reviewedChangeSet, acceptedReview }),
+        })
+      )
+    ).toContain("queue_apply_abandonment_claim_conflict");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { status: "paused", reason: "commit_pending_ack", pausedAt: 140 },
+          jobs: [cancelled],
+          applyAbandonments: [createApplyAbandonment()],
+          applyCommit: createApplyCommitMarker({
+            changeSetId: "changeset-review",
+            changeSetDigest: HASH_C,
+          }),
+        })
+      )
+    ).toContain("queue_apply_abandonment_commit_conflict");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [cancelled],
+          pendingReviews: [createPendingReview()],
+          applyAbandonments: [createApplyAbandonment()],
+        })
+      )
+    ).toContain("queue_apply_abandonment_pending_review_conflict");
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          jobs: [cancelled],
+          reviewRejections: [createReviewRejection()],
+          applyAbandonments: [createApplyAbandonment()],
+        })
+      )
+    ).toContain("queue_apply_abandonment_rejection_conflict");
   });
 
   it("requires every awaiting-review job to own one exact pending anchor", () => {

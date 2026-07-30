@@ -252,6 +252,7 @@ function createQueueSnapshot(
     ],
     pendingReviews: [],
     reviewRejections: [],
+    applyAbandonments: [],
     ...(marker ? { applyCommit: { ...marker } } : {}),
   };
 }

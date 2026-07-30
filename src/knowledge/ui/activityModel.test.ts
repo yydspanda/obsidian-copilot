@@ -237,6 +237,7 @@ function createSnapshot(
     sourceHighWatermarks: [],
     pendingReviews,
     reviewRejections: [],
+    applyAbandonments: [],
     ...(markers.applyClaim ? { applyClaim: markers.applyClaim } : {}),
     ...(markers.applyCommit ? { applyCommit: markers.applyCommit } : {}),
   };

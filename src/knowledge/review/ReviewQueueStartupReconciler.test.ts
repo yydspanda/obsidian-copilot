@@ -184,6 +184,7 @@ class RecordingQueuePort implements ReviewQueueStartupQueuePort {
       sourceHighWatermarks: [],
       pendingReviews: [],
       reviewRejections: [],
+      applyAbandonments: [],
     };
   }
 
@@ -385,6 +386,7 @@ function createInterruptedQueueSnapshot(): IngestQueueSnapshot {
     ],
     pendingReviews: [],
     reviewRejections: [],
+    applyAbandonments: [],
   };
 }
 

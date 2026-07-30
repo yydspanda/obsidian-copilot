@@ -2,13 +2,13 @@
 
 Status: Active
 
-Last updated: 2026-07-20
+Last updated: 2026-07-30
 
 Target platform: Obsidian Desktop on Windows
 
 本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A/B/C/D/E/F/G foundations and the G.1 runtime adapter foundation are implemented; G.2a adds the review-only startup coordinator, G.2b adds durable Manifest plan/intent plus the exact atomic Manifest/apply-ledger adapter, and G.2c adds Queue v4 with end-to-end durable apply-authority proofs. Review v2 now derives final intent from the immutable compiler plan, transaction journal v3 retains that intent and full source identity, and runtime envelope v2 re-proves Queue/Review/high-watermark/allocator plus Manifest read-set/source-order authority before the first target observation, again inside prepared publication, before entering applying, on unfinished startup recovery, across every shared-envelope mutation while the transaction is active, and when publishing Manifest success with its ledger. Pending Queue commit markers are bound to that ledger at startup. Generic Manifest storage cannot bypass the success path, unsafe legacy or stale-Manifest authority fails closed before new Wiki file access, and shared-page hashes advance for every co-owner. These cores are still not assembled into plugin startup or Knowledge Studio; no-journal recovery, remaining semantic dependencies, full workflow wiring, and the Windows acceptance gate remain pending. Commit H follows only after G.2 safely enables the runtime workflow. Verification details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier still has only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Current checkpoint: Commit A/B/C/D/E/F/G foundations and the G.1 runtime adapter foundation are implemented; G.2a adds the review-only startup coordinator, G.2b adds durable Manifest plan/intent plus the exact atomic Manifest/apply-ledger adapter, G.2c adds end-to-end durable apply-authority proofs, and G.2d upgrades Queue to v5 with explicit no-journal recovery. Review v2 derives final intent from the immutable compiler plan, transaction journal v3 retains that intent and full source identity, and runtime envelope v2 re-proves Queue/Review/high-watermark/allocator plus Manifest read-set/source-order authority before the first target observation, again inside prepared publication, before entering applying, on unfinished startup recovery, across every shared-envelope mutation while the transaction is active, and when publishing Manifest success with its ledger. An accepted claim without a journal is classified from one atomic snapshot and requires explicit continue or abandon; continue repeats full authority proof, while abandon atomically proves that no journal, Queue commit marker, or source-input ledger exists before writing a Queue v5 tombstone. Pending Queue commit markers remain bound to their ledger. Generic Manifest storage cannot bypass the success path, unsafe legacy or stale-Manifest authority fails closed before new Wiki file access, and shared-page hashes advance for every co-owner. These cores are still not assembled into plugin startup or Knowledge Studio; remaining semantic dependencies, full workflow wiring, recovery UI, and the Windows acceptance gate remain pending. Commit H follows only after G.2 safely enables the runtime workflow. Verification details are recorded in [`../TODO.md`](../TODO.md). Repository-wide Prettier still has only the pre-existing, untouched `src/LLMProviders/chatModelManager.ts` baseline. No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -200,7 +200,7 @@ Runtime integration boundary before real Vault writes:
 - 在接入真实写盘前决定 mutation intent：当前 content-addressed at-least-once 恢复存在“CAS 后、progress 前崩溃，再被用户恢复为精确 before”这一 ABA 取舍。
 - 为 `recovery_required` 增加明确的重新校验、继续、回滚或放弃操作；在此之前冲突只保持 fail closed。
 - 在重新 claim startup backlog 前扫描 durable Review Store，并用 `reconcilePendingReview` 收敛“proposal 已落盘、Queue hand-off 未落盘”的旧 attempt。
-- 为 accepted apply claim 已落盘但 journal 尚未创建的 crash window 增加 no-journal verify/continue/abandon；没有写入 intent 证明时不得自动重试。
+- [x] 为 accepted apply claim 已落盘但 journal 尚未创建的 crash window 增加 no-journal classify/continue/abandon Core；没有写入 intent 证明时不得自动重试，生产 startup/Studio 接线仍待完成。
 - terminal archive 必须同时协调 Queue jobs、pending/terminal review identity、Review Store 与 source high-watermark，或保留等价 tombstone。
 
 ### Commit F — Provider-neutral Compile Port ✅
@@ -279,7 +279,7 @@ Verified in automated code-level tests:
 Remaining exit gates:
 
 - 在真实 Windows Obsidian test Vault 验证 `DataAdapter.process`/`Vault.process` 的双实例序列化、callback/返回值、插件重载、外部编辑、NTFS/OneDrive/junction 和 crash/power-loss 行为；自动化测试不能替代该结论。
-- startup Review reconciliation、Manifest target read-set、exact `ApplyCommitManifestPort` ledger 与 commit-boundary Queue/Review/high-watermark 原子复证已完成 Core；仍需 schema/link/source-artifact read-set、no-journal recovery、history compaction/size threshold 和 safe compare-and-delete，或继续保持 delete unavailable。
+- startup Review reconciliation、Manifest target read-set、exact `ApplyCommitManifestPort` ledger、commit-boundary Queue/Review/high-watermark 原子复证与 no-journal classify/continue/abandon 已完成 Core；仍需 schema/link/source-artifact read-set、生产 startup/Studio recovery wiring、history compaction/size threshold 和 safe compare-and-delete，或继续保持 delete unavailable。
 - 当前单 envelope 有 O(size) 写放大和共享故障域；长期使用前必须通过 size/latency benchmark 决定 archive 与分片。
 - 完成这些门槛前，不把基础代码称为可用 Golden Flow 或 production-ready durable adapter。
 
@@ -291,7 +291,7 @@ Scope:
 - 已完成独立的 Review startup coordinator Core：pending record 恢复 Queue anchor；rejected record 在需要时恢复 predecessor 后提交 exact rejection；accepted record 只作为后续 runtime classification identity，启动过程不会自动 apply。协调器用有界 Review revision 重读避免漏掉并发 terminal decision，并将稳定 observed revision 交给最终 startup gate 再复证。
 - [x] 补齐 durable Manifest plan/intent：包含完整 post-compile pages、显式 ownership/authorization、Manifest revision/digest read-set 与 source hash/pipeline/`inputRevision`；Review filter/rewrite 只从 immutable plan 投影，journal 不再从 changed targets 猜完整 `lastSuccessful.generatedPages`。
 - 启动时先验证 runtime envelope，扫描 active journal、apply claim、commit marker 与 Review Store，再执行 pending-review reconciliation；完成前不能 claim 新任务。
-- 关闭 accepted apply claim 已落盘但 journal 尚未创建的窗口，提供 no-journal verify/continue/abandon；不能凭“没有 journal”自动推断未写盘。
+- [x] 关闭 accepted apply claim 已落盘但 journal 尚未创建的 Core 窗口：从同一 envelope 分类 accepted-not-started/active/blocked/finalizing/committed/abandoned，显式 continue 前重证 Manifest authority，显式 abandon 前原子证明不存在 journal/commit marker/source-input ledger 并写 Queue v5 tombstone；生产 startup/Studio 接线另行完成。
 - 已 journal 化并复证 manifest ownership/last-generated hash target read-set；继续补 schema、non-target links 与 source artifact read-set。delete 保持 unavailable，不能为了过门槛降级为 read-then-delete。
 - [x] 在 Manifest+ledger atomic callback 内再次复证 exact Queue apply claim、Review identity 与 allocator/source high-watermark；exact ledger replay 仍最先返回，更新观察由 retained rerun 或 promoted successor 证明。
 - [x] 在直接 apply 的 target observation 前、prepared 发布、prepared → applying、unfinished startup recovery 与活动事务每次 shared-envelope mutation 中复证或保留完整 durable authority + Manifest reservation；Queue v3 缺失 intent digest 或 Manifest read-set 漂移时零 Wiki 文件访问，并在启动时交叉验证 Queue commit marker 与 exact ledger。

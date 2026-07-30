@@ -48,7 +48,9 @@ import type {
   SourceManifest,
 } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import { NoJournalApplyRecoveryCoordinator } from "@/knowledge/recovery/NoJournalApplyRecovery";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
+import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
   KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
@@ -56,6 +58,7 @@ import {
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
+  KnowledgeRuntimeNoJournalApplyRecoveryPort,
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
@@ -524,6 +527,10 @@ describe("durable knowledge commit pipeline", () => {
       jobClaim: { ...accepted.jobClaim },
     });
     expect(applyingJob).toMatchObject({ status: "processing", stage: "applying" });
+    await expect(queue.recoverOnStartup(bundle.id)).resolves.toMatchObject({
+      control: { status: "paused", reason: "recovery_required" },
+      jobs: [expect.objectContaining({ id: applyingJob.id, status: "failed", stage: "applying" })],
+    });
 
     const wikiFiles = new MemoryKnowledgeFileStore();
     let transactionTime = 1_300;
@@ -535,6 +542,26 @@ describe("durable knowledge commit pipeline", () => {
       now: () => transactionTime++,
       createTransactionId: () => "transaction-compiler-review-1",
     });
+    const startupIdentity: AcceptedReviewStartupIdentity = {
+      bundleId: bundle.id,
+      changeSetId: accepted.changeSetId,
+      proposalDigest: accepted.proposalDigest,
+      recordRevision: accepted.recordRevision,
+      recordedAt: accepted.recordedAt,
+      acceptedDigest: accepted.acceptedDigest,
+      manifestCommitIntentDigest: accepted.manifestCommitIntentDigest,
+      acceptedAt: accepted.acceptedAt,
+      jobClaim: { ...accepted.jobClaim },
+    };
+    const noJournalRecovery = new NoJournalApplyRecoveryCoordinator({
+      state: new KnowledgeRuntimeNoJournalApplyRecoveryPort(runtime),
+      transaction,
+      now: () => transactionTime++,
+    });
+    const recoveryState = await noJournalRecovery.classify(startupIdentity);
+    if (recoveryState.kind !== "requires_decision") {
+      throw new Error(`Expected no-journal recovery, received '${recoveryState.kind}'`);
+    }
     const jobClaim: TransactionJobClaim = {
       jobId: applyingJob.id,
       attempt: applyingJob.attempt,
@@ -544,13 +571,10 @@ describe("durable knowledge commit pipeline", () => {
       pipelineFingerprint: applyingJob.pipelineFingerprint,
       inputRevision: applyingJob.inputRevision,
     };
-    const receipt: TransactionCommitReceipt = await transaction.apply({
-      changeSet: accepted.acceptedChangeSet,
-      bundle,
-      jobClaim,
-      manifestCommitIntent: accepted.manifestCommitIntent,
-      manifestCommitIntentDigest: accepted.manifestCommitIntentDigest,
-    });
+    const receipt: TransactionCommitReceipt = await noJournalRecovery.continue(
+      recoveryState.candidate,
+      bundle
+    );
     const committedJournal = requireCommittedJournal(await transaction.loadActive());
     expect(wikiFiles.files.get(acceptedChangeSet.changes[0]?.path ?? "")).toBe(REWRITTEN_CONTENT);
     expect(filteredPath).toBeDefined();
@@ -597,7 +621,7 @@ describe("durable knowledge commit pipeline", () => {
 
     await expect(queue.verifyApplyRecovery(receipt)).resolves.toMatchObject({
       id: jobClaim.jobId,
-      status: "processing",
+      status: "failed",
       stage: "applying",
     });
     await expect(queue.resolveApplyRecovery(receipt)).resolves.toMatchObject({

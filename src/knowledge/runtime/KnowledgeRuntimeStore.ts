@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createTransactionCommitReceiptDigest,
   transactionCommitReceiptMatchesJournal,
+  type ChangeSetTransactionApplyInput,
   type ChangeSetTransactionAuthorityPort,
   type ChangeSetTransactionAuthorityRequest,
   type TransactionCommitReceipt,
@@ -32,6 +33,8 @@ import {
   IngestQueueRevisionConflictError,
   parseIngestQueueSnapshot,
   validateIngestQueueSnapshot,
+  type IngestApplyAbandonment,
+  type IngestApplyClaimMarker,
   type IngestQueueSnapshot,
   type QueueStorage,
 } from "@/knowledge/ingest/queue/QueueStorage";
@@ -58,6 +61,7 @@ import type {
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   KnowledgeDiagnostic,
+  KnowledgeIngestJob,
   SourceCompileSnapshot,
   SourceManifest,
   SourceManifestEntry,
@@ -68,6 +72,14 @@ import {
   validateSourceManifest,
 } from "@/knowledge/model/validation";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import type {
+  NoJournalApplyAbandonReceipt,
+  NoJournalApplyRecoveryCandidate,
+  NoJournalApplyRecoveryClassification,
+  NoJournalApplyRecoveryReference,
+  NoJournalApplyRecoveryStatePort,
+} from "@/knowledge/recovery/NoJournalApplyRecovery";
+import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import {
   CHANGESET_REVIEW_SNAPSHOT_VERSION,
   ReviewStorageRevisionConflictError,
@@ -78,6 +90,7 @@ import {
   type ReviewStorage,
 } from "@/knowledge/review/ReviewStorage";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
+import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
 export const KNOWLEDGE_RUNTIME_STORE_VERSION = 2 as const;
@@ -421,6 +434,36 @@ export class KnowledgeApplyCommitManifestConflictError extends TransactionStorag
   ) {
     super(`Source '${sourceId}' cannot commit its final Manifest projection in '${bundleId}'`);
     this.name = "KnowledgeApplyCommitManifestConflictError";
+  }
+}
+
+/** Stable fail-closed reasons one no-journal recovery reference cannot be trusted. */
+export type KnowledgeNoJournalApplyRecoveryConflictReason =
+  | "request_invalid"
+  | "review_missing"
+  | "review_record_missing"
+  | "review_record_mismatch"
+  | "queue_missing"
+  | "queue_state_mismatch"
+  | "recovery_id_unknown"
+  | "write_evidence_conflict"
+  | "state_not_actionable"
+  | "revision_overflow";
+
+/** Reports torn or stale no-journal recovery evidence without exposing persisted payloads. */
+export class KnowledgeNoJournalApplyRecoveryConflictError extends TransactionStorageAuthorityError {
+  /**
+   * Creates a sanitized recovery conflict.
+   *
+   * @param bundleId - Bundle whose accepted apply could not be proved
+   * @param reason - Stable fail-closed conflict category
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly reason: KnowledgeNoJournalApplyRecoveryConflictReason
+  ) {
+    super(`An accepted apply in '${bundleId}' does not have exact no-journal recovery authority`);
+    this.name = "KnowledgeNoJournalApplyRecoveryConflictError";
   }
 }
 
@@ -876,17 +919,21 @@ function createApplyCommitLedgerIdentity(
   };
 }
 
-/** Minimal strict identity required to prove apply authority without file targets. */
-interface KnowledgeApplyAuthorityProof {
+/** Minimal strict identity required to prove Queue and Review apply authority. */
+interface KnowledgeApplyRuntimeIdentity {
   transactionId: string;
   bundleId: string;
-  bundle: KnowledgeBundleConfig;
   changeSetId: string;
   changeSetDigest: string;
   changeSet: KnowledgeChangeSet;
   jobClaim: TransactionJobClaim;
   manifestCommitIntent: ManifestCommitIntent;
   manifestCommitIntentDigest: string;
+}
+
+/** Complete identity required to add current Bundle and Manifest file-access authority. */
+interface KnowledgeApplyAuthorityProof extends KnowledgeApplyRuntimeIdentity {
+  bundle: KnowledgeBundleConfig;
 }
 
 /**
@@ -983,7 +1030,7 @@ function parseApplyAuthorityRequest(
  */
 function queueClaimMatchesTransaction(
   claim: IngestQueueSnapshot["applyClaim"],
-  journal: KnowledgeApplyAuthorityProof
+  journal: KnowledgeApplyRuntimeIdentity
 ): boolean {
   return (
     claim !== undefined &&
@@ -1009,7 +1056,7 @@ function queueClaimMatchesTransaction(
  */
 function reviewClaimMatchesTransaction(
   record: AcceptedChangeSetReviewRecord,
-  journal: KnowledgeApplyAuthorityProof
+  journal: KnowledgeApplyRuntimeIdentity
 ): boolean {
   return (
     record.jobClaim.jobId === journal.jobClaim.jobId &&
@@ -1033,6 +1080,321 @@ function exactJsonValuesEqual(left: unknown, right: unknown): boolean {
 }
 
 /**
+ * Compares one startup identity with its exact immutable accepted Review record.
+ *
+ * @param identity - Identity returned by review startup reconciliation
+ * @param record - Durable accepted Review record loaded from the shared envelope
+ * @returns Whether every startup-visible identity field is exact
+ */
+function acceptedRecordMatchesStartupIdentity(
+  identity: AcceptedReviewStartupIdentity,
+  record: AcceptedChangeSetReviewRecord
+): boolean {
+  return (
+    identity.changeSetId === record.changeSetId &&
+    identity.proposalDigest === record.proposalDigest &&
+    identity.recordRevision === record.recordRevision &&
+    identity.recordedAt === record.recordedAt &&
+    identity.acceptedDigest === record.acceptedDigest &&
+    identity.manifestCommitIntentDigest === record.manifestCommitIntentDigest &&
+    identity.acceptedAt === record.acceptedAt &&
+    identity.jobClaim.jobId === record.jobClaim.jobId &&
+    identity.jobClaim.sourceId === record.jobClaim.sourceId &&
+    identity.jobClaim.sourceContentHash === record.jobClaim.sourceContentHash &&
+    identity.jobClaim.pipelineFingerprint === record.jobClaim.pipelineFingerprint &&
+    identity.jobClaim.inputRevision === record.jobClaim.inputRevision &&
+    identity.jobClaim.attempt === record.jobClaim.attempt
+  );
+}
+
+/**
+ * Creates one stable opaque id from evidence retained across every apply phase.
+ *
+ * The applying `startedAt` is intentionally excluded because a fully finalized
+ * commit retains it neither in the completed Queue job nor in the Manifest
+ * ledger. The accepted Review identity remains immutable and unique for the
+ * owning Queue attempt, so the id stays stable through continue and abandon.
+ *
+ * @param bundleId - Bundle containing the accepted record
+ * @param record - Exact immutable accepted Review record
+ * @returns Namespaced lowercase SHA-256 recovery identifier
+ */
+function createNoJournalApplyRecoveryId(
+  bundleId: string,
+  record: AcceptedChangeSetReviewRecord
+): string {
+  const material: JsonValue = {
+    version: 1,
+    bundleId,
+    changeSetId: record.changeSetId,
+    proposalDigest: record.proposalDigest,
+    recordedAt: record.recordedAt,
+    acceptedDigest: record.acceptedDigest,
+    manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+    acceptedAt: record.acceptedAt,
+    jobClaim: { ...record.jobClaim },
+  };
+  return `knowledge-no-journal-${sha256(
+    `obsidian-copilot-knowledge-no-journal-apply-recovery-v1\n${canonicalizeJson(material)}`
+  )}`;
+}
+
+/**
+ * Creates the public opaque reference for one accepted record.
+ *
+ * @param bundleId - Bundle containing the accepted record
+ * @param record - Exact immutable accepted Review record
+ * @returns Detached recovery reference
+ */
+function createNoJournalApplyRecoveryReference(
+  bundleId: string,
+  record: AcceptedChangeSetReviewRecord
+): NoJournalApplyRecoveryReference {
+  return {
+    bundleId,
+    recoveryId: createNoJournalApplyRecoveryId(bundleId, record),
+  };
+}
+
+/**
+ * Compares one Queue job with the immutable accepted Review attempt.
+ *
+ * @param job - Durable Queue job
+ * @param record - Exact accepted Review record
+ * @returns Whether all source-observation and attempt fields match
+ */
+function queueJobMatchesAcceptedRecord(
+  job: KnowledgeIngestJob | undefined,
+  record: AcceptedChangeSetReviewRecord
+): job is KnowledgeIngestJob {
+  return (
+    job !== undefined &&
+    job.id === record.jobClaim.jobId &&
+    job.sourceId === record.jobClaim.sourceId &&
+    job.sourceContentHash === record.jobClaim.sourceContentHash &&
+    job.pipelineFingerprint === record.jobClaim.pipelineFingerprint &&
+    job.inputRevision === record.jobClaim.inputRevision &&
+    job.attempt === record.jobClaim.attempt
+  );
+}
+
+/**
+ * Compares a reviewed Queue apply claim with one accepted Review record.
+ *
+ * @param claim - Durable active or interrupted apply claim
+ * @param record - Exact accepted Review record
+ * @returns Whether the claim carries the same reviewed decision and payload ids
+ */
+function queueClaimMatchesAcceptedRecord(
+  claim: IngestApplyClaimMarker | undefined,
+  record: AcceptedChangeSetReviewRecord
+): claim is IngestApplyClaimMarker {
+  return (
+    claim !== undefined &&
+    claim.jobId === record.jobClaim.jobId &&
+    claim.sourceId === record.jobClaim.sourceId &&
+    claim.sourceContentHash === record.jobClaim.sourceContentHash &&
+    claim.pipelineFingerprint === record.jobClaim.pipelineFingerprint &&
+    claim.inputRevision === record.jobClaim.inputRevision &&
+    claim.attempt === record.jobClaim.attempt &&
+    claim.legacyReview === undefined &&
+    claim.reviewedChangeSet?.changeSetId === record.changeSetId &&
+    claim.reviewedChangeSet.changeSetDigest === record.acceptedDigest &&
+    claim.acceptedReview?.proposalDigest === record.proposalDigest &&
+    claim.acceptedReview.recordRevision === record.recordRevision &&
+    claim.acceptedReview.manifestCommitIntentDigest === record.manifestCommitIntentDigest &&
+    claim.acceptedReview.acceptedAt === record.acceptedAt
+  );
+}
+
+/**
+ * Converts exact accepted Queue and Review evidence into transaction authority.
+ *
+ * @param bundleId - Bundle containing the evidence
+ * @param record - Exact accepted Review record
+ * @param claim - Exact reviewed Queue apply claim
+ * @returns Identity sufficient for Queue/Review/allocator re-proof
+ */
+function createNoJournalApplyRuntimeIdentity(
+  bundleId: string,
+  record: AcceptedChangeSetReviewRecord,
+  claim: IngestApplyClaimMarker
+): KnowledgeApplyRuntimeIdentity {
+  return {
+    transactionId: createNoJournalApplyRecoveryId(bundleId, record),
+    bundleId,
+    changeSetId: record.changeSetId,
+    changeSetDigest: record.acceptedDigest,
+    changeSet: cloneJson(record.acceptedChangeSet),
+    jobClaim: {
+      jobId: claim.jobId,
+      attempt: claim.attempt,
+      startedAt: claim.startedAt,
+      sourceId: claim.sourceId,
+      sourceContentHash: claim.sourceContentHash,
+      pipelineFingerprint: claim.pipelineFingerprint,
+      inputRevision: claim.inputRevision,
+    },
+    manifestCommitIntent: cloneJson(record.manifestCommitIntent),
+    manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+  };
+}
+
+/**
+ * Creates one decision candidate only after exact Queue/Review proof succeeds.
+ *
+ * @param bundleId - Bundle containing the accepted apply
+ * @param record - Exact immutable accepted Review record
+ * @param claim - Exact durable applying claim
+ * @returns Detached candidate safe to render but not itself an authority token
+ */
+function createNoJournalApplyRecoveryCandidate(
+  bundleId: string,
+  record: AcceptedChangeSetReviewRecord,
+  claim: IngestApplyClaimMarker
+): NoJournalApplyRecoveryCandidate {
+  return {
+    ...createNoJournalApplyRecoveryReference(bundleId, record),
+    jobId: claim.jobId,
+    changeSetId: record.changeSetId,
+    sourceId: claim.sourceId,
+    sourceContentHash: claim.sourceContentHash,
+    pipelineFingerprint: claim.pipelineFingerprint,
+    inputRevision: claim.inputRevision,
+    attempt: claim.attempt,
+    startedAt: claim.startedAt,
+    acceptedAt: record.acceptedAt,
+  };
+}
+
+/**
+ * Compares one append-only abandonment with its exact accepted Review record.
+ *
+ * @param abandonment - Durable Queue abandonment tombstone
+ * @param record - Exact accepted Review record
+ * @returns Whether every retained accepted decision field is exact
+ */
+function abandonmentMatchesAcceptedRecord(
+  abandonment: IngestApplyAbandonment,
+  record: AcceptedChangeSetReviewRecord
+): boolean {
+  return (
+    abandonment.jobId === record.jobClaim.jobId &&
+    abandonment.sourceId === record.jobClaim.sourceId &&
+    abandonment.sourceContentHash === record.jobClaim.sourceContentHash &&
+    abandonment.pipelineFingerprint === record.jobClaim.pipelineFingerprint &&
+    abandonment.inputRevision === record.jobClaim.inputRevision &&
+    abandonment.attempt === record.jobClaim.attempt &&
+    abandonment.changeSetId === record.changeSetId &&
+    abandonment.changeSetDigest === record.acceptedDigest &&
+    abandonment.proposalDigest === record.proposalDigest &&
+    abandonment.recordRevision === record.recordRevision &&
+    abandonment.manifestCommitIntentDigest === record.manifestCommitIntentDigest &&
+    abandonment.acceptedAt === record.acceptedAt
+  );
+}
+
+/**
+ * Compares one exact commit ledger record with an accepted Review outcome.
+ *
+ * @param ledger - Durable Manifest commit ledger record
+ * @param bundleId - Bundle containing the Review record
+ * @param record - Exact accepted Review record
+ * @returns Whether the ledger proves this accepted source input committed
+ */
+function ledgerMatchesAcceptedRecord(
+  ledger: KnowledgeApplyCommitLedgerRecord,
+  bundleId: string,
+  record: AcceptedChangeSetReviewRecord
+): boolean {
+  return (
+    ledger.bundleId === bundleId &&
+    ledger.sourceId === record.jobClaim.sourceId &&
+    ledger.sourceContentHash === record.jobClaim.sourceContentHash &&
+    ledger.pipelineFingerprint === record.jobClaim.pipelineFingerprint &&
+    ledger.inputRevision === record.jobClaim.inputRevision &&
+    ledger.changeSetId === record.changeSetId &&
+    ledger.changeSetDigest === record.acceptedDigest &&
+    ledger.manifestIntentDigest === record.manifestCommitIntentDigest
+  );
+}
+
+/**
+ * Compares an active journal's immutable accepted material with one Review record.
+ *
+ * @param journal - Strict global active transaction journal
+ * @param bundleId - Bundle containing the Review record
+ * @param record - Exact accepted Review record
+ * @returns Whether the journal belongs to this accepted decision
+ */
+function transactionMatchesAcceptedRecord(
+  journal: ChangeSetTransactionJournal,
+  bundleId: string,
+  record: AcceptedChangeSetReviewRecord
+): boolean {
+  return (
+    journal.bundleId === bundleId &&
+    journal.changeSetId === record.changeSetId &&
+    journal.changeSetDigest === record.acceptedDigest &&
+    journal.manifestCommitIntentDigest === record.manifestCommitIntentDigest &&
+    reviewClaimMatchesTransaction(record, journal) &&
+    exactJsonValuesEqual(journal.changeSet, record.acceptedChangeSet) &&
+    exactJsonValuesEqual(journal.manifestCommitIntent, record.manifestCommitIntent)
+  );
+}
+
+/**
+ * Reports whether a queue job still occupies source execution capacity.
+ *
+ * @param job - Durable Queue job
+ * @returns Whether a retained rerun must wait for this job
+ */
+function isActiveNoJournalQueueJob(job: KnowledgeIngestJob): boolean {
+  return job.status !== "failed" && job.status !== "completed" && job.status !== "cancelled";
+}
+
+/**
+ * Promotes one retained latest rerun after the abandoned predecessor is terminal.
+ *
+ * @param snapshot - Queue already containing the cancelled predecessor
+ * @param sourceId - Source whose retained rerun may be promoted
+ * @param timestamp - Non-regressing promotion timestamp
+ * @returns Queue with at most one newly promoted pending successor
+ */
+function promoteNoJournalRerun(
+  snapshot: IngestQueueSnapshot,
+  sourceId: string,
+  timestamp: number
+): IngestQueueSnapshot {
+  const rerun = snapshot.reruns.find((candidate) => candidate.sourceId === sourceId);
+  const existingSuccessor = snapshot.jobs.some(
+    (job) => job.sourceId === sourceId && isActiveNoJournalQueueJob(job)
+  );
+  if (!rerun || existingSuccessor) {
+    return snapshot;
+  }
+  const successor: KnowledgeIngestJob = {
+    id: rerun.jobId,
+    bundleId: snapshot.bundleId,
+    sourceId: rerun.sourceId,
+    sourceContentHash: rerun.sourceContentHash,
+    pipelineFingerprint: rerun.pipelineFingerprint,
+    inputRevision: rerun.inputRevision,
+    attempt: 0,
+    rerunRequested: false,
+    createdAt: rerun.requestedAt,
+    updatedAt: Math.max(timestamp, rerun.updatedAt),
+    status: "pending",
+    stage: "queued",
+  };
+  return {
+    ...snapshot,
+    jobs: [...snapshot.jobs, successor],
+    reruns: snapshot.reruns.filter((candidate) => candidate.sourceId !== sourceId),
+  };
+}
+
+/**
  * Re-proves the complete source-apply authority from one atomic runtime snapshot.
  *
  * The Queue claim proves the exact execution, the accepted Review proves
@@ -1046,7 +1408,7 @@ function exactJsonValuesEqual(left: unknown, right: unknown): boolean {
  */
 function assertApplyCommitRuntimeAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
-  journal: KnowledgeApplyAuthorityProof
+  journal: KnowledgeApplyRuntimeIdentity
 ): void {
   const queueRaw = findBundleSlot(state, "queues", journal.bundleId);
   if (queueRaw === null) {
@@ -1566,7 +1928,11 @@ function assertLegacyQueueIsMigrationSafe(snapshot: IngestQueueSnapshot): void {
   if (snapshot.pendingReviews.length > 0 || snapshot.reviewRejections.length > 0) {
     throw new KnowledgeRuntimeMigrationUnsafeError("queue_review_state_present", snapshot.bundleId);
   }
-  if (snapshot.applyClaim !== undefined || snapshot.applyCommit !== undefined) {
+  if (
+    snapshot.applyClaim !== undefined ||
+    snapshot.applyCommit !== undefined ||
+    snapshot.applyAbandonments.length > 0
+  ) {
     throw new KnowledgeRuntimeMigrationUnsafeError("queue_apply_state_present", snapshot.bundleId);
   }
   if (snapshot.jobs.some((job) => job.status === "awaiting_review" || job.stage === "applying")) {
@@ -1818,6 +2184,231 @@ export class KnowledgeRuntimeStore {
     const proof = parseApplyAuthorityRequest(request);
     const state = await this.readState();
     this.assertTransactionFileAccessAuthority(state, proof);
+  }
+
+  /**
+   * Classifies one accepted Review identity from exactly one runtime snapshot.
+   *
+   * Classification never observes Wiki files and never starts an apply. Queue,
+   * Review, active journal, commit marker, abandonment, allocator, and ledger
+   * evidence are interpreted from the same detached atomic-envelope read.
+   *
+   * @param identity - Accepted identity returned by review startup reconciliation
+   * @returns Exact durable phase or explicit no-journal decision candidate
+   */
+  async classifyNoJournalApplyRecovery(
+    identity: AcceptedReviewStartupIdentity
+  ): Promise<NoJournalApplyRecoveryClassification> {
+    this.assertAcceptedReviewStartupIdentity(identity);
+    const state = await this.readState();
+    const record = this.requireAcceptedReviewByStartupIdentity(state, identity);
+    return this.classifyAcceptedApplyState(state, identity.bundleId, record);
+  }
+
+  /**
+   * Reloads and fully re-proves one continuation immediately before transaction apply.
+   *
+   * The caller's Bundle is validated against the durable accepted ChangeSet and
+   * current Manifest read-set. This method performs no Wiki file access; the
+   * transaction runtime repeats the same proof atomically when it publishes the
+   * prepared journal.
+   *
+   * @param reference - Opaque recovery id previously returned by classification
+   * @param bundleValue - Current configured Bundle boundary
+   * @returns Detached exact input for ChangeSetTransaction.apply
+   */
+  async loadNoJournalApplyContinueInput(
+    reference: NoJournalApplyRecoveryReference,
+    bundleValue: unknown
+  ): Promise<ChangeSetTransactionApplyInput> {
+    this.assertNoJournalApplyRecoveryReference(reference);
+    const state = await this.readState();
+    const record = this.requireAcceptedReviewByReference(state, reference);
+    const classification = this.classifyAcceptedApplyState(state, reference.bundleId, record);
+    if (classification.kind !== "requires_decision") {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        reference.bundleId,
+        "state_not_actionable"
+      );
+    }
+    const queue = this.requireNoJournalQueue(state, reference.bundleId);
+    const claim = queue.applyClaim;
+    if (!queueClaimMatchesAcceptedRecord(claim, record)) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        reference.bundleId,
+        "queue_state_mismatch"
+      );
+    }
+    const runtimeIdentity = createNoJournalApplyRuntimeIdentity(reference.bundleId, record, claim);
+    const proof = parseApplyAuthorityRequest({
+      ...runtimeIdentity,
+      bundle: bundleValue as KnowledgeBundleConfig,
+    });
+    this.assertTransactionFileAccessAuthority(state, proof);
+    return {
+      changeSet: cloneJson(proof.changeSet),
+      bundle: cloneJson(proof.bundle),
+      jobClaim: { ...proof.jobClaim },
+      manifestCommitIntent: cloneJson(proof.manifestCommitIntent),
+      manifestCommitIntentDigest: proof.manifestCommitIntentDigest,
+    };
+  }
+
+  /**
+   * Atomically abandons one exact accepted apply before any journal can exist.
+   *
+   * The shared-envelope callback proves an empty global journal, no Queue commit
+   * marker, no source-input ledger, and exact Queue/Review/allocator authority.
+   * Manifest drift deliberately does not prevent abandonment because no write
+   * intent was published. Exact tombstone replay preserves bytes and revisions.
+   *
+   * @param reference - Opaque exact recovery reference
+   * @param requestedAt - Validated explicit decision timestamp
+   * @returns Durable abandonment receipt
+   */
+  async abandonNoJournalApply(
+    reference: NoJournalApplyRecoveryReference,
+    requestedAt: number
+  ): Promise<NoJournalApplyAbandonReceipt> {
+    this.assertNoJournalApplyRecoveryReference(reference);
+    if (!Number.isSafeInteger(requestedAt) || requestedAt < 0) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(reference.bundleId, "request_invalid");
+    }
+    return this.updateState<NoJournalApplyAbandonReceipt>((state) => {
+      const record = this.requireAcceptedReviewByReference(state, reference);
+      const classification = this.classifyAcceptedApplyState(state, reference.bundleId, record);
+      if (classification.kind === "abandoned") {
+        return {
+          value: {
+            ...classification.reference,
+            jobId: classification.jobId,
+            changeSetId: classification.changeSetId,
+            abandonedAt: classification.abandonedAt,
+          },
+        };
+      }
+      if (classification.kind !== "requires_decision") {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(
+          reference.bundleId,
+          "state_not_actionable"
+        );
+      }
+      if (state.activeTransaction !== null) {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(
+          reference.bundleId,
+          "write_evidence_conflict"
+        );
+      }
+      const queue = this.requireNoJournalQueue(state, reference.bundleId);
+      const claim = queue.applyClaim;
+      const job = queue.jobs.find((candidate) => candidate.id === record.jobClaim.jobId);
+      if (
+        !queueClaimMatchesAcceptedRecord(claim, record) ||
+        !queueJobMatchesAcceptedRecord(job, record) ||
+        (job.status !== "processing" && job.status !== "failed") ||
+        job.stage !== "applying" ||
+        queue.applyCommit !== undefined
+      ) {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(
+          reference.bundleId,
+          "queue_state_mismatch"
+        );
+      }
+      const hasSourceInputLedger = state.applyCommits.some(
+        (ledger) =>
+          ledger.bundleId === reference.bundleId &&
+          ledger.sourceId === record.jobClaim.sourceId &&
+          ledger.inputRevision === record.jobClaim.inputRevision
+      );
+      if (hasSourceInputLedger) {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(
+          reference.bundleId,
+          "write_evidence_conflict"
+        );
+      }
+      if (
+        queue.revision === Number.MAX_SAFE_INTEGER ||
+        state.revision === Number.MAX_SAFE_INTEGER
+      ) {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(
+          reference.bundleId,
+          "revision_overflow"
+        );
+      }
+
+      const abandonedAt = Math.max(requestedAt, job.updatedAt, claim.startedAt, record.acceptedAt);
+      const cancelled: KnowledgeIngestJob = {
+        id: job.id,
+        bundleId: job.bundleId,
+        sourceId: job.sourceId,
+        sourceContentHash: job.sourceContentHash,
+        pipelineFingerprint: job.pipelineFingerprint,
+        inputRevision: job.inputRevision,
+        attempt: job.attempt,
+        rerunRequested: false,
+        createdAt: job.createdAt,
+        updatedAt: abandonedAt,
+        status: "cancelled",
+        stage: "cancelled",
+        cancelledAt: abandonedAt,
+      };
+      const abandonment: IngestApplyAbandonment = {
+        jobId: claim.jobId,
+        sourceId: claim.sourceId,
+        sourceContentHash: claim.sourceContentHash,
+        pipelineFingerprint: claim.pipelineFingerprint,
+        inputRevision: claim.inputRevision,
+        attempt: claim.attempt,
+        startedAt: claim.startedAt,
+        changeSetId: record.changeSetId,
+        changeSetDigest: record.acceptedDigest,
+        proposalDigest: record.proposalDigest,
+        recordRevision: record.recordRevision,
+        manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+        acceptedAt: record.acceptedAt,
+        abandonedAt,
+      };
+      const { applyClaim: _applyClaim, ...queueWithoutClaim } = queue;
+      void _applyClaim;
+      const currentPausedAt =
+        queue.control.status === "paused" ? queue.control.pausedAt : abandonedAt;
+      const cancelledQueue: IngestQueueSnapshot = {
+        ...queueWithoutClaim,
+        revision: queue.revision + 1,
+        control: {
+          status: "paused",
+          reason: "startup_recovery",
+          pausedAt: Math.max(abandonedAt, currentPausedAt),
+          detail: "An accepted apply was explicitly abandoned before journaling",
+        },
+        jobs: queue.jobs.map((candidate) =>
+          candidate.id === cancelled.id ? cancelled : candidate
+        ),
+        applyAbandonments: [...queue.applyAbandonments, abandonment].sort(
+          (left, right) =>
+            left.abandonedAt - right.abandonedAt || compareIdentifiers(left.jobId, right.jobId)
+        ),
+      };
+      const nextQueue = this.requireQueueSnapshot(
+        reference.bundleId,
+        promoteNoJournalRerun(cancelledQueue, job.sourceId, abandonedAt)
+      );
+      const receipt: NoJournalApplyAbandonReceipt = {
+        bundleId: reference.bundleId,
+        recoveryId: reference.recoveryId,
+        jobId: job.id,
+        changeSetId: record.changeSetId,
+        abandonedAt,
+      };
+      return {
+        next: {
+          ...state,
+          revision: state.revision + 1,
+          queues: replaceBundleSlot(state.queues, reference.bundleId, nextQueue),
+        },
+        value: receipt,
+      };
+    });
   }
 
   /**
@@ -2126,6 +2717,348 @@ export class KnowledgeRuntimeStore {
     assertIdentifier(bundleId, "bundleId");
     const value = findBundleSlot(await this.readState(), collection, bundleId);
     return value === null ? null : cloneJson(value);
+  }
+
+  /**
+   * Validates one accepted startup identity before durable state is inspected.
+   *
+   * @param identity - Caller-supplied startup identity
+   */
+  private assertAcceptedReviewStartupIdentity(identity: AcceptedReviewStartupIdentity): void {
+    const value: unknown = identity;
+    if (!isRecord(value) || !isRecord(value.jobClaim)) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError("unknown", "request_invalid");
+    }
+    const claim = value.jobClaim;
+    const valid =
+      typeof value.bundleId === "string" &&
+      value.bundleId.trim().length > 0 &&
+      typeof value.changeSetId === "string" &&
+      value.changeSetId.trim().length > 0 &&
+      sha256Schema.safeParse(value.proposalDigest).success &&
+      value.recordRevision === 1 &&
+      Number.isSafeInteger(value.recordedAt) &&
+      (value.recordedAt as number) >= 0 &&
+      sha256Schema.safeParse(value.acceptedDigest).success &&
+      sha256Schema.safeParse(value.manifestCommitIntentDigest).success &&
+      Number.isSafeInteger(value.acceptedAt) &&
+      (value.acceptedAt as number) >= 0 &&
+      typeof claim.jobId === "string" &&
+      claim.jobId.trim().length > 0 &&
+      typeof claim.sourceId === "string" &&
+      claim.sourceId.trim().length > 0 &&
+      sha256Schema.safeParse(claim.sourceContentHash).success &&
+      sha256Schema.safeParse(claim.pipelineFingerprint).success &&
+      Number.isSafeInteger(claim.inputRevision) &&
+      (claim.inputRevision as number) >= 0 &&
+      Number.isSafeInteger(claim.attempt) &&
+      (claim.attempt as number) > 0;
+    if (!valid) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        typeof value.bundleId === "string" && value.bundleId.trim().length > 0
+          ? value.bundleId
+          : "unknown",
+        "request_invalid"
+      );
+    }
+  }
+
+  /**
+   * Validates one opaque recovery reference before durable state is inspected.
+   *
+   * @param reference - Caller-supplied recovery reference
+   */
+  private assertNoJournalApplyRecoveryReference(reference: NoJournalApplyRecoveryReference): void {
+    const value: unknown = reference;
+    if (
+      !isRecord(value) ||
+      typeof value.bundleId !== "string" ||
+      value.bundleId.trim().length === 0 ||
+      typeof value.recoveryId !== "string" ||
+      !/^knowledge-no-journal-[a-f0-9]{64}$/.test(value.recoveryId)
+    ) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        isRecord(value) && typeof value.bundleId === "string" && value.bundleId.trim().length > 0
+          ? value.bundleId
+          : "unknown",
+        "request_invalid"
+      );
+    }
+  }
+
+  /**
+   * Loads the exact accepted Review record represented by one startup identity.
+   *
+   * @param state - Complete atomic runtime snapshot
+   * @param identity - Exact startup identity to revalidate
+   * @returns Detached accepted Review record
+   */
+  private requireAcceptedReviewByStartupIdentity(
+    state: KnowledgeRuntimeStoreSnapshot,
+    identity: AcceptedReviewStartupIdentity
+  ): AcceptedChangeSetReviewRecord {
+    const raw = findBundleSlot(state, "reviews", identity.bundleId);
+    if (raw === null) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(identity.bundleId, "review_missing");
+    }
+    const review = this.requireReviewSnapshot(identity.bundleId, raw);
+    const record = review.records.find(
+      (candidate) => candidate.changeSetId === identity.changeSetId
+    );
+    if (!record) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        identity.bundleId,
+        "review_record_missing"
+      );
+    }
+    if (record.outcome !== "accepted" || !acceptedRecordMatchesStartupIdentity(identity, record)) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        identity.bundleId,
+        "review_record_mismatch"
+      );
+    }
+    return cloneJson(record);
+  }
+
+  /**
+   * Resolves an opaque reference back to exactly one immutable accepted record.
+   *
+   * @param state - Complete atomic runtime snapshot
+   * @param reference - Opaque Bundle-scoped recovery reference
+   * @returns Detached accepted Review record
+   */
+  private requireAcceptedReviewByReference(
+    state: KnowledgeRuntimeStoreSnapshot,
+    reference: NoJournalApplyRecoveryReference
+  ): AcceptedChangeSetReviewRecord {
+    const raw = findBundleSlot(state, "reviews", reference.bundleId);
+    if (raw === null) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(reference.bundleId, "review_missing");
+    }
+    const review = this.requireReviewSnapshot(reference.bundleId, raw);
+    const matches = review.records.filter(
+      (record): record is AcceptedChangeSetReviewRecord =>
+        record.outcome === "accepted" &&
+        createNoJournalApplyRecoveryId(reference.bundleId, record) === reference.recoveryId
+    );
+    if (matches.length !== 1) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        reference.bundleId,
+        "recovery_id_unknown"
+      );
+    }
+    return cloneJson(matches[0]);
+  }
+
+  /**
+   * Loads one strict Queue snapshot required by recovery classification.
+   *
+   * @param state - Complete atomic runtime snapshot
+   * @param bundleId - Bundle whose Queue is required
+   * @returns Detached strict current Queue state
+   */
+  private requireNoJournalQueue(
+    state: KnowledgeRuntimeStoreSnapshot,
+    bundleId: string
+  ): IngestQueueSnapshot {
+    const raw = findBundleSlot(state, "queues", bundleId);
+    if (raw === null) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(bundleId, "queue_missing");
+    }
+    return this.requireQueueSnapshot(bundleId, raw);
+  }
+
+  /**
+   * Classifies one exact accepted record from a single already-loaded envelope.
+   *
+   * @param state - Complete atomic runtime snapshot
+   * @param bundleId - Bundle containing the accepted record
+   * @param record - Exact accepted Review record
+   * @returns Stable durable phase or explicit decision candidate
+   */
+  private classifyAcceptedApplyState(
+    state: KnowledgeRuntimeStoreSnapshot,
+    bundleId: string,
+    record: AcceptedChangeSetReviewRecord
+  ): NoJournalApplyRecoveryClassification {
+    const queue = this.requireNoJournalQueue(state, bundleId);
+    const reference = createNoJournalApplyRecoveryReference(bundleId, record);
+    const job = queue.jobs.find((candidate) => candidate.id === record.jobClaim.jobId);
+    const relatedAbandonments = queue.applyAbandonments.filter(
+      (candidate) =>
+        candidate.jobId === record.jobClaim.jobId || candidate.changeSetId === record.changeSetId
+    );
+    const sourceInputLedgers = state.applyCommits.filter(
+      (ledger) =>
+        ledger.bundleId === bundleId &&
+        ledger.sourceId === record.jobClaim.sourceId &&
+        ledger.inputRevision === record.jobClaim.inputRevision
+    );
+    const matchingLedgers = sourceInputLedgers.filter((ledger) =>
+      ledgerMatchesAcceptedRecord(ledger, bundleId, record)
+    );
+    const active =
+      state.activeTransaction === null ? null : this.requireTransaction(state.activeTransaction);
+    const activeMatches =
+      active !== null && transactionMatchesAcceptedRecord(active, bundleId, record);
+    const marker = queue.applyCommit;
+    const markerRelated =
+      marker !== undefined &&
+      (marker.jobId === record.jobClaim.jobId || marker.changeSetId === record.changeSetId);
+
+    if (relatedAbandonments.length > 0) {
+      const abandonment = relatedAbandonments[0];
+      if (
+        relatedAbandonments.length !== 1 ||
+        !abandonmentMatchesAcceptedRecord(abandonment, record) ||
+        !queueJobMatchesAcceptedRecord(job, record) ||
+        job.status !== "cancelled" ||
+        sourceInputLedgers.length > 0 ||
+        activeMatches ||
+        markerRelated
+      ) {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(bundleId, "write_evidence_conflict");
+      }
+      return {
+        kind: "abandoned",
+        reference,
+        jobId: abandonment.jobId,
+        changeSetId: abandonment.changeSetId,
+        abandonedAt: abandonment.abandonedAt,
+      };
+    }
+
+    if (sourceInputLedgers.length !== matchingLedgers.length || matchingLedgers.length > 1) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(bundleId, "write_evidence_conflict");
+    }
+
+    if (markerRelated) {
+      const ledger = matchingLedgers[0];
+      if (
+        !marker ||
+        matchingLedgers.length !== 1 ||
+        !queueJobMatchesAcceptedRecord(job, record) ||
+        job.status !== "completed" ||
+        job.changeSetId !== record.changeSetId ||
+        marker.jobId !== record.jobClaim.jobId ||
+        marker.sourceId !== record.jobClaim.sourceId ||
+        marker.sourceContentHash !== record.jobClaim.sourceContentHash ||
+        marker.pipelineFingerprint !== record.jobClaim.pipelineFingerprint ||
+        marker.inputRevision !== record.jobClaim.inputRevision ||
+        marker.attempt !== record.jobClaim.attempt ||
+        marker.changeSetId !== record.changeSetId ||
+        marker.changeSetDigest !== record.acceptedDigest ||
+        marker.transactionId !== ledger.transactionId ||
+        marker.commitRevision !== ledger.commitRevision ||
+        marker.committedAt !== ledger.recordedAt ||
+        (active !== null &&
+          (!activeMatches ||
+            active.phase !== "committed" ||
+            active.transactionId !== marker.transactionId))
+      ) {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(bundleId, "write_evidence_conflict");
+      }
+      return { kind: "finalizing", reference, transactionId: marker.transactionId };
+    }
+
+    if (matchingLedgers.length === 1) {
+      const ledger = matchingLedgers[0];
+      if (activeMatches) {
+        if (
+          active?.phase !== "committed" ||
+          active.transactionId !== ledger.transactionId ||
+          !queueClaimMatchesAcceptedRecord(queue.applyClaim, record) ||
+          !queueJobMatchesAcceptedRecord(job, record) ||
+          (job.status !== "processing" && job.status !== "failed") ||
+          job.stage !== "applying"
+        ) {
+          throw new KnowledgeNoJournalApplyRecoveryConflictError(
+            bundleId,
+            "write_evidence_conflict"
+          );
+        }
+        assertApplyCommitRuntimeAuthority(state, active);
+        return { kind: "finalizing", reference, transactionId: ledger.transactionId };
+      }
+      if (
+        !queueJobMatchesAcceptedRecord(job, record) ||
+        job.status !== "completed" ||
+        job.changeSetId !== record.changeSetId
+      ) {
+        throw new KnowledgeNoJournalApplyRecoveryConflictError(bundleId, "write_evidence_conflict");
+      }
+      return { kind: "committed", reference, transactionId: ledger.transactionId };
+    }
+
+    if (activeMatches && active) {
+      if (active.phase === "prepared" || active.phase === "applying") {
+        this.assertTransactionFileAccessAuthority(state, active);
+        return {
+          kind: "active",
+          reference,
+          transactionId: active.transactionId,
+          phase: active.phase,
+        };
+      }
+      if (active.phase === "recovery_required") {
+        assertApplyCommitRuntimeAuthority(state, active);
+        return {
+          kind: "blocked",
+          reference,
+          transactionId: active.transactionId,
+          reason: "transaction_recovery_required",
+        };
+      }
+      assertApplyCommitRuntimeAuthority(state, active);
+      return { kind: "finalizing", reference, transactionId: active.transactionId };
+    }
+
+    const pending = queue.pendingReviews.find(
+      (candidate) => candidate.jobId === record.jobClaim.jobId
+    );
+    if (
+      queueJobMatchesAcceptedRecord(job, record) &&
+      job.status === "awaiting_review" &&
+      job.stage === "review" &&
+      job.changeSetId === record.changeSetId &&
+      pending?.kind === "durable" &&
+      pending.changeSetId === record.changeSetId &&
+      pending.proposalDigest === record.proposalDigest &&
+      pending.reviewRecordRevision === 0 &&
+      pending.recordedAt === record.recordedAt &&
+      queue.applyClaim?.jobId !== record.jobClaim.jobId
+    ) {
+      return {
+        kind: "accepted_not_started",
+        bundleId,
+        changeSetId: record.changeSetId,
+        jobId: record.jobClaim.jobId,
+      };
+    }
+
+    const claim = queue.applyClaim;
+    if (
+      !queueClaimMatchesAcceptedRecord(claim, record) ||
+      !queueJobMatchesAcceptedRecord(job, record) ||
+      (job.status !== "processing" && job.status !== "failed") ||
+      job.stage !== "applying"
+    ) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(bundleId, "queue_state_mismatch");
+    }
+    const runtimeIdentity = createNoJournalApplyRuntimeIdentity(bundleId, record, claim);
+    assertApplyCommitRuntimeAuthority(state, runtimeIdentity);
+    if (active) {
+      return {
+        kind: "blocked",
+        reference,
+        transactionId: active.transactionId,
+        reason: "other_transaction_active",
+      };
+    }
+    return {
+      kind: "requires_decision",
+      candidate: createNoJournalApplyRecoveryCandidate(bundleId, record, claim),
+    };
   }
 
   /** Reads and strictly validates the complete atomic runtime envelope. */
@@ -2470,6 +3403,33 @@ export class KnowledgeRuntimeApplyAuthorityPort implements ChangeSetTransactionA
   /** Re-proves one exact apply identity without accessing Wiki files. */
   verify(request: ChangeSetTransactionAuthorityRequest): Promise<void> {
     return this.runtime.verifyApplyAuthority(request);
+  }
+}
+
+/** No-journal recovery state facade backed by the shared atomic runtime envelope. */
+export class KnowledgeRuntimeNoJournalApplyRecoveryPort implements NoJournalApplyRecoveryStatePort {
+  /** Creates a no-journal recovery facade over the shared runtime store. */
+  constructor(private readonly runtime: KnowledgeRuntimeStore) {}
+
+  /** Classifies one accepted Review identity from one atomic runtime snapshot. */
+  classify(identity: AcceptedReviewStartupIdentity): Promise<NoJournalApplyRecoveryClassification> {
+    return this.runtime.classifyNoJournalApplyRecovery(identity);
+  }
+
+  /** Reloads and fully re-proves one continuation without observing Wiki files. */
+  loadContinueInput(
+    reference: NoJournalApplyRecoveryReference,
+    bundle: unknown
+  ): Promise<ChangeSetTransactionApplyInput> {
+    return this.runtime.loadNoJournalApplyContinueInput(reference, bundle);
+  }
+
+  /** Atomically records one exact pre-journal abandonment or replays its receipt. */
+  abandon(
+    reference: NoJournalApplyRecoveryReference,
+    abandonedAt: number
+  ): Promise<NoJournalApplyAbandonReceipt> {
+    return this.runtime.abandonNoJournalApply(reference, abandonedAt);
   }
 }
 

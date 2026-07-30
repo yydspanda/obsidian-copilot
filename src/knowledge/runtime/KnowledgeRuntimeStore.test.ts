@@ -40,12 +40,14 @@ import {
   ReviewStorageRevisionConflictError,
   type ChangeSetReviewSnapshot,
 } from "@/knowledge/review/ReviewStorage";
+import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
   KnowledgeApplyCommitAuthorityError,
   KnowledgeApplyCommitLedgerConflictError,
   KnowledgeApplyCommitManifestConflictError,
   KnowledgeApplyCommitProofError,
+  KnowledgeNoJournalApplyRecoveryConflictError,
   KnowledgeRuntimeApplyAuthorityPort,
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
@@ -54,6 +56,7 @@ import {
   KnowledgeRuntimeManifestProtectedStateError,
   KnowledgeRuntimeManifestReservationError,
   KnowledgeRuntimeMigrationUnsafeError,
+  KnowledgeRuntimeNoJournalApplyRecoveryPort,
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
@@ -169,6 +172,7 @@ function createQueueSnapshot(revision: number, bundleId = "personal"): IngestQue
     sourceHighWatermarks: [],
     pendingReviews: [],
     reviewRejections: [],
+    applyAbandonments: [],
   };
 }
 
@@ -853,6 +857,7 @@ function createApplyAuthoritySlots(
     ],
     pendingReviews: [],
     reviewRejections: [],
+    applyAbandonments: [],
     applyClaim: {
       ...journal.jobClaim,
       reviewedChangeSet: {
@@ -933,6 +938,7 @@ function createPendingApplyCommitQueue(
     ],
     pendingReviews: [],
     reviewRejections: [],
+    applyAbandonments: [],
     applyCommit: {
       transactionId: receipt.transactionId,
       changeSetId: receipt.changeSetId,
@@ -963,11 +969,13 @@ function createLegacyReviewedActiveState(
   if (!claim?.acceptedReview) {
     throw new Error("Expected reviewed apply authority fixture");
   }
+  const { applyAbandonments: _applyAbandonments, ...queueBeforeAbandonmentHistory } = queue;
   const { manifestCommitIntentDigest: _manifestCommitIntentDigest, ...legacyAcceptedReview } =
     claim.acceptedReview;
+  void _applyAbandonments;
   void _manifestCommitIntentDigest;
   const legacyQueue = {
-    ...queue,
+    ...queueBeforeAbandonmentHistory,
     version: 3,
     applyClaim: {
       ...claim,
@@ -1021,6 +1029,7 @@ async function createHarness(): Promise<{
   queue: KnowledgeRuntimeQueueStorage;
   review: KnowledgeRuntimeReviewStorage;
   manifest: KnowledgeRuntimeManifestStorage;
+  recovery: KnowledgeRuntimeNoJournalApplyRecoveryPort;
   transaction: KnowledgeRuntimeTransactionStorage;
   revisions: KnowledgeRuntimeInputRevisionAllocator;
 }> {
@@ -1033,6 +1042,7 @@ async function createHarness(): Promise<{
     queue: new KnowledgeRuntimeQueueStorage(runtime),
     review: new KnowledgeRuntimeReviewStorage(runtime),
     manifest: new KnowledgeRuntimeManifestStorage(runtime),
+    recovery: new KnowledgeRuntimeNoJournalApplyRecoveryPort(runtime),
     transaction: new KnowledgeRuntimeTransactionStorage(runtime),
     revisions: new KnowledgeRuntimeInputRevisionAllocator(runtime),
   };
@@ -1078,6 +1088,95 @@ async function persistPreparedApplyAuthority(
       sourceId: journal.jobClaim.sourceId,
     });
   }
+}
+
+/**
+ * Reconstructs the startup-safe identity retained by one accepted Review record.
+ *
+ * @param review - Strict review snapshot containing exactly one accepted record
+ * @returns Detached identity suitable for no-journal classification
+ */
+function createAcceptedStartupIdentity(
+  review: ChangeSetReviewSnapshot
+): AcceptedReviewStartupIdentity {
+  const record = review.records[0];
+  if (!record || record.outcome !== "accepted") {
+    throw new Error("Expected one accepted Review record fixture");
+  }
+  return {
+    bundleId: review.bundleId,
+    changeSetId: record.changeSetId,
+    proposalDigest: record.proposalDigest,
+    recordRevision: record.recordRevision,
+    recordedAt: record.recordedAt,
+    acceptedDigest: record.acceptedDigest,
+    manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+    acceptedAt: record.acceptedAt,
+    jobClaim: { ...record.jobClaim },
+  };
+}
+
+/**
+ * Creates exact accepted Queue, Review, Manifest, and allocator state without a journal.
+ *
+ * @param transactionId - Fixture namespace used by the accepted ChangeSet
+ * @returns Initialized runtime facades plus the durable startup identity and source proof
+ */
+async function createNoJournalRecoveryHarness(transactionId = "transaction-no-journal") {
+  const harness = await createHarness();
+  const manifest = createRegisteredManifest();
+  const journal = createPreparedApplyJournal(manifest, transactionId);
+  const authority = createApplyAuthoritySlots(manifest, journal);
+  const review = authority.reviews[0].value as ChangeSetReviewSnapshot;
+  const state: KnowledgeRuntimeStoreSnapshot = {
+    ...createEmptyKnowledgeRuntimeStoreSnapshot(),
+    ...authority,
+    revision: 10,
+    manifests: [{ bundleId: manifest.bundleId, value: manifest }],
+    activeTransaction: null,
+  };
+  harness.file.replaceContent(JSON.stringify(state));
+  return {
+    ...harness,
+    identity: createAcceptedStartupIdentity(review),
+    journal,
+    manifest,
+  };
+}
+
+/**
+ * Converts the exact applying Queue attempt into startup-recovered failed state.
+ *
+ * @param state - Runtime snapshot carrying one applying no-journal attempt
+ * @param recoveredAt - Monotonic startup recovery timestamp
+ */
+function markNoJournalApplyFailed(state: KnowledgeRuntimeStoreSnapshot, recoveredAt: number): void {
+  const queue = state.queues[0].value as IngestQueueSnapshot;
+  const applying = queue.jobs[0];
+  queue.revision += 1;
+  queue.control = {
+    status: "paused",
+    reason: "recovery_required",
+    pausedAt: recoveredAt,
+    detail: "Interrupted apply requires recovery",
+  };
+  queue.jobs = [
+    {
+      ...applying,
+      rerunRequested: false,
+      updatedAt: recoveredAt,
+      status: "failed",
+      stage: "applying",
+      failure: {
+        code: "interrupted_apply_requires_recovery",
+        message: "Interrupted apply requires recovery",
+        retryable: false,
+        occurredAt: recoveredAt,
+      },
+    },
+  ];
+  delete (queue.jobs[0] as unknown as { startedAt?: number }).startedAt;
+  state.revision += 1;
 }
 
 describe("KnowledgeRuntimeStore", () => {
@@ -1241,6 +1340,465 @@ describe("KnowledgeRuntimeStore", () => {
       reason,
     });
     expect(await file.read()).toBe(before);
+  });
+
+  it("classifies exact processing and startup-recovered applying attempts as requiring a decision", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+
+    const processing = await harness.recovery.classify(harness.identity);
+    expect(processing.kind).toBe("requires_decision");
+    if (processing.kind !== "requires_decision") {
+      throw new Error("Expected an explicit no-journal recovery decision");
+    }
+    expect(processing.candidate).toMatchObject({
+      bundleId: "personal",
+      jobId: harness.journal.jobClaim.jobId,
+      changeSetId: harness.journal.changeSetId,
+      sourceId: harness.journal.jobClaim.sourceId,
+      inputRevision: harness.journal.jobClaim.inputRevision,
+      startedAt: harness.journal.jobClaim.startedAt,
+    });
+
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    markNoJournalApplyFailed(state, 220);
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
+      kind: "requires_decision",
+      candidate: processing.candidate,
+    });
+  });
+
+  it("keeps an accepted Review awaiting Queue apply classified as not started", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    const applying = queue.jobs[0];
+    const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+    const record = review.records[0];
+    if (!record || record.outcome !== "accepted") {
+      throw new Error("Expected accepted Review fixture");
+    }
+    queue.jobs = [
+      {
+        id: applying.id,
+        bundleId: applying.bundleId,
+        sourceId: applying.sourceId,
+        sourceContentHash: applying.sourceContentHash,
+        pipelineFingerprint: applying.pipelineFingerprint,
+        inputRevision: applying.inputRevision,
+        attempt: applying.attempt,
+        rerunRequested: false,
+        createdAt: applying.createdAt,
+        updatedAt: record.recordedAt,
+        status: "awaiting_review",
+        stage: "review",
+        changeSetId: record.changeSetId,
+      },
+    ];
+    queue.pendingReviews = [
+      {
+        kind: "durable",
+        jobId: applying.id,
+        changeSetId: record.changeSetId,
+        proposalDigest: record.proposalDigest,
+        reviewRecordRevision: 0,
+        recordedAt: record.recordedAt,
+      },
+    ];
+    delete queue.applyClaim;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
+      kind: "accepted_not_started",
+      bundleId: "personal",
+      changeSetId: harness.journal.changeSetId,
+      jobId: harness.journal.jobClaim.jobId,
+    });
+  });
+
+  it("classifies exact active phases and blocks both recovery-required and unrelated journals", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const initial = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    initial.activeTransaction = harness.journal;
+    harness.file.replaceContent(JSON.stringify(initial));
+
+    const prepared = await harness.recovery.classify(harness.identity);
+    expect(prepared).toMatchObject({
+      kind: "active",
+      transactionId: harness.journal.transactionId,
+      phase: "prepared",
+    });
+    if (prepared.kind !== "active") {
+      throw new Error("Expected active prepared classification");
+    }
+
+    const applying: ChangeSetTransactionJournal = {
+      ...harness.journal,
+      revision: 1,
+      phase: "applying",
+      updatedAt: harness.journal.updatedAt + 1,
+    };
+    initial.activeTransaction = applying;
+    harness.file.replaceContent(JSON.stringify(initial));
+    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
+      ...prepared,
+      phase: "applying",
+    });
+
+    initial.activeTransaction = {
+      ...applying,
+      revision: 2,
+      phase: "recovery_required",
+      conflicts: [
+        {
+          path: applying.targets[0].path,
+          code: "file_state_conflict",
+          detectedAt: applying.updatedAt + 1,
+        },
+      ],
+      updatedAt: applying.updatedAt + 1,
+    };
+    harness.file.replaceContent(JSON.stringify(initial));
+    await expect(harness.recovery.classify(harness.identity)).resolves.toMatchObject({
+      kind: "blocked",
+      transactionId: harness.journal.transactionId,
+      reason: "transaction_recovery_required",
+    });
+
+    const unrelated = await createNoJournalRecoveryHarness("transaction-blocked-candidate");
+    const unrelatedState = JSON.parse(await unrelated.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    unrelatedState.activeTransaction = createPreparedJournal("unrelated-global-transaction");
+    unrelated.file.replaceContent(JSON.stringify(unrelatedState));
+    await expect(unrelated.recovery.classify(unrelated.identity)).resolves.toMatchObject({
+      kind: "blocked",
+      transactionId: "unrelated-global-transaction",
+      reason: "other_transaction_active",
+    });
+  });
+
+  it("distinguishes finalizing commit evidence from a fully acknowledged historical commit", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+    const identity = createAcceptedStartupIdentity(review);
+    const recovery = new KnowledgeRuntimeNoJournalApplyRecoveryPort(harness.runtime);
+    state.queues[0].value = createPendingApplyCommitQueue(harness.journal, harness.receipt);
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await expect(recovery.classify(identity)).resolves.toMatchObject({
+      kind: "finalizing",
+      transactionId: harness.journal.transactionId,
+    });
+
+    const historical = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const completedQueue = historical.queues[0].value as IngestQueueSnapshot;
+    delete completedQueue.applyCommit;
+    completedQueue.control = { status: "running" };
+    historical.activeTransaction = null;
+    historical.revision += 1;
+    completedQueue.revision += 1;
+    harness.file.replaceContent(JSON.stringify(historical));
+
+    await expect(recovery.classify(identity)).resolves.toMatchObject({
+      kind: "committed",
+      transactionId: harness.journal.transactionId,
+    });
+  });
+
+  it("reloads exact continuation input but leaves stale-Manifest attempts abandonable", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const classification = await harness.recovery.classify(harness.identity);
+    if (classification.kind !== "requires_decision") {
+      throw new Error("Expected no-journal decision candidate");
+    }
+    const reference = classification.candidate;
+
+    await expect(harness.recovery.loadContinueInput(reference, createBundle())).resolves.toEqual({
+      changeSet: harness.journal.changeSet,
+      bundle: harness.journal.bundle,
+      jobClaim: harness.journal.jobClaim,
+      manifestCommitIntent: harness.journal.manifestCommitIntent,
+      manifestCommitIntentDigest: harness.journal.manifestCommitIntentDigest,
+    });
+
+    const stale = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const staleManifest = stale.manifests[0].value as SourceManifest;
+    staleManifest.revision += 1;
+    harness.file.replaceContent(JSON.stringify(stale));
+
+    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual(classification);
+    await expect(
+      harness.recovery.loadContinueInput(reference, createBundle())
+    ).rejects.toMatchObject({
+      name: KnowledgeApplyCommitManifestConflictError.name,
+      reason: "intent_invalid",
+    });
+    await expect(harness.recovery.abandon(reference, 300)).resolves.toMatchObject({
+      bundleId: reference.bundleId,
+      recoveryId: reference.recoveryId,
+      jobId: harness.journal.jobClaim.jobId,
+      changeSetId: harness.journal.changeSetId,
+      abandonedAt: 300,
+    });
+  });
+
+  it("atomically abandons an exact apply while retaining immutable review evidence", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const classification = await harness.recovery.classify(harness.identity);
+    if (classification.kind !== "requires_decision") {
+      throw new Error("Expected no-journal decision candidate");
+    }
+    const before = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const beforeReview = before.reviews[0].value;
+
+    const receipt = await harness.recovery.abandon(classification.candidate, 300);
+    const abandonedText = await harness.file.read();
+    const abandoned = JSON.parse(abandonedText) as KnowledgeRuntimeStoreSnapshot;
+    const queue = abandoned.queues[0].value as IngestQueueSnapshot;
+
+    expect(receipt).toEqual({
+      bundleId: "personal",
+      recoveryId: classification.candidate.recoveryId,
+      jobId: harness.journal.jobClaim.jobId,
+      changeSetId: harness.journal.changeSetId,
+      abandonedAt: 300,
+    });
+    expect(queue.control).toMatchObject({
+      status: "paused",
+      reason: "startup_recovery",
+      pausedAt: 300,
+    });
+    expect(queue.jobs).toEqual([
+      expect.objectContaining({
+        id: harness.journal.jobClaim.jobId,
+        status: "cancelled",
+        stage: "cancelled",
+        rerunRequested: false,
+        cancelledAt: 300,
+      }),
+    ]);
+    expect(queue.applyClaim).toBeUndefined();
+    expect(queue.applyAbandonments).toEqual([
+      {
+        ...harness.journal.jobClaim,
+        changeSetId: harness.journal.changeSetId,
+        changeSetDigest: harness.journal.changeSetDigest,
+        proposalDigest: harness.identity.proposalDigest,
+        recordRevision: 1,
+        manifestCommitIntentDigest: harness.journal.manifestCommitIntentDigest,
+        acceptedAt: harness.identity.acceptedAt,
+        abandonedAt: 300,
+      },
+    ]);
+    expect(abandoned.reviews[0].value).toEqual(beforeReview);
+    expect(abandoned.activeTransaction).toBeNull();
+
+    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
+      kind: "abandoned",
+      reference: {
+        bundleId: "personal",
+        recoveryId: classification.candidate.recoveryId,
+      },
+      jobId: harness.journal.jobClaim.jobId,
+      changeSetId: harness.journal.changeSetId,
+      abandonedAt: 300,
+    });
+    await expect(harness.recovery.abandon(classification.candidate, 999)).resolves.toEqual(receipt);
+    expect(await harness.file.read()).toBe(abandonedText);
+  });
+
+  it("converges an abandonment after the atomic file commits and then rejects", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const classification = await harness.recovery.classify(harness.identity);
+    if (classification.kind !== "requires_decision") {
+      throw new Error("Expected no-journal decision candidate");
+    }
+    harness.file.throwAfterCommitOnNextWrite();
+
+    await expect(harness.recovery.abandon(classification.candidate, 300)).rejects.toThrow(
+      "Simulated post-commit transport failure"
+    );
+    const committedText = await harness.file.read();
+    await expect(harness.recovery.classify(harness.identity)).resolves.toMatchObject({
+      kind: "abandoned",
+      abandonedAt: 300,
+    });
+    await expect(harness.recovery.abandon(classification.candidate, 400)).resolves.toMatchObject({
+      recoveryId: classification.candidate.recoveryId,
+      abandonedAt: 300,
+    });
+    expect(await harness.file.read()).toBe(committedText);
+  });
+
+  it("fails closed for stale references, startup identities, and conflicting source-input ledgers", async () => {
+    const staleReference = await createNoJournalRecoveryHarness("transaction-stale-reference");
+    const classification = await staleReference.recovery.classify(staleReference.identity);
+    if (classification.kind !== "requires_decision") {
+      throw new Error("Expected no-journal decision candidate");
+    }
+    const beforeReference = await staleReference.file.read();
+    await expect(
+      staleReference.recovery.abandon(
+        {
+          ...classification.candidate,
+          recoveryId: `knowledge-no-journal-${HASH_C}`,
+        },
+        300
+      )
+    ).rejects.toMatchObject({
+      name: KnowledgeNoJournalApplyRecoveryConflictError.name,
+      reason: "recovery_id_unknown",
+    });
+    expect(await staleReference.file.read()).toBe(beforeReference);
+
+    await expect(
+      staleReference.recovery.classify({
+        ...staleReference.identity,
+        acceptedDigest: HASH_C,
+      })
+    ).rejects.toMatchObject({
+      name: KnowledgeNoJournalApplyRecoveryConflictError.name,
+      reason: "review_record_mismatch",
+    });
+
+    const ledgerHarness = await createApplyHarness(createRegisteredManifest());
+    await ledgerHarness.port.recordCommitted(ledgerHarness.journal, ledgerHarness.receipt);
+    const ledgerState = JSON.parse(
+      await ledgerHarness.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+    const ledgerIdentity = createAcceptedStartupIdentity(
+      ledgerState.reviews[0].value as ChangeSetReviewSnapshot
+    );
+    ledgerState.activeTransaction = null;
+    ledgerState.applyCommits[0].changeSetDigest = HASH_C;
+    ledgerHarness.file.replaceContent(JSON.stringify(ledgerState));
+    const ledgerBefore = await ledgerHarness.file.read();
+
+    await expect(
+      new KnowledgeRuntimeNoJournalApplyRecoveryPort(ledgerHarness.runtime).classify(ledgerIdentity)
+    ).rejects.toMatchObject({
+      name: KnowledgeNoJournalApplyRecoveryConflictError.name,
+      reason: "write_evidence_conflict",
+    });
+    expect(await ledgerHarness.file.read()).toBe(ledgerBefore);
+
+    const abandonedHarness = await createNoJournalRecoveryHarness(
+      "transaction-abandoned-ledger-conflict"
+    );
+    const abandonedClassification = await abandonedHarness.recovery.classify(
+      abandonedHarness.identity
+    );
+    if (abandonedClassification.kind !== "requires_decision") {
+      throw new Error("Expected no-journal decision candidate");
+    }
+    await abandonedHarness.recovery.abandon(abandonedClassification.candidate, 300);
+    const abandonedState = JSON.parse(
+      await abandonedHarness.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+    abandonedState.manifests = ledgerState.manifests;
+    abandonedState.applyCommits = ledgerState.applyCommits;
+    abandonedHarness.file.replaceContent(JSON.stringify(abandonedState));
+    const abandonedBefore = await abandonedHarness.file.read();
+
+    await expect(
+      abandonedHarness.recovery.classify(abandonedHarness.identity)
+    ).rejects.toMatchObject({
+      name: KnowledgeNoJournalApplyRecoveryConflictError.name,
+      reason: "write_evidence_conflict",
+    });
+    expect(await abandonedHarness.file.read()).toBe(abandonedBefore);
+  });
+
+  it("serializes prepared publication against abandonment without split-brain evidence", async () => {
+    const harness = await createNoJournalRecoveryHarness("transaction-racing-apply");
+    const classification = await harness.recovery.classify(harness.identity);
+    if (classification.kind !== "requires_decision") {
+      throw new Error("Expected no-journal decision candidate");
+    }
+
+    const results = await Promise.allSettled([
+      harness.recovery.abandon(classification.candidate, 300),
+      harness.transaction.writeActive(harness.journal, null),
+    ]);
+    const fulfilled = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(state.activeTransaction !== null && queue.applyAbandonments.length > 0).toBe(false);
+    expect(
+      state.activeTransaction !== null ||
+        (queue.applyAbandonments.length === 1 && queue.jobs[0].status === "cancelled")
+    ).toBe(true);
+  });
+
+  it("abandons only the old attempt while preserving its promoted successor and latest rerun", async () => {
+    const harness = await createNoJournalRecoveryHarness("transaction-three-generation");
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    const oldApply = queue.jobs[0];
+    markNoJournalApplyFailed(state, 220);
+    queue.jobs.push({
+      id: "job-successor",
+      bundleId: oldApply.bundleId,
+      sourceId: oldApply.sourceId,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: oldApply.pipelineFingerprint,
+      inputRevision: 2,
+      attempt: 0,
+      rerunRequested: true,
+      createdAt: 180,
+      updatedAt: 220,
+      status: "pending",
+      stage: "queued",
+    });
+    queue.reruns = [
+      {
+        jobId: "job-latest",
+        sourceId: oldApply.sourceId,
+        sourceContentHash: HASH_B,
+        pipelineFingerprint: oldApply.pipelineFingerprint,
+        inputRevision: 3,
+        requestedAt: 200,
+        updatedAt: 220,
+      },
+    ];
+    queue.sourceHighWatermarks[0] = {
+      sourceId: oldApply.sourceId,
+      sourceContentHash: HASH_B,
+      pipelineFingerprint: oldApply.pipelineFingerprint,
+      inputRevision: 3,
+      observedAt: 220,
+    };
+    state.inputRevisions[0].sources[0].inputRevision = 3;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    const classification = await harness.recovery.classify(harness.identity);
+    if (classification.kind !== "requires_decision") {
+      throw new Error("Expected no-journal decision candidate");
+    }
+    await harness.recovery.abandon(classification.candidate, 300);
+    const abandoned = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const abandonedQueue = abandoned.queues[0].value as IngestQueueSnapshot;
+
+    expect(abandonedQueue.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: oldApply.id, status: "cancelled" }),
+        expect.objectContaining({
+          id: "job-successor",
+          status: "pending",
+          inputRevision: 2,
+          rerunRequested: true,
+        }),
+      ])
+    );
+    expect(abandonedQueue.reruns).toEqual([
+      expect.objectContaining({ jobId: "job-latest", inputRevision: 3 }),
+    ]);
   });
 
   it("blocks legacy reviewed prepared and applying recovery before any Wiki file access", async () => {

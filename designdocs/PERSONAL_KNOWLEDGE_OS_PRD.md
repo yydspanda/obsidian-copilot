@@ -46,7 +46,7 @@ Primary platform: Obsidian Desktop on Windows
 ### 2.4 当前证据
 
 - 用户明确希望把当前项目长期作为自己的助手、笔记和知识引擎，优先把个人体验做到最好。
-- 当前分支已经具备成熟 Chat、上下文、Search v3、文件解析，以及 Source Manifest、Queue/Transaction/Compiler/Review Core、strict runtime state foundation、create/update 文件 adapter 代码和最小 Windows Knowledge Studio shell。Windows 启动只初始化私有 runtime state；真实 workflow coordinator、Windows 实机验收、safe delete、Chat 入口、查询闭环和启动恢复仍未接通。
+- 当前分支已经具备成熟 Chat、上下文、Search v3、文件解析，以及 Source Manifest、Queue/Transaction/Compiler/Review Core、strict runtime state foundation、no-journal classify/continue/abandon Core、create/update 文件 adapter 代码和最小 Windows Knowledge Studio shell。Windows 启动只初始化私有 runtime state；真实 workflow coordinator、恢复 UI、Windows 实机验收、safe delete、Chat 入口、查询闭环和启动恢复接线仍未完成。
 - 对 `llm_wiki`、`llm-wiki-compiler`、`claude-obsidian`、OKF 和 Graphiti 的代码审计显示，优秀项目正在共同收敛到两阶段摄入、增量 manifest、持久队列、来源追踪、渐进检索、审核和维护闭环。
 
 ## 3. Target User and Jobs-to-be-Done

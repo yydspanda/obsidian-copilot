@@ -10,7 +10,7 @@ import type {
 import { validateKnowledgeIngestJob } from "@/knowledge/model/validation";
 
 /** Current version of the persisted ingest queue snapshot. */
-export const INGEST_QUEUE_VERSION = 4 as const;
+export const INGEST_QUEUE_VERSION = 5 as const;
 
 /** Durable reason that prevents a Bundle queue from claiming more work. */
 export type IngestQueuePauseReason =
@@ -99,6 +99,17 @@ export interface IngestApplyCommitMarker extends IngestApplyJobClaim {
   committedAt: number;
 }
 
+/** Durable proof that one accepted apply was explicitly abandoned before journaling. */
+export interface IngestApplyAbandonment extends IngestApplyJobClaim {
+  changeSetId: string;
+  changeSetDigest: string;
+  proposalDigest: string;
+  recordRevision: 1;
+  manifestCommitIntentDigest: string;
+  acceptedAt: number;
+  abandonedAt: number;
+}
+
 /** Durable proof that one exact review proposal was explicitly rejected. */
 export interface IngestReviewRejection {
   jobId: string;
@@ -141,6 +152,7 @@ export interface IngestQueueSnapshot {
   sourceHighWatermarks: IngestSourceHighWatermark[];
   pendingReviews: IngestPendingReview[];
   reviewRejections: IngestReviewRejection[];
+  applyAbandonments: IngestApplyAbandonment[];
   applyClaim?: IngestApplyClaimMarker;
   applyCommit?: IngestApplyCommitMarker;
 }
@@ -275,6 +287,21 @@ interface LegacyIngestQueueSnapshotV3 {
   applyCommit?: IngestApplyCommitMarker;
 }
 
+/** Complete version-4 snapshot before durable apply-abandonment history was retained. */
+interface LegacyIngestQueueSnapshotV4 {
+  version: 4;
+  bundleId: string;
+  revision: number;
+  control: IngestQueueControl;
+  jobs: KnowledgeIngestJob[];
+  reruns: IngestRerunRequest[];
+  sourceHighWatermarks: IngestSourceHighWatermark[];
+  pendingReviews: IngestPendingReview[];
+  reviewRejections: IngestReviewRejection[];
+  applyClaim?: IngestApplyClaimMarker;
+  applyCommit?: IngestApplyCommitMarker;
+}
+
 const legacyQueueControlSchema: z.ZodType<LegacyIngestQueueControl> = z.discriminatedUnion(
   "status",
   [
@@ -403,6 +430,19 @@ const applyCommitMarkerSchema: z.ZodType<IngestApplyCommitMarker> = z
   })
   .strict();
 
+const applyAbandonmentSchema: z.ZodType<IngestApplyAbandonment> = z
+  .object({
+    ...applyJobClaimShape,
+    changeSetId: nonEmptyStringSchema,
+    changeSetDigest: sha256Schema,
+    proposalDigest: sha256Schema,
+    recordRevision: z.literal(1),
+    manifestCommitIntentDigest: sha256Schema,
+    acceptedAt: nonNegativeIntegerSchema,
+    abandonedAt: nonNegativeIntegerSchema,
+  })
+  .strict();
+
 const reviewRejectionSchema: z.ZodType<IngestReviewRejection> = z
   .object({
     jobId: nonEmptyStringSchema,
@@ -479,10 +519,27 @@ const legacyIngestQueueSnapshotV3Schema: z.ZodType<LegacyIngestQueueSnapshotV3> 
   })
   .strict();
 
+/** Strict read-only schema for a version-4 queue snapshot. */
+const legacyIngestQueueSnapshotV4Schema: z.ZodType<LegacyIngestQueueSnapshotV4> = z
+  .object({
+    version: z.literal(4),
+    bundleId: nonEmptyStringSchema,
+    revision: nonNegativeIntegerSchema,
+    control: queueControlSchema,
+    jobs: z.array(knowledgeIngestJobSchema),
+    reruns: z.array(rerunRequestSchema),
+    sourceHighWatermarks: z.array(sourceHighWatermarkSchema),
+    pendingReviews: z.array(pendingReviewSchema),
+    reviewRejections: z.array(reviewRejectionSchema),
+    applyClaim: applyClaimMarkerSchema.optional(),
+    applyCommit: applyCommitMarkerSchema.optional(),
+  })
+  .strict();
+
 /**
- * Strict runtime schema for a complete version-4 ingest queue snapshot.
+ * Strict runtime schema for a complete version-5 ingest queue snapshot.
  *
- * Version 4 intentionally has no extension bag. Every new persisted field
+ * Version 5 intentionally has no extension bag. Every new persisted field
  * requires another version and an explicit read migration.
  */
 export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
@@ -496,6 +553,7 @@ export const ingestQueueSnapshotSchema: z.ZodType<IngestQueueSnapshot> = z
     sourceHighWatermarks: z.array(sourceHighWatermarkSchema),
     pendingReviews: z.array(pendingReviewSchema),
     reviewRejections: z.array(reviewRejectionSchema),
+    applyAbandonments: z.array(applyAbandonmentSchema),
     applyClaim: applyClaimMarkerSchema.optional(),
     applyCommit: applyCommitMarkerSchema.optional(),
   })
@@ -544,6 +602,18 @@ function isLegacyVersionTwoSnapshot(value: unknown): boolean {
 function isLegacyVersionThreeSnapshot(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
     ? (value as { version?: unknown }).version === 3
+    : false;
+}
+
+/**
+ * Reports whether unknown persisted JSON declares the legacy version-4 format.
+ *
+ * @param value - Untrusted queue JSON
+ * @returns Whether the top-level version discriminator is exactly four
+ */
+function isLegacyVersionFourSnapshot(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "version" in value
+    ? (value as { version?: unknown }).version === 4
     : false;
 }
 
@@ -610,10 +680,10 @@ function deriveLegacyPendingReviews(
 }
 
 /**
- * Converts one strictly parsed version-1 snapshot into detached version-4 state.
+ * Converts one strictly parsed version-1 snapshot into detached current state.
  *
  * @param legacy - Valid version-1 persisted queue
- * @returns Equivalent version-4 queue without review-rejection history
+ * @returns Equivalent current queue without review-rejection or apply-abandonment history
  */
 function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQueueSnapshot {
   const applying = legacy.jobs.find(
@@ -630,6 +700,7 @@ function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQ
     sourceHighWatermarks: deriveLegacySourceHighWatermarks(legacy),
     pendingReviews: deriveLegacyPendingReviews(legacy.jobs, 1),
     reviewRejections: [],
+    applyAbandonments: [],
     ...(applying
       ? {
           applyClaim: {
@@ -647,13 +718,13 @@ function migrateVersionOneSnapshot(legacy: LegacyIngestQueueSnapshotV1): IngestQ
 }
 
 /**
- * Converts one strictly parsed version-2 snapshot into detached version-4 state.
+ * Converts one strictly parsed version-2 snapshot into detached current state.
  *
  * Version 2 predates durable review rejection identity, so migration starts
  * that append-only audit collection empty without inferring prior decisions.
  *
  * @param legacy - Valid version-2 persisted queue
- * @returns Equivalent version-4 queue
+ * @returns Equivalent current queue
  */
 function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQueueSnapshot {
   return {
@@ -661,6 +732,7 @@ function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQ
     version: INGEST_QUEUE_VERSION,
     pendingReviews: deriveLegacyPendingReviews(legacy.jobs, 2),
     reviewRejections: [],
+    applyAbandonments: [],
     ...(legacy.applyClaim?.reviewedChangeSet
       ? {
           applyClaim: {
@@ -673,14 +745,14 @@ function migrateVersionTwoSnapshot(legacy: LegacyIngestQueueSnapshotV2): IngestQ
 }
 
 /**
- * Converts one strictly parsed version-3 snapshot into detached version-4 state.
+ * Converts one strictly parsed version-3 snapshot into detached current state.
  *
  * A reviewed apply already in progress cannot be bound to a final Manifest
  * intent from version-3 bytes. Migration therefore preserves its ChangeSet
  * identity but marks the review authorization as explicitly unverified.
  *
  * @param legacy - Valid version-3 persisted queue
- * @returns Equivalent version-4 queue with fail-closed reviewed apply provenance
+ * @returns Equivalent current queue with fail-closed reviewed apply provenance
  */
 function migrateVersionThreeSnapshot(
   legacy: LegacyIngestQueueSnapshotV3
@@ -714,6 +786,7 @@ function migrateVersionThreeSnapshot(
   return {
     ...snapshot,
     version: INGEST_QUEUE_VERSION,
+    applyAbandonments: [],
     ...(applyClaim === undefined
       ? {}
       : applyClaim.reviewedChangeSet
@@ -744,6 +817,24 @@ function migrateVersionThreeSnapshot(
               startedAt: applyClaim.startedAt,
             },
           }),
+  };
+}
+
+/**
+ * Converts one strictly parsed version-4 snapshot into detached current state.
+ *
+ * Version 4 predates explicit no-journal apply-abandonment history. Migration
+ * starts the append-only audit collection empty rather than inferring decisions
+ * from terminal jobs or Review Store state that is not present in this snapshot.
+ *
+ * @param legacy - Valid version-4 persisted queue
+ * @returns Equivalent current queue with empty apply-abandonment history
+ */
+function migrateVersionFourSnapshot(legacy: LegacyIngestQueueSnapshotV4): IngestQueueSnapshot {
+  return {
+    ...legacy,
+    version: INGEST_QUEUE_VERSION,
+    applyAbandonments: [],
   };
 }
 
@@ -805,6 +896,14 @@ export function parseIngestQueueSnapshot(
           },
         ],
       };
+    }
+    return { ok: false, issues: mapSchemaIssues(legacyResult.error.issues) };
+  }
+
+  if (isLegacyVersionFourSnapshot(value)) {
+    const legacyResult = legacyIngestQueueSnapshotV4Schema.safeParse(value);
+    if (legacyResult.success) {
+      return { ok: true, value: migrateVersionFourSnapshot(legacyResult.data) };
     }
     return { ok: false, issues: mapSchemaIssues(legacyResult.error.issues) };
   }
@@ -904,6 +1003,8 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
   const pendingReviewChangeSetIds = new Set<string>();
   const rejectedJobIds = new Set<string>();
   const rejectedChangeSetIds = new Set<string>();
+  const abandonedJobIds = new Set<string>();
+  const abandonedChangeSetIds = new Set<string>();
   let processingCount = 0;
 
   snapshot.jobs.forEach((job, index) => {
@@ -1120,6 +1221,105 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
         "queue_review_rejection_pending_conflict",
         `${field}.changeSetId`,
         "A rejected ChangeSet cannot remain in pending review state"
+      );
+    }
+  });
+
+  snapshot.applyAbandonments.forEach((abandonment, index) => {
+    const field = `applyAbandonments.${index}`;
+    if (abandonedJobIds.has(abandonment.jobId)) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_job_duplicate",
+        `${field}.jobId`,
+        "A queue job may retain only one durable apply abandonment"
+      );
+    }
+    abandonedJobIds.add(abandonment.jobId);
+    if (abandonedChangeSetIds.has(abandonment.changeSetId)) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_changeset_duplicate",
+        `${field}.changeSetId`,
+        "A reviewed ChangeSet may be abandoned only once"
+      );
+    }
+    abandonedChangeSetIds.add(abandonment.changeSetId);
+
+    const job = snapshot.jobs.find((candidate) => candidate.id === abandonment.jobId);
+    if (!job || job.status !== "cancelled" || !applyClaimMatchesJob(abandonment, job)) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_job_invalid",
+        `${field}.jobId`,
+        "An apply abandonment must reference its exact cancelled queue attempt"
+      );
+    } else if (abandonment.abandonedAt !== job.cancelledAt) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_timestamp_mismatch",
+        `${field}.abandonedAt`,
+        "Apply abandonment time must match its cancelled queue job"
+      );
+    }
+    if (
+      !job ||
+      abandonment.acceptedAt < job.createdAt ||
+      abandonment.acceptedAt > abandonment.startedAt ||
+      abandonment.startedAt > abandonment.abandonedAt
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_timestamp_invalid",
+        field,
+        "Apply abandonment must follow its accepted review and apply start"
+      );
+    }
+
+    if (
+      snapshot.applyClaim &&
+      (snapshot.applyClaim.jobId === abandonment.jobId ||
+        snapshot.applyClaim.reviewedChangeSet?.changeSetId === abandonment.changeSetId)
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_claim_conflict",
+        field,
+        "An abandoned apply cannot remain an active apply claim"
+      );
+    }
+    if (
+      snapshot.applyCommit &&
+      (snapshot.applyCommit.jobId === abandonment.jobId ||
+        snapshot.applyCommit.changeSetId === abandonment.changeSetId)
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_commit_conflict",
+        field,
+        "An abandoned apply cannot also retain committed apply proof"
+      );
+    }
+    if (
+      pendingReviewJobIds.has(abandonment.jobId) ||
+      pendingReviewChangeSetIds.has(abandonment.changeSetId)
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_pending_review_conflict",
+        field,
+        "An abandoned apply cannot remain pending for review"
+      );
+    }
+    if (
+      rejectedJobIds.has(abandonment.jobId) ||
+      rejectedChangeSetIds.has(abandonment.changeSetId)
+    ) {
+      addError(
+        diagnostics,
+        "queue_apply_abandonment_rejection_conflict",
+        field,
+        "An accepted abandoned apply cannot also be a rejected review"
       );
     }
   });

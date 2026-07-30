@@ -624,6 +624,7 @@ function createEmptyQueue(bundleId: string): IngestQueueSnapshot {
     sourceHighWatermarks: [],
     pendingReviews: [],
     reviewRejections: [],
+    applyAbandonments: [],
   };
 }
 

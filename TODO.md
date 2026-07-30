@@ -55,6 +55,7 @@
 - [x] 完成 Runtime v2 启动交叉校验：Manifest success 与 reserved metadata 必须双向存在并指向该 source 最新 ledger；source/hash/pipeline/input/intent/ChangeSet/time、Manifest revision/digest、连续 ledger 链与 Windows shared-page co-owner projection 任一撕裂均在启动时 fail closed。
 - [x] 在 prepared journal 发布前拒绝复用已入 ledger 的 transaction id，并把 durable transaction replacement 限定为 immutable payload 下的合法 prepared → applying → committed/recovery 状态迁移。
 - [x] 完成 Queue v4 与全写入周期原子授权复证：accepted apply claim 持久化最终 Manifest intent digest；直接 apply 在任何 target observation 前先复证完整 Queue/Review/allocator/Manifest read-set/source-order authority，prepared 发布、prepared → applying、启动读取 unfinished journal、每次共享 envelope mutation 与最终 Manifest+ledger callback 都重复或保留该证明；旧 v3 或 stale Manifest 在任何新 Wiki 文件访问前 fail closed。
+- [x] 完成 no-journal 显式恢复 Core：Queue v5 保存 exact abandonment tombstone，Runtime 从同一 atomic envelope 分类 accepted-not-started/active/blocked/finalizing/committed/abandoned，并以 opaque recovery id 在 continue 前重证完整 Manifest authority，或在无任何 journal/commit/ledger 写入证据时原子 abandon；崩溃重放与 prepared-publication 竞争均收敛且不产生 split-brain。
 
 ## Pending Tasks 📋
 
@@ -86,7 +87,7 @@
 - [ ] 定义并实现 `no_changes` 的 durable source-success/Manifest revision 语义；当前无文件 ChangeSet 不产生 Manifest commit plan，不能静默当作已成功摄入。
 - [ ] 在真实写盘前决定 CAS 后、progress 前崩溃的 content ABA 策略：接受 content-addressed at-least-once，或增加 mutation-intent marker 并在精确 before 状态 fail closed。
 - [ ] 为 transaction `recovery_required` 增加显式重新校验、继续、回滚或放弃动作及 Knowledge Studio 恢复 UI。
-- [ ] 为“accepted apply claim 已落盘、transaction journal 尚未创建即崩溃”增加 no-journal 显式恢复：先证明 journal、commit marker 与写入 intent 均不存在，再允许 continue 或 abandon；不得自动推断未写盘。
+- [x] 为“accepted apply claim 已落盘、transaction journal 尚未创建即崩溃”增加 no-journal 显式恢复 Core：先从同一 runtime snapshot 证明 exact Review/Queue/allocator 身份以及 journal、commit marker、source-input ledger 均不存在，再允许 continue 或 abandon；不得自动推断未写盘。Manifest 漂移会阻止 continue，但不阻止经原子证明的 abandon。
 - [ ] 严格解析并脱敏 file/projection adapter 的运行时成功返回值，非法 adapter payload 统一映射为受控 infrastructure error。
 
 ### Slice 1C：Golden Flow 产品闭环
@@ -98,6 +99,7 @@
 - [ ] 接入真实 parser artifact、provider structured-output adapter、target authorization/resolver 与 projected OKF/link validator；adapter 不得解析 fenced JSON 或静默修复模型输出。
 - [x] 抽取 ApplyView 的纯 diff 展示，并以独立 Review Core/UI 支持多文件 create/update、来源、校验和逐文件/逐块审核；delete 可见但 reject-only。
 - [x] 建立最小 Knowledge Studio / Activity 表面，显示解析、分析、关联、生成、校验、审核、apply、finalizing 和 recovery 阶段；真实 adapter 未接通前明确 fail closed。
+- [ ] 将 Review startup reconciliation、active transaction recovery 与 no-journal classify/continue/abandon 组装进 layout-ready startup gate 和 Knowledge Studio 恢复 UI；接线前继续保持 `adapter_unavailable`，不得自动 continue。
 - [ ] 将新 Wiki 接入 Search v3，支持 grounded answer、citation jump 和从回答保存回 Wiki。
 - [ ] 完成 `Markdown/PDF → queue → compile → review → write → grounded query → unchanged skip` 的首个 vertical slice。
 
@@ -142,7 +144,8 @@
 - ChangeSet journal v3 使用 Vault-global 单活动槽；完整 Bundle、accepted ChangeSet、精确 before/after、最终 Manifest intent/plan digest，以及 owning source id/hash/pipeline/input revision/job attempt/start 一并持久化；claim source 必须存在于 ChangeSet source refs。
 - 单文件写入只能通过 adapter 原子 compare-and-swap；全局 journal 提供可恢复语义，但 Obsidian Vault 不具备真正跨文件原子性。
 - 自动恢复只做幂等 roll-forward；divergent state 进入 sticky `recovery_required`，不自动 rollback 或覆盖用户编辑；committed marker 对后续用户修改保持权威。
-- Queue v4 保留 exact `applyClaim`、pending review anchor、review rejection tombstone 与 `commit_pending_ack` marker；审核 hand-off 固定为 durable pending record revision 0 → exact accepted/rejected record revision 1。accepted apply claim 同时绑定 proposal digest、accepted digest、最终 Manifest intent digest、review revision/time 与完整 job claim；启动恢复改为 failed 后仍原样保留。v1/v2 无法证明的 review/apply state，以及 v3 已开始但未保存 intent digest 的审核 apply，都以 `legacy_unverified` 明确 fail closed，等待人工恢复。
+- Queue v5 保留 exact `applyClaim`、pending review anchor、review rejection tombstone、no-journal apply abandonment tombstone 与 `commit_pending_ack` marker；审核 hand-off 固定为 durable pending record revision 0 → exact accepted/rejected record revision 1。accepted apply claim 同时绑定 proposal digest、accepted digest、最终 Manifest intent digest、review revision/time 与完整 job claim；启动恢复改为 failed 后仍原样保留。v1/v2 无法证明的 review/apply state，以及 v3 已开始但未保存 intent digest 的审核 apply，都以 `legacy_unverified` 明确 fail closed；v4 严格迁移时只初始化空 abandonment 历史，不猜测 cancelled job 的旧决策。
+- no-journal recovery id 只由跨完整生命周期仍会保留的 accepted Review identity 派生，不把最终成功后已不再保存的 `startedAt` 放入 id；action 时仍必须从当前 exact Queue claim 重新取得并核验 `startedAt`。continue 先由 Runtime 重证 Queue/Review/high-watermark/allocator/Manifest/source-order，再由 prepared-journal atomic publication 重证；abandon 则在同一 envelope transform 中要求任何 phase 的 active journal、Queue commit marker 与同 source/input ledger 均不存在，保留 immutable accepted Review，并写 cancelled job + exact tombstone。
 - Review 启动协调器只拥有 Review/Queue port：按 `recordedAt + changeSetId` 稳定扫描，pending/rejected 做 exact、可重放的 Queue 收敛；accepted 只返回供更高层 journal/ledger/no-journal 分类的 identity，绝不在启动时调用 `beginReviewApply`。每轮 mutation 后重读 Review revision，持续变化超过有界次数即 fail closed；返回 revision 仍须在最终 startup gate 复证。它尚未接入 plugin startup，不能据此开放 Studio。
 - applying executor 必须返回 `completed + exact commitReceipt`；`IngestQueue.runNext` 只对外转换为 `commit_ready`，Queue 在 Manifest 之前仍保持 processing/applying。审核接受转换为新的 durable applying claim，不能直接完成 job。
 - 页面提交后的协议固定为只读 `queue claim verify`，再持久执行 `atomic authority reproof+manifest+ledger → queue marker → journal ack → queue release`；最终 callback 从同一 runtime envelope 复证 Queue claim、accepted Review payload/intent 及 `allocator ≥ source high-watermark ≥ apply claim`，再按 exact transaction/revision/ChangeSet/intent/journal/receipt digest 幂等发布成功。较新的同内容观察可并存；较新的不同内容必须由 retained rerun 或启动恢复后 promoted successor 精确证明。
@@ -190,6 +193,7 @@
 - [x] G.2a 集成后全仓回归通过：152 个 Jest suite / 2806 个测试、TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier check 与 `git diff --check`；既有 keychain/解密预期 console 输出不影响结果。
 - [x] G.2b durable Manifest plan/intent 与 atomic ledger 通过 13 个定向 Jest suite / 273 个测试；最终全仓回归 154 个 Jest suite / 2871 个测试全部通过，并通过 TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier 与 `git diff --check`。既有 keychain/解密预期 console 输出不影响结果。
 - [x] G.2c Queue v4 与 atomic apply-authority reproof 本轮通过 9 个定向 Jest suite / 234 个测试，以及全仓 154 个 Jest suite / 2894 个测试；覆盖 target observation 前 authority preflight、prepared/applying/startup 全 Manifest reservation、unfinished-journal 写前授权、Queue marker↔ledger、latest-rerun/source-ABA 与 existing-successor 回归，并通过 TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier 与 `git diff --check`。既有 keychain/解密预期 console 输出不影响结果。
+- [x] G.2d no-journal recovery 与 Queue v5 本轮通过 Runtime 71 个测试、Queue/Core 聚焦 101 个测试及真实 compile→review→startup recovery→explicit continue→Wiki/Manifest/ledger/Queue ack 集成闭环；最终全仓 155 个 Jest suite / 2921 个测试全部通过，并通过 TypeScript `noEmit`、全仓 ESLint、变更文件 Prettier 与 `git diff --check`。覆盖 accepted-not-started/active/blocked/finalizing/committed/abandoned 分类、stale Manifest、commit-then-throw、prepared publication 竞争、三代 rerun 保留与 exact abandonment replay；既有 keychain/解密预期 console 输出不影响结果。
 - [x] G.1 自动化回归覆盖完整文件排他发布、并发初始化、realpath/symlink containment、共享 envelope 无丢失并发更新、跨 runtime revision 续号、watcher-capture 乱序拒绝、全 slot corruption fail-closed、create/update CAS 竞争与 delete replay 分类。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
 

@@ -132,6 +132,7 @@ function createSnapshot(
     sourceHighWatermarks: overrides.sourceHighWatermarks ?? deriveTestHighWatermarks(jobs, reruns),
     pendingReviews: overrides.pendingReviews ?? [],
     reviewRejections: overrides.reviewRejections ?? [],
+    applyAbandonments: overrides.applyAbandonments ?? [],
   };
 }
 
@@ -574,7 +575,7 @@ describe("IngestQueue persistence and enqueue", () => {
     expect(storage.writeAttempts).toBe(0);
   });
 
-  it("loads version 3 reviewed apply state as fail-closed version 4 provenance", async () => {
+  it("loads version 3 reviewed apply state as fail-closed current provenance", async () => {
     const harness = createHarness();
     const applying: KnowledgeIngestJob = {
       ...createPendingJob(),
@@ -591,8 +592,10 @@ describe("IngestQueue persistence and enqueue", () => {
         reviewedChangeSet: { changeSetId: "changeset-reviewed", changeSetDigest: HASH_C },
       }),
     });
+    const { applyAbandonments: _applyAbandonments, ...legacyCurrent } = current;
+    void _applyAbandonments;
     harness.storage.seed("personal", {
-      ...current,
+      ...legacyCurrent,
       version: 3,
       applyClaim: {
         ...current.applyClaim,
@@ -611,7 +614,7 @@ describe("IngestQueue persistence and enqueue", () => {
 
   it("fails closed for incompatible, mismatched, and malformed persisted JSON", async () => {
     const { queue, storage } = createHarness();
-    storage.seed("versioned", { ...createSnapshot("versioned"), version: 5 });
+    storage.seed("versioned", { ...createSnapshot("versioned"), version: 6 });
     storage.seed("mismatch", createSnapshot("other"));
     storage.seed("malformed", { ...createSnapshot("malformed"), jobs: [{ status: "mystery" }] });
 
