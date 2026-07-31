@@ -346,6 +346,26 @@ describe("KnowledgeStudioController", () => {
     expect(controller.getState().snapshot).toBeUndefined();
   });
 
+  it("shows an unavailable explanation without inventing a Bundle and aborts prior work", () => {
+    const load = createDeferred<KnowledgeStudioSnapshot>();
+    const port = new FakeKnowledgeStudioPort(async () => load.promise);
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    const signal = port.loadCalls[0].signal;
+
+    controller.showUnavailable("No project has a valid Knowledge Bundle configuration.");
+
+    expect(signal.aborted).toBe(true);
+    expect(port.unsubscribed).toBe(true);
+    expect(controller.getState()).toEqual({
+      status: "unavailable",
+      activeTab: "activity",
+      refreshing: false,
+      unavailableNotice: "No project has a valid Knowledge Bundle configuration.",
+    });
+    expect(() => controller.showUnavailable(" ")).toThrow(TypeError);
+  });
+
   it("aborts work and removes hint subscriptions when stopped", async () => {
     const load = createDeferred<KnowledgeStudioSnapshot>();
     const port = new FakeKnowledgeStudioPort(async () => load.promise);

@@ -1,6 +1,11 @@
 import { TFile } from "obsidian";
-import { parseProjectConfigFile, sanitizeVaultPathSegment } from "@/projects/projectUtils";
+import {
+  parseProjectConfigFile,
+  sanitizeVaultPathSegment,
+  writeProjectFrontmatter,
+} from "@/projects/projectUtils";
 import { mockTFile } from "@/__tests__/mockObsidian";
+import { COPILOT_PROJECT_KNOWLEDGE_BUNDLE } from "@/projects/constants";
 
 // Mock deep dependencies to avoid transitive import chains
 jest.mock("@/settings/model", () => ({
@@ -133,6 +138,91 @@ describe("parseProjectConfigFile", () => {
     // Reason: files without copilot-project-id are treated as corrupted and skipped.
     // With name-based folders, folderName can no longer serve as id fallback.
     expect(result).toBeNull();
+  });
+
+  it("preserves untrusted knowledge Bundle frontmatter without validating or repairing it", async () => {
+    const rawContent = [
+      "---",
+      "copilot-project-id: my-project",
+      "copilot-project-name: My Project",
+      "copilot-project-knowledge-bundle:",
+      "  version: unsupported",
+      "  wikiRoot: Wiki\\\\Native",
+      "  extra: true",
+      "---",
+      "Body text",
+    ].join("\n");
+    setupAppMock(rawContent, null);
+
+    const result = await parseProjectConfigFile(makeMockFile(VALID_PATH));
+
+    expect(result?.project.knowledgeBundle).toEqual({
+      version: "unsupported",
+      wikiRoot: "Wiki\\\\Native",
+      extra: true,
+    });
+  });
+});
+
+describe("writeProjectFrontmatter knowledge Bundle persistence", () => {
+  const file = makeMockFile("copilot-projects/my-project/project.md");
+
+  /**
+   * Creates the required non-knowledge fields for serialization tests.
+   *
+   * @param knowledgeBundle - Optional untrusted Bundle value
+   * @returns Complete project configuration
+   */
+  function makeProject(knowledgeBundle?: unknown) {
+    return {
+      id: "my-project",
+      name: "My Project",
+      systemPrompt: "",
+      projectModelKey: "",
+      modelConfigs: {},
+      contextSource: {},
+      created: 1,
+      UsageTimestamps: 2,
+      ...(knowledgeBundle === undefined ? {} : { knowledgeBundle }),
+    };
+  }
+
+  it("writes the exact configured value and deletes a stale value when unconfigured", async () => {
+    const frontmatter: Record<string, unknown> = {
+      [COPILOT_PROJECT_KNOWLEDGE_BUNDLE]: { stale: true },
+    };
+    (window as unknown as Record<string, unknown>).app = {
+      fileManager: {
+        processFrontMatter: jest.fn(
+          async (
+            _file: TFile,
+            update: (current: Record<string, unknown>) => void
+          ): Promise<void> => {
+            update(frontmatter);
+          }
+        ),
+      },
+    };
+    const configuredValue = {
+      version: 1,
+      id: "bundle",
+      sourceRoots: ["Sources"],
+      wikiRoot: "Wiki",
+      schemaRef: "Schema/rules.md",
+      reviewMode: "always",
+    };
+
+    await writeProjectFrontmatter(file, makeProject(configuredValue), "my-project", {
+      createdMs: 1,
+      lastUsedMs: 2,
+    });
+    expect(frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE]).toBe(configuredValue);
+
+    await writeProjectFrontmatter(file, makeProject(), "my-project", {
+      createdMs: 1,
+      lastUsedMs: 2,
+    });
+    expect(frontmatter).not.toHaveProperty(COPILOT_PROJECT_KNOWLEDGE_BUNDLE);
   });
 });
 

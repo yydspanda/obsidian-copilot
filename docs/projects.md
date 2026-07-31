@@ -18,6 +18,7 @@ In regular chat, all conversations share the same settings and model. Projects l
 - **Isolated chat history** — Conversations in one project don't mix with conversations in another
 
 **Example use cases:**
+
 - A "Research" project that always has your research notes as context
 - A "Client Work" project with a specific system prompt and access to client-related notes
 - A "Learning" project with YouTube video URLs for study materials
@@ -39,19 +40,43 @@ In regular chat, all conversations share the same settings and model. Projects l
 Each project has the following settings:
 
 ### Name
+
 A short name for the project. Appears in the project list.
 
 ### Description
+
 An optional description of what the project is for.
 
 ### Model
+
 Choose which AI model to use for this project. The available options depend on which models you have enabled.
 
 ### Model Settings
+
 Override the default temperature and max tokens specifically for this project.
 
 ### System Prompt
+
 Set a custom system prompt for this project. This replaces (or supplements) the global default. See [System Prompts](system-prompts.md) for details.
+
+### Knowledge Bundle (advanced, Windows only)
+
+This fork can preserve an optional `copilot-project-knowledge-bundle` object in the project's `project.md` frontmatter. It defines the source, generated Wiki, and schema boundaries that the future Personal Knowledge workflow will own:
+
+```yaml
+copilot-project-knowledge-bundle:
+  version: 1
+  id: research
+  sourceRoots:
+    - Sources/Research
+  wikiRoot: Wiki/Research
+  schemaRef: Knowledge/Schemas/research.md
+  reviewMode: always
+```
+
+The knowledge startup boundary validates this object strictly after all Projects have loaded. It rejects unknown fields, malformed Vault-relative paths, duplicate Bundle IDs, and case-insensitive Windows overlaps between any configured source, Wiki, and schema boundaries. It does not rewrite an unsafe path. If any project's Bundle is invalid, all knowledge adapters remain unavailable so write ownership cannot become ambiguous.
+
+This field does not change normal Project chat behavior. The current Knowledge Studio milestone still has no live ingest/compiler/query adapters, even when configuration is valid. Reload the plugin after changing this startup-only configuration. See [Personal Knowledge Studio](personal-knowledge.md) for the full availability and safety model.
 
 ---
 

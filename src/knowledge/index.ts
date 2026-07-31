@@ -4,6 +4,7 @@ export * from "@/knowledge/changeset/ChangeSetValidator";
 export * from "@/knowledge/changeset/TransactionStorage";
 export * from "@/knowledge/compiler/CompilerModelPort";
 export * from "@/knowledge/compiler/KnowledgeCompiler";
+export * from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 export {
   parseCompilerAnalysisModelOutput,
   type CompilerAnalysisModelOutput,
@@ -45,6 +46,11 @@ export * from "@/knowledge/recovery/KnowledgeStartupGate";
 export * from "@/knowledge/recovery/KnowledgeStartupRelease";
 export * from "@/knowledge/runtime/AtomicRuntimeFile";
 export * from "@/knowledge/runtime/KnowledgeRuntimeStore";
+export * from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
+export * from "@/knowledge/startup/KnowledgePluginStartupBarrier";
+export * from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
+export * from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
 export * from "@/knowledge/ui/KnowledgeStudioController";
+export * from "@/knowledge/ui/KnowledgeStudioSessionStore";
 export * from "@/knowledge/ui/activityModel";
 export * from "@/knowledge/ui/platform";

@@ -355,6 +355,31 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
     review: reviewTabId,
   };
 
+  if (state.status === "unavailable") {
+    return (
+      <main className="tw-flex tw-h-full tw-items-center tw-justify-center tw-p-6">
+        <section
+          className="tw-max-w-xl tw-rounded-xl tw-border tw-border-solid tw-border-border tw-bg-error tw-p-5 tw-text-error"
+          role="alert"
+        >
+          <div className="tw-flex tw-items-start tw-gap-3">
+            <ShieldAlert aria-hidden="true" className="tw-mt-0.5 tw-size-5 tw-shrink-0" />
+            <div>
+              <h1 className="tw-m-0 tw-text-base tw-font-semibold">Knowledge Studio unavailable</h1>
+              <p className="tw-m-0 tw-mt-2 tw-text-sm">
+                {state.unavailableNotice ??
+                  "Knowledge Studio cannot select a validated project Bundle yet."}
+              </p>
+              <p className="tw-m-0 tw-mt-2 tw-text-xs">
+                No knowledge files were changed and no model work was started.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   if (state.status === "idle") {
     return (
       <div className="tw-flex tw-h-full tw-items-center tw-justify-center tw-p-6" role="status">

@@ -72,7 +72,7 @@ export interface KnowledgeStudioCommandPort {
 }
 
 /** Controller lifecycle independent of any particular React render root. */
-export type KnowledgeStudioLoadStatus = "idle" | "loading" | "ready" | "error";
+export type KnowledgeStudioLoadStatus = "idle" | "unavailable" | "loading" | "ready" | "error";
 
 /** User-visible action currently serialized by the controller. */
 export interface KnowledgeStudioPendingAction {
@@ -97,6 +97,7 @@ export interface KnowledgeStudioState {
   selectedReviewChangeSetId?: string;
   pendingAction?: KnowledgeStudioPendingAction;
   feedback?: KnowledgeStudioFeedback;
+  unavailableNotice?: string;
   error?: string;
 }
 
@@ -319,6 +320,25 @@ export class KnowledgeStudioController {
       this.unsubscribeHints = undefined;
     }
     void this.refresh();
+  }
+
+  /**
+   * Presents a fail-closed explanation without inventing or loading a Bundle identity.
+   *
+   * @param notice - Sanitized user-facing reason no exact Bundle session can start
+   */
+  showUnavailable(notice: string): void {
+    if (typeof notice !== "string" || notice.trim().length === 0) {
+      throw new TypeError("Knowledge Studio unavailable notice must be a non-empty string");
+    }
+    this.cancelSessionWork();
+    this.state = {
+      status: "unavailable",
+      activeTab: "activity",
+      refreshing: false,
+      unavailableNotice: notice,
+    };
+    this.emit();
   }
 
   /** Stops the current Bundle session and cancels in-flight work. */

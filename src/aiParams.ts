@@ -86,6 +86,8 @@ export interface ProjectConfig {
   id: string;
   name: string;
   description?: string;
+  /** Untrusted knowledge Bundle frontmatter, validated only by the knowledge config source. */
+  knowledgeBundle?: unknown;
   systemPrompt: string;
   projectModelKey: string;
   modelConfigs: {

@@ -28,6 +28,7 @@ export const COPILOT_PROJECT_INCLUSIONS = "copilot-project-inclusions";
 export const COPILOT_PROJECT_EXCLUSIONS = "copilot-project-exclusions";
 export const COPILOT_PROJECT_WEB_URLS = "copilot-project-web-urls";
 export const COPILOT_PROJECT_YOUTUBE_URLS = "copilot-project-youtube-urls";
+export const COPILOT_PROJECT_KNOWLEDGE_BUNDLE = "copilot-project-knowledge-bundle";
 
 // File structure conventions
 export const PROJECT_CONFIG_FILE_NAME = "project.md";

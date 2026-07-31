@@ -49,12 +49,9 @@ jest.mock("obsidian", () => {
   };
 });
 
-import {
-  DEFAULT_KNOWLEDGE_BUNDLE_ID,
-  KNOWLEDGE_STUDIO_VIEW_TYPE,
-  KnowledgeStudioView,
-} from "@/components/KnowledgeStudioView";
+import { KNOWLEDGE_STUDIO_VIEW_TYPE, KnowledgeStudioView } from "@/components/KnowledgeStudioView";
 import type { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
+import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
 import type { WorkspaceLeaf } from "obsidian";
 
@@ -65,6 +62,7 @@ interface TestContainer extends HTMLElement {
 
 interface ControllerCalls {
   start: jest.Mock;
+  showUnavailable: jest.Mock;
   destroy: jest.Mock;
 }
 
@@ -72,6 +70,7 @@ interface ControllerCalls {
 function createController(): KnowledgeStudioController & ControllerCalls {
   return {
     start: jest.fn(),
+    showUnavailable: jest.fn(),
     destroy: jest.fn(),
   } as unknown as KnowledgeStudioController & ControllerCalls;
 }
@@ -99,20 +98,47 @@ describe("KnowledgeStudioView", () => {
 
   it("exposes stable workspace metadata and starts the selected Bundle", async () => {
     const controller = createController();
-    const view = new KnowledgeStudioView(createLeaf(), controller);
+    const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
+    sessionStore.replaceSelection("bundle-1", "Workflow adapters remain unavailable.");
+    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore);
 
     await view.onOpen();
 
     expect(view.getViewType()).toBe(KNOWLEDGE_STUDIO_VIEW_TYPE);
     expect(view.getDisplayText()).toBe("Knowledge Studio");
     expect(view.getIcon()).toBe("library-big");
-    expect(controller.start).toHaveBeenCalledWith(DEFAULT_KNOWLEDGE_BUNDLE_ID);
+    expect(controller.start).toHaveBeenCalledWith("bundle-1");
+    expect(controller.showUnavailable).not.toHaveBeenCalled();
     expect(roots[0].render).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves between unavailable and exact Bundle sessions without a shell Bundle identity", async () => {
+    const controller = createController();
+    const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
+    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore);
+
+    await view.onOpen();
+    expect(controller.showUnavailable).toHaveBeenLastCalledWith(
+      "Waiting for project configuration."
+    );
+    expect(controller.start).not.toHaveBeenCalled();
+
+    sessionStore.replaceSelection("bundle-2", "Workflow adapters remain unavailable.");
+    expect(controller.start).toHaveBeenLastCalledWith("bundle-2");
+
+    sessionStore.replaceSelection(undefined, "Bundle selection is required.");
+    expect(controller.showUnavailable).toHaveBeenLastCalledWith("Bundle selection is required.");
+
+    await view.onClose();
+    sessionStore.replaceSelection("bundle-after-close", "Closed view must not restart.");
+    expect(controller.start).toHaveBeenCalledTimes(1);
   });
 
   it("rebuilds the React root after window migration and cleans up exact owners", async () => {
     const controller = createController();
-    const view = new KnowledgeStudioView(createLeaf(), controller, "bundle-2");
+    const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
+    sessionStore.replaceSelection("bundle-2", "Workflow adapters remain unavailable.");
+    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore);
     const container = view.containerEl as TestContainer;
     await view.onOpen();
     const firstHost = view.containerEl.children[1].firstElementChild;

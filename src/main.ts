@@ -10,11 +10,7 @@ import { NoteSelectedTextContext, SelectedTextContext } from "@/types/message";
 import { registerCommands } from "@/commands";
 import CopilotView from "@/components/CopilotView";
 import { APPLY_VIEW_TYPE, ApplyView } from "@/components/composer/ApplyView";
-import {
-  DEFAULT_KNOWLEDGE_BUNDLE_ID,
-  KNOWLEDGE_STUDIO_VIEW_TYPE,
-  KnowledgeStudioView,
-} from "@/components/KnowledgeStudioView";
+import { KNOWLEDGE_STUDIO_VIEW_TYPE, KnowledgeStudioView } from "@/components/KnowledgeStudioView";
 import { LoadChatHistoryModal } from "@/components/modals/LoadChatHistoryModal";
 
 import { registerContextMenu } from "@/commands/contextMenu";
@@ -26,6 +22,15 @@ import { ProjectRegister } from "@/projects/projectRegister";
 import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/constants";
 import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
+import { ProjectKnowledgeBundleConfigSource } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
+import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
+import {
+  KnowledgePluginStartupBarrier,
+  type KnowledgePluginBundleConfigLoadResult,
+} from "@/knowledge/startup/KnowledgePluginStartupBarrier";
+import { KnowledgeStudioStartupAvailabilityAdapter } from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
+import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
+import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { logError, logInfo, logWarn } from "@/logger";
 import { logFileManager } from "@/logFileManager";
 import { KeychainService } from "@/services/keychainService";
@@ -36,11 +41,9 @@ import {
   resetPersistenceState,
 } from "@/services/settingsPersistence";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
-import {
-  KnowledgeStudioController,
-  UnavailableKnowledgeStudioPort,
-} from "@/knowledge/ui/KnowledgeStudioController";
+import { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
 import { isKnowledgeStudioPlatformSupported } from "@/knowledge/ui/platform";
+import { getCachedProjectRecords } from "@/projects/state";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
 import { checkIsPlusUser, refreshSelfHostModeValidation } from "@/plusUtils";
 import {
@@ -94,6 +97,13 @@ import { v4 as uuidv4 } from "uuid";
 
 // Removed unused FileTrackingState interface
 
+/** Throws before an obsolete or unloaded knowledge startup generation can continue. */
+function throwIfKnowledgeStartupStopped(signal: AbortSignal, lifecycleClosed: boolean): void {
+  if (signal.aborted || lifecycleClosed) {
+    throw new DOMException("The operation was aborted", "AbortError");
+  }
+}
+
 export default class CopilotPlugin extends Plugin {
   // Plugin components
   projectManager: ProjectManager;
@@ -115,10 +125,21 @@ export default class CopilotPlugin extends Plugin {
   private lastSelectionSignature?: string;
   private webSelectionTracker?: WebSelectionTracker;
   private knowledgeRuntime?: import("@/knowledge/runtime/KnowledgeRuntimeStore").KnowledgeRuntimeStore;
-  private knowledgeStudioPort: UnavailableKnowledgeStudioPort =
-    new UnavailableKnowledgeStudioPort();
+  private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
+  private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
+  private readonly knowledgeStudioStartupAvailability =
+    new KnowledgeStudioStartupAvailabilityAdapter(
+      this.knowledgeStudioPort,
+      this.knowledgeStudioSessionStore
+    );
+  private knowledgeLifecycleClosed = false;
+  private projectsInitialization?: Promise<void>;
+  private readonly knowledgeLayoutCoordinator = new KnowledgePluginLayoutCoordinator({
+    ensureInitialized: () => this.ensureProjectsInitializedAfterLayout(),
+  });
   private readonly chatHistoryLastAccessedAtManager = new RecentUsageManager<string>();
   async onload(): Promise<void> {
+    this.knowledgeLifecycleClosed = false;
     // Reason: clear stale module-level persistence state + KeychainService
     // singleton left over from a previous plugin lifecycle in the same
     // process (disable→enable, dev hot reload, "Open another vault" without
@@ -208,12 +229,38 @@ export default class CopilotPlugin extends Plugin {
     this.registerView(CHAT_VIEWTYPE, (leaf: WorkspaceLeaf) => new CopilotView(leaf, this));
     this.registerView(APPLY_VIEW_TYPE, (leaf: WorkspaceLeaf) => new ApplyView(leaf));
 
+    this.customCommandRegister = new CustomCommandRegister(this, this.app.vault);
+    this.systemPromptRegister = new SystemPromptRegister(this, this.app.vault);
+    this.projectRegister = new ProjectRegister(this.app);
+
+    this.app.workspace.onLayoutReady(() => {
+      if (this.knowledgeLifecycleClosed) {
+        return;
+      }
+      // Reason: projects must initialize after vault file tree is indexed (onLayoutReady),
+      // not in onload(). Otherwise getAbstractFileByPath() returns null for non-hidden
+      // folders and the adapter fallback creates synthetic TFiles that crash vault.read().
+      // The coordinator keeps this ordinary feature independent from Knowledge Runtime I/O.
+      this.knowledgeLayoutCoordinator.onLayoutReady();
+
+      // Initialize custom commands
+      void this.customCommandRegister
+        .initialize()
+        .then(migrateCommands)
+        .then(suggestDefaultCommands);
+
+      // Initialize system prompts (independent from custom commands)
+      void this.systemPromptRegister
+        .initialize()
+        .then(() => migrateSystemPromptsFromSettings(this.app.vault));
+    });
+
     if (isKnowledgeStudioPlatformSupported()) {
-      await this.initializeKnowledgeRuntimeFoundation();
+      void this.initializeKnowledgeStartupPrerequisites();
       this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
         const port = this.knowledgeStudioPort;
         const controller = new KnowledgeStudioController(port, port);
-        return new KnowledgeStudioView(leaf, controller, DEFAULT_KNOWLEDGE_BUNDLE_ID);
+        return new KnowledgeStudioView(leaf, controller, this.knowledgeStudioSessionStore);
       });
       this.addRibbonIcon("library-big", "Open Knowledge Studio", () => {
         void this.activateKnowledgeStudio();
@@ -264,32 +311,6 @@ export default class CopilotPlugin extends Plugin {
       })
     );
 
-    this.customCommandRegister = new CustomCommandRegister(this, this.app.vault);
-    this.systemPromptRegister = new SystemPromptRegister(this, this.app.vault);
-    this.projectRegister = new ProjectRegister(this.app);
-
-    this.app.workspace.onLayoutReady(() => {
-      // Reason: projects must initialize after vault file tree is indexed (onLayoutReady),
-      // not in onload(). Otherwise getAbstractFileByPath() returns null for non-hidden
-      // folders and the adapter fallback creates synthetic TFiles that crash vault.read().
-      // This matches the system-prompts initialization pattern.
-      this.projectRegister.initialize().catch((error) => {
-        logError("[Projects] ProjectRegister initialization failed", error);
-        new Notice("Failed to load projects. Check console for details.");
-      });
-
-      // Initialize custom commands
-      void this.customCommandRegister
-        .initialize()
-        .then(migrateCommands)
-        .then(suggestDefaultCommands);
-
-      // Initialize system prompts (independent from custom commands)
-      void this.systemPromptRegister
-        .initialize()
-        .then(() => migrateSystemPromptsFromSettings(this.app.vault));
-    });
-
     // Initialize automatic selection handler
     this.initSelectionHandler();
 
@@ -319,15 +340,15 @@ export default class CopilotPlugin extends Plugin {
       );
       const runtime = new KnowledgeRuntimeStore(runtimeFile);
       await runtime.initialize();
+      if (this.knowledgeLifecycleClosed) {
+        return;
+      }
       this.knowledgeRuntime = runtime;
-      this.knowledgeStudioPort = new UnavailableKnowledgeStudioPort(
-        "Durable Windows knowledge storage is initialized. Ingest, recovery, and query adapters remain disabled until the complete Golden Flow is connected."
-      );
     } catch (error) {
       this.knowledgeRuntime = undefined;
-      this.knowledgeStudioPort = new UnavailableKnowledgeStudioPort(
-        "Durable knowledge storage needs attention before Knowledge Studio can start. No knowledge files were changed."
-      );
+      if (this.knowledgeLifecycleClosed) {
+        return;
+      }
       logWarn(
         "Knowledge runtime foundation initialization failed.",
         error instanceof Error ? error.name : "unknown_error"
@@ -335,7 +356,130 @@ export default class CopilotPlugin extends Plugin {
     }
   }
 
+  /**
+   * Initializes optional Runtime I/O without blocking normal plugin or Projects startup.
+   *
+   * Layout readiness and Runtime completion may arrive in either order. The
+   * coordinator starts the fail-closed barrier exactly once after both exist.
+   */
+  private async initializeKnowledgeStartupPrerequisites(): Promise<void> {
+    await this.initializeKnowledgeRuntimeFoundation();
+    if (this.knowledgeLifecycleClosed) {
+      return;
+    }
+    const barrier = this.initializeKnowledgeStartupBarrier();
+    this.knowledgeLayoutCoordinator.attachBarrier(barrier);
+  }
+
+  /**
+   * Creates the plugin-level fail-closed barrier over Runtime, Projects, and Bundle config.
+   *
+   * The barrier intentionally has no ready delegate. Valid configuration still ends
+   * unavailable until recovery, compiler, watcher, and query adapters are composed.
+   */
+  private initializeKnowledgeStartupBarrier(): KnowledgePluginStartupBarrier {
+    const bundleConfigSource = new ProjectKnowledgeBundleConfigSource();
+    const barrier = new KnowledgePluginStartupBarrier({
+      runtime: {
+        isAvailable: () => !this.knowledgeLifecycleClosed && this.knowledgeRuntime !== undefined,
+      },
+      projects: {
+        initialize: async (signal) => {
+          throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+          await this.ensureProjectsInitializedAfterLayout();
+          throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+        },
+      },
+      bundleConfig: {
+        load: async (signal) => this.loadKnowledgeBundleStartupConfig(bundleConfigSource, signal),
+      },
+      studio: {
+        setUnavailable: (state) => {
+          if (this.knowledgeLifecycleClosed) {
+            return;
+          }
+          this.knowledgeStudioStartupAvailability.setUnavailable(state);
+        },
+      },
+    });
+    return barrier;
+  }
+
+  /**
+   * Loads and strictly validates every project-owned Bundle after project initialization.
+   *
+   * @param source - Pure strict project Bundle configuration source
+   * @param signal - Current startup generation cancellation
+   * @returns Safe aggregate containing no raw invalid configuration
+   */
+  private async loadKnowledgeBundleStartupConfig(
+    source: ProjectKnowledgeBundleConfigSource,
+    signal: AbortSignal
+  ): Promise<KnowledgePluginBundleConfigLoadResult> {
+    throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+    const result = source.load(
+      getCachedProjectRecords().map(({ project }) => ({
+        id: project.id,
+        knowledgeBundle: project.knowledgeBundle,
+      }))
+    );
+    throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+
+    if (result.kind === "unconfigured") {
+      return result;
+    }
+    if (result.kind === "invalid") {
+      return {
+        kind: "invalid",
+        diagnosticCodes: result.diagnostics.map(({ code }) => code),
+      };
+    }
+
+    const bundleIds = result.bundles.map(({ config }) => config.id);
+    return { kind: "configured", bundleIds };
+  }
+
+  /**
+   * Starts ordinary Projects independently from optional Knowledge Runtime readiness.
+   *
+   * Concurrent callers share one attempt. A failed attempt is cleared for an
+   * explicit retry, while a successful attempt remains an idempotent readiness proof.
+   *
+   * @returns Shared Project initialization attempt
+   */
+  private ensureProjectsInitializedAfterLayout(): Promise<void> {
+    if (this.projectsInitialization) {
+      return this.projectsInitialization;
+    }
+
+    const initialization = this.projectRegister.initialize().catch((error) => {
+      if (this.projectsInitialization === initialization) {
+        this.projectsInitialization = undefined;
+      }
+      if (!this.knowledgeLifecycleClosed) {
+        logError("[Projects] ProjectRegister initialization failed", error);
+        new Notice("Failed to load projects. Check logs for details.");
+      }
+      throw error;
+    });
+    this.projectsInitialization = initialization;
+    return initialization;
+  }
+
   async onunload() {
+    // Fail-close synchronously before the first await so no old startup
+    // continuation can publish or initialize services during persistence flush.
+    this.knowledgeLifecycleClosed = true;
+    this.knowledgeLayoutCoordinator.close();
+    this.knowledgeStudioSessionStore.dispose();
+    this.knowledgeStudioPort.dispose();
+    this.projectRegister?.cleanup();
+    this.projectManager?.onunload();
+    this.customCommandRegister?.cleanup();
+    this.systemPromptRegister?.cleanup();
+    this.settingsUnsubscriber?.();
+    this.settingsUnsubscriber = undefined;
+
     // Best-effort flush of pending keychain/data.json writes.
     // Reason: onunload() is void in Obsidian's type system, but awaiting here
     // is no worse than fire-and-forget, and consistent with the log flush below.
@@ -351,18 +495,9 @@ export default class CopilotPlugin extends Plugin {
     // Cleanup chat selection highlight controller
     this.chatSelectionHighlightController?.cleanup();
 
-    if (this.projectManager) {
-      this.projectManager.onunload();
-    }
-
     // Cleanup VaultDataManager event listeners
     const vaultDataManager = VaultDataManager.getInstance();
     vaultDataManager.cleanup();
-
-    this.customCommandRegister.cleanup();
-    this.systemPromptRegister.cleanup();
-    this.projectRegister.cleanup();
-    this.settingsUnsubscriber?.();
 
     // Cleanup selection handler
     this.cleanupSelectionHandler();

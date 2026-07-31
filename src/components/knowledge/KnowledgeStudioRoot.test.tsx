@@ -257,6 +257,22 @@ function asController(controller: TestKnowledgeStudioController): KnowledgeStudi
 }
 
 describe("KnowledgeStudioRoot", () => {
+  it("renders startup unavailability without displaying a fabricated Bundle identity", () => {
+    const controller = new TestKnowledgeStudioController({
+      status: "unavailable",
+      activeTab: "activity",
+      refreshing: false,
+      unavailableNotice: "No project has a Knowledge Bundle configuration.",
+    });
+    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "No project has a Knowledge Bundle configuration."
+    );
+    expect(screen.queryByText(/Bundle knowledge-studio-unconfigured/)).toBeNull();
+    expect(screen.queryByTestId("activity-panel")).toBeNull();
+  });
+
   it("subscribes to controller state and replaces loading only after publication", () => {
     const controller = new TestKnowledgeStudioController({
       status: "loading",

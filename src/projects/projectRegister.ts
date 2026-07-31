@@ -24,6 +24,15 @@ import { getSettings, subscribeToSettingsChange } from "@/settings/model";
 import { debounce } from "@/utils/debounce";
 import { App, Notice, TAbstractFile, Vault } from "obsidian";
 
+/** Reports an attempt to reuse a ProjectRegister after permanent plugin cleanup. */
+export class ProjectRegisterDisposedError extends Error {
+  /** Creates a stable disposed-lifecycle failure. */
+  constructor() {
+    super("ProjectRegister cannot initialize after cleanup");
+    this.name = "ProjectRegisterDisposedError";
+  }
+}
+
 /**
  * Project Register: manages vault event listeners and cache synchronization.
  * Aligned with system-prompts Register pattern.
@@ -37,6 +46,16 @@ export class ProjectRegister {
   private vault: Vault;
   private manager: ProjectFileManager;
   private settingsUnsubscriber?: () => void;
+  /** Whether this generation currently owns the four Vault listeners. */
+  private eventListenersRegistered = false;
+  /** Successful initialization state for the current lifecycle generation. */
+  private initialized = false;
+  /** Permanent plugin-unload boundary; disposed instances cannot be revived. */
+  private disposed = false;
+  /** Shared initialization work for concurrent callers in the current generation. */
+  private initializePromise?: Promise<void>;
+  /** Monotonic lifecycle generation invalidated synchronously by cleanup. */
+  private lifecycleGeneration = 0;
   /** Monotonic request id for latest-wins semantics on folder change. */
   private folderChangeRequestId = 0;
   /** Per-file debounced modify handlers to avoid cross-file debounce collisions. */
@@ -57,35 +76,134 @@ export class ProjectRegister {
    * before migration has completed. Deferring to initialize() (called from
    * onLayoutReady) avoids this race.
    */
-  async initialize(): Promise<void> {
-    this.initializeEventListeners();
-    await this.manager.initialize();
+  initialize(): Promise<void> {
+    if (this.disposed) {
+      return Promise.reject(new ProjectRegisterDisposedError());
+    }
+    if (this.initialized) {
+      return Promise.resolve();
+    }
+    if (this.initializePromise) {
+      return this.initializePromise;
+    }
+
+    const generation = ++this.lifecycleGeneration;
+    try {
+      this.initializeEventListeners();
+    } catch (error) {
+      this.removeEventListeners();
+      const rejection =
+        error instanceof Error ? error : new Error("Project listener initialization failed");
+      return Promise.reject(rejection);
+    }
+
+    const initialization = this.performInitialization(generation);
+    this.initializePromise = initialization;
+    return initialization;
   }
 
   /**
-   * Cleanup event listeners (called on plugin unload).
+   * Completes manager initialization for one still-current lifecycle generation.
+   *
+   * @param generation - Generation that registered the current listeners
+   */
+  private async performInitialization(generation: number): Promise<void> {
+    try {
+      await this.manager.initialize();
+      if (generation === this.lifecycleGeneration) {
+        this.initialized = true;
+      }
+    } catch (error) {
+      if (generation === this.lifecycleGeneration) {
+        this.initialized = false;
+        this.removeEventListeners();
+      }
+      throw error;
+    } finally {
+      if (generation === this.lifecycleGeneration) {
+        this.initializePromise = undefined;
+      }
+    }
+  }
+
+  /**
+   * Cleanup event listeners and invalidate any initialization still in flight.
    */
   cleanup(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.lifecycleGeneration += 1;
+    this.initialized = false;
+    this.initializePromise = undefined;
+    this.folderChangeRequestId += 1;
+
     for (const d of this.fileModifyDebouncers.values()) d.cancel();
     this.fileModifyDebouncers.clear();
     this.debouncedFolderChange.cancel();
-    this.settingsUnsubscriber?.();
-
-    this.vault.off("create", this.handleFileCreation);
-    this.vault.off("delete", this.handleFileDeletion);
-    this.vault.off("rename", this.handleFileRename);
-    this.vault.off("modify", this.handleFileModify);
+    this.removeEventListeners();
   }
 
   /**
    * Wire up vault event listeners and settings subscription.
    */
   private initializeEventListeners(): void {
+    if (this.eventListenersRegistered) return;
+
+    // Reason: set ownership before registration so a partial synchronous failure
+    // can remove every callback that may already have been accepted by Vault.
+    this.eventListenersRegistered = true;
     this.vault.on("create", this.handleFileCreation);
     this.vault.on("delete", this.handleFileDeletion);
     this.vault.on("rename", this.handleFileRename);
     this.vault.on("modify", this.handleFileModify);
     this.settingsUnsubscriber = subscribeToSettingsChange(this.handleSettingsChange);
+  }
+
+  /**
+   * Runs one lifecycle cleanup action without preventing the remaining removals.
+   *
+   * @param action - Synchronous removal callback
+   * @param label - Static label used for logging
+   */
+  private runCleanupAction(action: () => void, label: string): void {
+    try {
+      action();
+    } catch (error) {
+      logError(`[Projects] Failed to remove ${label}`, error);
+    }
+  }
+
+  /**
+   * Removes the listeners and settings subscription owned by this instance.
+   */
+  private removeEventListeners(): void {
+    const removeVaultListeners = this.eventListenersRegistered;
+    const settingsUnsubscriber = this.settingsUnsubscriber;
+    this.eventListenersRegistered = false;
+    this.settingsUnsubscriber = undefined;
+
+    if (removeVaultListeners) {
+      this.runCleanupAction(
+        () => this.vault.off("create", this.handleFileCreation),
+        "create listener"
+      );
+      this.runCleanupAction(
+        () => this.vault.off("delete", this.handleFileDeletion),
+        "delete listener"
+      );
+      this.runCleanupAction(
+        () => this.vault.off("rename", this.handleFileRename),
+        "rename listener"
+      );
+      this.runCleanupAction(
+        () => this.vault.off("modify", this.handleFileModify),
+        "modify listener"
+      );
+    }
+
+    if (settingsUnsubscriber) {
+      this.runCleanupAction(settingsUnsubscriber, "settings subscription");
+    }
   }
 
   /**

@@ -1,7 +1,8 @@
 import { App, Vault } from "obsidian";
 import { ProjectConfig } from "@/aiParams";
-import { ProjectFileManager } from "@/projects/ProjectFileManager";
+import { buildHiddenProjectFrontmatter, ProjectFileManager } from "@/projects/ProjectFileManager";
 import { mockTFile } from "@/__tests__/mockObsidian";
+import { COPILOT_PROJECT_KNOWLEDGE_BUNDLE } from "@/projects/constants";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -38,10 +39,19 @@ jest.mock("@/projects/projectUtils", () => ({
   getProjectsFolder: jest.fn(() => "copilot-projects"),
   getProjectFolderPath: jest.fn((name: string) => `copilot-projects/${name}`),
   getProjectConfigFilePath: jest.fn((name: string) => `copilot-projects/${name}/project.md`),
+  splitUrlsStringToArray: jest.fn((value: string) => (value ? value.split("\n") : [])),
 }));
 
 jest.mock("@/utils", () => ({
   ensureFolderExists: jest.fn(async () => {}),
+}));
+
+jest.mock("@/utils/vaultAdapterUtils", () => ({
+  isInVaultCache: jest.fn(() => true),
+  patchFrontmatter: jest.fn(async () => {}),
+  readFrontmatterViaAdapter: jest.fn(async () => ({})),
+  resolveFileByPath: jest.fn(),
+  trashFile: jest.fn(async () => {}),
 }));
 
 jest.mock("@/cache/projectContextCache", () => ({
@@ -89,6 +99,8 @@ function makeConfig(
 function makeMockVault(): jest.Mocked<Vault> {
   return {
     create: jest.fn(async (path: string) => mockTFile({ path })),
+    read: jest.fn(async () => "---\ncopilot-project-id: project\n---\nOld body"),
+    modify: jest.fn(async () => {}),
     // Reason: null = file does not exist yet, avoids collision error in createProject
     getAbstractFileByPath: jest.fn(() => null),
     adapter: { exists: jest.fn(async () => false) },
@@ -154,5 +166,114 @@ describe("ProjectFileManager.createProject", () => {
     await expect(
       manager.createProject(makeConfig({ id: "   ", name: "Valid Name" }))
     ).rejects.toThrow(/cannot be empty/i);
+  });
+});
+
+describe("ProjectFileManager.updateProject knowledge Bundle intent", () => {
+  let vault: jest.Mocked<Vault>;
+  let writeProjectFrontmatter: jest.Mock;
+  let resolveFileByPath: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetSingleton();
+    vault = makeMockVault();
+    ({ writeProjectFrontmatter } = jest.requireMock<{
+      writeProjectFrontmatter: jest.Mock;
+    }>("@/projects/projectUtils"));
+    ({ resolveFileByPath } = jest.requireMock<{
+      resolveFileByPath: jest.Mock;
+    }>("@/utils/vaultAdapterUtils"));
+    resolveFileByPath.mockResolvedValue(mockTFile({ path: "copilot-projects/Project/project.md" }));
+  });
+
+  it("preserves the existing advanced Bundle when the update omits knowledgeBundle", async () => {
+    const knowledgeBundle = {
+      version: 1,
+      id: "advanced",
+      sourceRoots: ["Sources"],
+      wikiRoot: "Wiki",
+      schemaRef: "Schemas/knowledge.md",
+      reviewMode: "always",
+    };
+    const existing = {
+      project: makeConfig({
+        id: "project",
+        name: "Project",
+        knowledgeBundle,
+        created: 10,
+      }),
+      filePath: "copilot-projects/Project/project.md",
+      folderName: "Project",
+    };
+    (getCachedProjectRecordById as jest.Mock).mockReturnValue(existing);
+    (getCachedProjectRecords as jest.Mock).mockReturnValue([existing]);
+    const manager = ProjectFileManager.getInstance(makeMockApp(vault));
+
+    const updated = await manager.updateProject(
+      "project",
+      makeConfig({ id: "project", name: "Project", systemPrompt: "Updated" })
+    );
+
+    const serializedProject = writeProjectFrontmatter.mock.calls[0][1] as ProjectConfig;
+    expect(serializedProject.knowledgeBundle).toBe(knowledgeBundle);
+    expect(updated.project.knowledgeBundle).toBe(knowledgeBundle);
+  });
+
+  it("deletes the existing Bundle when the update owns knowledgeBundle with undefined", async () => {
+    const existing = {
+      project: makeConfig({
+        id: "project",
+        name: "Project",
+        knowledgeBundle: { version: "advanced" },
+        created: 10,
+      }),
+      filePath: "copilot-projects/Project/project.md",
+      folderName: "Project",
+    };
+    (getCachedProjectRecordById as jest.Mock).mockReturnValue(existing);
+    (getCachedProjectRecords as jest.Mock).mockReturnValue([existing]);
+    const manager = ProjectFileManager.getInstance(makeMockApp(vault));
+
+    const updated = await manager.updateProject(
+      "project",
+      makeConfig({
+        id: "project",
+        name: "Project",
+        systemPrompt: "Updated",
+        knowledgeBundle: undefined,
+      })
+    );
+
+    const serializedProject = writeProjectFrontmatter.mock.calls[0][1] as ProjectConfig;
+    expect(serializedProject).not.toHaveProperty("knowledgeBundle");
+    expect(updated.project).not.toHaveProperty("knowledgeBundle");
+  });
+});
+
+describe("buildHiddenProjectFrontmatter knowledge Bundle persistence", () => {
+  it("preserves the exact value and omits the key when hidden-folder content is unconfigured", () => {
+    const knowledgeBundle = {
+      version: "untrusted",
+      wikiRoot: "Wiki\\Native",
+      extra: true,
+    };
+
+    const configuredFrontmatter = buildHiddenProjectFrontmatter(
+      makeConfig({ id: "project", name: "Project", knowledgeBundle }),
+      "Project",
+      { createdMs: 1, lastUsedMs: 2 }
+    );
+    expect(configuredFrontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE]).toBe(knowledgeBundle);
+
+    const unconfiguredFrontmatter = buildHiddenProjectFrontmatter(
+      makeConfig({ id: "project", name: "Project" }),
+      "Project",
+      {
+        createdMs: 1,
+        lastUsedMs: 2,
+      }
+    );
+    expect(unconfiguredFrontmatter).not.toHaveProperty(COPILOT_PROJECT_KNOWLEDGE_BUNDLE);
   });
 });

@@ -1,5 +1,6 @@
 import { KnowledgeStudioRoot } from "@/components/knowledge/KnowledgeStudioRoot";
 import { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
+import type { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import React from "react";
@@ -8,25 +9,24 @@ import type { Root } from "react-dom/client";
 /** Stable Obsidian workspace type for the personal knowledge surface. */
 export const KNOWLEDGE_STUDIO_VIEW_TYPE = "obsidian-copilot-knowledge-studio";
 
-/** Default Bundle selected by the first single-user vertical slice. */
-export const DEFAULT_KNOWLEDGE_BUNDLE_ID = "personal";
-
 /** Popout-safe ItemView hosting the controller-driven Knowledge Studio UI. */
 export class KnowledgeStudioView extends ItemView {
   private root: Root | null = null;
   private windowMigrationDestroy: (() => void) | null = null;
+  private sessionUnsubscriber: (() => void) | null = null;
+  private currentBundleId?: string;
 
   /**
    * Creates one view with a controller owned by its lifecycle.
    *
    * @param leaf - Obsidian workspace leaf
    * @param controller - Read/command controller for one Bundle session
-   * @param bundleId - Bundle opened by this view
+   * @param sessionStore - Dynamic validated Bundle selection for this plugin lifecycle
    */
   constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: KnowledgeStudioController,
-    private readonly bundleId = DEFAULT_KNOWLEDGE_BUNDLE_ID
+    private readonly sessionStore: KnowledgeStudioSessionStore
   ) {
     super(leaf);
   }
@@ -54,7 +54,8 @@ export class KnowledgeStudioView extends ItemView {
   /** Mounts the React surface and starts its durable Bundle session. */
   async onOpen(): Promise<void> {
     this.renderView();
-    this.controller.start(this.bundleId);
+    this.sessionUnsubscriber?.();
+    this.sessionUnsubscriber = this.sessionStore.subscribe(() => this.synchronizeSession());
     this.windowMigrationDestroy?.();
     this.windowMigrationDestroy = this.containerEl.onWindowMigrated(() => {
       this.unmountRoot();
@@ -64,10 +65,28 @@ export class KnowledgeStudioView extends ItemView {
 
   /** Releases migration hooks, controller work, and the current React root. */
   async onClose(): Promise<void> {
+    this.sessionUnsubscriber?.();
+    this.sessionUnsubscriber = null;
     this.windowMigrationDestroy?.();
     this.windowMigrationDestroy = null;
+    this.currentBundleId = undefined;
     this.controller.destroy();
     this.unmountRoot();
+  }
+
+  /** Applies the latest exact Bundle selection without ever starting a shell sentinel. */
+  private synchronizeSession(): void {
+    const session = this.sessionStore.getState();
+    if (!session.bundleId) {
+      this.currentBundleId = undefined;
+      this.controller.showUnavailable(session.unavailableNotice);
+      return;
+    }
+    if (this.currentBundleId === session.bundleId) {
+      return;
+    }
+    this.currentBundleId = session.bundleId;
+    this.controller.start(session.bundleId);
   }
 
   /** Creates a fresh React root in the document currently owning the view. */

@@ -5,6 +5,7 @@ import {
   COPILOT_PROJECT_EXCLUSIONS,
   COPILOT_PROJECT_ID,
   COPILOT_PROJECT_INCLUSIONS,
+  COPILOT_PROJECT_KNOWLEDGE_BUNDLE,
   COPILOT_PROJECT_LAST_USED,
   COPILOT_PROJECT_MAX_TOKENS,
   COPILOT_PROJECT_MODEL_KEY,
@@ -89,6 +90,14 @@ export async function writeProjectFrontmatter(
     frontmatter[COPILOT_PROJECT_YOUTUBE_URLS] = youtubeUrls;
     frontmatter[COPILOT_PROJECT_CREATED] = timestamps.createdMs;
     frontmatter[COPILOT_PROJECT_LAST_USED] = timestamps.lastUsedMs;
+
+    // Reason: the project layer preserves this value as untrusted data. Knowledge runtime
+    // activation performs strict schema and boundary validation separately.
+    if (project.knowledgeBundle !== undefined) {
+      frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE] = project.knowledgeBundle;
+    } else {
+      delete frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE];
+    }
   });
 }
 
@@ -275,6 +284,9 @@ export async function parseProjectConfigFile(file: TFile): Promise<ProjectFileRe
       },
       created: Number.isFinite(createdMs) && createdMs > 0 ? createdMs : 0,
       UsageTimestamps: Number.isFinite(lastUsedMs) && lastUsedMs > 0 ? lastUsedMs : 0,
+      ...(frontmatter && COPILOT_PROJECT_KNOWLEDGE_BUNDLE in frontmatter
+        ? { knowledgeBundle: frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE] }
+        : {}),
     },
     filePath: file.path,
     folderName,
@@ -473,6 +485,12 @@ export async function ensureProjectFrontmatter(
       }
       if (frontmatter[COPILOT_PROJECT_LAST_USED] == null) {
         frontmatter[COPILOT_PROJECT_LAST_USED] = lastUsedMs;
+      }
+      if (
+        !(COPILOT_PROJECT_KNOWLEDGE_BUNDLE in frontmatter) &&
+        record.project.knowledgeBundle !== undefined
+      ) {
+        frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE] = record.project.knowledgeBundle;
       }
     });
   } finally {

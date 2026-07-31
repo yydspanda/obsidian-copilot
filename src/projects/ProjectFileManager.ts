@@ -7,6 +7,7 @@ import {
   COPILOT_PROJECT_EXCLUSIONS,
   COPILOT_PROJECT_ID,
   COPILOT_PROJECT_INCLUSIONS,
+  COPILOT_PROJECT_KNOWLEDGE_BUNDLE,
   COPILOT_PROJECT_LAST_USED,
   COPILOT_PROJECT_MAX_TOKENS,
   COPILOT_PROJECT_MODEL_KEY,
@@ -47,6 +48,98 @@ import {
 } from "@/utils/vaultAdapterUtils";
 import { App, normalizePath, stringifyYaml, TFile, TFolder, Vault } from "obsidian";
 import { ensureProjectsMigratedIfNeeded } from "@/projects/projectMigration";
+
+/**
+ * Resolves the knowledge Bundle portion of an update without conflating omission and deletion.
+ *
+ * An omitted property preserves the cached advanced configuration. An explicit own
+ * `knowledgeBundle: undefined` removes it. Any other explicit value replaces it as
+ * untrusted project data for the knowledge configuration source to validate later.
+ *
+ * @param existing - Currently cached project configuration
+ * @param update - Incoming complete project update
+ * @returns Detached update with the intended Bundle property state
+ */
+function resolveProjectKnowledgeBundleUpdate(
+  existing: ProjectConfig,
+  update: ProjectConfig
+): ProjectConfig {
+  const resolved = { ...update };
+  const explicitlyUpdated = Object.prototype.hasOwnProperty.call(update, "knowledgeBundle");
+
+  if (!explicitlyUpdated) {
+    if (Object.prototype.hasOwnProperty.call(existing, "knowledgeBundle")) {
+      resolved.knowledgeBundle = existing.knowledgeBundle;
+    }
+    return resolved;
+  }
+
+  if (update.knowledgeBundle === undefined) {
+    delete resolved.knowledgeBundle;
+  }
+  return resolved;
+}
+
+/**
+ * Builds the complete frontmatter map for hidden-folder adapter writes.
+ *
+ * @param project - Project configuration to serialize
+ * @param folderName - Folder name used only as the project-name fallback
+ * @param timestamps - Created and last-used timestamps
+ * @returns Complete frontmatter without invented optional values
+ */
+export function buildHiddenProjectFrontmatter(
+  project: ProjectConfig,
+  folderName: string,
+  timestamps: { createdMs: number; lastUsedMs: number }
+): Record<string, unknown> {
+  const webUrls = splitUrlsStringToArray(project.contextSource?.webUrls || "");
+  const youtubeUrls = splitUrlsStringToArray(project.contextSource?.youtubeUrls || "");
+
+  const fm: Record<string, unknown> = {
+    // Reason: do NOT fallback to folderName for id — with name-based folders,
+    // folderName is derived from project name, not id.
+    [COPILOT_PROJECT_ID]: project.id.trim(),
+    [COPILOT_PROJECT_NAME]: (project.name || folderName).trim(),
+    [COPILOT_PROJECT_DESCRIPTION]: (project.description || "").trim(),
+    [COPILOT_PROJECT_MODEL_KEY]: (project.projectModelKey || "").trim(),
+    [COPILOT_PROJECT_INCLUSIONS]: project.contextSource?.inclusions || "",
+    [COPILOT_PROJECT_EXCLUSIONS]: project.contextSource?.exclusions || "",
+    [COPILOT_PROJECT_WEB_URLS]: webUrls,
+    [COPILOT_PROJECT_YOUTUBE_URLS]: youtubeUrls,
+    [COPILOT_PROJECT_CREATED]: timestamps.createdMs,
+    [COPILOT_PROJECT_LAST_USED]: timestamps.lastUsedMs,
+  };
+
+  if (project.modelConfigs?.temperature != null) {
+    fm[COPILOT_PROJECT_TEMPERATURE] = project.modelConfigs.temperature;
+  }
+  if (project.modelConfigs?.maxTokens != null) {
+    fm[COPILOT_PROJECT_MAX_TOKENS] = project.modelConfigs.maxTokens;
+  }
+  if (project.knowledgeBundle !== undefined) {
+    fm[COPILOT_PROJECT_KNOWLEDGE_BUNDLE] = project.knowledgeBundle;
+  }
+
+  return fm;
+}
+
+/**
+ * Builds complete project content for hidden-folder adapter writes.
+ *
+ * @param project - Project configuration to serialize
+ * @param folderName - Folder name used only as the project-name fallback
+ * @param timestamps - Created and last-used timestamps
+ * @returns Complete Markdown file with YAML frontmatter
+ */
+function buildProjectFileContent(
+  project: ProjectConfig,
+  folderName: string,
+  timestamps: { createdMs: number; lastUsedMs: number }
+): string {
+  const fm = buildHiddenProjectFrontmatter(project, folderName, timestamps);
+  return `---\n${stringifyYaml(fm)}---\n${project.systemPrompt || ""}`;
+}
 
 /**
  * Project file manager (aligned with system-prompts Manager pattern).
@@ -183,48 +276,6 @@ export class ProjectFileManager {
   }
 
   /**
-   * Build complete file content (frontmatter + body) for a project.
-   * Used for hidden-folder files where processFrontMatter is unavailable.
-   *
-   * @param project - ProjectConfig to serialize
-   * @param folderName - Folder name (fallback for id/name)
-   * @param timestamps - Created and last-used timestamps
-   * @returns Complete file content string
-   */
-  private buildProjectFileContent(
-    project: ProjectConfig,
-    folderName: string,
-    timestamps: { createdMs: number; lastUsedMs: number }
-  ): string {
-    const webUrls = splitUrlsStringToArray(project.contextSource?.webUrls || "");
-    const youtubeUrls = splitUrlsStringToArray(project.contextSource?.youtubeUrls || "");
-
-    const fm: Record<string, unknown> = {
-      // Reason: do NOT fallback to folderName for id — with name-based folders,
-      // folderName is derived from project name, not id.
-      [COPILOT_PROJECT_ID]: project.id.trim(),
-      [COPILOT_PROJECT_NAME]: (project.name || folderName).trim(),
-      [COPILOT_PROJECT_DESCRIPTION]: (project.description || "").trim(),
-      [COPILOT_PROJECT_MODEL_KEY]: (project.projectModelKey || "").trim(),
-      [COPILOT_PROJECT_INCLUSIONS]: project.contextSource?.inclusions || "",
-      [COPILOT_PROJECT_EXCLUSIONS]: project.contextSource?.exclusions || "",
-      [COPILOT_PROJECT_WEB_URLS]: webUrls,
-      [COPILOT_PROJECT_YOUTUBE_URLS]: youtubeUrls,
-      [COPILOT_PROJECT_CREATED]: timestamps.createdMs,
-      [COPILOT_PROJECT_LAST_USED]: timestamps.lastUsedMs,
-    };
-
-    if (project.modelConfigs?.temperature != null) {
-      fm[COPILOT_PROJECT_TEMPERATURE] = project.modelConfigs.temperature;
-    }
-    if (project.modelConfigs?.maxTokens != null) {
-      fm[COPILOT_PROJECT_MAX_TOKENS] = project.modelConfigs.maxTokens;
-    }
-
-    return `---\n${stringifyYaml(fm)}---\n${project.systemPrompt || ""}`;
-  }
-
-  /**
    * Create a new project file (\<projectsFolder\>/\<id\>/project.md).
    * @param project - ProjectConfig to create
    * @returns Newly created ProjectFileRecord
@@ -337,8 +388,9 @@ export class ProjectFileManager {
 
     const existing = getCachedProjectRecordById(normalizedId);
     if (!existing) throw new Error(`Project not found: ${normalizedId}`);
+    const projectForUpdate = resolveProjectKnowledgeBundleUpdate(existing.project, nextProject);
 
-    const trimmedName = (nextProject.name || "").trim();
+    const trimmedName = (projectForUpdate.name || "").trim();
     if (trimmedName) {
       const nameConflict = getCachedProjectRecords().some(
         (r) =>
@@ -430,7 +482,7 @@ export class ProjectFileManager {
         const folderPath = getProjectFolderPath(folderName);
         await ensureFolderExists(getProjectsFolder());
         await ensureFolderExists(folderPath);
-        file = await this.vault.create(filePath, nextProject.systemPrompt || "");
+        file = await this.vault.create(filePath, projectForUpdate.systemPrompt || "");
         materialized = true;
       }
 
@@ -447,7 +499,11 @@ export class ProjectFileManager {
       const memoryLastUsed = this.projectLastUsedManager.getLastTouchedAt(normalizedId) ?? 0;
       const lastUsedMs = Math.max(cachedLastUsed, memoryLastUsed);
 
-      const projectForWrite = { ...nextProject, created: createdMs, UsageTimestamps: lastUsedMs };
+      const projectForWrite = {
+        ...projectForUpdate,
+        created: createdMs,
+        UsageTimestamps: lastUsedMs,
+      };
 
       // Reason: processFrontMatter (used by writeProjectFrontmatter) does not work reliably
       // on synthetic TFiles for hidden folders. Split into cached-file and adapter-based paths.
@@ -473,11 +529,11 @@ export class ProjectFileManager {
         const separator = frontmatterBlock.endsWith("\n") ? "" : "\n";
         await this.vault.modify(
           file,
-          frontmatterBlock + separator + (nextProject.systemPrompt || "")
+          frontmatterBlock + separator + (projectForUpdate.systemPrompt || "")
         );
       } else {
         // Hidden-folder file: build complete content and write via adapter
-        const content = this.buildProjectFileContent(projectForWrite, folderName, {
+        const content = buildProjectFileContent(projectForWrite, folderName, {
           createdMs,
           lastUsedMs,
         });
@@ -485,7 +541,11 @@ export class ProjectFileManager {
       }
 
       const updated: ProjectFileRecord = {
-        project: { ...nextProject, created: createdMs, UsageTimestamps: lastUsedMs },
+        project: {
+          ...projectForUpdate,
+          created: createdMs,
+          UsageTimestamps: lastUsedMs,
+        },
         filePath,
         folderName,
       };
