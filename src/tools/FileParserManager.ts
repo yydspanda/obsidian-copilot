@@ -293,9 +293,20 @@ export class Docs4LLMParser implements FileParser {
     Docs4LLMParser.lastRateLimitNoticeTime = 0;
   }
 
-  constructor(brevilabsClient: BrevilabsClient, project: ProjectConfig | null = null) {
+  /**
+   * Create a document parser bound to one explicit Vault lifecycle.
+   *
+   * @param brevilabsClient - Document conversion API client
+   * @param vault - Vault that owns project context cache state
+   * @param project - Optional project receiving parsed file context
+   */
+  constructor(
+    brevilabsClient: BrevilabsClient,
+    vault: Vault,
+    project: ProjectConfig | null = null
+  ) {
     this.brevilabsClient = brevilabsClient;
-    this.projectContextCache = ProjectContextCache.getInstance();
+    this.projectContextCache = ProjectContextCache.getInstance(vault);
     this.selfHostPdfParser = new SelfHostPdfParser();
     this.currentProject = project;
   }
@@ -491,7 +502,7 @@ export class FileParserManager {
 
   constructor(
     brevilabsClient: BrevilabsClient,
-    _vault: Vault,
+    vault: Vault,
     isProjectMode: boolean = false,
     project: ProjectConfig | null = null
   ) {
@@ -499,7 +510,7 @@ export class FileParserManager {
     this.registerParser(new MarkdownParser());
 
     // In project mode, use Docs4LLMParser for all supported files including PDFs
-    this.registerParser(new Docs4LLMParser(brevilabsClient, project));
+    this.registerParser(new Docs4LLMParser(brevilabsClient, vault, project));
 
     // Only register PDFParser when not in project mode
     if (!isProjectMode) {

@@ -1,5 +1,5 @@
 import { err2String } from "@/errorFormat";
-import { TFile } from "obsidian";
+import { App, TFile, Vault } from "obsidian";
 import { ensureFolderExists } from "@/utils";
 import { getSettings } from "@/settings/model";
 import { isSensitiveKey } from "@/encryptionService";
@@ -37,15 +37,6 @@ class LogFileManager {
     if (this.initialized) return;
     // Start with empty buffer - log file is only an export artifact
     this.initialized = true;
-  }
-
-  private hasVault(): boolean {
-    // global `app` is available in Obsidian environment
-    try {
-      return typeof app !== "undefined" && !!app.vault?.adapter;
-    } catch {
-      return false;
-    }
   }
 
   private sanitizeForSingleLine(value: unknown): string {
@@ -120,17 +111,22 @@ class LogFileManager {
     // Intentionally do not flush automatically.
   }
 
-  async flush(): Promise<void> {
-    if (!this.hasVault()) return;
+  /**
+   * Flushes the current log snapshot to one explicit Vault owner.
+   *
+   * @param vault - Exact Vault that should receive the log snapshot
+   */
+  async flush(vault: Vault): Promise<void> {
+    const ownerVault = vault;
     if (this.flushing) return;
     this.flushing = true;
     try {
       const path = this.getLogPath();
+      const content = this.buffer.join("\n") + (this.buffer.length ? "\n" : "");
       // Only write if a log file already exists.
       // Do not create files or folders implicitly; creation happens in openLogFile().
-      if (await app.vault.adapter.exists(path)) {
-        const content = this.buffer.join("\n") + (this.buffer.length ? "\n" : "");
-        await app.vault.adapter.write(path, content);
+      if (await ownerVault.adapter.exists(path)) {
+        await ownerVault.adapter.write(path, content);
       }
     } catch {
       // swallow write errors; logging should never crash the app
@@ -139,14 +135,19 @@ class LogFileManager {
     }
   }
 
-  async clear(): Promise<void> {
+  /**
+   * Clears the in-memory log and removes the exported file from one explicit Vault owner.
+   *
+   * @param vault - Exact Vault whose exported log file should be removed
+   */
+  async clear(vault: Vault): Promise<void> {
+    const ownerVault = vault;
     this.buffer = [];
-    if (!this.hasVault()) return;
     try {
       const path = this.getLogPath();
-      if (await app.vault.adapter.exists(path)) {
+      if (await ownerVault.adapter.exists(path)) {
         // Delete the file for a clean slate; openLogFile() will recreate on demand
-        await app.vault.adapter.remove(path);
+        await ownerVault.adapter.remove(path);
       }
     } catch {
       // ignore
@@ -202,8 +203,14 @@ class LogFileManager {
     return value;
   }
 
-  async openLogFile(): Promise<void> {
-    if (!this.hasVault()) return;
+  /**
+   * Writes and opens the exported log through one explicit App/Vault/Workspace owner.
+   *
+   * @param ownerApp - Exact App whose Vault receives and whose Workspace opens the log
+   */
+  async openLogFile(ownerApp: App): Promise<void> {
+    const ownerVault = ownerApp.vault;
+    const ownerWorkspace = ownerApp.workspace;
     const path = this.getLogPath();
 
     // Snapshot the current buffer
@@ -226,25 +233,25 @@ class LogFileManager {
       const content = bufferSnapshot.join("\n") + (bufferSnapshot.length ? "\n" : "");
       const folder = path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
       if (folder) {
-        await ensureFolderExists(folder);
+        await ensureFolderExists(folder, ownerVault);
       }
 
-      const fileExists = await app.vault.adapter.exists(path);
+      const fileExists = await ownerVault.adapter.exists(path);
       if (fileExists) {
-        await app.vault.adapter.write(path, content);
+        await ownerVault.adapter.write(path, content);
       } else {
-        await app.vault.create(path, content);
+        await ownerVault.create(path, content);
       }
     } catch {
       // Swallow write errors; logging should never crash the app
     }
 
     // Original buffer unchanged; open the file
-    const abstract = app.vault.getAbstractFileByPath(path);
+    const abstract = ownerVault.getAbstractFileByPath(path);
     const file = abstract instanceof TFile ? abstract : null;
     try {
       if (file) {
-        const leaf = app.workspace.getLeaf(true);
+        const leaf = ownerWorkspace.getLeaf(true);
         await leaf.openFile(file);
       }
     } catch {

@@ -668,7 +668,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
 
   const handleNewChat = useCallback(async () => {
     clearRecordedPromptPayload();
-    await logFileManager.clear();
+    await logFileManager.clear(plugin.app.vault);
     handleStopGenerating(ABORT_REASON.NEW_CHAT);
 
     // Analyze chat messages for memory if enabled

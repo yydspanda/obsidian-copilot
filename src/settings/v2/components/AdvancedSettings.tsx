@@ -442,8 +442,8 @@ export const AdvancedSettings: React.FC = () => {
             onClick={() => {
               void (async () => {
                 await flushRecordedPromptPayloadToLog();
-                await logFileManager.flush();
-                await logFileManager.openLogFile();
+                await logFileManager.flush(app.vault);
+                await logFileManager.openLogFile(app);
               })();
             }}
           >

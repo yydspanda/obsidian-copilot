@@ -40,6 +40,8 @@ export default class ChainManager {
   public promptManager: PromptManager;
   public userMemoryManager: UserMemoryManager;
   private pendingModelError: Error | null = null;
+  private settingsUnsubscriber?: () => void;
+  private disposed = false;
 
   constructor(app: App) {
     // Instantiate singletons
@@ -52,11 +54,30 @@ export default class ChainManager {
     // Initialize async operations
     void this.initialize().catch((err) => logError("ChainManager initialize failed", err));
 
-    subscribeToSettingsChange(() => {
+    this.settingsUnsubscriber = subscribeToSettingsChange(() => {
+      if (this.disposed) {
+        return;
+      }
       void this.createChainWithNewModel().catch((err) =>
         logError("createChainWithNewModel failed", err)
       );
     });
+  }
+
+  /**
+   * Permanently stops lifecycle-owned subscriptions.
+   *
+   * Provider initialization already in flight cannot be cancelled, but its
+   * continuation will stop before any later chain housekeeping.
+   */
+  public dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    const settingsUnsubscriber = this.settingsUnsubscriber;
+    this.settingsUnsubscriber = undefined;
+    settingsUnsubscriber?.();
   }
 
   private async initialize() {
@@ -91,6 +112,9 @@ export default class ChainManager {
     options: SetChainOptions = {},
     neededReInitChatMode: boolean = true
   ): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     let newModelKey: string | undefined;
     const chainType = getChainType();
     const currentProject = getCurrentProject();
@@ -140,6 +164,9 @@ export default class ChainManager {
           ...currentProject?.modelConfigs,
         };
         await this.chatModelManager.setChatModel(mergedModel);
+        if (this.disposed) {
+          return;
+        }
         this.pendingModelError = null;
       }
 
@@ -154,6 +181,9 @@ export default class ChainManager {
         this.validateChainType(chainType);
         if (options.refreshIndex) {
           await this.refreshVaultIndex();
+          if (this.disposed) {
+            return;
+          }
         }
       } else {
         console.error(
@@ -162,6 +192,9 @@ export default class ChainManager {
       }
       logInfo(`Setting model to ${newModelKey}`);
     } catch (error) {
+      if (this.disposed) {
+        return;
+      }
       this.pendingModelError = error instanceof Error ? error : new Error(String(error));
       logError(`createChainWithNewModel failed: ${error}`);
       logInfo(`modelKey: ${newModelKey || getModelKey()}`);
@@ -195,9 +228,10 @@ export default class ChainManager {
    * semantic search is disabled — v3 lexical search builds its index on
    * demand and doesn't need a precomputed store.
    */
-  private async refreshVaultIndex() {
-    if (!getSettings().enableSemanticSearchV3) return;
+  private async refreshVaultIndex(): Promise<void> {
+    if (this.disposed || !getSettings().enableSemanticSearchV3) return;
     const VectorStoreManager = (await import("@/search/vectorStoreManager")).default;
+    if (this.disposed) return;
     await VectorStoreManager.getInstance().indexVaultToVectorStore(false);
   }
 

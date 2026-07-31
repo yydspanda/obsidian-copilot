@@ -1,5 +1,5 @@
 import { atom } from "jotai";
-import { TFile, TFolder, TAbstractFile } from "obsidian";
+import { App, MetadataCache, TFile, TFolder, TAbstractFile, Vault } from "obsidian";
 import { debounce } from "@/utils/debounce";
 import { settingsStore } from "@/settings/model";
 import { getTagsFromNote, isAllowedFileForNoteContext } from "@/utils";
@@ -42,20 +42,57 @@ export const tagsAllAtom = atom<string[]>([]);
  */
 export class VaultDataManager {
   private static instance: VaultDataManager | null = null;
+  private readonly app: App;
+  private readonly vault: Vault;
+  private readonly metadataCache: MetadataCache;
   private initialized = false;
+  private disposed = false;
 
-  private constructor() {
-    // Private constructor for singleton pattern
+  /**
+   * Creates a manager bound to one exact App/Vault lifecycle.
+   *
+   * @param app - App that owns the Vault and MetadataCache listeners
+   */
+  private constructor(app: App) {
+    this.app = app;
+    this.vault = app.vault;
+    this.metadataCache = app.metadataCache;
   }
 
   /**
-   * Gets the singleton instance of VaultDataManager
+   * Gets the manager for an exact App/Vault ownership tuple.
+   *
+   * A changed owner retires the previous manager before returning a replacement.
+   *
+   * @param app - App requesting the active manager
+   * @returns Manager owned by the supplied App and Vault
    */
-  public static getInstance(): VaultDataManager {
+  public static getInstance(app: App): VaultDataManager {
+    const current = VaultDataManager.instance;
+    if (current && !current.isOwnedBy(app)) {
+      return VaultDataManager.startLifecycle(app);
+    }
     if (!VaultDataManager.instance) {
-      VaultDataManager.instance = new VaultDataManager();
+      VaultDataManager.instance = new VaultDataManager(app);
     }
     return VaultDataManager.instance;
+  }
+
+  /**
+   * Starts a fresh plugin lifecycle, including same-App hot reloads.
+   *
+   * The replacement becomes authoritative before the previous manager is
+   * cleaned up, so a delayed stale cleanup cannot clear the new owner.
+   *
+   * @param app - App that owns the new plugin lifecycle
+   * @returns Fresh lifecycle-owned manager
+   */
+  public static startLifecycle(app: App): VaultDataManager {
+    const previous = VaultDataManager.instance;
+    const replacement = new VaultDataManager(app);
+    VaultDataManager.instance = replacement;
+    previous?.cleanup();
+    return replacement;
   }
 
   /**
@@ -66,13 +103,11 @@ export class VaultDataManager {
    * Filtering is done by hooks based on parameters.
    */
   public initialize(): void {
-    if (this.initialized) {
-      logInfo("VaultDataManager: Already initialized, skipping");
+    if (!this.isActiveOwner()) {
       return;
     }
-
-    if (!app?.vault) {
-      logInfo("VaultDataManager: app.vault not available, deferring initialization");
+    if (this.initialized) {
+      logInfo("VaultDataManager: Already initialized, skipping");
       return;
     }
 
@@ -85,19 +120,44 @@ export class VaultDataManager {
     this.refreshTagsAll();
 
     // Register event listeners
-    app.vault.on("create", this.handleFileCreate);
-    app.vault.on("delete", this.handleFileDelete);
-    app.vault.on("rename", this.handleFileRename);
-    app.vault.on("modify", this.handleFileModify);
-    app.metadataCache.on("changed", this.handleMetadataChange);
+    this.vault.on("create", this.handleFileCreate);
+    this.vault.on("delete", this.handleFileDelete);
+    this.vault.on("rename", this.handleFileRename);
+    this.vault.on("modify", this.handleFileModify);
+    this.metadataCache.on("changed", this.handleMetadataChange);
 
     this.initialized = true;
+  }
+
+  /**
+   * Reports whether this object still owns the active App/Vault lifecycle.
+   *
+   * @returns Whether callbacks may observe or publish Vault data
+   */
+  private isActiveOwner(): boolean {
+    return !this.disposed && VaultDataManager.instance === this;
+  }
+
+  /**
+   * Compares a candidate against this manager's exact ownership tuple.
+   *
+   * @param app - Candidate App
+   * @returns Whether App, Vault, and MetadataCache identities all match
+   */
+  private isOwnedBy(app: App): boolean {
+    return (
+      !this.disposed &&
+      this.app === app &&
+      this.vault === app.vault &&
+      this.metadataCache === app.metadataCache
+    );
   }
 
   /**
    * Handles file creation events
    */
   private handleFileCreate = (file: TAbstractFile): void => {
+    if (!this.isActiveOwner()) return;
     if (file instanceof TFile) {
       if (isAllowedFileForNoteContext(file)) {
         this.debouncedRefreshNotes();
@@ -113,6 +173,7 @@ export class VaultDataManager {
    * Handles file deletion events
    */
   private handleFileDelete = (file: TAbstractFile): void => {
+    if (!this.isActiveOwner()) return;
     if (file instanceof TFile) {
       if (isAllowedFileForNoteContext(file)) {
         this.debouncedRefreshNotes();
@@ -130,6 +191,7 @@ export class VaultDataManager {
    * since we simply refresh all affected data structures
    */
   private handleFileRename = (file: TAbstractFile, _oldPath: string): void => {
+    if (!this.isActiveOwner()) return;
     if (file instanceof TFile) {
       if (isAllowedFileForNoteContext(file)) {
         this.debouncedRefreshNotes();
@@ -145,6 +207,7 @@ export class VaultDataManager {
    * Handles file modify events (for inline tag changes)
    */
   private handleFileModify = (file: TAbstractFile): void => {
+    if (!this.isActiveOwner()) return;
     if (file instanceof TFile && file.extension === "md") {
       this.debouncedRefreshTagsAll();
     }
@@ -154,6 +217,7 @@ export class VaultDataManager {
    * Handles metadata cache changes (for frontmatter tag updates)
    */
   private handleMetadataChange = (file: TFile): void => {
+    if (!this.isActiveOwner()) return;
     if (file.extension === "md") {
       this.debouncedRefreshTagsFrontmatter();
       this.debouncedRefreshTagsAll();
@@ -201,9 +265,9 @@ export class VaultDataManager {
    * Hooks will filter based on their parameters.
    */
   private refreshNotes = (): void => {
-    if (!app?.vault) return;
+    if (!this.isActiveOwner()) return;
 
-    const allFiles = app.vault.getFiles();
+    const allFiles = this.vault.getFiles();
     const newFiles = allFiles.filter(
       (file): file is TFile => file instanceof TFile && isAllowedFileForNoteContext(file)
     );
@@ -218,9 +282,9 @@ export class VaultDataManager {
    * Refreshes the folders atom with current vault folders
    */
   private refreshFolders = (): void => {
-    if (!app?.vault) return;
+    if (!this.isActiveOwner()) return;
 
-    const newFolders = app.vault
+    const newFolders = this.vault
       .getAllLoadedFiles()
       .filter((file: TAbstractFile): file is TFolder => file instanceof TFolder);
 
@@ -232,12 +296,12 @@ export class VaultDataManager {
    * Refreshes the frontmatter tags atom with current vault tags (frontmatter only)
    */
   private refreshTagsFrontmatter = (): void => {
-    if (!app?.vault || !app?.metadataCache) return;
+    if (!this.isActiveOwner()) return;
 
     const tagSet = new Set<string>();
 
-    app.vault.getMarkdownFiles().forEach((file: TFile) => {
-      const fileTags = getTagsFromNote(file, true); // frontmatterOnly = true
+    this.vault.getMarkdownFiles().forEach((file: TFile) => {
+      const fileTags = getTagsFromNote(file, true, this.metadataCache); // frontmatterOnly = true
       fileTags.forEach((tag) => {
         const tagWithHash = tag.startsWith("#") ? tag : `#${tag}`;
         tagSet.add(tagWithHash);
@@ -254,12 +318,12 @@ export class VaultDataManager {
    * Refreshes the all tags atom with current vault tags (frontmatter + inline)
    */
   private refreshTagsAll = (): void => {
-    if (!app?.vault || !app?.metadataCache) return;
+    if (!this.isActiveOwner()) return;
 
     const tagSet = new Set<string>();
 
-    app.vault.getMarkdownFiles().forEach((file: TFile) => {
-      const fileTags = getTagsFromNote(file, false); // frontmatterOnly = false (all tags)
+    this.vault.getMarkdownFiles().forEach((file: TFile) => {
+      const fileTags = getTagsFromNote(file, false, this.metadataCache); // frontmatterOnly = false (all tags)
       fileTags.forEach((tag) => {
         const tagWithHash = tag.startsWith("#") ? tag : `#${tag}`;
         tagSet.add(tagWithHash);
@@ -277,9 +341,10 @@ export class VaultDataManager {
    * Should be called during plugin unload.
    */
   public cleanup(): void {
-    if (!this.initialized) {
+    if (this.disposed) {
       return;
     }
+    this.disposed = true;
 
     logInfo("VaultDataManager: Cleaning up event listeners");
 
@@ -289,18 +354,19 @@ export class VaultDataManager {
     this.debouncedRefreshTagsFrontmatter.cancel();
     this.debouncedRefreshTagsAll.cancel();
 
-    // Remove event listeners
-    if (app?.vault) {
-      app.vault.off("create", this.handleFileCreate);
-      app.vault.off("delete", this.handleFileDelete);
-      app.vault.off("rename", this.handleFileRename);
-      app.vault.off("modify", this.handleFileModify);
-    }
-    if (app?.metadataCache) {
-      app.metadataCache.off("changed", this.handleMetadataChange);
-    }
+    // Remove only the listeners captured from this exact lifecycle owner.
+    // Calling off for an unregistered callback is safe and also cleans up a
+    // partially completed initialize() if one of the later registrations threw.
+    this.vault.off("create", this.handleFileCreate);
+    this.vault.off("delete", this.handleFileDelete);
+    this.vault.off("rename", this.handleFileRename);
+    this.vault.off("modify", this.handleFileModify);
+    this.metadataCache.off("changed", this.handleMetadataChange);
 
     this.initialized = false;
+    if (VaultDataManager.instance === this) {
+      VaultDataManager.instance = null;
+    }
   }
 
   /**

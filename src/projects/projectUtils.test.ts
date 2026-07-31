@@ -1,11 +1,14 @@
-import { TFile } from "obsidian";
+import { App, TFile } from "obsidian";
 import {
+  ensureProjectFrontmatter,
   parseProjectConfigFile,
+  ProjectStateLifecycleEndedError,
   sanitizeVaultPathSegment,
   writeProjectFrontmatter,
 } from "@/projects/projectUtils";
 import { mockTFile } from "@/__tests__/mockObsidian";
 import { COPILOT_PROJECT_KNOWLEDGE_BUNDLE } from "@/projects/constants";
+import { isProjectStateOwnerActive, ProjectStateOwner } from "@/projects/state";
 
 // Mock deep dependencies to avoid transitive import chains
 jest.mock("@/settings/model", () => ({
@@ -13,10 +16,11 @@ jest.mock("@/settings/model", () => ({
 }));
 
 jest.mock("@/projects/state", () => ({
-  addPendingFileWrite: jest.fn(),
-  removePendingFileWrite: jest.fn(),
+  acquireProjectFileWrite: jest.fn(() => ({})),
+  isProjectStateOwnerActive: jest.fn(() => true),
+  releaseProjectFileWrite: jest.fn(() => true),
   isPendingFileWrite: jest.fn(() => false),
-  updateCachedProjectRecords: jest.fn(),
+  updateCachedProjectRecordsForOwner: jest.fn(() => true),
 }));
 
 jest.mock("@/logger", () => ({
@@ -38,9 +42,9 @@ function makeMockFile(path: string): TFile {
   });
 }
 
-// Helper: set up the global `app` mock used by parseProjectConfigFile
-function setupAppMock(rawContent: string, frontmatter: Record<string, unknown> | null) {
-  (window as unknown as Record<string, unknown>).app = {
+// Helper: set up the explicit App owner used by parseProjectConfigFile
+function setupAppMock(rawContent: string, frontmatter: Record<string, unknown> | null): App {
+  const appContext = {
     vault: {
       read: jest.fn().mockResolvedValue(rawContent),
       // Reason: parseProjectConfigFile uses `cachedFile instanceof TFile` to detect synthetic TFiles.
@@ -53,6 +57,8 @@ function setupAppMock(rawContent: string, frontmatter: Record<string, unknown> |
       getFileCache: jest.fn().mockReturnValue(frontmatter ? { frontmatter } : null),
     },
   };
+  (window as unknown as Record<string, unknown>).app = appContext;
+  return appContext as unknown as App;
 }
 
 describe("parseProjectConfigFile", () => {
@@ -62,10 +68,10 @@ describe("parseProjectConfigFile", () => {
     // Malformed YAML: unbalanced braces cause a parse error
     const malformedContent = "---\nname: {bad: yaml: here\n---\nBody text";
     // Force the metadata-cache miss so the fallback YAML parser runs
-    setupAppMock(malformedContent, null);
+    const appContext = setupAppMock(malformedContent, null);
 
     const file = makeMockFile(VALID_PATH);
-    const result = await parseProjectConfigFile(file);
+    const result = await parseProjectConfigFile(appContext, file);
 
     expect(result).toBeNull();
   });
@@ -91,7 +97,7 @@ describe("parseProjectConfigFile", () => {
     ].join("\n");
 
     // Use metadata-cache path (non-null frontmatter) for the happy path
-    setupAppMock(rawContent, {
+    const appContext = setupAppMock(rawContent, {
       "copilot-project-id": "my-project",
       "copilot-project-name": "My Project",
       "copilot-project-description": "A test project",
@@ -107,7 +113,7 @@ describe("parseProjectConfigFile", () => {
     });
 
     const file = makeMockFile(VALID_PATH);
-    const result = await parseProjectConfigFile(file);
+    const result = await parseProjectConfigFile(appContext, file);
 
     expect(result).not.toBeNull();
     expect(result!.project.id).toBe("my-project");
@@ -128,12 +134,12 @@ describe("parseProjectConfigFile", () => {
   it("returns null when copilot-project-id is missing from frontmatter", async () => {
     const rawContent = ["---", "copilot-project-name: My Project", "---", "Body text"].join("\n");
 
-    setupAppMock(rawContent, {
+    const appContext = setupAppMock(rawContent, {
       "copilot-project-name": "My Project",
     });
 
     const file = makeMockFile(VALID_PATH);
-    const result = await parseProjectConfigFile(file);
+    const result = await parseProjectConfigFile(appContext, file);
 
     // Reason: files without copilot-project-id are treated as corrupted and skipped.
     // With name-based folders, folderName can no longer serve as id fallback.
@@ -152,15 +158,40 @@ describe("parseProjectConfigFile", () => {
       "---",
       "Body text",
     ].join("\n");
-    setupAppMock(rawContent, null);
+    const appContext = setupAppMock(rawContent, null);
 
-    const result = await parseProjectConfigFile(makeMockFile(VALID_PATH));
+    const result = await parseProjectConfigFile(appContext, makeMockFile(VALID_PATH));
 
     expect(result?.project.knowledgeBundle).toEqual({
       version: "unsupported",
       wikiRoot: "Wiki\\\\Native",
       extra: true,
     });
+  });
+
+  it("reads only from the explicitly supplied App when another global App exists", async () => {
+    const ownedContent = [
+      "---",
+      "copilot-project-id: owned",
+      "copilot-project-name: Owned",
+      "---",
+      "Owned body",
+    ].join("\n");
+    const foreignContent = [
+      "---",
+      "copilot-project-id: foreign",
+      "copilot-project-name: Foreign",
+      "---",
+      "Foreign body",
+    ].join("\n");
+    const ownedApp = setupAppMock(ownedContent, null);
+    const foreignApp = setupAppMock(foreignContent, null);
+
+    const result = await parseProjectConfigFile(ownedApp, makeMockFile(VALID_PATH));
+
+    expect(result?.project.id).toBe("owned");
+    expect(ownedApp.vault.read).toHaveBeenCalledTimes(1);
+    expect(foreignApp.vault.read).not.toHaveBeenCalled();
   });
 });
 
@@ -191,7 +222,7 @@ describe("writeProjectFrontmatter knowledge Bundle persistence", () => {
     const frontmatter: Record<string, unknown> = {
       [COPILOT_PROJECT_KNOWLEDGE_BUNDLE]: { stale: true },
     };
-    (window as unknown as Record<string, unknown>).app = {
+    const appContext = {
       fileManager: {
         processFrontMatter: jest.fn(
           async (
@@ -202,7 +233,8 @@ describe("writeProjectFrontmatter knowledge Bundle persistence", () => {
           }
         ),
       },
-    };
+    } as unknown as App;
+    (window as unknown as Record<string, unknown>).app = appContext;
     const configuredValue = {
       version: 1,
       id: "bundle",
@@ -212,17 +244,101 @@ describe("writeProjectFrontmatter knowledge Bundle persistence", () => {
       reviewMode: "always",
     };
 
-    await writeProjectFrontmatter(file, makeProject(configuredValue), "my-project", {
+    await writeProjectFrontmatter(appContext, file, makeProject(configuredValue), "my-project", {
       createdMs: 1,
       lastUsedMs: 2,
     });
     expect(frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE]).toBe(configuredValue);
 
-    await writeProjectFrontmatter(file, makeProject(), "my-project", {
+    await writeProjectFrontmatter(appContext, file, makeProject(), "my-project", {
       createdMs: 1,
       lastUsedMs: 2,
     });
     expect(frontmatter).not.toHaveProperty(COPILOT_PROJECT_KNOWLEDGE_BUNDLE);
+  });
+
+  it("does not mutate frontmatter when its lifecycle assertion expires before the callback", async () => {
+    const frontmatter: Record<string, unknown> = { preserved: true };
+    let runUpdate: (() => void) | undefined;
+    const processFrontMatter = jest.fn(
+      (_file: TFile, update: (current: Record<string, unknown>) => void): Promise<void> =>
+        new Promise((resolve, reject) => {
+          runUpdate = () => {
+            try {
+              update(frontmatter);
+              resolve();
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          };
+        })
+    );
+    const appContext = { fileManager: { processFrontMatter } } as unknown as App;
+    let active = true;
+    const assertActive = () => {
+      if (!active) throw new ProjectStateLifecycleEndedError();
+    };
+
+    const write = writeProjectFrontmatter(
+      appContext,
+      file,
+      makeProject({ version: 1 }),
+      "my-project",
+      { createdMs: 1, lastUsedMs: 2 },
+      assertActive
+    );
+    await Promise.resolve();
+    active = false;
+    runUpdate?.();
+
+    await expect(write).rejects.toBeInstanceOf(ProjectStateLifecycleEndedError);
+    expect(frontmatter).toEqual({ preserved: true });
+  });
+});
+
+describe("ensureProjectFrontmatter lifecycle ownership", () => {
+  it("rejects a deferred callback without mutating after a new owner takes over", async () => {
+    const file = makeMockFile("copilot-projects/my-project/project.md");
+    const owner = {} as ProjectStateOwner;
+    const frontmatter: Record<string, unknown> = { preserved: true };
+    let runUpdate: (() => void) | undefined;
+    const processFrontMatter = jest.fn(
+      (_file: TFile, update: (current: Record<string, unknown>) => void): Promise<void> =>
+        new Promise((resolve, reject) => {
+          runUpdate = () => {
+            try {
+              update(frontmatter);
+              resolve();
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+          };
+        })
+    );
+    const appContext = { fileManager: { processFrontMatter } } as unknown as App;
+    const isOwnerActiveMock = jest.mocked(isProjectStateOwnerActive);
+    isOwnerActiveMock.mockReturnValue(true);
+
+    const repair = ensureProjectFrontmatter(appContext, owner, file, {
+      project: {
+        id: "my-project",
+        name: "My Project",
+        systemPrompt: "",
+        projectModelKey: "",
+        modelConfigs: {},
+        contextSource: {},
+        created: 1,
+        UsageTimestamps: 2,
+      },
+      filePath: file.path,
+      folderName: "my-project",
+    });
+    await Promise.resolve();
+    isOwnerActiveMock.mockReturnValue(false);
+    runUpdate?.();
+
+    await expect(repair).rejects.toBeInstanceOf(ProjectStateLifecycleEndedError);
+    expect(frontmatter).toEqual({ preserved: true });
   });
 });
 

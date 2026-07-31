@@ -33,6 +33,17 @@ export interface CacheFileRef {
 /** Default cache directory used by FileCache. */
 const FILE_CONTENT_CACHE_DIR = ".copilot/file-content-cache";
 
+/** Error thrown when a stale ProjectContextCache reference is used after disposal. */
+export class ProjectContextCacheDisposedError extends Error {
+  /**
+   * Create a lifecycle error for a disposed project context cache.
+   */
+  public constructor() {
+    super("ProjectContextCache has been disposed");
+    this.name = "ProjectContextCacheDisposedError";
+  }
+}
+
 /**
  * Synchronously resolve the on-disk cache file reference for a parsed file.
  * Accepts an already-loaded ContextCache so the caller controls the data source
@@ -65,24 +76,38 @@ export function getFileCacheRef(
  * 2. Individual file content stored in .copilot/file-content-cache
  */
 export class ProjectContextCache {
-  private static instance: ProjectContextCache;
-  private cacheDir: string = ".copilot/project-context-cache";
+  private static instance?: ProjectContextCache;
+  private readonly cacheDir: string = ".copilot/project-context-cache";
   private memoryCache: Map<string, ContextCache> = new Map();
-  private vault: Vault;
-  private fileCache: FileCache<string>;
+  private readonly vault: Vault;
+  private readonly fileCache: FileCache<string>;
   private static readonly DEBOUNCE_DELAY = 5000; // 5 seconds
   private projectMutexMap: Map<string, Mutex> = new Map();
   private mutexCreationMutex: Mutex = new Mutex(); // Global lock to protect project mutex creation
+  private disposed = false;
+  private lifecycleGeneration = 0;
 
-  private constructor() {
-    this.vault = app.vault;
-    this.fileCache = FileCache.getInstance<string>();
+  private constructor(vault: Vault) {
+    this.vault = vault;
+    this.fileCache = FileCache.getInstance<string>(FILE_CONTENT_CACHE_DIR, vault);
     this.initializeEventListeners();
   }
 
-  static getInstance(): ProjectContextCache {
+  /**
+   * Get the context cache owned by one exact Vault.
+   *
+   * Supplying another Vault synchronously disposes the old cache and creates a
+   * clean instance, including a fresh file-content memory cache.
+   *
+   * @param vault - Vault that owns cache I/O and event listeners
+   * @returns Active cache for the requested Vault
+   */
+  static getInstance(vault: Vault = app.vault): ProjectContextCache {
+    if (ProjectContextCache.instance && ProjectContextCache.instance.vault !== vault) {
+      ProjectContextCache.instance.dispose();
+    }
     if (!ProjectContextCache.instance) {
-      ProjectContextCache.instance = new ProjectContextCache();
+      ProjectContextCache.instance = new ProjectContextCache(vault);
     }
     return ProjectContextCache.instance;
   }
@@ -92,19 +117,78 @@ export class ProjectContextCache {
   //===========================================================================
 
   /**
-   * Clean up resources used by the cache
+   * Permanently release resources owned by this Vault lifecycle.
+   *
+   * Disposal is synchronous and idempotent. Persisted cache files remain on
+   * disk, while listeners, mutexes, and all in-memory cache data are released.
    */
-  public cleanup() {
-    this.debouncedHandleFileChange.cancel();
-    this.vault.off("create", this.handleFileEvent);
-    this.vault.off("modify", this.handleFileEvent);
-    this.vault.off("delete", this.handleFileEvent);
-    this.vault.off("rename", this.handleFileEvent);
+  public dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.lifecycleGeneration++;
+    this.runCleanupAction(() => this.debouncedHandleFileChange.cancel(), "file-change debounce");
+    this.runCleanupAction(() => this.vault.off("create", this.handleFileEvent), "create listener");
+    this.runCleanupAction(() => this.vault.off("modify", this.handleFileEvent), "modify listener");
+    this.runCleanupAction(() => this.vault.off("delete", this.handleFileEvent), "delete listener");
+    this.runCleanupAction(() => this.vault.off("rename", this.handleFileEvent), "rename listener");
 
-    // Clean up project mutexes
+    this.memoryCache.clear();
     this.projectMutexMap.clear();
+    this.runCleanupAction(() => this.fileCache.dispose(), "file cache");
+    if (ProjectContextCache.instance === this) {
+      ProjectContextCache.instance = undefined;
+    }
   }
 
+  /**
+   * Run one teardown action without abandoning the remaining lifecycle cleanup.
+   *
+   * @param action - Synchronous cleanup operation
+   * @param label - Safe component label for diagnostics
+   */
+  private runCleanupAction(action: () => void, label: string): void {
+    try {
+      action();
+    } catch (error) {
+      logError(`[ProjectContextCache] Failed to clean up ${label}`, error);
+    }
+  }
+
+  /**
+   * Backward-compatible alias for lifecycle disposal.
+   */
+  public cleanup(): void {
+    this.dispose();
+  }
+
+  /**
+   * Capture the current lifecycle generation for an asynchronous operation.
+   *
+   * @returns Current generation
+   * @throws ProjectContextCacheDisposedError when this cache is no longer active
+   */
+  private captureGeneration(): number {
+    this.assertActive();
+    return this.lifecycleGeneration;
+  }
+
+  /**
+   * Reject stale work after disposal or lifecycle replacement.
+   *
+   * @param expectedGeneration - Optional generation captured before an await
+   * @throws ProjectContextCacheDisposedError when the operation is stale
+   */
+  private assertActive(expectedGeneration: number = this.lifecycleGeneration): void {
+    if (this.disposed || expectedGeneration !== this.lifecycleGeneration) {
+      throw new ProjectContextCacheDisposedError();
+    }
+  }
+
+  /**
+   * Register Vault listeners for this cache lifecycle.
+   */
   private initializeEventListeners() {
     // Monitor file events
     this.vault.on("create", this.handleFileEvent);
@@ -114,6 +198,9 @@ export class ProjectContextCache {
   }
 
   private handleFileEvent = (file: TAbstractFile) => {
+    if (this.disposed) {
+      return;
+    }
     if (file instanceof TFile) {
       this.debouncedHandleFileChange(file);
     }
@@ -121,6 +208,7 @@ export class ProjectContextCache {
 
   private handleFileChange = async (file: TFile) => {
     try {
+      const generation = this.captureGeneration();
       // Only process markdown files
       if (file.extension !== "md") {
         return;
@@ -130,6 +218,7 @@ export class ProjectContextCache {
 
       // Check each project to see if the file matches its patterns
       for (const project of projects) {
+        this.assertActive(generation);
         const { inclusions, exclusions } = getMatchingPatterns({
           inclusions: project.contextSource.inclusions,
           exclusions: project.contextSource.exclusions,
@@ -139,12 +228,16 @@ export class ProjectContextCache {
         if (shouldIndexFile(file, inclusions, exclusions, true)) {
           // Only invalidate markdown context, keep other contexts
           await this.invalidateMarkdownContext(project);
+          this.assertActive(generation);
           logInfo(
             `Invalidated markdown context for project ${project.name} due to file change: ${file.path}`
           );
         }
       }
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        return;
+      }
       logError("Error handling file change for project context cache:", error);
     }
   };
@@ -164,14 +257,19 @@ export class ProjectContextCache {
   // BASE CACHE OPERATIONS
   //===========================================================================
 
-  private async ensureCacheDir() {
-    if (!(await this.vault.adapter.exists(this.cacheDir))) {
+  private async ensureCacheDir(): Promise<void> {
+    const generation = this.captureGeneration();
+    const cacheDirectoryExists = await this.vault.adapter.exists(this.cacheDir);
+    this.assertActive(generation);
+    if (!cacheDirectoryExists) {
       logInfo("Creating project context cache directory:", this.cacheDir);
       await this.vault.adapter.mkdir(this.cacheDir);
+      this.assertActive(generation);
     }
   }
 
   private getCacheKey(project: ProjectConfig): string {
+    this.assertActive();
     // Use project ID as cache key
     return md5(project.id);
   }
@@ -181,6 +279,7 @@ export class ProjectContextCache {
   }
 
   private async getOrCreateProjectMutex(project: ProjectConfig): Promise<Mutex> {
+    const generation = this.captureGeneration();
     const projectId = project.id;
 
     // Quick check without lock for performance
@@ -191,6 +290,7 @@ export class ProjectContextCache {
 
     // Use global lock to ensure atomic creation
     return await this.mutexCreationMutex.runExclusive(async () => {
+      this.assertActive(generation);
       // Double-check inside the lock
       const mutex = this.projectMutexMap.get(projectId);
       if (mutex) {
@@ -207,6 +307,7 @@ export class ProjectContextCache {
   }
 
   async get(project: ProjectConfig): Promise<ContextCache | null> {
+    const generation = this.captureGeneration();
     try {
       const cacheKey = this.getCacheKey(project);
 
@@ -218,9 +319,12 @@ export class ProjectContextCache {
       }
 
       const cachePath = this.getCachePath(cacheKey);
-      if (await this.vault.adapter.exists(cachePath)) {
+      const cacheFileExists = await this.vault.adapter.exists(cachePath);
+      this.assertActive(generation);
+      if (cacheFileExists) {
         logInfo("File cache hit for project:", project.name);
         const cacheContent = await this.vault.adapter.read(cachePath);
+        this.assertActive(generation);
         const contextCache = JSON.parse(cacheContent) as ContextCache;
         // Store in memory cache
         this.memoryCache.set(cacheKey, contextCache);
@@ -229,13 +333,18 @@ export class ProjectContextCache {
       logInfo("Cache miss for project:", project.name);
       return null;
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError("Error reading from project context cache:", error);
       return null;
     }
   }
 
   async getOrInitializeCache(project: ProjectConfig): Promise<ContextCache> {
+    const generation = this.captureGeneration();
     const initialProjectCache = await this.get(project);
+    this.assertActive(generation);
 
     if (initialProjectCache) {
       logInfo(
@@ -250,10 +359,12 @@ export class ProjectContextCache {
 
     const newCache = this.createEmptyCache();
     await this.setWithoutMutex(project, newCache);
+    this.assertActive(generation);
     return newCache;
   }
 
   getSync(project: ProjectConfig): ContextCache | null {
+    this.assertActive();
     try {
       const cacheKey = this.getCacheKey(project);
       const memoryResult = this.memoryCache.get(cacheKey);
@@ -270,21 +381,26 @@ export class ProjectContextCache {
   }
 
   private async set(project: ProjectConfig, contextCache: ContextCache): Promise<void> {
+    const generation = this.captureGeneration();
     const mutex = await this.getOrCreateProjectMutex(project);
+    this.assertActive(generation);
 
     if (mutex.isLocked()) {
       logInfo(`Waiting for project cache lock for project: ${project.name}`);
     }
 
     return await mutex.runExclusive(async () => {
+      this.assertActive(generation);
       logInfo(`Acquired cache lock for project: ${project.name}`);
       return await this.setWithoutMutex(project, contextCache);
     });
   }
 
   private async setWithoutMutex(project: ProjectConfig, contextCache: ContextCache): Promise<void> {
+    const generation = this.captureGeneration();
     try {
       await this.ensureCacheDir();
+      this.assertActive(generation);
       const cacheKey = this.getCacheKey(project);
       const cachePath = this.getCachePath(cacheKey);
       logInfo("Caching context for project:", project.name);
@@ -297,7 +413,11 @@ export class ProjectContextCache {
 
       // Store in file cache
       await this.vault.adapter.write(cachePath, JSON.stringify(contextCacheCopy));
+      this.assertActive(generation);
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError("Error writing to project context cache:", error);
       throw error; // Re-throw to maintain error propagation
     }
@@ -322,12 +442,14 @@ export class ProjectContextCache {
    * Clear all cached data for all projects
    */
   async clearAllCache(): Promise<void> {
+    const generation = this.captureGeneration();
     try {
       // Get all projects first to collect file keys to remove
       const allFileKeysToRemove = new Set<string>();
 
       // Process all projects to get their file cache keys
       for (const projectCache of Array.from(this.memoryCache.values())) {
+        this.assertActive(generation);
         if (projectCache?.fileContexts) {
           // Collect all file cache keys for this project
           for (const filePath in projectCache.fileContexts) {
@@ -342,21 +464,33 @@ export class ProjectContextCache {
       this.memoryCache.clear();
 
       // Clear project context files
-      if (await this.vault.adapter.exists(this.cacheDir)) {
+      const cacheDirectoryExists = await this.vault.adapter.exists(this.cacheDir);
+      this.assertActive(generation);
+      if (cacheDirectoryExists) {
         const files = await this.vault.adapter.list(this.cacheDir);
+        this.assertActive(generation);
         logInfo("Clearing project context cache, removing files:", files.files.length);
-        await Promise.all(files.files.map((file) => this.vault.adapter.remove(file)));
+        for (const file of files.files) {
+          this.assertActive(generation);
+          await this.vault.adapter.remove(file);
+          this.assertActive(generation);
+        }
       }
 
       // Only remove the file cache entries that were referenced by projects
       for (const cacheKey of allFileKeysToRemove) {
+        this.assertActive(generation);
         await this.fileCache.remove(cacheKey);
+        this.assertActive(generation);
       }
 
       logInfo(
         `Cleared ${allFileKeysToRemove.size} file content cache entries associated with projects`
       );
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError("Error clearing project context cache:", error);
     }
   }
@@ -365,11 +499,13 @@ export class ProjectContextCache {
    * Clear all cached data for a specific project
    */
   async clearForProject(project: ProjectConfig): Promise<void> {
+    const generation = this.captureGeneration();
     try {
       logInfo(`[clearForProject] Starting for project: ${project.name} (ID: ${project.id})`);
       const projectCacheKey = this.getCacheKey(project);
 
       const projectCache = await this.get(project);
+      this.assertActive(generation);
       let filesClearedCount = 0;
 
       if (projectCache?.fileContexts) {
@@ -381,7 +517,9 @@ export class ProjectContextCache {
           for (const filePath in projectCache.fileContexts) {
             const fileEntry = projectCache.fileContexts[filePath];
             if (fileEntry && fileEntry.cacheKey) {
+              this.assertActive(generation);
               await this.fileCache.remove(fileEntry.cacheKey); // fileCache.remove logs its own success/failure per file
+              this.assertActive(generation);
               filesClearedCount++;
             } else {
               logWarn(
@@ -405,8 +543,11 @@ export class ProjectContextCache {
       );
 
       const cachePath = this.getCachePath(projectCacheKey);
-      if (await this.vault.adapter.exists(cachePath)) {
+      const cacheFileExists = await this.vault.adapter.exists(cachePath);
+      this.assertActive(generation);
+      if (cacheFileExists) {
         await this.vault.adapter.remove(cachePath);
+        this.assertActive(generation);
         logInfo(
           `[clearForProject] Project ${project.name}: Successfully removed main project cache file: ${cachePath}`
         );
@@ -421,6 +562,9 @@ export class ProjectContextCache {
 
       logInfo(`[clearForProject] Completed for project: ${project.name}`);
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError(`[clearForProject] Error for project ${project.name} (ID: ${project.id}):`, error);
     }
   }
@@ -437,6 +581,7 @@ export class ProjectContextCache {
     project: ProjectConfig,
     forceReloadAllRemotes: boolean = false
   ): Promise<void> {
+    this.assertActive();
     await this.updateCacheSafely(
       project,
       (cache) => {
@@ -463,6 +608,7 @@ export class ProjectContextCache {
    * Update the markdown context for a project
    */
   async updateMarkdownContext(project: ProjectConfig, content: string): Promise<void> {
+    this.assertActive();
     return await this.updateCacheSafely(project, (cache) => {
       cache.markdownContext = content;
       cache.markdownNeedsReload = false;
@@ -475,6 +621,7 @@ export class ProjectContextCache {
    * Clear only the markdown context for a project
    */
   async clearMarkdownContext(project: ProjectConfig): Promise<void> {
+    this.assertActive();
     await this.updateCacheSafely(project, (cache) => {
       cache.markdownContext = "";
       cache.markdownNeedsReload = true;
@@ -492,18 +639,22 @@ export class ProjectContextCache {
    * This method efficiently searches across all available caches to find file content
    */
   async getOrReuseFileContext(project: ProjectConfig, filePath: string): Promise<string | null> {
+    const generation = this.captureGeneration();
     try {
       // 1. Try to get from project cache first
       const projectContent = await this.getFileContext(project, filePath);
+      this.assertActive(generation);
       if (projectContent) {
         return projectContent;
       }
 
       // 2. Search other projects as fallback
       const result = await this.searchOtherProjectsForFile(filePath);
+      this.assertActive(generation);
       if (result) {
         // Associate with current project
         await this.associateCacheWithProject(project, filePath, result.cacheKey);
+        this.assertActive(generation);
         logInfo(
           `Reused cached content from other project for: ${filePath} in project ${project.name}`
         );
@@ -513,6 +664,9 @@ export class ProjectContextCache {
       // No content found in any cache
       return null;
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError(`Error in getOrReuseFileContext for ${filePath} in project ${project.name}:`, error);
       return null;
     }
@@ -522,6 +676,7 @@ export class ProjectContextCache {
    * Get content for a specific file in a project
    */
   protected async getFileContext(project: ProjectConfig, filePath: string): Promise<string | null> {
+    this.assertActive();
     try {
       // Ensure filePath is valid before proceeding
       if (!filePath || typeof filePath !== "string") {
@@ -574,6 +729,9 @@ export class ProjectContextCache {
 
       return await this.fileCache.get(cacheKey); // fileCache.get already logs "Cache miss for file:"
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError(`Error getting file context for ${filePath} in project ${project.name}:`, error);
       return null;
     }
@@ -583,6 +741,7 @@ export class ProjectContextCache {
    * Add or update a file in a project's context
    */
   async setFileContext(project: ProjectConfig, filePath: string, content: string): Promise<void> {
+    this.assertActive();
     return await this.updateCacheSafelyAsync(project, async (cache) => {
       if (!cache.fileContexts) {
         cache.fileContexts = {};
@@ -615,6 +774,7 @@ export class ProjectContextCache {
    * Remove a file from a project's context
    */
   async removeFileContext(project: ProjectConfig, filePath: string): Promise<void> {
+    this.assertActive();
     return await this.updateCacheSafelyAsync(project, async (cache) => {
       if (cache.fileContexts && cache.fileContexts[filePath]) {
         // Get the cache key before removing from project cache
@@ -639,6 +799,7 @@ export class ProjectContextCache {
   private async searchOtherProjectsForFile(
     filePath: string
   ): Promise<{ cacheKey: string; content: string } | null> {
+    this.assertActive();
     try {
       const projects = getCachedProjects();
 
@@ -672,6 +833,9 @@ export class ProjectContextCache {
       logInfo(`No content found in any project for file: ${filePath}`);
       return null;
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError(`Error searching other projects for file ${filePath}:`, error);
       return null;
     }
@@ -685,6 +849,7 @@ export class ProjectContextCache {
     filePath: string,
     cacheKey: string
   ): Promise<void> {
+    this.assertActive();
     return await this.updateCacheSafelyAsync(project, async (cache) => {
       if (!cache.fileContexts) {
         cache.fileContexts = {};
@@ -705,6 +870,7 @@ export class ProjectContextCache {
    * Helper method to perform file reference cleanup logic on a cache object
    */
   private cleanupFileReferencesInCache(project: ProjectConfig, cache: ContextCache): ContextCache {
+    this.assertActive();
     if (!cache.fileContexts) {
       return cache;
     }
@@ -748,6 +914,7 @@ export class ProjectContextCache {
    * Removes references to files that no longer match patterns, but keeps their content cached.
    */
   async cleanupProjectFileReferences(project: ProjectConfig): Promise<void> {
+    this.assertActive();
     logInfo(`[cleanupProjectFileReferences] Starting for project: ${project.name}`);
     try {
       await this.updateCacheSafely(
@@ -756,6 +923,9 @@ export class ProjectContextCache {
         true
       );
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError(`Error cleaning up project file references for ${project.name}:`, error);
     }
   }
@@ -768,6 +938,7 @@ export class ProjectContextCache {
     project: ProjectConfig,
     contextCacheToUpdate: ContextCache
   ): Promise<ContextCache> {
+    this.assertActive();
     try {
       logInfo(`[updateProjectFilesFromPatterns] Starting for project: ${project.name}`);
       if (!contextCacheToUpdate.fileContexts) {
@@ -806,6 +977,9 @@ export class ProjectContextCache {
         `[updateProjectFilesFromPatterns] Completed for project: ${project.name}. Total fileContexts in memory: ${Object.keys(contextCacheToUpdate.fileContexts).length}`
       );
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError(`[updateProjectFilesFromPatterns] Error for project ${project.name}:`, error);
     }
     return contextCacheToUpdate;
@@ -816,6 +990,7 @@ export class ProjectContextCache {
     contextCacheToUpdate: ContextCache,
     projectAllFiles: TFile[]
   ): ContextCache {
+    this.assertActive();
     try {
       if (!contextCacheToUpdate.fileContexts) {
         contextCacheToUpdate.fileContexts = {};
@@ -846,6 +1021,9 @@ export class ProjectContextCache {
         `[updateProjectFilesFromPatterns] Completed for project: ${project.name}. Total markdown fileContexts in memory: ${Object.keys(contextCacheToUpdate.fileContexts).length}`
       );
     } catch (error) {
+      if (error instanceof ProjectContextCacheDisposedError) {
+        throw error;
+      }
       logError(`[updateProjectFilesFromPatterns] Error for project ${project.name}:`, error);
     }
     return contextCacheToUpdate;
@@ -860,6 +1038,7 @@ export class ProjectContextCache {
    */
 
   async removeWebUrls(project: ProjectConfig, urls: string[]): Promise<void> {
+    this.assertActive();
     if (!urls.length) return;
 
     await this.updateCacheSafely(project, (cache) => {
@@ -879,6 +1058,7 @@ export class ProjectContextCache {
    * Add or update a web URL in a project's context
    */
   async updateWebUrl(project: ProjectConfig, url: string, content: string): Promise<void> {
+    this.assertActive();
     return await this.updateCacheSafely(project, (cache) => {
       if (!cache.webContexts) {
         cache.webContexts = {};
@@ -898,6 +1078,7 @@ export class ProjectContextCache {
    */
 
   async removeYoutubeUrls(project: ProjectConfig, urls: string[]): Promise<void> {
+    this.assertActive();
     if (!urls.length) return;
 
     await this.updateCacheSafely(project, (cache) => {
@@ -919,6 +1100,7 @@ export class ProjectContextCache {
    * Add or update a YouTube URL in a project's context
    */
   async updateYoutubeUrl(project: ProjectConfig, url: string, content: string): Promise<void> {
+    this.assertActive();
     return await this.updateCacheSafely(project, (cache) => {
       if (!cache.youtubeContexts) {
         cache.youtubeContexts = {};
@@ -945,11 +1127,15 @@ export class ProjectContextCache {
     updateFn: (cache: ContextCache) => ContextCache,
     skipIfEmpty: boolean = false
   ): Promise<void> {
+    const generation = this.captureGeneration();
     const mutex = await this.getOrCreateProjectMutex(project);
+    this.assertActive(generation);
 
     return await mutex.runExclusive(async () => {
+      this.assertActive(generation);
       try {
         const cache = await this.get(project);
+        this.assertActive(generation);
         if (!cache) {
           if (skipIfEmpty) {
             return;
@@ -959,8 +1145,12 @@ export class ProjectContextCache {
           );
         }
         const updatedCache = updateFn(cache);
+        this.assertActive(generation);
         await this.setWithoutMutex(project, updatedCache);
       } catch (error) {
+        if (error instanceof ProjectContextCacheDisposedError) {
+          throw error;
+        }
         logError(`Error updating cache for project ${project.name}:`, error);
         throw error;
       }
@@ -979,11 +1169,15 @@ export class ProjectContextCache {
     updateFn: (cache: ContextCache) => Promise<ContextCache>,
     skipIfEmpty: boolean = false
   ): Promise<void> {
+    const generation = this.captureGeneration();
     const mutex = await this.getOrCreateProjectMutex(project);
+    this.assertActive(generation);
 
     return await mutex.runExclusive(async () => {
+      this.assertActive(generation);
       try {
         const cache = await this.get(project);
+        this.assertActive(generation);
         if (!cache) {
           if (skipIfEmpty) {
             return;
@@ -993,8 +1187,12 @@ export class ProjectContextCache {
           );
         }
         const updatedCache = await updateFn(cache);
+        this.assertActive(generation);
         await this.setWithoutMutex(project, updatedCache);
       } catch (error) {
+        if (error instanceof ProjectContextCacheDisposedError) {
+          throw error;
+        }
         logError(`Error updating cache for project ${project.name}:`, error);
         throw error;
       }
@@ -1006,9 +1204,12 @@ export class ProjectContextCache {
    * Use this instead of direct set() calls from external modules
    */
   async setCacheSafely(project: ProjectConfig, contextCache: ContextCache): Promise<void> {
+    const generation = this.captureGeneration();
     const mutex = await this.getOrCreateProjectMutex(project);
+    this.assertActive(generation);
 
     return await mutex.runExclusive(async () => {
+      this.assertActive(generation);
       logInfo(`External safe set for project: ${project.name}`);
       return await this.setWithoutMutex(project, contextCache);
     });

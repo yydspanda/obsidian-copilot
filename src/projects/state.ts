@@ -1,13 +1,144 @@
-import { atom, createStore } from "jotai";
-import { useAtomValue } from "jotai";
+import { atom, createStore, useAtomValue } from "jotai";
+import { normalizePath } from "obsidian";
+
 import { ProjectConfig } from "@/aiParams";
 import { ProjectFileRecord } from "@/projects/type";
-import { normalizePath } from "obsidian";
 
 // Independent store for projects (aligned with system-prompts pattern)
 const projectsStore = createStore();
 
 const projectRecordsAtom = atom<ProjectFileRecord[]>([]);
+
+declare const projectStateOwnerBrand: unique symbol;
+declare const projectFileWriteLeaseBrand: unique symbol;
+
+/**
+ * Opaque ownership token for one active Projects state lifecycle.
+ *
+ * Tokens can only be obtained from {@link beginProjectStateLifecycle}. Runtime
+ * ownership is determined by object identity so an earlier asynchronous lifecycle
+ * cannot commit into a newer lifecycle.
+ */
+export interface ProjectStateOwner {
+  readonly [projectStateOwnerBrand]: never;
+}
+
+/**
+ * Opaque lease for one pending project-file write.
+ *
+ * A lease belongs to the lifecycle owner that acquired it and can be released
+ * exactly once without affecting another write to the same normalized path.
+ */
+export interface ProjectFileWriteLease {
+  readonly [projectFileWriteLeaseBrand]: never;
+}
+
+interface ProjectFileWriteLeaseRecord {
+  owner: ProjectStateOwner;
+  path: string;
+}
+
+let activeProjectStateOwner: ProjectStateOwner | undefined;
+let projectStateOwnershipActivated = false;
+const projectFileWriteLeases = new Map<ProjectFileWriteLease, ProjectFileWriteLeaseRecord>();
+const projectFileWriteLeasesByPath = new Map<string, Set<ProjectFileWriteLease>>();
+
+// Compatibility-only counters for callers that have not yet migrated to opaque leases.
+// Once explicit lifecycle ownership is activated, these wrappers are permanently disabled.
+const legacyPendingFileWrites = new Map<string, number>();
+
+/**
+ * Creates an opaque project state owner.
+ *
+ * @returns A new identity-only lifecycle owner
+ */
+function createProjectStateOwner(): ProjectStateOwner {
+  return Object.freeze({}) as ProjectStateOwner;
+}
+
+/**
+ * Creates an opaque pending-write lease.
+ *
+ * @returns A new identity-only write lease
+ */
+function createProjectFileWriteLease(): ProjectFileWriteLease {
+  return Object.freeze({}) as ProjectFileWriteLease;
+}
+
+/**
+ * Clears all state that belongs to the active or just-released lifecycle.
+ */
+function clearProjectState(): void {
+  projectsStore.set(projectRecordsAtom, []);
+  projectFileWriteLeases.clear();
+  projectFileWriteLeasesByPath.clear();
+  legacyPendingFileWrites.clear();
+}
+
+/**
+ * Runs a project-record mutation only when the caller still owns the active lifecycle.
+ *
+ * @param owner - Lifecycle owner attempting the mutation
+ * @param mutate - Pure record transformation to commit
+ * @returns Whether the mutation was committed
+ */
+function mutateCachedProjectRecordsForOwner(
+  owner: ProjectStateOwner,
+  mutate: (records: ProjectFileRecord[]) => ProjectFileRecord[]
+): boolean {
+  if (owner !== activeProjectStateOwner) {
+    return false;
+  }
+
+  const records = projectsStore.get(projectRecordsAtom);
+  projectsStore.set(projectRecordsAtom, mutate(records));
+  return true;
+}
+
+/**
+ * Starts a new Projects state lifecycle and invalidates all earlier ownership.
+ *
+ * Project records and every pending-write guard are cleared synchronously before
+ * this function returns.
+ *
+ * @returns Opaque owner required for all mutations in this lifecycle
+ */
+export function beginProjectStateLifecycle(): ProjectStateOwner {
+  const owner = createProjectStateOwner();
+  projectStateOwnershipActivated = true;
+  activeProjectStateOwner = owner;
+  clearProjectState();
+  return owner;
+}
+
+/**
+ * Releases a Projects state lifecycle only if it is still the active owner.
+ *
+ * Compare-and-release prevents a delayed cleanup from an earlier lifecycle from
+ * clearing records or pending-write guards owned by a newer lifecycle.
+ *
+ * @param owner - Lifecycle owner attempting release
+ * @returns Whether the active lifecycle was released
+ */
+export function releaseProjectStateLifecycle(owner: ProjectStateOwner): boolean {
+  if (owner !== activeProjectStateOwner) {
+    return false;
+  }
+
+  activeProjectStateOwner = undefined;
+  clearProjectState();
+  return true;
+}
+
+/**
+ * Reports whether an owner still controls the active Projects state lifecycle.
+ *
+ * @param owner - Lifecycle owner to inspect
+ * @returns Whether the owner is current
+ */
+export function isProjectStateOwnerActive(owner: ProjectStateOwner): boolean {
+  return owner === activeProjectStateOwner;
+}
 
 // Reason: derived atom so that useProjects() returns a stable array reference
 // (only recomputed when projectRecordsAtom changes, not on every parent render).
@@ -59,17 +190,93 @@ export function getCachedProjectRecordByFilePath(filePath: string): ProjectFileR
 }
 
 /**
+ * Replace all cached project records for the active lifecycle owner.
+ *
+ * @param owner - Lifecycle owner attempting the mutation
+ * @param records - New array of ProjectFileRecord
+ * @returns Whether the records were committed
+ */
+export function updateCachedProjectRecordsForOwner(
+  owner: ProjectStateOwner,
+  records: ProjectFileRecord[]
+): boolean {
+  return mutateCachedProjectRecordsForOwner(owner, () => records);
+}
+
+/**
  * Replace all cached project records.
+ *
+ * This compatibility wrapper works only until explicit lifecycle ownership is
+ * activated. Afterwards, unowned writes are deterministic no-ops.
+ *
  * @param records - New array of ProjectFileRecord
  */
 export function updateCachedProjectRecords(records: ProjectFileRecord[]): void {
+  if (projectStateOwnershipActivated) {
+    return;
+  }
   projectsStore.set(projectRecordsAtom, records);
 }
 
 /**
- * Replace the cached record for a given file path in a single store write.
+ * Replace the cached record for a file path within the active lifecycle.
+ *
  * Avoids transient "disappear/reappear" gaps for subscribers during modify events,
  * while still cleaning up stale entries when the frontmatter id changes.
+ *
+ * @param owner - Lifecycle owner attempting the mutation
+ * @param filePath - Vault path of project.md being modified
+ * @param record - Parsed record to store for that file
+ * @returns Whether the record was committed
+ */
+export function replaceCachedProjectRecordByFilePathForOwner(
+  owner: ProjectStateOwner,
+  filePath: string,
+  record: ProjectFileRecord
+): boolean {
+  return mutateCachedProjectRecordsForOwner(owner, (prev) =>
+    replaceProjectRecordByFilePath(prev, filePath, record)
+  );
+}
+
+/**
+ * Computes a cache replacement by file path while preserving existing array order.
+ *
+ * @param prev - Existing cached records
+ * @param filePath - Vault path being replaced
+ * @param record - Parsed replacement record
+ * @returns Updated records
+ */
+function replaceProjectRecordByFilePath(
+  prev: ProjectFileRecord[],
+  filePath: string,
+  record: ProjectFileRecord
+): ProjectFileRecord[] {
+  // Reason: find the original index by filePath to preserve array order (avoid moving to end on
+  // every modify). If the record exists, replace in-place; otherwise append.
+  const existingIndex = prev.findIndex((candidate) => candidate.filePath === filePath);
+
+  if (existingIndex === -1) {
+    // New filePath: remove any stale id match, then append.
+    const withoutId = prev.filter((candidate) => candidate.project.id !== record.project.id);
+    return [...withoutId, record];
+  }
+
+  // Reason: also remove any other entry with the same id but different filePath (stale duplicate),
+  // then replace in-place at the original position.
+  const updated = prev.filter(
+    (candidate, index) => index === existingIndex || candidate.project.id !== record.project.id
+  );
+  const newIndex = updated.findIndex((candidate) => candidate.filePath === filePath);
+  updated[newIndex] = record;
+  return updated;
+}
+
+/**
+ * Replace the cached record for a given file path in a single store write.
+ *
+ * This compatibility wrapper works only until explicit lifecycle ownership is
+ * activated. Afterwards, unowned writes are deterministic no-ops.
  *
  * @param filePath - Vault path of project.md being modified
  * @param record - Parsed record to store for that file
@@ -78,50 +285,99 @@ export function replaceCachedProjectRecordByFilePath(
   filePath: string,
   record: ProjectFileRecord
 ): void {
-  const prev = projectsStore.get(projectRecordsAtom);
-
-  // Reason: find the original index by filePath to preserve array order (avoid moving to end on
-  // every modify). If the record exists, replace in-place; otherwise append.
-  const existingIndex = prev.findIndex((r) => r.filePath === filePath);
-
-  if (existingIndex !== -1) {
-    // Reason: also remove any other entry with the same id but different filePath (stale duplicate),
-    // then replace in-place at the original position.
-    const updated = prev.filter(
-      (r, i) => i === existingIndex || r.project.id !== record.project.id
-    );
-    const newIndex = updated.findIndex((r) => r.filePath === filePath);
-    updated[newIndex] = record;
-    projectsStore.set(projectRecordsAtom, updated);
-  } else {
-    // New filePath: remove any stale id match, then append
-    const withoutId = prev.filter((r) => r.project.id !== record.project.id);
-    projectsStore.set(projectRecordsAtom, [...withoutId, record]);
+  if (projectStateOwnershipActivated) {
+    return;
   }
+
+  const prev = projectsStore.get(projectRecordsAtom);
+  projectsStore.set(projectRecordsAtom, replaceProjectRecordByFilePath(prev, filePath, record));
 }
 
 /**
- * Add or update a project record by project.id.
+ * Add or update a project record by project id for the active lifecycle owner.
+ *
+ * @param owner - Lifecycle owner attempting the mutation
  * @param record - ProjectFileRecord to upsert
+ * @returns Whether the record was committed
  */
-export function upsertCachedProjectRecord(record: ProjectFileRecord): void {
-  const records = projectsStore.get(projectRecordsAtom);
-  const existingIndex = records.findIndex((r) => r.project.id === record.project.id);
+export function upsertCachedProjectRecordForOwner(
+  owner: ProjectStateOwner,
+  record: ProjectFileRecord
+): boolean {
+  return mutateCachedProjectRecordsForOwner(owner, (records) =>
+    upsertProjectRecord(records, record)
+  );
+}
+
+/**
+ * Computes a cache upsert by project id.
+ *
+ * @param records - Existing cached records
+ * @param record - Record to add or replace
+ * @returns Updated records
+ */
+function upsertProjectRecord(
+  records: ProjectFileRecord[],
+  record: ProjectFileRecord
+): ProjectFileRecord[] {
+  const existingIndex = records.findIndex(
+    (candidate) => candidate.project.id === record.project.id
+  );
 
   if (existingIndex !== -1) {
     const updated = [...records];
     updated[existingIndex] = record;
-    projectsStore.set(projectRecordsAtom, updated);
-  } else {
-    projectsStore.set(projectRecordsAtom, [...records, record]);
+    return updated;
   }
+  return [...records, record];
+}
+
+/**
+ * Add or update a project record by project id.
+ *
+ * This compatibility wrapper works only until explicit lifecycle ownership is
+ * activated. Afterwards, unowned writes are deterministic no-ops.
+ *
+ * @param record - ProjectFileRecord to upsert
+ */
+export function upsertCachedProjectRecord(record: ProjectFileRecord): void {
+  if (projectStateOwnershipActivated) {
+    return;
+  }
+
+  const records = projectsStore.get(projectRecordsAtom);
+  projectsStore.set(projectRecordsAtom, upsertProjectRecord(records, record));
+}
+
+/**
+ * Remove a project record by project id for the active lifecycle owner.
+ *
+ * @param owner - Lifecycle owner attempting the mutation
+ * @param projectId - Project id to remove
+ * @returns Whether the mutation was committed
+ */
+export function deleteCachedProjectRecordByIdForOwner(
+  owner: ProjectStateOwner,
+  projectId: string
+): boolean {
+  return mutateCachedProjectRecordsForOwner(owner, (records) =>
+    records.filter((record) => record.project.id !== projectId)
+  );
 }
 
 /**
  * Remove a project record by project id.
+ *
+ * This compatibility wrapper works only until explicit lifecycle ownership is
+ * activated. Afterwards, unowned writes are deterministic no-ops.
+ *
  * @param projectId - Project id to remove
  */
 export function deleteCachedProjectRecordById(projectId: string): void {
+  if (projectStateOwnershipActivated) {
+    return;
+  }
+
   const records = projectsStore.get(projectRecordsAtom);
   projectsStore.set(
     projectRecordsAtom,
@@ -130,10 +386,34 @@ export function deleteCachedProjectRecordById(projectId: string): void {
 }
 
 /**
+ * Remove a project record by file path for the active lifecycle owner.
+ *
+ * @param owner - Lifecycle owner attempting the mutation
+ * @param filePath - Vault path of project.md
+ * @returns Whether the mutation was committed
+ */
+export function deleteCachedProjectRecordByFilePathForOwner(
+  owner: ProjectStateOwner,
+  filePath: string
+): boolean {
+  return mutateCachedProjectRecordsForOwner(owner, (records) =>
+    records.filter((record) => record.filePath !== filePath)
+  );
+}
+
+/**
  * Remove a project record by file path (used for delete/rename events).
+ *
+ * This compatibility wrapper works only until explicit lifecycle ownership is
+ * activated. Afterwards, unowned writes are deterministic no-ops.
+ *
  * @param filePath - Vault path of project.md
  */
 export function deleteCachedProjectRecordByFilePath(filePath: string): void {
+  if (projectStateOwnershipActivated) {
+    return;
+  }
+
   const records = projectsStore.get(projectRecordsAtom);
   projectsStore.set(
     projectRecordsAtom,
@@ -155,28 +435,114 @@ export function subscribeToProjectRecords(
   });
 }
 
-// Reason: use a ref-counted Map instead of a plain Set so overlapping async writes to the
-// same path don't prematurely clear the guard when the first writer finishes.
-const pendingFileWrites = new Map<string, number>();
+/**
+ * Acquires an owner-bound pending-write lease for a normalized Vault path.
+ *
+ * @param owner - Active lifecycle owner acquiring the lease
+ * @param path - Vault path being written
+ * @returns Opaque lease, or undefined when the owner is stale
+ */
+export function acquireProjectFileWrite(
+  owner: ProjectStateOwner,
+  path: string
+): ProjectFileWriteLease | undefined {
+  if (owner !== activeProjectStateOwner) {
+    return undefined;
+  }
 
-/** Mark a file path as pending write (normalizes path to avoid mismatches). */
-export function addPendingFileWrite(path: string): void {
   const key = normalizePath(path);
-  pendingFileWrites.set(key, (pendingFileWrites.get(key) ?? 0) + 1);
+  const lease = createProjectFileWriteLease();
+  projectFileWriteLeases.set(lease, { owner, path: key });
+
+  const leasesForPath = projectFileWriteLeasesByPath.get(key);
+  if (leasesForPath) {
+    leasesForPath.add(lease);
+  } else {
+    projectFileWriteLeasesByPath.set(key, new Set([lease]));
+  }
+
+  return lease;
 }
 
-/** Remove a file path from pending writes (normalizes path to avoid mismatches). */
-export function removePendingFileWrite(path: string): void {
+/**
+ * Releases a pending-write lease exactly once.
+ *
+ * Stale, unknown, or already-released leases are deterministic no-ops. In
+ * particular, a delayed old lease cannot decrement a newer lifecycle's guard
+ * for the same path.
+ *
+ * @param lease - Opaque lease returned by {@link acquireProjectFileWrite}
+ * @returns Whether a current pending-write lease was released
+ */
+export function releaseProjectFileWrite(lease: ProjectFileWriteLease): boolean {
+  const record = projectFileWriteLeases.get(lease);
+  if (!record || record.owner !== activeProjectStateOwner) {
+    return false;
+  }
+
+  projectFileWriteLeases.delete(lease);
+  const leasesForPath = projectFileWriteLeasesByPath.get(record.path);
+  if (!leasesForPath) {
+    return false;
+  }
+
+  leasesForPath.delete(lease);
+  if (leasesForPath.size === 0) {
+    projectFileWriteLeasesByPath.delete(record.path);
+  }
+  return true;
+}
+
+/**
+ * Mark a file path as pending write.
+ *
+ * This compatibility wrapper works only until explicit lifecycle ownership is
+ * activated. New lifecycle-aware callers must retain an opaque lease from
+ * {@link acquireProjectFileWrite}.
+ *
+ * @param path - Vault path being written
+ */
+export function addPendingFileWrite(path: string): void {
+  if (projectStateOwnershipActivated) {
+    return;
+  }
+
   const key = normalizePath(path);
-  const count = (pendingFileWrites.get(key) ?? 0) - 1;
+  legacyPendingFileWrites.set(key, (legacyPendingFileWrites.get(key) ?? 0) + 1);
+}
+
+/**
+ * Remove a file path from compatibility pending writes.
+ *
+ * This compatibility wrapper works only until explicit lifecycle ownership is
+ * activated. It never releases owner-bound leases.
+ *
+ * @param path - Vault path whose compatibility guard should be decremented
+ */
+export function removePendingFileWrite(path: string): void {
+  if (projectStateOwnershipActivated) {
+    return;
+  }
+
+  const key = normalizePath(path);
+  const count = (legacyPendingFileWrites.get(key) ?? 0) - 1;
   if (count <= 0) {
-    pendingFileWrites.delete(key);
+    legacyPendingFileWrites.delete(key);
   } else {
-    pendingFileWrites.set(key, count);
+    legacyPendingFileWrites.set(key, count);
   }
 }
 
-/** Check if a file path is pending write (normalizes path to avoid mismatches). */
+/**
+ * Check if a file path has any current pending-write guard.
+ *
+ * @param path - Vault path to inspect
+ * @returns Whether the path has an owner-bound or compatibility guard
+ */
 export function isPendingFileWrite(path: string): boolean {
-  return (pendingFileWrites.get(normalizePath(path)) ?? 0) > 0;
+  const key = normalizePath(path);
+  return (
+    (projectFileWriteLeasesByPath.get(key)?.size ?? 0) > 0 ||
+    (legacyPendingFileWrites.get(key) ?? 0) > 0
+  );
 }

@@ -501,7 +501,7 @@ export function registerCommands(
   addCommand(plugin, COMMAND_IDS.OPEN_LOG_FILE, async () => {
     try {
       await flushRecordedPromptPayloadToLog();
-      await logFileManager.openLogFile();
+      await logFileManager.openLogFile(plugin.app);
     } catch (error) {
       logError("Error creating Copilot log file:", error);
       new Notice("Failed to create Copilot log file.");
@@ -511,7 +511,7 @@ export function registerCommands(
   // Clear Copilot log file (delete on disk and clear in-memory buffer)
   addCommand(plugin, COMMAND_IDS.CLEAR_LOG_FILE, async () => {
     try {
-      await logFileManager.clear();
+      await logFileManager.clear(plugin.app.vault);
       new Notice("Copilot log cleared.");
     } catch (error) {
       logError("Error clearing Copilot log file:", error);

@@ -26,42 +26,84 @@ import { FileParserManager, saveConvertedDocOutput } from "@/tools/FileParserMan
 import { err2String } from "@/utils";
 import { isRateLimitError } from "@/utils/rateLimitUtils";
 import { RecentUsageManager } from "@/utils/recentUsageManager";
-import { App, Notice, TFile } from "obsidian";
+import { App, Notice, TFile, Vault } from "obsidian";
 import { BrevilabsClient } from "./brevilabsClient";
 import ChainManager from "./chainManager";
 import { ProjectLoadTracker } from "./projectLoadTracker";
 
+/** Error thrown when code uses a ProjectManager after its plugin lifecycle ended. */
+export class ProjectManagerDisposedError extends Error {
+  /**
+   * Create a lifecycle error for a disposed ProjectManager.
+   */
+  public constructor() {
+    super("ProjectManager has been disposed");
+    this.name = "ProjectManagerDisposedError";
+  }
+}
+
+/** Error thrown when the active ProjectManager accessor is used before initialization. */
+export class ProjectManagerNotInitializedError extends Error {
+  /**
+   * Create an error for a missing active ProjectManager.
+   */
+  public constructor() {
+    super("ProjectManager has not been initialized");
+    this.name = "ProjectManagerNotInitializedError";
+  }
+}
+
 export default class ProjectManager {
-  public static instance: ProjectManager;
+  private static activeInstance?: ProjectManager;
   private currentProjectId: string | null;
-  private app: App;
-  private plugin: CopilotPlugin;
+  private readonly app: App;
+  private readonly vault: Vault;
+  private readonly plugin: CopilotPlugin;
   private readonly chainMangerInstance: ChainManager;
   private readonly projectContextCache: ProjectContextCache;
   private fileParserManager: FileParserManager;
-  private loadTracker: ProjectLoadTracker;
+  private readonly loadTracker: ProjectLoadTracker;
+  private disposed = false;
+  private lifecycleGeneration = 0;
+  private switchRequestId = 0;
+  private modelKeyUnsubscriber?: () => void;
+  private chainTypeUnsubscriber?: () => void;
+  private projectUnsubscriber?: () => void;
   private projectRecordsUnsubscriber?: () => void;
 
   private constructor(app: App, plugin: CopilotPlugin) {
     this.app = app;
+    this.vault = app.vault;
     this.plugin = plugin;
     this.currentProjectId = null;
     this.chainMangerInstance = new ChainManager(app);
-    this.projectContextCache = ProjectContextCache.getInstance();
+    this.projectContextCache = ProjectContextCache.getInstance(this.vault);
     this.fileParserManager = new FileParserManager(
       BrevilabsClient.getInstance(),
-      this.app.vault,
+      this.vault,
       true,
       null
     );
-    this.loadTracker = ProjectLoadTracker.getInstance(this.app);
+    this.loadTracker = ProjectLoadTracker.startLifecycle(this.app);
 
     // Set up subscriptions
-    subscribeToModelKeyChange(() => {
-      void this.getCurrentChainManager().createChainWithNewModel();
+    this.modelKeyUnsubscriber = subscribeToModelKeyChange(() => {
+      if (this.disposed) {
+        return;
+      }
+      void this.getCurrentChainManager()
+        .createChainWithNewModel()
+        .catch((error) => {
+          if (!this.disposed) {
+            logError("[ProjectManager] Failed to apply model change", error);
+          }
+        });
     });
 
-    subscribeToChainTypeChange(() => {
+    this.chainTypeUnsubscriber = subscribeToChainTypeChange(() => {
+      if (this.disposed) {
+        return;
+      }
       // When switching from other modes to project mode, no need to update the chain.
       if (isProjectMode()) {
         return;
@@ -73,14 +115,27 @@ export default class ProjectManager {
           VAULT_VECTOR_STORE_STRATEGY.ON_MODE_SWITCH &&
         (getChainType() === ChainType.VAULT_QA_CHAIN ||
           getChainType() === ChainType.COPILOT_PLUS_CHAIN);
-      void this.getCurrentChainManager().createChainWithNewModel({
-        refreshIndex: shouldAutoIndex,
-      });
+      void this.getCurrentChainManager()
+        .createChainWithNewModel({
+          refreshIndex: shouldAutoIndex,
+        })
+        .catch((error) => {
+          if (!this.disposed) {
+            logError("[ProjectManager] Failed to apply chain-type change", error);
+          }
+        });
     });
 
     // Subscribe to Project changes
-    subscribeToProjectChange((project) => {
-      void this.switchProject(project);
+    this.projectUnsubscriber = subscribeToProjectChange((project) => {
+      if (this.disposed) {
+        return;
+      }
+      void this.switchProject(project).catch((error) => {
+        if (!(error instanceof ProjectManagerDisposedError)) {
+          logError("[ProjectManager] Failed to switch project", error);
+        }
+      });
     });
 
     // Subscribe to project cache changes to monitor project modifications
@@ -93,6 +148,9 @@ export default class ProjectManager {
     this.previousProjectRecords = [];
     this.projectRecordsUnsubscriber?.();
     this.projectRecordsUnsubscriber = subscribeToProjectRecords((nextRecords) => {
+      if (this.disposed) {
+        return;
+      }
       const prevProjects = this.previousProjectRecords.map((r) => r.project);
       const nextProjects = nextRecords.map((r) => r.project);
       this.previousProjectRecords = nextRecords;
@@ -111,9 +169,11 @@ export default class ProjectManager {
         logWarn(
           `[ProjectManager] Active project id="${this.currentProjectId}" no longer exists, clearing selection`
         );
-        void this.switchProject(null).catch((err) =>
-          logError("[ProjectManager] Failed to switch away from removed project", err)
-        );
+        void this.switchProject(null).catch((error) => {
+          if (!(error instanceof ProjectManagerDisposedError)) {
+            logError("[ProjectManager] Failed to switch away from removed project", error);
+          }
+        });
       }
 
       // Find modified projects
@@ -168,18 +228,139 @@ export default class ProjectManager {
     return JSON.stringify(prevComparable) !== JSON.stringify(nextComparable);
   }
 
-  public static getInstance(app: App, plugin: CopilotPlugin): ProjectManager {
-    if (!ProjectManager.instance) {
-      ProjectManager.instance = new ProjectManager(app, plugin);
+  /**
+   * Return the ProjectManager owned by the active plugin lifecycle.
+   *
+   * @throws ProjectManagerNotInitializedError when the plugin has not initialized it
+   */
+  public static get instance(): ProjectManager {
+    if (!ProjectManager.activeInstance) {
+      throw new ProjectManagerNotInitializedError();
     }
-    return ProjectManager.instance;
+    return ProjectManager.activeInstance;
   }
 
+  /**
+   * Synchronously retires the manager from an earlier plugin lifecycle.
+   *
+   * The plugin calls this before a new ProjectRegister establishes its state
+   * owner. That ordering prevents state-reset notifications from starting work
+   * through the old plugin while the new lifecycle is being constructed.
+   */
+  public static retireActive(): void {
+    ProjectManager.activeInstance?.onunload();
+  }
+
+  /**
+   * Get the manager for one exact plugin, App, and Vault ownership tuple.
+   *
+   * A changed plugin instance represents a hot reload. A changed App or Vault
+   * represents a cross-vault lifecycle. Either change disposes the old manager
+   * before constructing the replacement.
+   *
+   * @param app - App owned by the current plugin lifecycle
+   * @param plugin - Current Copilot plugin instance
+   * @returns Active ProjectManager for this lifecycle
+   */
+  public static getInstance(app: App, plugin: CopilotPlugin): ProjectManager {
+    const current = ProjectManager.activeInstance;
+    if (current && !current.isOwnedBy(app, plugin)) {
+      ProjectManager.retireActive();
+    }
+    if (!ProjectManager.activeInstance) {
+      ProjectManager.activeInstance = new ProjectManager(app, plugin);
+    }
+    return ProjectManager.activeInstance;
+  }
+
+  /**
+   * Check whether this manager belongs to an exact plugin lifecycle.
+   *
+   * @param app - Candidate App
+   * @param plugin - Candidate plugin
+   * @returns Whether both lifecycle owners and the captured Vault match
+   */
+  private isOwnedBy(app: App, plugin: CopilotPlugin): boolean {
+    return !this.disposed && this.app === app && this.vault === app.vault && this.plugin === plugin;
+  }
+
+  /**
+   * Reject work attempted through a stale manager reference.
+   *
+   * @throws ProjectManagerDisposedError when this lifecycle has ended
+   */
+  private assertActive(expectedGeneration: number = this.lifecycleGeneration): void {
+    if (this.disposed || expectedGeneration !== this.lifecycleGeneration) {
+      throw new ProjectManagerDisposedError();
+    }
+  }
+
+  /**
+   * Capture the current lifecycle generation before asynchronous work.
+   *
+   * @returns Current generation
+   * @throws ProjectManagerDisposedError when this manager is stale
+   */
+  private captureGeneration(): number {
+    this.assertActive();
+    return this.lifecycleGeneration;
+  }
+
+  /**
+   * Check whether an asynchronous continuation still owns this lifecycle.
+   *
+   * @param expectedGeneration - Generation captured before an await
+   * @returns Whether this manager remains active for that generation
+   */
+  private isActiveGeneration(expectedGeneration: number): boolean {
+    return !this.disposed && expectedGeneration === this.lifecycleGeneration;
+  }
+
+  /**
+   * Check whether one switch still owns both the manager lifecycle and latest-wins slot.
+   *
+   * @param expectedGeneration - Manager generation captured by the switch
+   * @param requestId - Switch request identity
+   * @returns Whether the request may publish another side effect
+   */
+  private isCurrentSwitch(expectedGeneration: number, requestId: number): boolean {
+    return this.isActiveGeneration(expectedGeneration) && requestId === this.switchRequestId;
+  }
+
+  /**
+   * Run one cleanup action without preventing the remaining lifecycle teardown.
+   *
+   * @param action - Synchronous teardown action
+   * @param label - Safe component label for diagnostics
+   */
+  private runCleanupAction(action: (() => void) | undefined, label: string): void {
+    if (!action) {
+      return;
+    }
+    try {
+      action();
+    } catch (error) {
+      logError(`[ProjectManager] Failed to clean up ${label}`, error);
+    }
+  }
+
+  /**
+   * Get the ChainManager owned by this plugin lifecycle.
+   *
+   * @returns Active ChainManager
+   */
   public getCurrentChainManager(): ChainManager {
+    this.assertActive();
     return this.chainMangerInstance;
   }
 
+  /**
+   * Get the active project identifier.
+   *
+   * @returns Active project identifier, or null outside project mode
+   */
   public getCurrentProjectId(): string | null {
+    this.assertActive();
     return this.currentProjectId;
   }
 
@@ -197,10 +378,12 @@ export default class ProjectManager {
    * This allows UI components to use in-memory values for immediate feedback.
    */
   public getProjectUsageTimestampsManager(): RecentUsageManager<string> {
+    this.assertActive();
     return ProjectFileManager.getInstance(this.app).getProjectUsageTimestampsManager();
   }
 
   public async switchProject(project: ProjectConfig | null): Promise<void> {
+    const generation = this.captureGeneration();
     // Reason: setCurrentProject(updatedConfig) fires this callback even for same-id updates
     // (e.g. when vault file content changes). Skip early to avoid loading-state churn.
     if (project && this.currentProjectId === project.id) {
@@ -209,6 +392,7 @@ export default class ProjectManager {
     if (!project && this.currentProjectId === null) {
       return;
     }
+    const requestId = ++this.switchRequestId;
 
     try {
       // Clear all project context loading states
@@ -221,6 +405,8 @@ export default class ProjectManager {
       // switch default project
       if (!project) {
         await this.saveCurrentProjectMessage();
+        this.assertActive(generation);
+        if (requestId !== this.switchRequestId) return;
         this.currentProjectId = null; // ensure set currentProjectId
 
         // Reason: update the atom AFTER saving so saveChat() uses the correct project context.
@@ -230,6 +416,8 @@ export default class ProjectManager {
         }
 
         await this.loadNextProjectMessage();
+        this.assertActive(generation);
+        if (requestId !== this.switchRequestId) return;
         this.refreshChatView();
         return;
       }
@@ -238,20 +426,28 @@ export default class ProjectManager {
       const projectId = project.id;
 
       await this.saveCurrentProjectMessage();
+      this.assertActive(generation);
+      if (requestId !== this.switchRequestId) return;
       this.currentProjectId = projectId; // ensure set currentProjectId
 
       // Use sequential operations to ensure loading state is maintained
       // through the entire process
       await this.loadNextProjectMessage();
+      this.assertActive(generation);
+      if (requestId !== this.switchRequestId) return;
       await this.getCurrentChainManager().createChainWithNewModel();
+      this.assertActive(generation);
+      if (requestId !== this.switchRequestId) return;
       // Update FileParserManager with the current project
       this.fileParserManager = new FileParserManager(
         BrevilabsClient.getInstance(),
-        this.app.vault,
+        this.vault,
         true,
         project
       );
       await this.loadProjectContext(project);
+      this.assertActive(generation);
+      if (requestId !== this.switchRequestId) return;
 
       // fresh chat view
       this.refreshChatView();
@@ -261,10 +457,14 @@ export default class ProjectManager {
 
       logInfo(`Switched to project: ${project.name}`);
     } catch (error) {
+      this.assertActive(generation);
+      if (requestId !== this.switchRequestId) return;
       logError(`Failed to switch project: ${error}`);
       throw error;
     } finally {
-      setProjectLoading(false);
+      if (this.isCurrentSwitch(generation, requestId)) {
+        setProjectLoading(false);
+      }
     }
   }
 
@@ -285,6 +485,7 @@ export default class ProjectManager {
     project: ProjectConfig,
     forUpdate: boolean = false
   ): Promise<ContextCache | null> {
+    const generation = this.captureGeneration();
     // for update context condition
     if (forUpdate) {
       this.loadTracker.clearAllLoadStates();
@@ -299,6 +500,7 @@ export default class ProjectManager {
       logInfo(`[loadProjectContext] Starting for project: ${project.name}`);
 
       const contextCache = await this.projectContextCache.getOrInitializeCache(project);
+      this.assertActive(generation);
 
       const projectAllFiles = this.getProjectAllFiles(project);
 
@@ -311,21 +513,25 @@ export default class ProjectManager {
         this.processWebUrls(project, contextCache),
         this.processYoutubeUrls(project, contextCache),
       ]);
+      this.assertActive(generation);
 
       updatedContextCacheAfterSources.timestamp = Date.now();
       // Note: Since non-markdown files cannot pass cache parameters , so we need to save the context cache first
       await this.projectContextCache.setCacheSafely(project, updatedContextCacheAfterSources);
+      this.assertActive(generation);
 
       // After other contexts are processed, ensure all referenced non-markdown files are parsed and cached
       await this.processNonMarkdownFiles(project, projectAllFiles, updatedContextCacheAfterSources);
+      this.assertActive(generation);
 
       logInfo(`[loadProjectContext] Completed for project: ${project.name}.`);
       return updatedContextCacheAfterSources;
     } catch (error) {
+      this.assertActive(generation);
       logError(`[loadProjectContext] Failed for project ${project.name}:`, error);
       throw error;
     } finally {
-      if (forUpdate) {
+      if (forUpdate && this.isActiveGeneration(generation)) {
         setProjectLoading(false);
       }
     }
@@ -399,6 +605,7 @@ export default class ProjectManager {
   }
 
   public async getProjectContext(projectId: string): Promise<string | null> {
+    const generation = this.captureGeneration();
     const project = getCachedProjects().find((p) => p.id === projectId);
     if (!project) {
       logWarn(`[getProjectContext] Project not found for ID: ${projectId}`);
@@ -420,6 +627,7 @@ export default class ProjectManager {
       }
 
       const updatedCache = await this.loadProjectContext(project, true);
+      this.assertActive(generation);
       if (!updatedCache) {
         logError(`[getProjectContext] Project ${project.name}: loadProjectContext returned null.`);
         return null;
@@ -431,13 +639,16 @@ export default class ProjectManager {
       );
     }
 
-    return this.formatProjectContextWithFiles(contextCache, project);
+    const formattedContext = await this.formatProjectContextWithFiles(contextCache, project);
+    this.assertActive(generation);
+    return formattedContext;
   }
 
   private async formatProjectContextWithFiles(
     contextCache: ContextCache,
     project: ProjectConfig
   ): Promise<string> {
+    const generation = this.captureGeneration();
     const contextParts = [];
 
     if (contextCache.markdownContext) {
@@ -478,6 +689,7 @@ export default class ProjectManager {
         });
 
         const fileContextsStrings = await Promise.all(fileContextPromises);
+        this.assertActive(generation);
         if (fileContextsStrings.length > 0) {
           contextParts.push(`## Other Files\n${fileContextsStrings.join("\n\n")}`);
         }
@@ -603,10 +815,7 @@ ${contextParts.join("\n\n")}
             file.path,
             "md",
             async () => {
-              return Promise.all([
-                this.app.vault.adapter.stat(file.path),
-                this.app.vault.read(file),
-              ]);
+              return Promise.all([this.vault.adapter.stat(file.path), this.vault.read(file)]);
             }
           );
 
@@ -834,7 +1043,7 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
 
     this.fileParserManager = new FileParserManager(
       BrevilabsClient.getInstance(),
-      this.app.vault,
+      this.vault,
       true,
       project
     );
@@ -871,14 +1080,14 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
             );
             if (existingContent) {
               // Export cached content when the output folder is enabled
-              await saveConvertedDocOutput(file, existingContent, this.app.vault);
+              await saveConvertedDocOutput(file, existingContent, this.vault);
               processedNonMdCount++;
             } else {
               logInfo(
                 `[loadProjectContext] Project ${project.name}: Parsing/caching new/updated file: ${filePath}`
               );
 
-              await this.fileParserManager.parseFile(file, this.app.vault);
+              await this.fileParserManager.parseFile(file, this.vault);
               processedNonMdCount++;
             }
           });
@@ -908,6 +1117,7 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
    * @param failedItem Failed item information
    */
   public async retryFailedItem(failedItem: FailedItem): Promise<void> {
+    const generation = this.captureGeneration();
     try {
       if (!this.currentProjectId) {
         logWarn("[retryFailedItem] No current project, aborting retry");
@@ -941,9 +1151,11 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
           return;
       }
 
+      this.assertActive(generation);
       logInfo(`[retryFailedItem] Successfully retried ${failedItem.type} item: ${failedItem.path}`);
       new Notice(`Retry successful: ${failedItem.path}`);
     } catch (error) {
+      this.assertActive(generation);
       logError(
         `[retryFailedItem] Failed to retry ${failedItem.type} item ${failedItem.path}:`,
         error
@@ -981,7 +1193,7 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
   }
 
   private async retryMarkdownFile(project: ProjectConfig, filePath: string): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(filePath);
+    const file = this.vault.getAbstractFileByPath(filePath);
     if (!(file instanceof TFile) || file.extension !== "md") {
       throw new Error(`File not found or not a markdown file: ${filePath}`);
     }
@@ -1001,7 +1213,7 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
   }
 
   private async retryNonMarkdownFile(project: ProjectConfig, filePath: string): Promise<void> {
-    const file = this.app.vault.getAbstractFileByPath(filePath);
+    const file = this.vault.getAbstractFileByPath(filePath);
     if (!(file instanceof TFile) || file.extension === "md") {
       throw new Error(`File not found or is a markdown file: ${filePath}`);
     }
@@ -1012,7 +1224,7 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
 
     try {
       await this.loadTracker.executeWithProcessTracking(filePath, "nonMd", async () => {
-        return this.fileParserManager.parseFile(file, this.app.vault);
+        return this.fileParserManager.parseFile(file, this.vault);
       });
 
       logInfo(`[retryNonMarkdownFile] Successfully reprocessed non-markdown file: ${filePath}`);
@@ -1032,14 +1244,51 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
       isProject: true,
     });
 
-    return this.app.vault.getFiles().filter((file: TFile) => {
+    return this.vault.getFiles().filter((file: TFile) => {
       return shouldIndexFile(file, inclusionPatterns, exclusionPatterns, true);
     });
   }
 
+  /**
+   * Permanently end this manager's plugin lifecycle.
+   *
+   * The operation is synchronous and idempotent. It removes every subscription,
+   * releases the Vault-owned context cache, and clears the static accessor only
+   * when this object is still the active owner.
+   */
   public onunload(): void {
-    this.projectRecordsUnsubscriber?.();
+    if (this.disposed) {
+      return;
+    }
+    const ownsActiveInstance = ProjectManager.activeInstance === this;
+    this.disposed = true;
+    this.lifecycleGeneration++;
+    this.switchRequestId++;
+
+    const modelKeyUnsubscriber = this.modelKeyUnsubscriber;
+    this.modelKeyUnsubscriber = undefined;
+    const chainTypeUnsubscriber = this.chainTypeUnsubscriber;
+    this.chainTypeUnsubscriber = undefined;
+    const projectUnsubscriber = this.projectUnsubscriber;
+    this.projectUnsubscriber = undefined;
+    const projectRecordsUnsubscriber = this.projectRecordsUnsubscriber;
     this.projectRecordsUnsubscriber = undefined;
-    this.projectContextCache.cleanup();
+
+    this.runCleanupAction(modelKeyUnsubscriber, "model-key subscription");
+    this.runCleanupAction(chainTypeUnsubscriber, "chain-type subscription");
+    this.runCleanupAction(projectUnsubscriber, "project subscription");
+    this.runCleanupAction(projectRecordsUnsubscriber, "project-records subscription");
+    this.runCleanupAction(() => this.loadTracker.dispose(), "project load tracker");
+    this.runCleanupAction(() => this.chainMangerInstance.dispose(), "chain manager");
+    this.runCleanupAction(() => this.projectContextCache.dispose(), "project context cache");
+
+    if (ownsActiveInstance) {
+      this.currentProjectId = null;
+      if (getCurrentProject() !== null) {
+        this.runCleanupAction(() => setCurrentProject(null), "active project selection");
+      }
+      this.runCleanupAction(() => setProjectLoading(false), "project loading state");
+      ProjectManager.activeInstance = undefined;
+    }
   }
 }

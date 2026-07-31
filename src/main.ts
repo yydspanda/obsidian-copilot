@@ -24,6 +24,7 @@ import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
 import { ProjectKnowledgeBundleConfigSource } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
+import { initializeKnowledgeRuntimeForCurrentGeneration } from "@/knowledge/startup/KnowledgeRuntimeFoundationInitializer";
 import {
   KnowledgePluginStartupBarrier,
   type KnowledgePluginBundleConfigLoadResult,
@@ -124,6 +125,7 @@ export default class CopilotPlugin extends Plugin {
   private selectionListenerDocument?: Document;
   private lastSelectionSignature?: string;
   private webSelectionTracker?: WebSelectionTracker;
+  private vaultDataManager?: VaultDataManager;
   private knowledgeRuntime?: import("@/knowledge/runtime/KnowledgeRuntimeStore").KnowledgeRuntimeStore;
   private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
   private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
@@ -133,6 +135,7 @@ export default class CopilotPlugin extends Plugin {
       this.knowledgeStudioSessionStore
     );
   private knowledgeLifecycleClosed = false;
+  private knowledgeRuntimeStartupGeneration = 0;
   private projectsInitialization?: Promise<void>;
   private readonly knowledgeLayoutCoordinator = new KnowledgePluginLayoutCoordinator({
     ensureInitialized: () => this.ensureProjectsInitializedAfterLayout(),
@@ -182,7 +185,16 @@ export default class CopilotPlugin extends Plugin {
     void checkIsPlusUser();
     void refreshSelfHostModeValidation();
 
-    // Initialize ProjectManager
+    // Retire the previous plugin's subscriber before replacing project state.
+    // Otherwise owner reset notifications can start a stale autosave through
+    // the old plugin during an overlapping hot reload.
+    ProjectManager.retireActive();
+
+    // Start the project-file lifecycle before the new ProjectManager subscribes
+    // so stale scans cannot publish into the new plugin lifecycle.
+    this.projectRegister = new ProjectRegister(this.app);
+
+    // Initialize ProjectManager after the new project state owner is active.
     this.projectManager = ProjectManager.getInstance(this.app, this);
 
     // Always construct VectorStoreManager; it internally no-ops when semantic search is disabled
@@ -190,8 +202,8 @@ export default class CopilotPlugin extends Plugin {
 
     // Initialize VaultDataManager for centralized vault data (notes, folders, tags)
     // Note: VaultDataManager tracks ALL data; hooks filter based on parameters
-    const vaultDataManager = VaultDataManager.getInstance();
-    vaultDataManager.initialize();
+    this.vaultDataManager = VaultDataManager.startLifecycle(this.app);
+    this.vaultDataManager.initialize();
 
     // Initialize FileParserManager early with other core services
     this.fileParserManager = new FileParserManager(this.brevilabsClient, this.app.vault);
@@ -231,7 +243,6 @@ export default class CopilotPlugin extends Plugin {
 
     this.customCommandRegister = new CustomCommandRegister(this, this.app.vault);
     this.systemPromptRegister = new SystemPromptRegister(this, this.app.vault);
-    this.projectRegister = new ProjectRegister(this.app);
 
     this.app.workspace.onLayoutReady(() => {
       if (this.knowledgeLifecycleClosed) {
@@ -324,31 +335,41 @@ export default class CopilotPlugin extends Plugin {
    * complete.
    */
   private async initializeKnowledgeRuntimeFoundation(): Promise<void> {
+    const generation = ++this.knowledgeRuntimeStartupGeneration;
     const pluginDirectory = this.manifest.dir;
     if (!pluginDirectory) {
       logWarn("Knowledge runtime foundation is unavailable: plugin directory is missing.");
       return;
     }
     try {
-      const [{ KnowledgeRuntimeStore }, { ObsidianAtomicRuntimeFile }] = await Promise.all([
-        import("@/knowledge/runtime/KnowledgeRuntimeStore"),
-        import("@/knowledge/runtime/ObsidianAtomicRuntimeFile"),
-      ]);
-      const runtimeFile = new ObsidianAtomicRuntimeFile(
-        this.app.vault.adapter,
-        `${pluginDirectory}/knowledge-runtime-v1.json`
+      const runtime = await initializeKnowledgeRuntimeForCurrentGeneration(
+        async () => {
+          const [{ KnowledgeRuntimeStore }, { ObsidianAtomicRuntimeFile }] = await Promise.all([
+            import("@/knowledge/runtime/KnowledgeRuntimeStore"),
+            import("@/knowledge/runtime/ObsidianAtomicRuntimeFile"),
+          ]);
+          return { KnowledgeRuntimeStore, ObsidianAtomicRuntimeFile };
+        },
+        () =>
+          !this.knowledgeLifecycleClosed && generation === this.knowledgeRuntimeStartupGeneration,
+        ({ KnowledgeRuntimeStore, ObsidianAtomicRuntimeFile }) => {
+          const runtimeFile = new ObsidianAtomicRuntimeFile(
+            this.app.vault.adapter,
+            `${pluginDirectory}/knowledge-runtime-v1.json`
+          );
+          return new KnowledgeRuntimeStore(runtimeFile);
+        },
+        async (candidate) => candidate.initialize()
       );
-      const runtime = new KnowledgeRuntimeStore(runtimeFile);
-      await runtime.initialize();
-      if (this.knowledgeLifecycleClosed) {
+      if (!runtime) {
         return;
       }
       this.knowledgeRuntime = runtime;
     } catch (error) {
-      this.knowledgeRuntime = undefined;
-      if (this.knowledgeLifecycleClosed) {
+      if (this.knowledgeLifecycleClosed || generation !== this.knowledgeRuntimeStartupGeneration) {
         return;
       }
+      this.knowledgeRuntime = undefined;
       logWarn(
         "Knowledge runtime foundation initialization failed.",
         error instanceof Error ? error.name : "unknown_error"
@@ -470,23 +491,24 @@ export default class CopilotPlugin extends Plugin {
     // Fail-close synchronously before the first await so no old startup
     // continuation can publish or initialize services during persistence flush.
     this.knowledgeLifecycleClosed = true;
+    this.knowledgeRuntimeStartupGeneration += 1;
     this.knowledgeLayoutCoordinator.close();
     this.knowledgeStudioSessionStore.dispose();
     this.knowledgeStudioPort.dispose();
-    this.projectRegister?.cleanup();
+    // Unsubscribe ProjectManager before releasing project state. Reversing
+    // this order can notify an unloading manager and start a stale switch.
     this.projectManager?.onunload();
+    this.projectRegister?.cleanup();
     this.customCommandRegister?.cleanup();
     this.systemPromptRegister?.cleanup();
     this.settingsUnsubscriber?.();
     this.settingsUnsubscriber = undefined;
 
-    // Best-effort flush of pending keychain/data.json writes.
-    // Reason: onunload() is void in Obsidian's type system, but awaiting here
-    // is no worse than fire-and-forget, and consistent with the log flush below.
-    // (Module-level state + KeychainService singleton reset happen at the
-    // START of the next onload, not here — see comment in onload above for
-    // the late-write race that motivated the move.)
-    await flushPersistence();
+    // Retire the exact Vault data owner before the first await. A stale unload
+    // continuation must never resolve a global singleton and clean up a newer
+    // plugin lifecycle.
+    this.vaultDataManager?.cleanup();
+    this.vaultDataManager = undefined;
 
     // Clear all persistent selection highlights before unload
     // This prevents "stuck" highlights after hot reload (dev environment)
@@ -494,10 +516,6 @@ export default class CopilotPlugin extends Plugin {
 
     // Cleanup chat selection highlight controller
     this.chatSelectionHighlightController?.cleanup();
-
-    // Cleanup VaultDataManager event listeners
-    const vaultDataManager = VaultDataManager.getInstance();
-    vaultDataManager.cleanup();
 
     // Cleanup selection handler
     this.cleanupSelectionHandler();
@@ -512,9 +530,17 @@ export default class CopilotPlugin extends Plugin {
       // Ignore errors if service not available
     }
 
-    // Best-effort flush of log file
-    await logFileManager.flush();
     logInfo("Copilot plugin unloaded");
+
+    // Best-effort flush of pending keychain/data.json writes.
+    // Reason: onunload() is void in Obsidian's type system, but awaiting here
+    // is no worse than fire-and-forget, and consistent with the log flush below.
+    // (Module-level state + KeychainService singleton reset happen at the
+    // START of the next onload, not here — see comment in onload above for
+    // the late-write race that motivated the move.)
+    // Start the log flush with this plugin's captured Vault before yielding.
+    // Its adapter can never switch to a newer global App/Vault mid-flight.
+    await Promise.all([flushPersistence(), logFileManager.flush(this.app.vault)]);
   }
 
   /**
@@ -1116,7 +1142,7 @@ export default class CopilotPlugin extends Plugin {
 
   async handleNewChat() {
     clearRecordedPromptPayload();
-    await logFileManager.clear();
+    await logFileManager.clear(this.app.vault);
 
     // Analyze chat messages for memory if enabled
     if (getSettings().enableRecentConversations) {

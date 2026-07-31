@@ -21,7 +21,15 @@ import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { Document } from "@langchain/core/documents";
 import { MemoryVariables } from "@langchain/core/memory";
 import { DateTime } from "luxon";
-import { MarkdownView, Notice, TFile, Vault, normalizePath, requestUrl } from "obsidian";
+import {
+  MarkdownView,
+  MetadataCache,
+  Notice,
+  TFile,
+  Vault,
+  normalizePath,
+  requestUrl,
+} from "obsidian";
 import { CustomModel } from "./aiParams";
 import { getApiKeyForProvider } from "@/utils/modelUtils";
 export { err2String } from "@/errorFormat";
@@ -195,10 +203,15 @@ export function stripFrontmatter(content: string, options: StripFrontmatterOptio
 /**
  * @param file - The note file to get tags from.
  * @param frontmatterOnly - Whether to only get tags from frontmatter.
+ * @param metadataCache - Explicit metadata owner; defaults to the active global App for compatibility.
  * @returns An array of lowercase tags without the hash symbol.
  */
-export function getTagsFromNote(file: TFile, frontmatterOnly = true): string[] {
-  const metadata = app.metadataCache.getFileCache(file);
+export function getTagsFromNote(
+  file: TFile,
+  frontmatterOnly = true,
+  metadataCache?: MetadataCache
+): string[] {
+  const metadata = (metadataCache ?? app.metadataCache).getFileCache(file);
   const frontmatterTags = metadata?.frontmatter?.tags;
   const allTags = new Set<string>();
 
@@ -280,8 +293,16 @@ export const formatDateTime = (
  * - ensureFolderExists("some/deep/nested/path")
  *
  * Throws if any segment conflicts with an existing file.
+ *
+ * @param folderPath - Vault-relative folder path to create
+ * @param vault - Explicit Vault owner; defaults to the active Obsidian App for legacy callers
+ * @param assertActive - Optional lifecycle assertion run before each Vault side effect
  */
-export async function ensureFolderExists(folderPath: string): Promise<void> {
+export async function ensureFolderExists(
+  folderPath: string,
+  vault: Vault = app.vault,
+  assertActive?: () => void
+): Promise<void> {
   const path = normalizePath(folderPath).replace(/^\/+/, "").replace(/\/+$/, "");
   if (!path) return; // nothing to ensure
 
@@ -289,9 +310,10 @@ export async function ensureFolderExists(folderPath: string): Promise<void> {
   let current = "";
 
   for (const part of parts) {
+    assertActive?.();
     current = current ? `${current}/${part}` : part;
 
-    const existing = app.vault.getAbstractFileByPath(current);
+    const existing = vault.getAbstractFileByPath(current);
     if (existing) {
       if (existing instanceof TFile) {
         throw new Error(`Path conflict: "${current}" exists as a file, expected folder.`);
@@ -301,7 +323,8 @@ export async function ensureFolderExists(folderPath: string): Promise<void> {
     }
 
     // Create this level; parents are guaranteed to exist from previous iterations
-    await app.vault.adapter.mkdir(current);
+    assertActive?.();
+    await vault.adapter.mkdir(current);
   }
 }
 
