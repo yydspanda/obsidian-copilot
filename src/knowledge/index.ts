@@ -17,6 +17,7 @@ export * from "@/knowledge/ingest/queue/IngestQueue";
 export * from "@/knowledge/ingest/queue/QueueStorage";
 export * from "@/knowledge/ingest/queue/RetryPolicy";
 export * from "@/knowledge/ingest/InputRevisionAllocator";
+export * from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 export * from "@/knowledge/ingest/SourceObservationHandoff";
 export * from "@/knowledge/manifest/ManifestCommitIntent";
 export * from "@/knowledge/manifest/freshness";
