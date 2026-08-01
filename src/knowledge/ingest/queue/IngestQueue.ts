@@ -43,9 +43,121 @@ const WORK_STAGE_ORDER: readonly KnowledgeIngestWorkStage[] = [
   "validating",
   "applying",
 ];
+const EXECUTION_CLAIM_TOKEN = Symbol("IngestExecutionClaim.constructor");
 
 type ProcessingIngestJob = Extract<KnowledgeIngestJob, { status: "processing" }>;
 type ExecutedJobStatus = Extract<RunNextResult, { kind: "executed" }>["status"];
+
+interface IngestExecutionClaimState {
+  job: Readonly<ProcessingIngestJob>;
+  signal: AbortSignal;
+  storage: QueueStorage;
+  isCurrent: () => boolean;
+  revoked: boolean;
+}
+
+const ingestExecutionClaimStates = new WeakMap<object, IngestExecutionClaimState>();
+
+/** Returns hidden state only for a Queue-issued execution claim. */
+function requireIngestExecutionClaimState(value: unknown): IngestExecutionClaimState {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("The ingest execution claim is invalid");
+  }
+  const state = ingestExecutionClaimStates.get(value);
+  if (!state) {
+    throw new TypeError("The ingest execution claim is invalid");
+  }
+  return state;
+}
+
+/**
+ * Creates one in-process claim owned by the exact Queue controller.
+ *
+ * @param job - Frozen durable processing attempt
+ * @param signal - Queue-owned cancellation signal
+ * @param isCurrent - Synchronous controller ownership check
+ * @returns Opaque claim that cannot be reconstructed from the job DTO
+ */
+function createIngestExecutionClaim(
+  job: Readonly<ProcessingIngestJob>,
+  signal: AbortSignal,
+  storage: QueueStorage,
+  isCurrent: () => boolean
+): IngestExecutionClaim {
+  const claim = new IngestExecutionClaim(EXECUTION_CLAIM_TOKEN);
+  ingestExecutionClaimStates.set(claim, { job, signal, storage, isCurrent, revoked: false });
+  return claim;
+}
+
+/** Revokes a claim synchronously before its Queue controller is released. */
+function revokeIngestExecutionClaim(claim: IngestExecutionClaim | undefined): void {
+  if (!claim) return;
+  requireIngestExecutionClaimState(claim).revoked = true;
+}
+
+/**
+ * Compares an authentic claim with the exact QueueStorage instance that issued it.
+ *
+ * This narrow predicate lets the Runtime proof facade verify composition without
+ * exposing the storage capability retained in Queue-private claim state.
+ *
+ * @param claim - Candidate Queue-issued execution claim
+ * @param storage - Candidate exact Queue persistence facade
+ * @returns Whether both identities belong to the same exact Queue storage facade
+ */
+export function ingestExecutionClaimMatchesQueueStorage(claim: unknown, storage: unknown): boolean {
+  try {
+    return requireIngestExecutionClaimState(claim).storage === storage;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Queue-issued, process-local authority for one exact active ingest attempt.
+ *
+ * Durable consumers must still reprove this claim against Runtime state. The
+ * capability only prevents a plain or frozen job DTO from impersonating the
+ * Queue-owned controller and its exact AbortSignal.
+ */
+export class IngestExecutionClaim {
+  /** Rejects direct construction without the module-private Queue token. */
+  constructor(token: symbol) {
+    if (token !== EXECUTION_CLAIM_TOKEN) {
+      throw new TypeError("The ingest execution claim is invalid");
+    }
+    Object.freeze(this);
+  }
+
+  /** Requires an authentic Queue-issued claim. */
+  static assert(value: unknown): asserts value is IngestExecutionClaim {
+    requireIngestExecutionClaimState(value);
+  }
+
+  /** Returns the exact immutable processing job captured by the Queue. */
+  getJob(): Readonly<ProcessingIngestJob> {
+    return requireIngestExecutionClaimState(this).job;
+  }
+
+  /** Returns the Queue-owned signal; callers cannot substitute another signal. */
+  getSignal(): AbortSignal {
+    return requireIngestExecutionClaimState(this).signal;
+  }
+
+  /** Reports whether the same local controller still owns this exact attempt. */
+  isCurrent(): boolean {
+    const state = requireIngestExecutionClaimState(this);
+    if (state.revoked || state.signal.aborted) return false;
+    try {
+      return state.isCurrent() === true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+Object.freeze(IngestExecutionClaim.prototype);
+Object.freeze(IngestExecutionClaim);
 
 /** Input required to enqueue one exact source and pipeline version. */
 export interface EnqueueIngestRequest {
@@ -129,6 +241,8 @@ export type IngestExecutionResult =
 /** Context passed to a provider-neutral ingest executor. */
 export interface IngestExecutionContext {
   job: Readonly<ProcessingIngestJob>;
+  /** Opaque, revocable claim bound to this exact job and Queue AbortSignal. */
+  executionClaim: IngestExecutionClaim;
   signal: AbortSignal;
   reportStage(stage: KnowledgeIngestWorkStage): Promise<void>;
 }
@@ -553,6 +667,106 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Snapshots one plain record entirely through own enumerable data descriptors.
+ *
+ * Each untrusted descriptor is read exactly once. The returned null-prototype
+ * record is detached from accessors and proxies before any semantic validation
+ * or durable finalization can observe it again.
+ *
+ * @param value - Unknown executor-owned value
+ * @returns Frozen data-only record, or undefined for any exotic shape
+ */
+function snapshotDataRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return undefined;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return undefined;
+    }
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== "string")) {
+      return undefined;
+    }
+    const snapshot = Object.create(null) as Record<string, unknown>;
+    for (const key of keys as string[]) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      Object.defineProperty(snapshot, key, {
+        value: descriptor.value,
+        enumerable: true,
+        writable: false,
+        configurable: false,
+      });
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Checks whether a detached record has exactly one expected string-key set.
+ *
+ * @param value - Trusted record returned by snapshotDataRecord
+ * @param expected - Complete contract field set
+ * @returns Whether no required or unexpected field is present
+ */
+function hasExactDataKeys(
+  value: Readonly<Record<string, unknown>>,
+  expected: readonly string[]
+): boolean {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
+}
+
+/**
+ * Snapshots a dense executor-owned array without iteration or property reads.
+ *
+ * @param value - Unknown array candidate
+ * @returns Frozen detached element-reference array, or undefined when malformed
+ */
+function snapshotDenseDataArray(value: unknown): readonly unknown[] | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined;
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !lengthDescriptor ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0 ||
+      lengthDescriptor.enumerable ||
+      lengthDescriptor.configurable
+    ) {
+      return undefined;
+    }
+    const length = lengthDescriptor.value as number;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== length + 1 || keys.some((key) => typeof key === "symbol")) {
+      return undefined;
+    }
+    const snapshot: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      snapshot.push(descriptor.value);
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Reports whether a job remains eligible for source-level deduplication.
  *
  * @param job - Durable queue job
@@ -841,26 +1055,37 @@ function assertHash(value: unknown, field: string): asserts value is string {
  * @returns Detached exact queue-attempt identity
  */
 function snapshotReviewDecisionJobClaim(value: unknown): IngestReviewDecisionJobClaim {
-  if (!isRecord(value)) {
+  const claim = snapshotDataRecord(value);
+  if (
+    !claim ||
+    !hasExactDataKeys(claim, [
+      "jobId",
+      "sourceId",
+      "sourceContentHash",
+      "pipelineFingerprint",
+      "inputRevision",
+      "attempt",
+    ])
+  ) {
     throw new TypeError("reviewDecision.jobClaim must be an object");
   }
-  assertIdentifier(value.jobId, "reviewDecision.jobClaim.jobId");
-  assertIdentifier(value.sourceId, "reviewDecision.jobClaim.sourceId");
-  assertHash(value.sourceContentHash, "reviewDecision.jobClaim.sourceContentHash");
-  assertHash(value.pipelineFingerprint, "reviewDecision.jobClaim.pipelineFingerprint");
-  if (!Number.isSafeInteger(value.inputRevision) || (value.inputRevision as number) < 0) {
+  assertIdentifier(claim.jobId, "reviewDecision.jobClaim.jobId");
+  assertIdentifier(claim.sourceId, "reviewDecision.jobClaim.sourceId");
+  assertHash(claim.sourceContentHash, "reviewDecision.jobClaim.sourceContentHash");
+  assertHash(claim.pipelineFingerprint, "reviewDecision.jobClaim.pipelineFingerprint");
+  if (!Number.isSafeInteger(claim.inputRevision) || (claim.inputRevision as number) < 0) {
     throw new TypeError("reviewDecision.jobClaim.inputRevision must be non-negative");
   }
-  if (!Number.isSafeInteger(value.attempt) || (value.attempt as number) <= 0) {
+  if (!Number.isSafeInteger(claim.attempt) || (claim.attempt as number) <= 0) {
     throw new TypeError("reviewDecision.jobClaim.attempt must be positive");
   }
   return Object.freeze({
-    jobId: value.jobId,
-    sourceId: value.sourceId,
-    sourceContentHash: value.sourceContentHash,
-    pipelineFingerprint: value.pipelineFingerprint,
-    inputRevision: value.inputRevision as number,
-    attempt: value.attempt as number,
+    jobId: claim.jobId,
+    sourceId: claim.sourceId,
+    sourceContentHash: claim.sourceContentHash,
+    pipelineFingerprint: claim.pipelineFingerprint,
+    inputRevision: claim.inputRevision as number,
+    attempt: claim.attempt as number,
   });
 }
 
@@ -871,26 +1096,39 @@ function snapshotReviewDecisionJobClaim(value: unknown): IngestReviewDecisionJob
  * @returns Detached pending decision identity
  */
 function snapshotPendingReviewDecision(value: unknown): IngestPendingReviewDecisionReceipt {
-  if (!isRecord(value) || value.outcome !== "pending") {
+  const decision = snapshotDataRecord(value);
+  if (
+    !decision ||
+    !hasExactDataKeys(decision, [
+      "outcome",
+      "bundleId",
+      "changeSetId",
+      "proposalDigest",
+      "recordRevision",
+      "recordedAt",
+      "jobClaim",
+    ]) ||
+    decision.outcome !== "pending"
+  ) {
     throw new TypeError("reviewDecision must be a durable pending record");
   }
-  assertIdentifier(value.bundleId, "reviewDecision.bundleId");
-  assertIdentifier(value.changeSetId, "reviewDecision.changeSetId");
-  assertHash(value.proposalDigest, "reviewDecision.proposalDigest");
-  if (value.recordRevision !== 0) {
+  assertIdentifier(decision.bundleId, "reviewDecision.bundleId");
+  assertIdentifier(decision.changeSetId, "reviewDecision.changeSetId");
+  assertHash(decision.proposalDigest, "reviewDecision.proposalDigest");
+  if (decision.recordRevision !== 0) {
     throw new TypeError("reviewDecision.recordRevision must be zero while pending");
   }
-  if (!Number.isSafeInteger(value.recordedAt) || (value.recordedAt as number) < 0) {
+  if (!Number.isSafeInteger(decision.recordedAt) || (decision.recordedAt as number) < 0) {
     throw new TypeError("reviewDecision.recordedAt must be non-negative");
   }
   return Object.freeze({
     outcome: "pending",
-    bundleId: value.bundleId,
-    changeSetId: value.changeSetId,
-    proposalDigest: value.proposalDigest,
+    bundleId: decision.bundleId,
+    changeSetId: decision.changeSetId,
+    proposalDigest: decision.proposalDigest,
     recordRevision: 0,
-    recordedAt: value.recordedAt as number,
-    jobClaim: snapshotReviewDecisionJobClaim(value.jobClaim),
+    recordedAt: decision.recordedAt as number,
+    jobClaim: snapshotReviewDecisionJobClaim(decision.jobClaim),
   });
 }
 
@@ -1034,6 +1272,99 @@ function assertTransactionCommitReceipt(value: unknown): asserts value is Transa
   if (startedAt > committedAt) {
     throw new TypeError("receipt committedAt cannot precede its owning job claim");
   }
+}
+
+/**
+ * Snapshots one transaction target without retaining executor-owned objects.
+ *
+ * @param value - Unknown committed-target candidate
+ * @returns Frozen exact target identity
+ */
+function snapshotTransactionCommittedTarget(
+  value: unknown
+): TransactionCommitReceipt["targets"][number] {
+  const target = snapshotDataRecord(value);
+  if (!target || (target.kind !== "missing" && target.kind !== "file")) {
+    throw new TypeError("transaction commit target is invalid");
+  }
+  if (target.kind === "missing") {
+    if (!hasExactDataKeys(target, ["path", "kind"])) {
+      throw new TypeError("missing transaction target has unexpected fields");
+    }
+    assertIdentifier(target.path, "receipt.targets.path");
+    return Object.freeze({ path: target.path, kind: "missing" });
+  }
+  if (!hasExactDataKeys(target, ["path", "kind", "contentHash"])) {
+    throw new TypeError("file transaction target has unexpected fields");
+  }
+  assertIdentifier(target.path, "receipt.targets.path");
+  assertHash(target.contentHash, "receipt.targets.contentHash");
+  return Object.freeze({ path: target.path, kind: "file", contentHash: target.contentHash });
+}
+
+/**
+ * Creates a deeply detached transaction receipt from executor-owned data.
+ *
+ * @param value - Unknown transaction proof returned by an executor
+ * @returns Deeply frozen receipt safe to retain and return to coordination
+ */
+function snapshotTransactionCommitReceipt(value: unknown): TransactionCommitReceipt {
+  const receipt = snapshotDataRecord(value);
+  if (
+    !receipt ||
+    !hasExactDataKeys(receipt, [
+      "transactionId",
+      "commitRevision",
+      "bundleId",
+      "changeSetId",
+      "changeSetDigest",
+      "jobClaim",
+      "committedAt",
+      "targets",
+    ])
+  ) {
+    throw new TypeError("transaction commit receipt has unexpected fields");
+  }
+  const claim = snapshotDataRecord(receipt.jobClaim);
+  if (
+    !claim ||
+    !hasExactDataKeys(claim, [
+      "jobId",
+      "sourceId",
+      "sourceContentHash",
+      "pipelineFingerprint",
+      "inputRevision",
+      "attempt",
+      "startedAt",
+    ])
+  ) {
+    throw new TypeError("transaction commit receipt claim is invalid");
+  }
+  const targetValues = snapshotDenseDataArray(receipt.targets);
+  if (!targetValues) {
+    throw new TypeError("transaction commit receipt targets are invalid");
+  }
+  const targets = Object.freeze(targetValues.map(snapshotTransactionCommittedTarget));
+  const snapshot: unknown = Object.freeze({
+    transactionId: receipt.transactionId,
+    commitRevision: receipt.commitRevision,
+    bundleId: receipt.bundleId,
+    changeSetId: receipt.changeSetId,
+    changeSetDigest: receipt.changeSetDigest,
+    jobClaim: Object.freeze({
+      jobId: claim.jobId,
+      sourceId: claim.sourceId,
+      sourceContentHash: claim.sourceContentHash,
+      pipelineFingerprint: claim.pipelineFingerprint,
+      inputRevision: claim.inputRevision,
+      attempt: claim.attempt,
+      startedAt: claim.startedAt,
+    }),
+    committedAt: receipt.committedAt,
+    targets,
+  });
+  assertTransactionCommitReceipt(snapshot);
+  return snapshot;
 }
 
 /**
@@ -1515,6 +1846,7 @@ export class IngestQueue {
     }
 
     const executionJob = Object.freeze({ ...job });
+    let executionClaim: IngestExecutionClaim | undefined;
     try {
       this.emit(claim.snapshot, "claim", executionJob.id);
       const beforeExecution = requireJob(await this.load(bundleId), executionJob.id);
@@ -1530,21 +1862,43 @@ export class IngestQueue {
 
       let result: IngestExecutionResult;
       try {
-        result = await this.executor.execute({
-          job: executionJob,
-          signal: active.controller.signal,
-          reportStage: async (stage) => {
-            await this.reportStage(
-              bundleId,
-              executionJob.id,
-              executionJob.attempt,
-              executionJob.startedAt,
-              stage,
-              active.controller.signal
-            );
-          },
-        });
-        this.assertExecutionResult(result);
+        try {
+          executionClaim = createIngestExecutionClaim(
+            executionJob,
+            active.controller.signal,
+            this.storage,
+            () => {
+              const current = this.activeControllers.get(bundleId);
+              return (
+                current?.controller === active.controller &&
+                current.jobId === executionJob.id &&
+                current.attempt === executionJob.attempt &&
+                current.startedAt === executionJob.startedAt
+              );
+            }
+          );
+          const issuedExecutionClaim = executionClaim;
+          result = await this.executor.execute({
+            job: executionJob,
+            executionClaim: issuedExecutionClaim,
+            signal: active.controller.signal,
+            reportStage: async (stage) => {
+              await this.reportStage(
+                bundleId,
+                executionJob.id,
+                executionJob.attempt,
+                executionJob.startedAt,
+                stage,
+                active.controller.signal,
+                issuedExecutionClaim
+              );
+            },
+          });
+        } finally {
+          revokeIngestExecutionClaim(executionClaim);
+          executionClaim = undefined;
+        }
+        result = this.snapshotExecutionResult(result);
       } catch (error) {
         if (error instanceof IngestQueueInfrastructureError) {
           throw error;
@@ -1581,6 +1935,7 @@ export class IngestQueue {
       await this.recoverAfterInfrastructureFailure(bundleId);
       throw error;
     } finally {
+      revokeIngestExecutionClaim(executionClaim);
       const current = this.activeControllers.get(bundleId);
       if (current?.controller === active.controller) {
         this.activeControllers.delete(bundleId);
@@ -2648,6 +3003,7 @@ export class IngestQueue {
    * @param jobId - Claimed job identifier
    * @param stage - Current executor stage
    * @param signal - Controller signal paired with the claim
+   * @param executionClaim - Revocable capability paired with this reporter
    */
   private async reportStage(
     bundleId: string,
@@ -2655,9 +3011,10 @@ export class IngestQueue {
     attempt: number,
     startedAt: number,
     stage: KnowledgeIngestWorkStage,
-    signal: AbortSignal
+    signal: AbortSignal,
+    executionClaim: IngestExecutionClaim
   ): Promise<void> {
-    if (signal.aborted) {
+    if (signal.aborted || !executionClaim.isCurrent()) {
       throw new DOMException("Ingest execution was aborted", "AbortError");
     }
     const timestamp = this.now();
@@ -2666,7 +3023,7 @@ export class IngestQueue {
       mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
         return this.mutate<boolean>(bundleId, (current) => {
           const job = requireJob(current, jobId);
-          if (!isSameClaim(job, attempt, startedAt)) {
+          if (!executionClaim.isCurrent() || !isSameClaim(job, attempt, startedAt)) {
             throw new IngestQueueTransitionError(job.id, jobState(job), `report stage '${stage}'`);
           }
           const currentIndex = WORK_STAGE_ORDER.indexOf(job.stage);
@@ -3158,44 +3515,50 @@ export class IngestQueue {
   }
 
   /**
-   * Validates an executor outcome before entering persistence finalization.
+   * Snapshots and validates an executor outcome before durable finalization.
    *
    * @param value - Runtime result returned through the executor port
+   * @returns Deeply detached frozen result safe for later asynchronous reads
    */
-  private assertExecutionResult(value: unknown): asserts value is IngestExecutionResult {
-    if (
-      !isRecord(value) ||
-      (value.kind !== "awaiting_review" &&
-        value.kind !== "no_changes" &&
-        value.kind !== "completed") ||
-      typeof value.changeSetId !== "string" ||
-      value.changeSetId.trim().length === 0
-    ) {
+  private snapshotExecutionResult(value: unknown): IngestExecutionResult {
+    const result = snapshotDataRecord(value);
+    if (!result || typeof result.kind !== "string") {
       throw new TypeError("executor result does not satisfy the ingest outcome contract");
     }
-    if (value.kind === "completed") {
-      if (!("commitReceipt" in value)) {
-        throw new TypeError("completed executor result requires transaction commit proof");
+    if (result.kind === "no_changes") {
+      if (!hasExactDataKeys(result, ["kind", "changeSetId"])) {
+        throw new TypeError("no-changes executor result has unexpected fields");
       }
-      assertTransactionCommitReceipt(value.commitReceipt);
-      if (value.commitReceipt.changeSetId !== value.changeSetId) {
-        throw new TypeError("executor commit receipt must match its ChangeSet result");
+      assertIdentifier(result.changeSetId, "changeSetId");
+      return Object.freeze({ kind: "no_changes", changeSetId: result.changeSetId });
+    }
+    if (result.kind === "awaiting_review") {
+      if (!hasExactDataKeys(result, ["kind", "changeSetId", "reviewDecision"])) {
+        throw new TypeError("awaiting-review executor result has unexpected fields");
       }
-    } else if (value.kind === "awaiting_review") {
-      if (!("reviewDecision" in value)) {
-        throw new TypeError("awaiting-review executor result requires pending review proof");
-      }
-      const pendingReview = snapshotPendingReviewDecision(value.reviewDecision);
-      if (pendingReview.changeSetId !== value.changeSetId) {
+      assertIdentifier(result.changeSetId, "changeSetId");
+      const reviewDecision = snapshotPendingReviewDecision(result.reviewDecision);
+      if (reviewDecision.changeSetId !== result.changeSetId) {
         throw new TypeError("executor pending review proof must match its ChangeSet result");
       }
+      return Object.freeze({
+        kind: "awaiting_review",
+        changeSetId: result.changeSetId,
+        reviewDecision,
+      });
     }
-    if (value.kind !== "completed" && "commitReceipt" in value) {
-      throw new TypeError("only a completed executor result may carry transaction commit proof");
+    if (result.kind === "completed") {
+      if (!hasExactDataKeys(result, ["kind", "changeSetId", "commitReceipt"])) {
+        throw new TypeError("completed executor result has unexpected fields");
+      }
+      assertIdentifier(result.changeSetId, "changeSetId");
+      const commitReceipt = snapshotTransactionCommitReceipt(result.commitReceipt);
+      if (commitReceipt.changeSetId !== result.changeSetId) {
+        throw new TypeError("executor commit receipt must match its ChangeSet result");
+      }
+      return Object.freeze({ kind: "completed", changeSetId: result.changeSetId, commitReceipt });
     }
-    if (value.kind !== "awaiting_review" && "reviewDecision" in value) {
-      throw new TypeError("only an awaiting-review result may carry pending review proof");
-    }
+    throw new TypeError("executor result does not satisfy the ingest outcome contract");
   }
 
   /**

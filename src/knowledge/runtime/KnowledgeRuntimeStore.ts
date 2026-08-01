@@ -37,6 +37,21 @@ import type {
   SourceInputRevisionAllocator,
 } from "@/knowledge/ingest/InputRevisionAllocator";
 import {
+  ingestExecutionClaimMatchesQueueStorage,
+  type IngestExecutionClaim,
+} from "@/knowledge/ingest/queue/IngestQueue";
+import {
+  KnowledgeExecutionOwner,
+  createKnowledgeExecutionOwner,
+} from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import {
+  KNOWLEDGE_INGEST_EXECUTION_PROOF_VERSION,
+  verifyKnowledgeIngestExecutionProofRequest,
+  type KnowledgeIngestExecutionProof,
+  type KnowledgeIngestExecutionProofPort,
+  type KnowledgeIngestExecutionProofRequest,
+} from "@/knowledge/ingest/KnowledgeIngestExecutionProof";
+import {
   INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
   parseIngestQueueSnapshot,
@@ -109,6 +124,7 @@ import {
   type ReviewStorage,
 } from "@/knowledge/review/ReviewStorage";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
+import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
 export const KNOWLEDGE_RUNTIME_STORE_VERSION = 3 as const;
@@ -723,6 +739,15 @@ export class KnowledgeRuntimeQueueObservationAuthorityError extends Error {
   constructor(public readonly bundleId: string) {
     super(`Queue '${bundleId}' contains an unallocated or regressing source observation`);
     this.name = "KnowledgeRuntimeQueueObservationAuthorityError";
+  }
+}
+
+/** Reports a Queue attempt that lacks exact consumed-observation and Manifest authority. */
+export class KnowledgeRuntimeIngestExecutionProofError extends Error {
+  /** Creates a sanitized read-only execution-proof failure. */
+  constructor() {
+    super("The knowledge ingest execution claim is not authorized by Runtime");
+    this.name = "KnowledgeRuntimeIngestExecutionProofError";
   }
 }
 
@@ -3265,6 +3290,14 @@ function createBoundSourceInputObservation(
   };
 }
 
+/** Throws a sanitized cancellation without retaining the signal reason. */
+function throwIfRuntimeExecutionProofAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  const error = new Error("The knowledge Runtime execution proof was aborted");
+  error.name = "AbortError";
+  throw error;
+}
+
 /**
  * Reads one Bundle slot from a detached runtime snapshot.
  *
@@ -4576,6 +4609,110 @@ export class KnowledgeRuntimeStore {
     );
   }
 
+  /**
+   * Proves one exact processing Queue attempt, consumed observation, and Manifest
+   * from the same atomic Runtime envelope without changing its bytes or revision.
+   */
+  async proveIngestExecution(
+    requestValue: Readonly<KnowledgeIngestExecutionProofRequest>,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeIngestExecutionProof>> {
+    throwIfRuntimeExecutionProofAborted(signal);
+    let request: Readonly<KnowledgeIngestExecutionProofRequest>;
+    try {
+      request = verifyKnowledgeIngestExecutionProofRequest(requestValue);
+    } catch {
+      throw new KnowledgeRuntimeIngestExecutionProofError();
+    }
+    const proof = await this.updateState<Readonly<KnowledgeIngestExecutionProof>>((state) => {
+      const queueRaw = findBundleSlot(state, "queues", request.bundleId);
+      const manifestRaw = findBundleSlot(state, "manifests", request.bundleId);
+      if (queueRaw === null || manifestRaw === null) {
+        throw new KnowledgeRuntimeIngestExecutionProofError();
+      }
+      const queue = this.requireQueueSnapshot(request.bundleId, queueRaw);
+      const manifest = this.requireManifest(request.bundleId, manifestRaw);
+      const job = queue.jobs.find((candidate) => candidate.id === request.jobId);
+      const tupleJobs = queue.jobs.filter(
+        (candidate) =>
+          candidate.sourceId === request.sourceId &&
+          candidate.sourceContentHash === request.sourceContentHash &&
+          candidate.pipelineFingerprint === request.pipelineFingerprint &&
+          candidate.inputRevision === request.inputRevision
+      );
+      if (
+        queue.control.status !== "running" ||
+        !job ||
+        tupleJobs.length !== 1 ||
+        tupleJobs[0]?.id !== request.jobId ||
+        job.status !== "processing" ||
+        job.stage === "applying" ||
+        job.bundleId !== request.bundleId ||
+        job.sourceId !== request.sourceId ||
+        job.sourceContentHash !== request.sourceContentHash ||
+        job.pipelineFingerprint !== request.pipelineFingerprint ||
+        job.inputRevision !== request.inputRevision ||
+        job.attempt !== request.attempt ||
+        job.startedAt !== request.startedAt
+      ) {
+        throw new KnowledgeRuntimeIngestExecutionProofError();
+      }
+      const source = state.inputRevisions
+        .find((bundle) => bundle.bundleId === request.bundleId)
+        ?.sources.find((candidate) => candidate.sourceId === request.sourceId);
+      const observations =
+        source?.observations.filter(
+          (observation) =>
+            observation.status === "consumed" &&
+            observation.inputRevision === request.inputRevision &&
+            observation.sourceContentHash === request.sourceContentHash &&
+            observation.pipelineFingerprint === request.pipelineFingerprint
+        ) ?? [];
+      const manifestEntries = manifest.entries.filter(
+        (entry) => entry.sourceId === request.sourceId
+      );
+      if (observations.length !== 1 || manifestEntries.length !== 1) {
+        throw new KnowledgeRuntimeIngestExecutionProofError();
+      }
+      const observation = observations[0];
+      if (observation.status !== "consumed" || observation.queueRevision > queue.revision) {
+        throw new KnowledgeRuntimeIngestExecutionProofError();
+      }
+      return {
+        value: Object.freeze({
+          version: KNOWLEDGE_INGEST_EXECUTION_PROOF_VERSION,
+          bundleId: request.bundleId,
+          jobId: request.jobId,
+          sourceId: request.sourceId,
+          sourceContentHash: request.sourceContentHash,
+          pipelineFingerprint: request.pipelineFingerprint,
+          inputRevision: request.inputRevision,
+          attempt: request.attempt,
+          startedAt: request.startedAt,
+          stage: job.stage,
+          runtimeIdentityDigest: sha256(`knowledge-runtime-execution-owner-v1\n${state.runtimeId}`),
+          runtimeRevision: state.revision,
+          queueRevision: queue.revision,
+          observationIdentityDigest: sha256(
+            `knowledge-runtime-consumed-observation-v1\n${canonicalizeJson({
+              runtimeId: state.runtimeId,
+              bundleId: request.bundleId,
+              sourceId: request.sourceId,
+              observationToken: observation.observationToken,
+              captureId: observation.captureId,
+              inputRevision: observation.inputRevision,
+              queueRevision: observation.queueRevision,
+            })}`
+          ),
+          manifestRevision: manifest.revision,
+          manifestDigest: createSourceManifestDigest(manifest),
+        }),
+      };
+    });
+    throwIfRuntimeExecutionProofAborted(signal);
+    return proof;
+  }
+
   /** Migrates a supported v1/v2 envelope through one atomic transform. */
   private async migrateLegacyStore(): Promise<void> {
     let callbackCalled = false;
@@ -5276,14 +5413,48 @@ function assertActiveTransactionTransition(
   }
 }
 
+/** Hidden Runtime and lifecycle authority retained by one QueueStorage facade. */
+interface KnowledgeRuntimeQueueStorageState {
+  runtime: KnowledgeRuntimeStore;
+  executionOwner: KnowledgeExecutionOwner;
+}
+
+const runtimeQueueStorageStates = new WeakMap<object, KnowledgeRuntimeQueueStorageState>();
+
+/** Returns hidden state only for an authentic Runtime QueueStorage facade. */
+function requireRuntimeQueueStorageState(value: unknown): KnowledgeRuntimeQueueStorageState {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("The Runtime Queue storage is invalid");
+  }
+  const state = runtimeQueueStorageStates.get(value);
+  if (!state) throw new TypeError("The Runtime Queue storage is invalid");
+  return state;
+}
+
 /** QueueStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeQueueStorage implements QueueStorage {
-  /** Creates a queue facade over the shared runtime store. */
-  constructor(private readonly runtime: KnowledgeRuntimeStore) {}
+  /** Creates a queue facade over the shared runtime store and one workflow lifecycle owner. */
+  constructor(
+    runtime: KnowledgeRuntimeStore,
+    executionOwner: KnowledgeExecutionOwner = createKnowledgeExecutionOwner()
+  ) {
+    if (!(runtime instanceof KnowledgeRuntimeStore)) {
+      throw new TypeError("The Runtime Queue storage dependency is invalid");
+    }
+    KnowledgeExecutionOwner.assert(executionOwner);
+    KnowledgeExecutionOwner.bindRuntime(executionOwner, runtime);
+    runtimeQueueStorageStates.set(this, Object.freeze({ runtime, executionOwner }));
+    Object.freeze(this);
+  }
+
+  /** Returns the opaque lifecycle identity required by the matching workflow loader. */
+  getExecutionOwner(): KnowledgeExecutionOwner {
+    return requireRuntimeQueueStorageState(this).executionOwner;
+  }
 
   /** Reads one detached queue snapshot. */
   read(bundleId: string): Promise<unknown> {
-    return this.runtime.readQueue(bundleId);
+    return requireRuntimeQueueStorageState(this).runtime.readQueue(bundleId);
   }
 
   /** Atomically compares and replaces one queue snapshot. */
@@ -5293,9 +5464,17 @@ export class KnowledgeRuntimeQueueStorage implements QueueStorage {
     expectedRevision: number | null,
     authority?: QueueWriteAuthority
   ): Promise<void> {
-    return this.runtime.writeQueue(bundleId, snapshot, expectedRevision, authority);
+    return requireRuntimeQueueStorageState(this).runtime.writeQueue(
+      bundleId,
+      snapshot,
+      expectedRevision,
+      authority
+    );
   }
 }
+
+Object.freeze(KnowledgeRuntimeQueueStorage.prototype);
+Object.freeze(KnowledgeRuntimeQueueStorage);
 
 /** ReviewStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
@@ -5465,3 +5644,115 @@ export class KnowledgeRuntimeInputObservationBinder implements SourceInputObserv
     return this.runtime.loadInputObservationRecoveryWork(bundleId);
   }
 }
+
+/** Hidden captured capability retained by one Runtime execution-proof facade. */
+interface KnowledgeRuntimeIngestExecutionProofPortState {
+  queueStorage: KnowledgeRuntimeQueueStorage;
+  executionOwner: KnowledgeExecutionOwner;
+  prove: (
+    request: Readonly<KnowledgeIngestExecutionProofRequest>,
+    signal: AbortSignal
+  ) => Promise<unknown>;
+}
+
+const runtimeIngestExecutionProofPortStates = new WeakMap<
+  object,
+  KnowledgeRuntimeIngestExecutionProofPortState
+>();
+
+/** Captures the canonical Runtime proof data method during module initialization. */
+function captureRuntimeIngestExecutionProofMethod(): KnowledgeRuntimeStore["proveIngestExecution"] {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    KnowledgeRuntimeStore.prototype,
+    "proveIngestExecution"
+  );
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "function") {
+    throw new TypeError("The Runtime ingest execution-proof dependency is invalid");
+  }
+  return descriptor.value as KnowledgeRuntimeStore["proveIngestExecution"];
+}
+
+const runtimeIngestExecutionProofMethod = captureRuntimeIngestExecutionProofMethod();
+
+/**
+ * Returns the process-local captured capability for one authentic facade.
+ *
+ * @param value - Candidate Runtime execution-proof facade
+ * @returns Hidden proof capability
+ */
+function requireRuntimeIngestExecutionProofPortState(
+  value: unknown
+): KnowledgeRuntimeIngestExecutionProofPortState {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("The Runtime ingest execution-proof port is invalid");
+  }
+  const state = runtimeIngestExecutionProofPortStates.get(value);
+  if (!state) {
+    throw new TypeError("The Runtime ingest execution-proof port is invalid");
+  }
+  return state;
+}
+
+/**
+ * Narrow read-only execution-proof facade backed by one shared Runtime envelope.
+ *
+ * The Runtime receiver and its original proof method are retained only inside a
+ * process-local WeakMap closure. The public object therefore exposes neither a
+ * durable Runtime handle nor an own property that can be copied as authority.
+ */
+export class KnowledgeRuntimeIngestExecutionProofPort implements KnowledgeIngestExecutionProofPort {
+  /** Captures the Runtime proof method and exact Queue facade without exposing either receiver. */
+  constructor(runtime: KnowledgeRuntimeStore, queueStorage: KnowledgeRuntimeQueueStorage) {
+    if (!(runtime instanceof KnowledgeRuntimeStore)) {
+      throw new TypeError("The Runtime ingest execution-proof dependency is invalid");
+    }
+    const queueState = requireRuntimeQueueStorageState(queueStorage);
+    if (queueState.runtime !== runtime) {
+      throw new TypeError("The Runtime ingest execution-proof dependency is invalid");
+    }
+    runtimeIngestExecutionProofPortStates.set(
+      this,
+      Object.freeze({
+        queueStorage,
+        executionOwner: queueState.executionOwner,
+        prove: (request: Readonly<KnowledgeIngestExecutionProofRequest>, signal: AbortSignal) =>
+          Reflect.apply(runtimeIngestExecutionProofMethod, runtime, [request, signal]),
+      })
+    );
+    Object.freeze(this);
+  }
+
+  /** Requires an authentic process-local Runtime proof facade. */
+  static assert(value: unknown): asserts value is KnowledgeRuntimeIngestExecutionProofPort {
+    requireRuntimeIngestExecutionProofPortState(value);
+  }
+
+  /** Requires one Queue claim to come from this facade's exact Runtime QueueStorage instance. */
+  static assertClaimOwner(
+    value: KnowledgeRuntimeIngestExecutionProofPort,
+    claim: IngestExecutionClaim
+  ): void {
+    const state = requireRuntimeIngestExecutionProofPortState(value);
+    if (!ingestExecutionClaimMatchesQueueStorage(claim, state.queueStorage)) {
+      throw new TypeError("The Runtime ingest execution-proof owner is invalid");
+    }
+  }
+
+  /** Returns the opaque App/Vault/workflow lifecycle identity paired with this proof facade. */
+  static getExecutionOwner(
+    value: KnowledgeRuntimeIngestExecutionProofPort
+  ): KnowledgeExecutionOwner {
+    return requireRuntimeIngestExecutionProofPortState(value).executionOwner;
+  }
+
+  /** Derives one proof from a single atomic Runtime-envelope transform. */
+  prove(
+    request: Readonly<KnowledgeIngestExecutionProofRequest>,
+    signal: AbortSignal
+  ): Promise<unknown> {
+    return requireRuntimeIngestExecutionProofPortState(this).prove(request, signal);
+  }
+}
+
+Object.freeze(KnowledgeRuntimeIngestExecutionProofPort.prototype);
+Object.freeze(KnowledgeRuntimeIngestExecutionProofPort);

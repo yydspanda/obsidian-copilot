@@ -1,5 +1,9 @@
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
+  KnowledgeExecutionOwner,
+  createKnowledgeExecutionOwner,
+} from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import {
   KnowledgeSourceExecutionPlan,
   KnowledgeSourceWorkflowPlanError,
   KnowledgeSourceWorkflowPlanLoader,
@@ -133,6 +137,7 @@ function createParsedSource(sourceId = SOURCE_ID, text = "parsed source text") {
 }
 
 interface HarnessOptions {
+  executionOwner?: KnowledgeExecutionOwner;
   manifest?: SourceManifest;
   schemaBytes?: Uint8Array;
   sourceBytes?: Uint8Array;
@@ -143,6 +148,8 @@ interface HarnessOptions {
 }
 
 interface Harness {
+  executionOwner: KnowledgeExecutionOwner;
+  dependencies: KnowledgeSourceWorkflowPlanDependencies;
   owner: ConfiguredProjectKnowledgeBundle;
   loader: KnowledgeSourceWorkflowPlanLoader;
   parser: KnowledgeByteParser;
@@ -173,6 +180,7 @@ interface Harness {
 /** Creates narrow mutable fake ports around immutable production payloads. */
 function createHarness(options: HarnessOptions = {}): Harness {
   const owner = createOwner();
+  const executionOwner = options.executionOwner ?? createKnowledgeExecutionOwner();
   const state: Harness["state"] = {
     manifest: options.manifest ?? createManifest(),
     schemaBytes: options.schemaBytes ?? new TextEncoder().encode("# Knowledge schema\n"),
@@ -232,6 +240,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     isCurrent: () => state.current,
   };
   const dependencies: KnowledgeSourceWorkflowPlanDependencies = {
+    executionOwner,
     manifest: manifestPort,
     artifactReader: readerPort,
     pipelineProfile: profilePort,
@@ -241,6 +250,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
     maxParsedCharacters: options.maxParsedCharacters,
   };
   return {
+    executionOwner,
+    dependencies,
     owner,
     loader: new KnowledgeSourceWorkflowPlanLoader(dependencies),
     parser,
@@ -290,7 +301,36 @@ async function expectWorkflowError(
   return failure;
 }
 
+/** Captures one sanitized workflow error from a synchronous operation. */
+function expectWorkflowErrorSync(
+  action: () => unknown,
+  code: KnowledgeSourceWorkflowPlanError["code"],
+  stage: KnowledgeSourceWorkflowPlanError["stage"]
+): KnowledgeSourceWorkflowPlanError {
+  let caught: unknown;
+  try {
+    action();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(KnowledgeSourceWorkflowPlanError);
+  const failure = caught as KnowledgeSourceWorkflowPlanError;
+  expect(failure).toMatchObject({ code, stage });
+  expect(failure.message).toBe("The knowledge source workflow plan could not be prepared");
+  return failure;
+}
+
 describe("KnowledgeSourceWorkflowPlanLoader", () => {
+  it("prevents one lifecycle owner from being registered to another workflow generation", () => {
+    const harness = createHarness();
+
+    expectWorkflowErrorSync(
+      () => new KnowledgeSourceWorkflowPlanLoader(harness.dependencies),
+      "dependency_invalid",
+      "dependencies"
+    );
+  });
+
   it("double-collects every read-only authority before publishing one plan", async () => {
     const harness = createHarness();
 
@@ -302,6 +342,40 @@ describe("KnowledgeSourceWorkflowPlanLoader", () => {
     expect(harness.state.profileCalls).toBe(2);
     expect(harness.state.sourceReadCalls).toBe(0);
     expect(harness.state.parserCalls).toBe(0);
+  });
+
+  it("retains the exact detached secret-free profile selected by the matching collection", async () => {
+    const harness = createHarness();
+
+    const plan = await harness.loader.load([harness.owner], new AbortController().signal);
+    const profile = plan.getBundlePipelineProfile(BUNDLE_ID);
+
+    expect(profile).toEqual(harness.state.profile);
+    expect(profile).not.toBe(harness.state.profile);
+    expect(Object.isFrozen(profile)).toBe(true);
+    expect(Object.isFrozen(profile?.compiler)).toBe(true);
+    expect(Object.isFrozen(profile?.compiler.configuration)).toBe(true);
+    expect(Object.isFrozen(profile?.parsers)).toBe(true);
+    expect(Object.isFrozen(profile?.parsers[0])).toBe(true);
+    expect(Object.isFrozen(profile?.model)).toBe(true);
+    expect(Object.isFrozen(profile?.model.configuration)).toBe(true);
+    expect(plan.getBundlePipelineProfile("unknown-bundle")).toBeUndefined();
+    expect(plan.matchesExecutionOwner(harness.executionOwner)).toBe(true);
+    expect(plan.matchesExecutionOwner(createKnowledgeExecutionOwner())).toBe(false);
+  });
+
+  it("prevents stale generations from exposing a watch plan or retained profile", async () => {
+    const harness = createHarness();
+    const plan = await harness.loader.load([harness.owner], new AbortController().signal);
+    harness.state.current = false;
+
+    expectWorkflowErrorSync(() => plan.getWatchPlan(), "generation_stale", "plan");
+    expectWorkflowErrorSync(() => plan.getDigest(), "generation_stale", "plan");
+    expectWorkflowErrorSync(
+      () => plan.getBundlePipelineProfile(BUNDLE_ID),
+      "generation_stale",
+      "plan"
+    );
   });
 
   it("rejects a changed collection instead of publishing mixed generations", async () => {
@@ -409,6 +483,7 @@ describe("KnowledgeSourceWorkflowPlanLoader", () => {
     expect(
       () =>
         new KnowledgeSourceWorkflowPlanLoader({
+          executionOwner: harness.executionOwner,
           manifest: harness.manifestPort,
           artifactReader: malformedReader as unknown as KnowledgeExactArtifactReaderPort,
           pipelineProfile: harness.profilePort,
@@ -433,6 +508,7 @@ describe("KnowledgeSourceWorkflowPlanLoader", () => {
     expect(
       () =>
         new KnowledgeSourceWorkflowPlanLoader({
+          executionOwner: harness.executionOwner,
           manifest: harness.manifestPort,
           artifactReader: harness.readerPort,
           pipelineProfile: harness.profilePort,
@@ -450,6 +526,7 @@ describe("KnowledgeSourceWorkflowPlanLoader", () => {
 
     try {
       new KnowledgeSourceWorkflowPlanLoader({
+        executionOwner: harness.executionOwner,
         manifest: harness.manifestPort,
         artifactReader: harness.readerPort,
         pipelineProfile: harness.profilePort,
@@ -493,6 +570,90 @@ describe("KnowledgeSourceWorkflowPlanLoader", () => {
 });
 
 describe("KnowledgeSourceExecutionPlan.prepare", () => {
+  it("re-proves the current Manifest, schema, and profile as one retained authority snapshot", async () => {
+    const harness = createHarness();
+    const { plan } = await loadPlanAndJob(harness);
+
+    const authority = await plan.reproveBundleAuthorities(BUNDLE_ID, new AbortController().signal);
+
+    expect(harness.state.manifestCalls).toBe(3);
+    expect(harness.state.schemaReadCalls).toBe(3);
+    expect(harness.state.profileCalls).toBe(3);
+    expect(harness.state.sourceReadCalls).toBe(0);
+    expect(harness.state.parserCalls).toBe(0);
+    expect(authority.manifest).toEqual(createManifest());
+    expect(authority.schema.content).toBe("# Knowledge schema\n");
+    expect(authority.pipeline).toBe(plan.getBundlePipelineProfile(BUNDLE_ID));
+    expect(Object.isFrozen(authority)).toBe(true);
+    expect(Object.isFrozen(authority.manifest)).toBe(true);
+    expect(Object.isFrozen(authority.schema)).toBe(true);
+    expect(Object.isFrozen(authority.pipeline)).toBe(true);
+  });
+
+  it("rejects a changed current pipeline profile before source bytes or a parser are used", async () => {
+    const harness = createHarness();
+    const { plan } = await loadPlanAndJob(harness);
+    harness.state.profile = {
+      ...createPipelineProfile(),
+      outputLanguage: "en",
+    };
+
+    await expectWorkflowError(
+      () => plan.reproveBundleAuthorities(BUNDLE_ID, new AbortController().signal),
+      "profile_stale",
+      "profile"
+    );
+
+    expect(harness.state.manifestCalls).toBe(3);
+    expect(harness.state.schemaReadCalls).toBe(3);
+    expect(harness.state.profileCalls).toBe(3);
+    expect(harness.state.sourceReadCalls).toBe(0);
+    expect(harness.state.parserCalls).toBe(0);
+  });
+
+  it("sanitizes a failed current pipeline-profile reproof", async () => {
+    const secretCanary = "sk-profile-reproof-private-error-77d9";
+    const harness = createHarness();
+    const { plan } = await loadPlanAndJob(harness);
+    harness.state.resolveProfile = () => {
+      throw new Error(secretCanary);
+    };
+
+    const failure = await expectWorkflowError(
+      () => plan.reproveBundleAuthorities(BUNDLE_ID, new AbortController().signal),
+      "profile_stale",
+      "profile"
+    );
+
+    expect(harness.state.manifestCalls).toBe(3);
+    expect(harness.state.schemaReadCalls).toBe(3);
+    expect(harness.state.profileCalls).toBe(3);
+    expect(harness.state.sourceReadCalls).toBe(0);
+    expect(harness.state.parserCalls).toBe(0);
+    expect(JSON.stringify(failure)).not.toContain(secretCanary);
+    expect(failure.message).not.toContain(secretCanary);
+  });
+
+  it("rejects an unknown Bundle reproof before calling any retained authority port", async () => {
+    const harness = createHarness();
+    const { plan } = await loadPlanAndJob(harness);
+    const callsAfterLoad = {
+      manifest: harness.state.manifestCalls,
+      schema: harness.state.schemaReadCalls,
+      profile: harness.state.profileCalls,
+    };
+
+    await expectWorkflowError(
+      () => plan.reproveBundleAuthorities("unknown-bundle", new AbortController().signal),
+      "job_not_authorized",
+      "job"
+    );
+
+    expect(harness.state.manifestCalls).toBe(callsAfterLoad.manifest);
+    expect(harness.state.schemaReadCalls).toBe(callsAfterLoad.schema);
+    expect(harness.state.profileCalls).toBe(callsAfterLoad.profile);
+  });
+
   it("passes the exact reader-owned byte reference to the selected parser", async () => {
     const harness = createHarness();
     const { plan, job } = await loadPlanAndJob(harness);
@@ -698,6 +859,29 @@ describe("KnowledgeSourceExecutionPlan.prepare", () => {
     expect(harness.state.parserCalls).toBe(1);
     expect(harness.state.manifestCalls).toBe(4);
     expect(harness.state.schemaReadCalls).toBe(4);
+  });
+
+  it("re-proves authority after parsing and rejects a late pipeline-profile change", async () => {
+    const harness = createHarness();
+    const { plan, job } = await loadPlanAndJob(harness);
+    harness.state.parse = async () => {
+      harness.state.profile = {
+        ...createPipelineProfile(),
+        outputLanguage: "en",
+      };
+      return createParsedSource();
+    };
+
+    await expectWorkflowError(
+      () => plan.prepare(job, new AbortController().signal),
+      "profile_stale",
+      "profile"
+    );
+
+    expect(harness.state.parserCalls).toBe(1);
+    expect(harness.state.manifestCalls).toBe(4);
+    expect(harness.state.schemaReadCalls).toBe(4);
+    expect(harness.state.profileCalls).toBe(4);
   });
 
   it("rejects a reader payload accessor without invoking it or the parser", async () => {

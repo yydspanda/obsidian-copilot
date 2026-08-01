@@ -17,6 +17,13 @@ import {
 import { IngestQueue, type IngestExecutor } from "@/knowledge/ingest/queue/IngestQueue";
 import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import {
+  KnowledgeIngestExecutionAuthorityBinder,
+  KnowledgeIngestExecutionAuthorityError,
+  type KnowledgeIngestExecutionAuthority,
+  type KnowledgeIngestExecutionProof,
+  type KnowledgeIngestExecutionProofRequest,
+} from "@/knowledge/ingest/KnowledgeIngestExecutionAuthority";
+import {
   INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
   type IngestQueueSnapshot,
@@ -55,6 +62,8 @@ import {
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
   KnowledgeRuntimeInputObservationBinder,
+  KnowledgeRuntimeIngestExecutionProofError,
+  KnowledgeRuntimeIngestExecutionProofPort,
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeManifestProtectedStateError,
@@ -4398,6 +4407,239 @@ describe("KnowledgeRuntimeStore", () => {
         queueRevision: 1,
       }),
     ]);
+  });
+
+  it("proves a claimed Queue job, consumed observation, and Manifest without changing bytes", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "execution-proof-capture",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") throw new Error("Expected a bound execution observation");
+    const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(harness.runtime, harness.queue);
+    let proof: Readonly<KnowledgeIngestExecutionProof> | undefined;
+    let authority: KnowledgeIngestExecutionAuthority | undefined;
+    let beforeProof = "";
+    let afterProof = "";
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Captures one real same-envelope execution proof. */
+        execute: async (context) => {
+          const job = context.job;
+          const request: KnowledgeIngestExecutionProofRequest = {
+            bundleId: job.bundleId,
+            jobId: job.id,
+            sourceId: job.sourceId,
+            sourceContentHash: job.sourceContentHash,
+            pipelineFingerprint: job.pipelineFingerprint,
+            inputRevision: job.inputRevision,
+            attempt: job.attempt,
+            startedAt: job.startedAt,
+          };
+          beforeProof = await harness.file.read();
+          proof = (await proofPort.prove(
+            request,
+            context.signal
+          )) as Readonly<KnowledgeIngestExecutionProof>;
+          afterProof = await harness.file.read();
+          authority = await new KnowledgeIngestExecutionAuthorityBinder(proofPort).bind(
+            context.executionClaim
+          );
+          await authority.reprove("parsing");
+          await context.reportStage("analyzing");
+          await authority.reprove("analyzing");
+          return { kind: "no_changes", changeSetId: "changeset-proof" };
+        },
+      },
+      { clock: () => 100, jobIdFactory: () => "job-execution-proof" }
+    );
+
+    await expect(queue.enqueue(bound.observation)).resolves.toMatchObject({ kind: "enqueued" });
+    await expect(queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "completed",
+    });
+
+    expect(proof).toMatchObject({
+      version: 1,
+      bundleId: "personal",
+      jobId: "job-execution-proof",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      attempt: 1,
+      startedAt: 100,
+      stage: "parsing",
+      manifestRevision: 1,
+      manifestDigest: createSourceManifestDigest(createRegisteredManifest()),
+    });
+    expect(proof?.runtimeIdentityDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(proof?.observationIdentityDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(afterProof).toBe(beforeProof);
+    if (!authority) throw new Error("Expected a bound execution authority");
+    await expect(authority.reprove("analyzing")).rejects.toBeInstanceOf(
+      KnowledgeIngestExecutionAuthorityError
+    );
+  });
+
+  it("rejects a processing job whose consumed-observation tuple is shared by Queue history", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "execution-proof-duplicate-job-capture",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") throw new Error("Expected a bound execution observation");
+    const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(harness.runtime, harness.queue);
+    let proofRejected = false;
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Injects valid terminal history sharing the active observation tuple. */
+        execute: async (context) => {
+          const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+          const queueSlot = state.queues.find((slot) => slot.bundleId === "personal");
+          if (!queueSlot) throw new Error("Expected the personal Queue slot");
+          const queueSnapshot = queueSlot.value as IngestQueueSnapshot;
+          queueSnapshot.jobs.push({
+            id: "job-execution-proof-history",
+            bundleId: context.job.bundleId,
+            sourceId: context.job.sourceId,
+            sourceContentHash: context.job.sourceContentHash,
+            pipelineFingerprint: context.job.pipelineFingerprint,
+            inputRevision: context.job.inputRevision,
+            attempt: 1,
+            rerunRequested: false,
+            createdAt: 90,
+            updatedAt: 95,
+            status: "completed",
+            stage: "completed",
+            changeSetId: "changeset-execution-proof-history",
+            completedAt: 95,
+          });
+          harness.file.replaceContent(JSON.stringify(state));
+          const request: KnowledgeIngestExecutionProofRequest = {
+            bundleId: context.job.bundleId,
+            jobId: context.job.id,
+            sourceId: context.job.sourceId,
+            sourceContentHash: context.job.sourceContentHash,
+            pipelineFingerprint: context.job.pipelineFingerprint,
+            inputRevision: context.job.inputRevision,
+            attempt: context.job.attempt,
+            startedAt: context.job.startedAt,
+          };
+          try {
+            await proofPort.prove(request, context.signal);
+          } catch (error) {
+            expect(error).toBeInstanceOf(KnowledgeRuntimeIngestExecutionProofError);
+            proofRejected = true;
+          }
+          return { kind: "no_changes", changeSetId: "changeset-proof-duplicate-history" };
+        },
+      },
+      { clock: () => 100, jobIdFactory: () => "job-execution-proof-active" }
+    );
+
+    await expect(queue.enqueue(bound.observation)).resolves.toMatchObject({ kind: "enqueued" });
+    await expect(queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "completed",
+    });
+    expect(proofRejected).toBe(true);
+  });
+
+  it("rejects a processing high-watermark that has no exact consumed observation", async () => {
+    const harness = await createHarness();
+    const request: KnowledgeIngestExecutionProofRequest = {
+      bundleId: "personal",
+      jobId: "job-high-watermark-only",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      attempt: 1,
+      startedAt: 100,
+    };
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    state.revision = 5;
+    state.queues = [
+      {
+        bundleId: "personal",
+        value: {
+          ...createQueueSnapshot(2),
+          jobs: [
+            {
+              id: request.jobId,
+              bundleId: request.bundleId,
+              sourceId: request.sourceId,
+              sourceContentHash: request.sourceContentHash,
+              pipelineFingerprint: request.pipelineFingerprint,
+              inputRevision: request.inputRevision,
+              attempt: request.attempt,
+              rerunRequested: false,
+              createdAt: 90,
+              updatedAt: 100,
+              status: "processing",
+              stage: "parsing",
+              startedAt: request.startedAt,
+            },
+          ],
+          sourceHighWatermarks: [
+            {
+              sourceId: request.sourceId,
+              sourceContentHash: request.sourceContentHash,
+              pipelineFingerprint: request.pipelineFingerprint,
+              inputRevision: request.inputRevision,
+              observedAt: 90,
+            },
+          ],
+        },
+      },
+    ];
+    state.manifests = [{ bundleId: "personal", value: createRegisteredManifest() }];
+    state.inputRevisions = [
+      {
+        bundleId: "personal",
+        sources: [
+          {
+            sourceId: request.sourceId,
+            inputRevision: request.inputRevision,
+            managedAfterRevision: request.inputRevision,
+            legacyCheckpoint: {
+              sourceId: request.sourceId,
+              sourceContentHash: request.sourceContentHash,
+              pipelineFingerprint: request.pipelineFingerprint,
+              inputRevision: request.inputRevision,
+              observedAt: 90,
+            },
+            observations: [],
+          },
+        ],
+      },
+    ];
+    harness.file.replaceContent(JSON.stringify(state));
+    const before = await harness.file.read();
+    const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(harness.runtime, harness.queue);
+
+    await expect(proofPort.prove(request, new AbortController().signal)).rejects.toBeInstanceOf(
+      KnowledgeRuntimeIngestExecutionProofError
+    );
+    expect(await harness.file.read()).toBe(before);
   });
 
   it("lets a bound read commit while a newer allocation is still unbound", async () => {

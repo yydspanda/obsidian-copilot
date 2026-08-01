@@ -10,6 +10,7 @@ import {
   KnowledgeSourceWatchPlan,
 } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import type { ExactSourceArtifact } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
   canonicalizeJson,
@@ -66,6 +67,7 @@ export interface KnowledgeWorkflowGenerationPort {
 
 /** Resource limits and capabilities captured by one workflow-plan loader. */
 export interface KnowledgeSourceWorkflowPlanDependencies {
+  executionOwner: KnowledgeExecutionOwner;
   manifest: KnowledgeManifestSnapshotPort;
   artifactReader: KnowledgeExactArtifactReaderPort;
   pipelineProfile: KnowledgePipelineProfilePort;
@@ -102,6 +104,13 @@ export interface KnowledgeSourceParsePreparation {
   artifacts: readonly SourceArtifactObservation[];
 }
 
+/** Exact secret-free Bundle authority retained and freshly re-proved by one execution plan. */
+export interface KnowledgeSourceBundleAuthoritySnapshot {
+  readonly manifest: SourceManifest;
+  readonly schema: CompilerSchemaSnapshot;
+  readonly pipeline: KnowledgeBundlePipelineProfile;
+}
+
 /** Stable stage at which read-only workflow-plan preparation failed. */
 export type KnowledgeSourceWorkflowPlanErrorStage =
   | "dependencies"
@@ -125,6 +134,7 @@ export type KnowledgeSourceWorkflowPlanErrorCode =
   | "schema_too_large"
   | "schema_utf8_invalid"
   | "profile_invalid"
+  | "profile_stale"
   | "collection_changed"
   | "parser_binding_invalid"
   | "job_invalid"
@@ -161,6 +171,7 @@ interface CollectedBundleMaterial {
   owner: ConfiguredProjectKnowledgeBundle;
   manifest: SourceManifest;
   schema: CompilerSchemaSnapshot;
+  pipeline: KnowledgeBundlePipelineProfile;
 }
 
 interface CollectedWorkflowMaterial {
@@ -170,6 +181,7 @@ interface CollectedWorkflowMaterial {
 }
 
 interface ExecutionPlanState {
+  executionOwner: KnowledgeExecutionOwner;
   watchPlan: KnowledgeSourceWatchPlan;
   bundlesById: ReadonlyMap<string, CollectedBundleMaterial>;
   parsersBySource: ReadonlyMap<string, CapturedParser>;
@@ -180,7 +192,12 @@ interface ExecutionPlanState {
     expectedContentHash: string,
     signal?: AbortSignal
   ) => Promise<ExactSourceArtifact>;
+  resolveProfile: (
+    owner: ConfiguredProjectKnowledgeBundle,
+    signal: AbortSignal
+  ) => Promise<unknown>;
   isCurrent: () => boolean;
+  parsers: readonly CapturedParser[];
   maxSchemaBytes: number;
   maxParsedCharacters: number;
   digest: string;
@@ -215,6 +232,11 @@ function assertCurrent(signal: AbortSignal, isCurrent: () => boolean): void {
   if (signal.aborted) {
     throw createAbortError();
   }
+  assertGenerationCurrent(isCurrent);
+}
+
+/** Rejects a stale workflow generation without requiring a caller-provided cancellation signal. */
+function assertGenerationCurrent(isCurrent: () => boolean): void {
   let current = false;
   try {
     current = isCurrent();
@@ -588,7 +610,7 @@ function captureParser(value: KnowledgeByteParser): CapturedParser {
 function capturePipelineProfile(
   value: unknown,
   parsers: readonly CapturedParser[],
-  bundleIndex: number
+  bundleIndex?: number
 ): KnowledgeBundlePipelineProfile {
   let snapshot: JsonValue;
   try {
@@ -630,6 +652,7 @@ function capturePipelineProfile(
 
 /** Captures all loader dependency methods once and freezes parser routing by profile digest. */
 function captureDependencies(dependencies: KnowledgeSourceWorkflowPlanDependencies): {
+  executionOwner: KnowledgeExecutionOwner;
   manifestLoad: (bundleId: string) => Promise<unknown>;
   readArtifact: (path: string, signal?: AbortSignal) => Promise<ExactSourceArtifact>;
   readExpectedArtifact: (
@@ -646,6 +669,12 @@ function captureDependencies(dependencies: KnowledgeSourceWorkflowPlanDependenci
   maxSchemaBytes: number;
   maxParsedCharacters: number;
 } {
+  const executionOwner = readOwnDataProperty(dependencies, "executionOwner");
+  try {
+    KnowledgeExecutionOwner.assert(executionOwner);
+  } catch {
+    throw new KnowledgeSourceWorkflowPlanError("dependency_invalid", "dependencies");
+  }
   const manifest = readOwnDataProperty(dependencies, "manifest");
   const artifactReader = readOwnDataProperty(dependencies, "artifactReader");
   const pipelineProfile = readOwnDataProperty(dependencies, "pipelineProfile");
@@ -672,6 +701,7 @@ function captureDependencies(dependencies: KnowledgeSourceWorkflowPlanDependenci
   const maxSchemaBytes = readOptionalOwnDataProperty(dependencies, "maxSchemaBytes");
   const maxParsedCharacters = readOptionalOwnDataProperty(dependencies, "maxParsedCharacters");
   return Object.freeze({
+    executionOwner,
     manifestLoad: async (bundleId) =>
       (await Reflect.apply(manifestLoad.method, manifestLoad.receiver, [bundleId])) as unknown,
     readArtifact: async (path, signal) =>
@@ -881,6 +911,48 @@ async function reproveSchema(
   }
 }
 
+/** Verifies the current secret-free behavior profile exactly equals the retained plan snapshot. */
+async function reprovePipelineProfile(
+  state: ExecutionPlanState,
+  material: CollectedBundleMaterial,
+  signal: AbortSignal
+): Promise<void> {
+  assertCurrent(signal, state.isCurrent);
+  let profileValue: unknown;
+  try {
+    profileValue = await state.resolveProfile(material.owner, signal);
+    assertCurrent(signal, state.isCurrent);
+    const profile = capturePipelineProfile(profileValue, state.parsers);
+    if (
+      canonicalizeJson(profile as unknown as JsonValue) !==
+      canonicalizeJson(material.pipeline as unknown as JsonValue)
+    ) {
+      throw new TypeError("Pipeline profile changed");
+    }
+  } catch {
+    assertCurrent(signal, state.isCurrent);
+    throw new KnowledgeSourceWorkflowPlanError("profile_stale", "profile");
+  }
+  assertCurrent(signal, state.isCurrent);
+}
+
+/** Re-proves one Bundle's complete retained Manifest, schema, and profile authority. */
+async function reproveBundleMaterial(
+  state: ExecutionPlanState,
+  material: CollectedBundleMaterial,
+  signal: AbortSignal
+): Promise<Readonly<KnowledgeSourceBundleAuthoritySnapshot>> {
+  const manifest = await reproveManifest(state, material.owner.config.id, signal);
+  await reproveSchema(state, material, signal);
+  await reprovePipelineProfile(state, material, signal);
+  assertCurrent(signal, state.isCurrent);
+  return Object.freeze({
+    manifest,
+    schema: material.schema,
+    pipeline: material.pipeline,
+  });
+}
+
 /**
  * Authenticated execution binding produced by one double-collected loader generation.
  *
@@ -913,12 +985,49 @@ export class KnowledgeSourceExecutionPlan {
 
   /** Returns the exact opaque watcher authority produced by the same collection. */
   getWatchPlan(): KnowledgeSourceWatchPlan {
-    return requireExecutionPlanState(this).watchPlan;
+    const state = requireExecutionPlanState(this);
+    assertGenerationCurrent(state.isCurrent);
+    return state.watchPlan;
   }
 
   /** Returns the config-free digest of the double-collected data authority. */
   getDigest(): string {
-    return requireExecutionPlanState(this).digest;
+    const state = requireExecutionPlanState(this);
+    assertGenerationCurrent(state.isCurrent);
+    return state.digest;
+  }
+
+  /** Reports whether this plan belongs to one exact App/Vault/workflow lifecycle owner. */
+  matchesExecutionOwner(value: unknown): boolean {
+    const state = requireExecutionPlanState(this);
+    assertGenerationCurrent(state.isCurrent);
+    try {
+      KnowledgeExecutionOwner.assert(value);
+      return state.executionOwner === value;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Returns one retained, detached, secret-free Bundle pipeline profile when still current. */
+  getBundlePipelineProfile(bundleId: string): KnowledgeBundlePipelineProfile | undefined {
+    const state = requireExecutionPlanState(this);
+    assertGenerationCurrent(state.isCurrent);
+    return state.bundlesById.get(bundleId)?.pipeline;
+  }
+
+  /** Strictly re-proves one Bundle's current Manifest, schema, and profile authority. */
+  async reproveBundleAuthorities(
+    bundleId: string,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeSourceBundleAuthoritySnapshot>> {
+    const state = requireExecutionPlanState(this);
+    assertCurrent(signal, state.isCurrent);
+    const material = state.bundlesById.get(bundleId);
+    if (!material) {
+      throw new KnowledgeSourceWorkflowPlanError("job_not_authorized", "job");
+    }
+    return reproveBundleMaterial(state, material, signal);
   }
 
   /**
@@ -940,7 +1049,8 @@ export class KnowledgeSourceExecutionPlan {
       throw new KnowledgeSourceWorkflowPlanError("job_not_authorized", "job");
     }
 
-    const manifest = await reproveManifest(state, job.bundleId, signal);
+    const initialAuthority = await reproveBundleMaterial(state, material, signal);
+    const manifest = initialAuthority.manifest;
     const manifestSource = manifest.entries.find((entry) => entry.sourceId === job.sourceId);
     if (
       !manifestSource ||
@@ -949,8 +1059,6 @@ export class KnowledgeSourceExecutionPlan {
     ) {
       throw new KnowledgeSourceWorkflowPlanError("manifest_stale", "manifest");
     }
-    await reproveSchema(state, material, signal);
-
     let rawArtifact: unknown;
     try {
       rawArtifact = await state.readExpectedArtifact(
@@ -996,8 +1104,7 @@ export class KnowledgeSourceExecutionPlan {
     }
     assertParserBytesUnchanged(artifact.bytes, hashBeforeParse);
 
-    const finalManifest = await reproveManifest(state, job.bundleId, signal);
-    await reproveSchema(state, material, signal);
+    const finalAuthority = await reproveBundleMaterial(state, material, signal);
     assertCurrent(signal, state.isCurrent);
     assertParserBytesUnchanged(artifact.bytes, hashBeforeParse);
     const sourceIdentity = Object.freeze({
@@ -1009,7 +1116,7 @@ export class KnowledgeSourceExecutionPlan {
     return Object.freeze({
       authority: "unbound_read_only" as const,
       bundle: material.owner.config,
-      manifest: finalManifest,
+      manifest: finalAuthority.manifest,
       schema: material.schema,
       source: sourceIdentity,
       artifacts: Object.freeze([parsed.artifact]),
@@ -1030,10 +1137,13 @@ Object.freeze(KnowledgeSourceExecutionPlan);
 export class KnowledgeSourceWorkflowPlanLoader {
   /** Captures exact repository, App/Vault reader, profile, parser, and generation capabilities. */
   constructor(dependencies: KnowledgeSourceWorkflowPlanDependencies) {
-    workflowPlanLoaderStates.set(
-      this,
-      Object.freeze({ dependencies: captureDependencies(dependencies) })
-    );
+    const captured = captureDependencies(dependencies);
+    try {
+      KnowledgeExecutionOwner.bindWorkflow(captured.executionOwner, this);
+    } catch {
+      throw new KnowledgeSourceWorkflowPlanError("dependency_invalid", "dependencies");
+    }
+    workflowPlanLoaderStates.set(this, Object.freeze({ dependencies: captured }));
     Object.freeze(this);
   }
 
@@ -1081,7 +1191,9 @@ export class KnowledgeSourceWorkflowPlanLoader {
         schema: schema.snapshot,
         pipeline: pipelineSnapshot,
       });
-      bundles.push(Object.freeze({ owner, manifest, schema: schema.compiler }));
+      bundles.push(
+        Object.freeze({ owner, manifest, schema: schema.compiler, pipeline: pipelineSnapshot })
+      );
     }
 
     let watchPlan: KnowledgeSourceWatchPlan;
@@ -1135,6 +1247,7 @@ export class KnowledgeSourceWorkflowPlanLoader {
       parsersBySource.set(createBundleSourceKey(source.bundleId, source.sourceId), parser);
     }
     const state: ExecutionPlanState = Object.freeze({
+      executionOwner: dependencies.executionOwner,
       watchPlan: second.watchPlan,
       bundlesById: new Map(
         second.bundles.map((bundle) => [bundle.owner.config.id, bundle] as const)
@@ -1143,7 +1256,9 @@ export class KnowledgeSourceWorkflowPlanLoader {
       manifestLoad: dependencies.manifestLoad,
       readArtifact: dependencies.readArtifact,
       readExpectedArtifact: dependencies.readExpectedArtifact,
+      resolveProfile: dependencies.resolveProfile,
       isCurrent: dependencies.isCurrent,
+      parsers: dependencies.parsers,
       maxSchemaBytes: dependencies.maxSchemaBytes,
       maxParsedCharacters: dependencies.maxParsedCharacters,
       digest: second.digest,

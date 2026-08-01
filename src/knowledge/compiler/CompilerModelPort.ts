@@ -281,6 +281,17 @@ export interface CompilerCandidateValidator {
 /** Provider-neutral structured-output boundary used by the compiler core. */
 export interface CompilerModelPort {
   /**
+   * Receives a one-shot opaque authorization immediately before a model call.
+   *
+   * The compiler keeps this hook optional for provider ports that do not need
+   * process-local request provenance. Hardened per-attempt adapters may consume
+   * the value through `KnowledgeCompilerModelCallAuthorization.consume`.
+   *
+   * @param authorization - Compiler-issued opaque call authorization
+   */
+  authorizeModelCall?(authorization: unknown): void;
+
+  /**
    * Discovers concepts, grounded claims, relations, and candidate target paths.
    *
    * Provider adapters must enforce response byte/token limits before decoding;

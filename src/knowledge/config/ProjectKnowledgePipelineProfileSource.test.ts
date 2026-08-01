@@ -1,6 +1,7 @@
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
   KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION,
+  KNOWLEDGE_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION,
   ProjectKnowledgePipelineProfileError,
   ProjectKnowledgePipelineProfileSource,
   type ProjectKnowledgePipelineProfileErrorCode,
@@ -180,9 +181,10 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       model: MODEL_NAME,
       configuration: {
         behaviorContractVersion: KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION,
+        routeContractVersion: KNOWLEDGE_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION,
         adapterPolicy: "knowledge-projection-only-v1",
         routingPolicy: "private-bound-capability-v1",
-        structuredOutput: "json-schema-v1",
+        structuredOutput: "decoded-object-core-schema-v1",
         streaming: false,
         modelFallback: false,
         temperature: 0.15,
@@ -331,6 +333,7 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
     expect(serialized).not.toContain(unknownCanary);
     expect(Object.keys(profile.model.configuration as Record<string, unknown>)).toEqual([
       "behaviorContractVersion",
+      "routeContractVersion",
       "adapterPolicy",
       "routingPolicy",
       "structuredOutput",

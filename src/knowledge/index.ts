@@ -4,6 +4,7 @@ export * from "@/knowledge/changeset/ChangeSetValidator";
 export * from "@/knowledge/changeset/TransactionStorage";
 export * from "@/knowledge/compiler/CompilerModelPort";
 export * from "@/knowledge/compiler/KnowledgeCompiler";
+export * from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 export * from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 export * from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 export {
@@ -18,6 +19,9 @@ export * from "@/knowledge/ingest/queue/IngestQueue";
 export * from "@/knowledge/ingest/queue/QueueStorage";
 export * from "@/knowledge/ingest/queue/RetryPolicy";
 export * from "@/knowledge/ingest/InputRevisionAllocator";
+export * from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
+export * from "@/knowledge/ingest/KnowledgeExecutionOwner";
+export * from "@/knowledge/ingest/KnowledgeIngestExecutionAuthority";
 export * from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 export * from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
 export * from "@/knowledge/ingest/ObsidianVaultSourceWatcher";

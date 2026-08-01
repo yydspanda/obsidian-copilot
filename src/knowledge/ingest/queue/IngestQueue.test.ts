@@ -1,5 +1,6 @@
 import {
   IngestExecutorError,
+  IngestExecutionClaim,
   IngestQueue,
   IngestQueueApplyCommitConflictError,
   IngestQueueApplyCommitPendingError,
@@ -660,6 +661,202 @@ describe("IngestQueue persistence and enqueue", () => {
 });
 
 describe("IngestQueue execution and reruns", () => {
+  it("issues an opaque claim for the exact Queue controller and revokes it after execution", async () => {
+    let captured: IngestExecutionClaim | undefined;
+    const harness = createHarness(async (context) => {
+      captured = context.executionClaim;
+      IngestExecutionClaim.assert(context.executionClaim);
+      expect(context.executionClaim.getJob()).toBe(context.job);
+      expect(context.executionClaim.getSignal()).toBe(context.signal);
+      expect(context.executionClaim.isCurrent()).toBe(true);
+      expect(Object.keys(context.executionClaim)).toEqual([]);
+      expect(Object.isFrozen(context.executionClaim)).toBe(true);
+      expect(() => IngestExecutionClaim.assert({ ...context.executionClaim })).toThrow(TypeError);
+      expect(() =>
+        IngestExecutionClaim.assert(Object.create(IngestExecutionClaim.prototype))
+      ).toThrow(TypeError);
+      expect(() => new IngestExecutionClaim(Symbol("forged"))).toThrow(TypeError);
+      return { kind: "no_changes", changeSetId: "changeset-final" };
+    });
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "completed",
+    });
+
+    expect(captured).toBeDefined();
+    expect(captured?.isCurrent()).toBe(false);
+  });
+
+  it("revokes the execution claim before durable finalization begins", async () => {
+    const finalizationReadStarted = createDeferred<void>();
+    const releaseFinalizationRead = createDeferred<void>();
+    let captured: IngestExecutionClaim | undefined;
+    let retainedReporter: IngestExecutionContext["reportStage"] | undefined;
+    let harness: QueueHarness;
+    harness = createHarness(async (context) => {
+      captured = context.executionClaim;
+      retainedReporter = context.reportStage;
+      harness.storage.onRead = () => finalizationReadStarted.resolve();
+      harness.storage.readBarrier = releaseFinalizationRead.promise;
+      return { kind: "no_changes", changeSetId: "changeset-finalization-boundary" };
+    });
+    await harness.queue.enqueue(createRequest());
+
+    let settled = false;
+    const running = harness.queue.runNext("personal").finally(() => {
+      settled = true;
+    });
+    await finalizationReadStarted.promise;
+
+    expect(captured).toBeDefined();
+    expect(captured?.isCurrent()).toBe(false);
+    expect(settled).toBe(false);
+    if (!retainedReporter) throw new Error("Expected a retained stage reporter");
+    await expect(retainedReporter("analyzing")).rejects.toMatchObject({ name: "AbortError" });
+
+    releaseFinalizationRead.resolve();
+    await expect(running).resolves.toMatchObject({
+      kind: "executed",
+      status: "completed",
+    });
+  });
+
+  it("revokes the execution claim before inspecting an executor result", async () => {
+    let currentDuringResultInspection: boolean | undefined;
+    const harness = createHarness(async (context) => {
+      const result = new Proxy(
+        { kind: "no_changes" as const, changeSetId: "changeset-result-boundary" },
+        {
+          getOwnPropertyDescriptor: (target, key) => {
+            currentDuringResultInspection = context.executionClaim.isCurrent();
+            return Reflect.getOwnPropertyDescriptor(target, key);
+          },
+        }
+      );
+      return result;
+    });
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "completed",
+    });
+
+    expect(currentDuringResultInspection).toBe(false);
+  });
+
+  it("rejects accessor-backed executor outcomes without invoking accessors", async () => {
+    let accessorCalls = 0;
+    const harness = createHarness(async () => {
+      const result = { changeSetId: "changeset-accessor" };
+      Object.defineProperty(result, "kind", {
+        enumerable: true,
+        get: () => {
+          accessorCalls += 1;
+          return "no_changes";
+        },
+      });
+      return result as IngestExecutionResult;
+    });
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "failed",
+    });
+
+    expect(accessorCalls).toBe(0);
+    expect(harness.storage.getSnapshot("personal").jobs[0]).toMatchObject({
+      status: "failed",
+      failure: { code: "unexpected_executor_failure" },
+    });
+  });
+
+  it("finalizes only a one-read detached snapshot of a Proxy executor result", async () => {
+    let changeSetDescriptorReads = 0;
+    let propertyReads = 0;
+    const result = new Proxy(
+      { kind: "no_changes" as const, changeSetId: "changeset-detached" },
+      {
+        get: (_target, key) => {
+          if (key === "then") return undefined;
+          propertyReads += 1;
+          throw new Error("Executor result properties must not be read directly");
+        },
+        getOwnPropertyDescriptor: (target, key) => {
+          const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+          if (key !== "changeSetId" || !descriptor || !("value" in descriptor)) {
+            return descriptor;
+          }
+          changeSetDescriptorReads += 1;
+          return {
+            ...descriptor,
+            value: changeSetDescriptorReads === 1 ? "changeset-detached" : "changeset-substituted",
+          };
+        },
+      }
+    );
+    const harness = createHarness(async () => result);
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      status: "completed",
+    });
+
+    expect(propertyReads).toBe(0);
+    expect(changeSetDescriptorReads).toBe(1);
+    expect(harness.storage.getSnapshot("personal").jobs[0]).toMatchObject({
+      status: "completed",
+      changeSetId: "changeset-detached",
+    });
+  });
+
+  it("returns a deeply detached commit receipt without reading Proxy properties", async () => {
+    let receiptPropertyReads = 0;
+    let targetPropertyReads = 0;
+    const receipt = createCommitReceipt();
+    const originalTarget = receipt.targets[0];
+    if (!originalTarget) throw new Error("Expected a commit target");
+    receipt.targets = [
+      new Proxy(originalTarget, {
+        get: () => {
+          targetPropertyReads += 1;
+          throw new Error("Commit target properties must not be read directly");
+        },
+      }),
+    ];
+    const proxiedReceipt = new Proxy(receipt, {
+      get: () => {
+        receiptPropertyReads += 1;
+        throw new Error("Commit receipt properties must not be read directly");
+      },
+    });
+    const harness = createHarness(async (context) => {
+      await context.reportStage("applying");
+      return {
+        kind: "completed",
+        changeSetId: "changeset-committed",
+        commitReceipt: proxiedReceipt,
+      };
+    });
+    await harness.queue.enqueue(createRequest());
+
+    const run = await harness.queue.runNext("personal");
+    expect(run).toMatchObject({ kind: "commit_ready", jobId: "job-1" });
+    if (run.kind !== "commit_ready") throw new Error("Expected detached commit proof");
+
+    expect(receiptPropertyReads).toBe(0);
+    expect(targetPropertyReads).toBe(0);
+    expect(run.receipt).not.toBe(proxiedReceipt);
+    expect(Object.isFrozen(run.receipt)).toBe(true);
+    expect(Object.isFrozen(run.receipt.jobClaim)).toBe(true);
+    expect(Object.isFrozen(run.receipt.targets)).toBe(true);
+    expect(Object.isFrozen(run.receipt.targets[0])).toBe(true);
+  });
+
   it("persists forward stages and completes a claimed job", async () => {
     const harness = createHarness(async (context) => {
       await context.reportStage("analyzing");

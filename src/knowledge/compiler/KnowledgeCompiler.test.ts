@@ -22,6 +22,9 @@ import {
   KnowledgeCompiler,
   KnowledgeCompilerAbortError,
   KnowledgeCompilerInfrastructureError,
+  KnowledgeCompilerModelCallAuthorization,
+  KnowledgeCompilerModelSession,
+  type KnowledgeCompilerModelCall,
 } from "@/knowledge/compiler/KnowledgeCompiler";
 import type { CompilerGenerationModelOutput } from "@/knowledge/compiler/generationSchema";
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
@@ -68,12 +71,20 @@ class FakeCompilerModel implements CompilerModelPort {
   readonly analysisSignals: AbortSignal[] = [];
   readonly generationRequests: CompilerGenerationRequest[] = [];
   readonly generationSignals: AbortSignal[] = [];
+  readonly modelCallAuthorizations: unknown[] = [];
+  authorizationHandler?: (authorization: unknown) => void;
 
   /** Creates a fake with explicit handlers for both compiler stages. */
   constructor(
     private readonly analysisHandler: AnalysisHandler,
     private readonly generationHandler: GenerationHandler
   ) {}
+
+  /** Records and optionally consumes one compiler-issued model-call authorization. */
+  authorizeModelCall(authorization: unknown): void {
+    this.modelCallAuthorizations.push(authorization);
+    this.authorizationHandler?.(authorization);
+  }
 
   /** Records and delegates one analysis request. */
   async analyze(request: CompilerAnalysisRequest, signal: AbortSignal): Promise<unknown> {
@@ -1164,6 +1175,133 @@ function createThrowingHarness(stage: Exclude<KnowledgeCompilerStage, "input">):
   }
   return createHarness({ validate: secretFailure });
 }
+
+describe("KnowledgeCompiler model-call authorization", () => {
+  it("issues opaque one-shot authorizations containing exact frozen compiler objects", async () => {
+    const rawAnalysis = createAnalysisOutput();
+    const harness = createHarness({ analyze: async () => rawAnalysis });
+    const calls: KnowledgeCompilerModelCall[] = [];
+    harness.model.authorizationHandler = (authorization) => {
+      const expectedStage = calls.length === 0 ? "analysis" : "generation";
+      expect(Object.isFrozen(authorization)).toBe(true);
+      expect(Reflect.ownKeys(authorization as object)).toEqual([]);
+      expect(() =>
+        KnowledgeCompilerModelCallAuthorization.consume(
+          { ...(authorization as object) },
+          expectedStage
+        )
+      ).toThrow(TypeError);
+      expect(() =>
+        KnowledgeCompilerModelCallAuthorization.consume(
+          Object.create(KnowledgeCompilerModelCallAuthorization.prototype),
+          expectedStage
+        )
+      ).toThrow(TypeError);
+      const wrongStage = expectedStage === "analysis" ? "generation" : "analysis";
+      expect(() =>
+        KnowledgeCompilerModelCallAuthorization.consume(authorization, wrongStage)
+      ).toThrow(TypeError);
+      const call = KnowledgeCompilerModelCallAuthorization.consume(authorization, expectedStage);
+      expect(() =>
+        KnowledgeCompilerModelCallAuthorization.consume(authorization, expectedStage)
+      ).toThrow(TypeError);
+      calls.push(call);
+    };
+    const controller = new AbortController();
+
+    const result = requireProposal(
+      await harness.compiler.compile(createCompileInput(), controller.signal)
+    );
+
+    expect(calls).toHaveLength(2);
+    const analysisCall = calls[0];
+    const generationCall = calls[1];
+    expect(analysisCall.stage).toBe("analysis");
+    expect(analysisCall.request).toBe(harness.model.analysisRequests[0]);
+    expect(analysisCall.signal).toBe(controller.signal);
+    expect(analysisCall.session).toBe(generationCall.session);
+    KnowledgeCompilerModelSession.assert(analysisCall.session);
+    expect(Object.isFrozen(analysisCall.session)).toBe(true);
+    expect(Reflect.ownKeys(analysisCall.session)).toEqual([]);
+    expect(Object.isFrozen(analysisCall)).toBe(true);
+    expect(Object.isFrozen(analysisCall.request)).toBe(true);
+    expect(generationCall.stage).toBe("generation");
+    if (generationCall.stage !== "generation") {
+      throw new Error("Expected a generation authorization");
+    }
+    expect(generationCall.request).toBe(harness.model.generationRequests[0]);
+    expect(generationCall.signal).toBe(controller.signal);
+    expect(generationCall.rawAnalysis).toBe(rawAnalysis);
+    expect(generationCall.analysis).toBe(result.analysis);
+    expect(generationCall.targets).toBe(harness.validator.inputs[0].targets);
+    expect(Object.isFrozen(generationCall)).toBe(true);
+    expect(Object.isFrozen(generationCall.analysis)).toBe(true);
+    expect(Object.isFrozen(generationCall.analysis.targets)).toBe(true);
+    expect(Object.isFrozen(generationCall.targets)).toBe(true);
+    expect(Object.isFrozen(KnowledgeCompilerModelCallAuthorization.prototype)).toBe(true);
+    expect(Object.isFrozen(KnowledgeCompilerModelCallAuthorization)).toBe(true);
+    expect(Object.isFrozen(KnowledgeCompilerModelSession.prototype)).toBe(true);
+    expect(Object.isFrozen(KnowledgeCompilerModelSession)).toBe(true);
+    expect(() => KnowledgeCompilerModelSession.assert({ ...analysisCall.session })).toThrow(
+      TypeError
+    );
+    expect(() =>
+      KnowledgeCompilerModelSession.assert(Object.create(KnowledgeCompilerModelSession.prototype))
+    ).toThrow(TypeError);
+    expect(() => new KnowledgeCompilerModelSession(Symbol("forged"))).toThrow(TypeError);
+    expect(() => new KnowledgeCompilerModelCallAuthorization(Symbol("forged"))).toThrow(TypeError);
+  });
+
+  it("mints a distinct model session for every compile invocation", async () => {
+    const harness = createHarness();
+    const calls: KnowledgeCompilerModelCall[] = [];
+    harness.model.authorizationHandler = (authorization) => {
+      const expectedStage = calls.length % 2 === 0 ? "analysis" : "generation";
+      calls.push(KnowledgeCompilerModelCallAuthorization.consume(authorization, expectedStage));
+    };
+
+    await expect(
+      harness.compiler.compile(createCompileInput(), new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "proposed" });
+    await expect(
+      harness.compiler.compile(createCompileInput(), new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "proposed" });
+
+    expect(calls).toHaveLength(4);
+    expect(calls[0].session).toBe(calls[1].session);
+    expect(calls[2].session).toBe(calls[3].session);
+    expect(calls[0].session).not.toBe(calls[2].session);
+  });
+
+  it.each(["analysis", "generation"] as const)(
+    "sanitizes a rejected %s authorization hook before invoking that model stage",
+    async (stage) => {
+      const secretCanary = "sk-model-authorization-secret-canary";
+      const harness = createHarness();
+      let authorizationCalls = 0;
+      harness.model.authorizationHandler = () => {
+        authorizationCalls += 1;
+        if (stage === "analysis" || authorizationCalls === 2) {
+          throw new Error(secretCanary);
+        }
+      };
+      let caught: unknown;
+
+      try {
+        await harness.compiler.compile(createCompileInput(), new AbortController().signal);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(KnowledgeCompilerInfrastructureError);
+      expect(caught).toMatchObject({ stage });
+      expect(String(caught)).not.toContain(secretCanary);
+      expect(JSON.stringify(caught)).not.toContain(secretCanary);
+      expect(harness.model.analysisRequests).toHaveLength(stage === "analysis" ? 0 : 1);
+      expect(harness.model.generationRequests).toHaveLength(0);
+    }
+  );
+});
 
 describe("KnowledgeCompiler dependency isolation and cancellation", () => {
   it.each<Exclude<KnowledgeCompilerStage, "input">>([

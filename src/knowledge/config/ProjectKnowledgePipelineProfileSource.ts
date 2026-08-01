@@ -17,6 +17,9 @@ import { sha256 } from "@/utils/hash";
 /** Current secret-free model behavior projection consumed by future Knowledge providers. */
 export const KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION = 1 as const;
 
+/** Current private route-to-adapter binding included in every pipeline fingerprint. */
+export const KNOWLEDGE_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION = 1 as const;
+
 const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const DEFAULT_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
 const VERBOSITIES = ["low", "medium", "high"] as const;
@@ -557,9 +560,10 @@ function selectModelBehavior(
   }
   const configuration: JsonValue = Object.freeze({
     behaviorContractVersion: KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION,
+    routeContractVersion: KNOWLEDGE_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION,
     adapterPolicy: "knowledge-projection-only-v1",
     routingPolicy: "private-bound-capability-v1",
-    structuredOutput: "json-schema-v1",
+    structuredOutput: "decoded-object-core-schema-v1",
     streaming: false,
     modelFallback: false,
     temperature: project.temperature ?? selected.temperature ?? settings.temperature,

@@ -91,6 +91,10 @@ export const DEFAULT_KNOWLEDGE_COMPILER_LIMITS: KnowledgeCompilerLimits = {
 };
 
 const MAX_COMPILER_SCHEMA_DIAGNOSTICS = 256;
+const MODEL_CALL_AUTHORIZATION_TOKEN = Symbol(
+  "KnowledgeCompilerModelCallAuthorization.constructor"
+);
+const MODEL_SESSION_TOKEN = Symbol("KnowledgeCompilerModelSession.constructor");
 
 const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 0, {
   message: "Expected a non-empty string",
@@ -267,6 +271,141 @@ const compilerCandidateValidationResultSchema: z.ZodType<CompilerCandidateValida
     diagnostics: z.array(knowledgeDiagnosticSchema),
   })
   .strict();
+
+/** Model stages that may receive compiler-issued process-local authorization. */
+export type KnowledgeCompilerModelCallStage = "analysis" | "generation";
+
+const modelSessionIdentities = new WeakSet<object>();
+
+/**
+ * Fresh opaque identity shared only by model calls from one compile invocation.
+ *
+ * A session has no public state. Adapters compare its exact object identity to
+ * prevent analysis from one compile invocation authorizing another invocation's
+ * generation call.
+ */
+export class KnowledgeCompilerModelSession {
+  /** Rejects direct construction without the module-private compiler token. */
+  constructor(token: symbol) {
+    if (token !== MODEL_SESSION_TOKEN) {
+      throw new TypeError("The knowledge compiler model session is invalid");
+    }
+    Object.freeze(this);
+  }
+
+  /** Requires an authentic session minted by this compiler module. */
+  static assert(value: unknown): asserts value is KnowledgeCompilerModelSession {
+    if (typeof value !== "object" || value === null || !modelSessionIdentities.has(value)) {
+      throw new TypeError("The knowledge compiler model session is invalid");
+    }
+  }
+}
+
+Object.freeze(KnowledgeCompilerModelSession.prototype);
+Object.freeze(KnowledgeCompilerModelSession);
+
+/** Issues one fresh process-local model session for a compile invocation. */
+function createModelSession(): KnowledgeCompilerModelSession {
+  const session = new KnowledgeCompilerModelSession(MODEL_SESSION_TOKEN);
+  modelSessionIdentities.add(session);
+  return session;
+}
+
+/** Exact private compiler state released to an authorized analysis adapter. */
+export interface KnowledgeCompilerAnalysisModelCall {
+  stage: "analysis";
+  session: KnowledgeCompilerModelSession;
+  request: CompilerAnalysisRequest;
+  signal: AbortSignal;
+}
+
+/** Exact private compiler state released to an authorized generation adapter. */
+export interface KnowledgeCompilerGenerationModelCall {
+  stage: "generation";
+  session: KnowledgeCompilerModelSession;
+  request: CompilerGenerationRequest;
+  signal: AbortSignal;
+  rawAnalysis: unknown;
+  analysis: CompilerAnalysis;
+  targets: readonly CompilerBoundTarget[];
+}
+
+/** One-shot compiler call state inspected only by the receiving model adapter. */
+export type KnowledgeCompilerModelCall =
+  | KnowledgeCompilerAnalysisModelCall
+  | KnowledgeCompilerGenerationModelCall;
+
+interface KnowledgeCompilerModelCallAuthorizationState {
+  call: KnowledgeCompilerModelCall;
+  consumed: boolean;
+}
+
+const modelCallAuthorizationStates = new WeakMap<
+  object,
+  KnowledgeCompilerModelCallAuthorizationState
+>();
+
+/** Returns hidden state only for a compiler-issued model-call authorization. */
+function requireModelCallAuthorizationState(
+  value: unknown
+): KnowledgeCompilerModelCallAuthorizationState {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("The knowledge compiler model-call authorization is invalid");
+  }
+  const state = modelCallAuthorizationStates.get(value);
+  if (!state) {
+    throw new TypeError("The knowledge compiler model-call authorization is invalid");
+  }
+  return state;
+}
+
+/** Issues one opaque authorization for an exact compiler-owned model call. */
+function createModelCallAuthorization(
+  call: KnowledgeCompilerModelCall
+): KnowledgeCompilerModelCallAuthorization {
+  const authorization = new KnowledgeCompilerModelCallAuthorization(MODEL_CALL_AUTHORIZATION_TOKEN);
+  modelCallAuthorizationStates.set(authorization, { call: Object.freeze(call), consumed: false });
+  return authorization;
+}
+
+/**
+ * Opaque, process-local provenance for one exact compiler-issued model call.
+ *
+ * The authorization has no public fields and cannot be reconstructed from a
+ * structurally equal request. Its receiving adapter must consume it once for
+ * the expected stage before using the enclosed exact object identities.
+ */
+export class KnowledgeCompilerModelCallAuthorization {
+  /** Rejects direct construction without the module-private compiler token. */
+  constructor(token: symbol) {
+    if (token !== MODEL_CALL_AUTHORIZATION_TOKEN) {
+      throw new TypeError("The knowledge compiler model-call authorization is invalid");
+    }
+    Object.freeze(this);
+  }
+
+  /**
+   * Consumes an authentic authorization once and returns its exact private call state.
+   *
+   * @param value - Candidate opaque authorization received by a model adapter
+   * @param expectedStage - Model stage expected by that adapter
+   * @returns Frozen call envelope retaining the compiler's exact object identities
+   */
+  static consume<TStage extends KnowledgeCompilerModelCallStage>(
+    value: unknown,
+    expectedStage: TStage
+  ): Extract<KnowledgeCompilerModelCall, { stage: TStage }> {
+    const state = requireModelCallAuthorizationState(value);
+    if (state.consumed || state.call.stage !== expectedStage) {
+      throw new TypeError("The knowledge compiler model-call authorization is invalid");
+    }
+    state.consumed = true;
+    return state.call as Extract<KnowledgeCompilerModelCall, { stage: TStage }>;
+  }
+}
+
+Object.freeze(KnowledgeCompilerModelCallAuthorization.prototype);
+Object.freeze(KnowledgeCompilerModelCallAuthorization);
 
 /** Internal result used while normalizing untrusted analysis semantics. */
 type AnalysisNormalizationResult =
@@ -1583,7 +1722,7 @@ function normalizeAnalysis(
     return pathComparison === 0 ? compareText(left.targetId, right.targetId) : pathComparison;
   });
 
-  const analysis: CompilerAnalysis = {
+  const analysis: CompilerAnalysis = deepFreeze({
     version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
     summary: output.summary,
     concepts,
@@ -1592,7 +1731,7 @@ function normalizeAnalysis(
     relations,
     citations,
     targets,
-  };
+  });
   return {
     ok: true,
     analysis,
@@ -1797,7 +1936,7 @@ function bindTargetObservations(
     return { ok: false, diagnostics };
   }
   boundTargets.sort((left, right) => compareVaultPaths(left.path, right.path));
-  return { ok: true, targets: boundTargets, diagnostics };
+  return { ok: true, targets: deepFreeze(boundTargets), diagnostics };
 }
 
 /**
@@ -2134,6 +2273,7 @@ export class KnowledgeCompiler {
     value: KnowledgeCompileInput,
     signal: AbortSignal
   ): Promise<KnowledgeCompileResult> {
+    const modelSession = createModelSession();
     const parsedInput = knowledgeCompileInputSchema.safeParse(value);
     if (!parsedInput.success) {
       return createFailure("input", mapSchemaIssues(parsedInput.error));
@@ -2155,9 +2295,15 @@ export class KnowledgeCompiler {
     if (analysisRequestDiagnostics.length > 0) {
       return createFailure("input", analysisRequestDiagnostics);
     }
-    const rawAnalysis = await this.invokeDependency("analysis", signal, () =>
-      this.dependencies.model.analyze(analysisRequest, signal)
-    );
+    const rawAnalysis = await this.invokeDependency("analysis", signal, () => {
+      this.authorizeModelCall({
+        stage: "analysis",
+        session: modelSession,
+        request: analysisRequest,
+        signal,
+      });
+      return this.dependencies.model.analyze(analysisRequest, signal);
+    });
     const parsedAnalysis = parseCompilerAnalysisModelOutput(rawAnalysis);
     if (!parsedAnalysis.ok) {
       return createFailure("analysis", parsedAnalysis.issues);
@@ -2238,9 +2384,18 @@ export class KnowledgeCompiler {
       if (generationRequestDiagnostics.length > 0) {
         return createFailure("generation", generationRequestDiagnostics);
       }
-      const rawGeneration = await this.invokeDependency("generation", signal, () =>
-        this.dependencies.model.generate(generationRequest, signal)
-      );
+      const rawGeneration = await this.invokeDependency("generation", signal, () => {
+        this.authorizeModelCall({
+          stage: "generation",
+          session: modelSession,
+          request: generationRequest,
+          signal,
+          rawAnalysis,
+          analysis,
+          targets: binding.targets,
+        });
+        return this.dependencies.model.generate(generationRequest, signal);
+      });
       const parsedGeneration = parseCompilerGenerationModelOutput(rawGeneration);
       if (!parsedGeneration.ok) {
         return createFailure("generation", parsedGeneration.issues);
@@ -2487,6 +2642,20 @@ export class KnowledgeCompiler {
       analysis: generationAnalysis,
       targets: generationTargets,
     });
+  }
+
+  /**
+   * Delivers one exact one-shot call authorization to an opted-in model port.
+   *
+   * The caller invokes this method inside `invokeDependency`, so an accessor or
+   * hook failure is sanitized as the matching analysis or generation stage.
+   *
+   * @param call - Exact compiler-owned model call state
+   */
+  private authorizeModelCall(call: KnowledgeCompilerModelCall): void {
+    const model = this.dependencies.model;
+    if (model.authorizeModelCall === undefined) return;
+    model.authorizeModelCall(createModelCallAuthorization(call));
   }
 
   /**
