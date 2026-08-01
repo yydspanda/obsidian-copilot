@@ -48,6 +48,8 @@ export interface ProjectKnowledgePipelineProfileSourceOptions {
   parsers: readonly KnowledgeSourceParserProfile[];
   outputLanguage: string;
   supportedProviders: readonly string[];
+  promptContractIdentity: string;
+  providerRouteIdentities: Readonly<Record<string, string>>;
 }
 
 /** Stable, non-secret failure categories for profile projection. */
@@ -110,6 +112,8 @@ interface CapturedOptions {
   compilerConfiguration: JsonValue;
   parsers: readonly KnowledgeSourceParserProfile[];
   outputLanguage: string;
+  promptContractIdentity: string;
+  providerRouteIdentities: Readonly<Record<string, string>>;
 }
 
 interface SelectedModelBehavior {
@@ -312,8 +316,8 @@ function snapshotJsonValue(
   }
 }
 
-/** Canonicalizes a custom endpoint into a non-reversible identity. */
-function createEndpointIdentity(value: unknown): string | undefined {
+/** Canonicalizes a model endpoint into the profile's non-reversible identity. */
+export function createKnowledgeModelEndpointIdentity(value: unknown): string | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string" || value.trim() !== value) {
     throw new ProjectKnowledgePipelineProfileError("endpoint_invalid");
@@ -429,7 +433,9 @@ function captureActiveModel(
   const enablePromptCaching = readOptionalBoolean(value, "enablePromptCaching");
   const reasoningEffort = readOptionalEnum(value, "reasoningEffort", REASONING_EFFORTS);
   const verbosity = readOptionalEnum(value, "verbosity", VERBOSITIES);
-  const endpointIdentity = createEndpointIdentity(readOptionalDataProperty(value, "baseUrl"));
+  const endpointIdentity = createKnowledgeModelEndpointIdentity(
+    readOptionalDataProperty(value, "baseUrl")
+  );
   const routingIdentity = createRoutingIdentity(value);
   return Object.freeze({
     name,
@@ -522,12 +528,45 @@ function captureOptions(value: ProjectKnowledgePipelineProfileSourceOptions): {
   if (providers.length === 0 || new Set(providers).size !== providers.length) {
     throw new ProjectKnowledgePipelineProfileError("input_invalid");
   }
+  const promptContractIdentity = readDataProperty(value, "promptContractIdentity");
+  if (
+    typeof promptContractIdentity !== "string" ||
+    !/^[a-f0-9]{64}$/.test(promptContractIdentity)
+  ) {
+    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+  }
+  const providerRouteSnapshot = snapshotJsonValue(
+    readDataProperty(value, "providerRouteIdentities")
+  );
+  if (
+    typeof providerRouteSnapshot !== "object" ||
+    providerRouteSnapshot === null ||
+    Array.isArray(providerRouteSnapshot) ||
+    Reflect.ownKeys(providerRouteSnapshot).length !== providers.length
+  ) {
+    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+  }
+  const providerRouteIdentities = Object.create(null) as Record<string, string>;
+  for (const provider of providers) {
+    const identity = readDataProperty(providerRouteSnapshot, provider);
+    if (typeof identity !== "string" || !/^[a-f0-9]{64}$/.test(identity)) {
+      throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    }
+    Object.defineProperty(providerRouteIdentities, provider, {
+      value: identity,
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    });
+  }
   return {
     options: Object.freeze({
       compilerVersion,
       compilerConfiguration,
       parsers: Object.freeze([...parsers]),
       outputLanguage,
+      promptContractIdentity,
+      providerRouteIdentities: Object.freeze(providerRouteIdentities),
     }),
     supportedProviders: new Set(providers),
   };
@@ -537,7 +576,8 @@ function captureOptions(value: ProjectKnowledgePipelineProfileSourceOptions): {
 function selectModelBehavior(
   project: CapturedProject,
   settings: CapturedSettings,
-  supportedProviders: ReadonlySet<string>
+  supportedProviders: ReadonlySet<string>,
+  options: CapturedOptions
 ): SelectedModelBehavior {
   const matches = settings.activeModels.filter(
     (candidate) => `${candidate.name}|${candidate.provider}` === project.projectModelKey
@@ -561,6 +601,8 @@ function selectModelBehavior(
   const configuration: JsonValue = Object.freeze({
     behaviorContractVersion: KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION,
     routeContractVersion: KNOWLEDGE_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION,
+    promptContractIdentity: options.promptContractIdentity,
+    providerRouteIdentity: options.providerRouteIdentities[selected.provider],
     adapterPolicy: "knowledge-projection-only-v1",
     routingPolicy: "private-bound-capability-v1",
     structuredOutput: "decoded-object-core-schema-v1",
@@ -651,7 +693,12 @@ export class ProjectKnowledgePipelineProfileSource {
     if (!project) {
       throw new ProjectKnowledgePipelineProfileError("project_missing");
     }
-    const model = selectModelBehavior(project, state.settings, state.supportedProviders);
+    const model = selectModelBehavior(
+      project,
+      state.settings,
+      state.supportedProviders,
+      state.options
+    );
     return Object.freeze({
       version: KNOWLEDGE_PIPELINE_PROFILE_VERSION,
       bundleId,

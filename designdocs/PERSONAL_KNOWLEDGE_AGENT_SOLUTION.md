@@ -511,6 +511,10 @@ G.2k 将 watcher 的 fingerprint 来源收紧为 opaque `KnowledgeSourceWatchPla
 
 两阶段编译的可执行 Core 位于 `src/knowledge/compiler/`。第一阶段只能从调用方按当前来源和 Manifest 选出的最小 target catalog 获得既有页权限；catalog 外路径只能做 Windows case-insensitive existence probe，确认缺失后才可成为 create。第二阶段只看到 runtime 绑定后的 create/update 最小 DTO，并以 `targetSetDigest + targetId` 返回 write/unchanged；模型不能提交路径、operation、hash、source refs、validation、status，也看不到 delete 原文或 ownership 授权。普通 claim 至少需要一条实际送模 evidence 的 material-valid `supports`，candidate validator 再确定性检查 OKF、links 与 citations，最终只生成 `proposed` ChangeSet。compiler source identity 包含 source adapter 单调分配的 `inputRevision`，所以来源内容 A→B→A 会产生新的 ChangeSet/review instance，而不会复用第一次 A 的审核身份。
 
+G.2n 在用户明确授权的独立提交中加入 Knowledge 专用 prompt 与首个 concrete provider route。Prompt Encoder 是纯确定性 leaf：analysis/generation 各固定两条消息，静态 system policy 声明 JSON shape、最小示例和数据/指令信任层级，完整 Compiler request 与 outputLanguage/OKF/citation/reasoning/verbosity behavior 只进入 canonical escaped `INPUT_JSON`。相同 request/prompt-visible behavior 产生逐字相同 prompt 与覆盖实际 system/user 消息的 domain-separated digest；这不承诺远端模型输出确定。实际两阶段 prompt policy/limits 的 identity 与 provider-route identity 进入 pipeline fingerprint，DeepSeek route 另与完整 profile digest 绑定。schema.content 仅可作为受 system 权限边界约束的 Wiki 组织、术语、内容和格式 policy；它不能改写输出合约、身份、路径、证据或权限。schema、evidence excerpt、context page、current target content 与 outputLanguage 即使含 prompt injection，也不进入 system message。模型仍无 tool、Vault、网络或写能力，最终 evidence/path/target/digest/citation/ChangeSet 权限继续由现有 Core 决定性复验。
+
+DeepSeek route 不复用 ChatModelManager、LangChain、`safeFetch` 或 `requestUrl`。首期固定官方 `https://api.deepseek.com/chat/completions` 与当前 `deepseek-v4-flash` / `deepseek-v4-pro` capability allowlist；custom endpoint、旧 alias 和未显式映射的 generic model field 都 unavailable。每个已授权 stage 只调用一次注入的 native-fetch port，透传 exact Queue-owned `AbortSignal`，强制 `stream: false`、JSON Object、exact model/max_tokens、无 tool/fallback/内部 retry/repair。JSON Object 不是 provider-native JSON Schema，strict Zod/Core parser 仍是输出 authority。HTTP response 从首字节（含 keep-alive 空白）流式计入 8 MiB cap，之后才 fatal UTF-8 和 JSON decode；status/content-type/redirect、单 choice、exact response model、`finish_reason=stop`、assistant content 与 completion usage 全部复验。credential 只保存在 module-private closure 与 Authorization header，不进入 descriptor/profile/prompt/error/cause/log/durable state。route 额外绑定完整 pipeline profile digest，避免两个 model configuration 相同但输出语言、compiler/parser 或 citation contract 不同的 workflow 互换。当前模块没有 production key resolver/native-fetch lifecycle、worker 或 `main.ts` 接线，因此默认零网络、Studio 继续 unavailable。
+
 Delete 的授权比普通 write 更窄：目标必须由 Manifest 标记为当前 source 独占的 generated page，resolver 观察到的 bytes 必须仍匹配 last-generated hash。该 target read-set 已由 Compiler plan、Review intent 和 transaction journal 持久化，并在 prepared reservation 与最终 Manifest commit 时复证；但安全 compare-and-delete 以及 schema、非 target link、source artifact 依赖仍未完成，因此产品 UI 继续不启用 compiler delete。
 
 审核使用独立 strict v2 Review Store 保存完整 proposal、canonical digest、queue job claim、record revision、compiler-owned Manifest commit plan 以及 accepted/rejected 终态，不能只在 Queue 的 `awaiting_review` job 中保存一个 ChangeSet id。plan 绑定 Manifest revision/digest、完整 primary-source page projection、每个 target 的 ownership/authorization、source hash、pipeline fingerprint 与单调 `inputRevision`；Accept 只能由该 plan 与 accepted ChangeSet 纯投影出最终 Manifest intent，过滤文件或重写内容时会精确保留未接受页并重新绑定 after hash。Queue 只有收到同 Bundle、同 exact job claim 的 durable pending receipt（revision 0）才进入 `awaiting_review`；接受/拒绝必须携带匹配 proposal digest 的 terminal receipt（revision 1）。Queue v5 把 accepted digest 与最终 Manifest intent digest 一并放入 apply claim，并增加 exact no-journal abandonment tombstone；v3 已在途但缺少 intent digest 的审核只能迁移为 `legacy_unverified`，不会从其他槽猜测补齐，v4 迁移也不会从 cancelled job 猜测历史 abandon。`reconcilePendingReview` 用来收敛“Review Store 已落盘、Queue hand-off 未落盘”的崩溃窗口，旧版 `legacy_unverified` anchor 只能由真实 pending record 升级。UI 只提交 opaque change/block id；Core 按当前 snapshot token 精确重组选择后的文本，保留 proposal-owned change identity/order，重新计算 content hash 与 accepted ChangeSet digest，并重新运行 OKF、citation 与 link validator。accepted payload 与 proposal 的 Bundle、operation、provenance、citation 身份必须一致。`awaiting_review` 不能通用 Cancel，Reject 必须先写 Review Store；同一 accepted receipt 只在 active apply claim 内幂等，apply 完成后的晚到回执由未来 Review/Manifest 协调器判断 already-applied。Activity 只从 durable Queue snapshot 派生；EventSink 只触发 reload，commit marker 清除前显示 `finalizing` 而不是 `completed`。
@@ -775,20 +779,21 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 主要风险与约束：
 
-| 风险                                     | 约束                                                                 |
-| ---------------------------------------- | -------------------------------------------------------------------- |
-| Prompt injection 指挥 Agent 忽略规则     | 外部内容作为 artifact/Observation，不成为系统指令                    |
-| Project A 内容泄漏到 Project B           | Scope Resolver 和 MessageRepository 均使用项目身份隔离               |
-| 模型虚构来源                             | 引用必须对应实际输入 artifact 或工具结果                             |
-| 自动总结污染长期记忆                     | 自动总结只进入 Recent Conversations 或 Candidate                     |
-| LLM 更新多个 Wiki 页面后产生不一致       | 使用 ChangeSet、before hash、合规校验、commit marker 和 journal 恢复 |
-| Wiki 综合掩盖 Raw Source 的矛盾          | concept 保留引用和冲突说明，Query 可下钻原文                         |
-| OKF 扩展变成新的私有锁定                 | 核心字段遵守 v0.1，扩展字段可忽略并在 round-trip 时保留              |
-| 大上下文导致遗漏或请求失败               | 最终装配点执行总预算和优先级降级                                     |
-| 写错文件或覆盖原文                       | 目标规范化、diff preview、用户确认和可恢复写入                       |
-| 外部 provider 接收敏感笔记               | 在发送前让范围可见，并支持本地/自托管 provider                       |
-| Popout window 中 UI 或确认框落到错误窗口 | 从元素 `.doc` / `.win` 派生文档与窗口，迁移时重建 renderer           |
-| 工具超时或部分失败                       | 返回类型化失败，不能把失败结果当作有效知识                           |
+| 风险                                     | 约束                                                                         |
+| ---------------------------------------- | ---------------------------------------------------------------------------- |
+| Prompt injection 指挥 Agent 忽略规则     | 外部内容只进入 canonical INPUT_JSON；模型无工具，所有 authority 由 Core 复验 |
+| Project A 内容泄漏到 Project B           | Scope Resolver 和 MessageRepository 均使用项目身份隔离                       |
+| 模型虚构来源                             | 引用必须对应实际输入 artifact 或工具结果                                     |
+| 自动总结污染长期记忆                     | 自动总结只进入 Recent Conversations 或 Candidate                             |
+| LLM 更新多个 Wiki 页面后产生不一致       | 使用 ChangeSet、before hash、合规校验、commit marker 和 journal 恢复         |
+| Wiki 综合掩盖 Raw Source 的矛盾          | concept 保留引用和冲突说明，Query 可下钻原文                                 |
+| OKF 扩展变成新的私有锁定                 | 核心字段遵守 v0.1，扩展字段可忽略并在 round-trip 时保留                      |
+| 大上下文导致遗漏或请求失败               | 最终装配点执行总预算和优先级降级                                             |
+| 写错文件或覆盖原文                       | 目标规范化、diff preview、用户确认和可恢复写入                               |
+| 外部 provider 接收敏感笔记               | 在发送前让范围可见；credential 不进 prompt/log；支持本地/自托管 provider     |
+| Provider SDK 隐式 retry/fallback         | Knowledge route 使用单次 native fetch port；Queue 是唯一外层 retry owner     |
+| Popout window 中 UI 或确认框落到错误窗口 | 从元素 `.doc` / `.win` 派生文档与窗口，迁移时重建 renderer                   |
+| 工具超时或部分失败                       | 返回类型化失败，不能把失败结果当作有效知识                                   |
 
 密钥、完整请求头和未脱敏调试 payload 不得写入文档、聊天或执行记录。
 
@@ -924,34 +929,36 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 - 一开始就建设多 Agent 编排、知识图谱本体或通用工作流引擎。
 - 用一个通用自然语言匹配器决定所有知识范围、权限和写入目标。
 - 为了适配某类笔记而硬编码目录名、语言词表或内容模式。
-- 在本方案阶段修改任何 AI prompt 内容。
+- 未经用户对独立变更明确授权，修改任何 AI prompt；G.2n 的 Knowledge 编译 prompt 是已授权例外，Chat prompt 未改。
 
 ---
 
 ## 18. 当前架构决策
 
-| 决策                                             | 理由                                                                             |
-| ------------------------------------------------ | -------------------------------------------------------------------------------- |
-| Vault Markdown 是知识事实源                      | 用户可读、可编辑、可迁移，不依赖模型或服务商                                     |
-| Windows Obsidian Desktop 是唯一首期平台          | 产品、文件系统、性能、UI 和测试只对 Windows 做承诺，其他平台不占用当前开发范围   |
-| Raw Sources 与 LLM-maintained Wiki 分层          | 既保留来源真实性，又获得持续综合和链接的复利价值                                 |
-| Chat + 全页 Knowledge Studio                     | Chat 适合即时助手，摄入、审核、队列、维护和图谱需要完整工作区                    |
-| 指定 Wiki Root 采用 OKF v0.1                     | 提供最小、开放、可被其他 Agent 消费的文件契约                                    |
-| 普通 Vault 读取保持宽容                          | 不用标准化成本阻断现有 Obsidian 工作流                                           |
-| `index.md` 优先于全量扫描                        | 支持 Agent 渐进发现并降低 token 与检索成本                                       |
-| 多文件 Wiki 更新使用 ChangeSet                   | 让跨页面维护可预览、校验，并通过 journal 获得可恢复事务语义                      |
-| `PromptContextEnvelope` 是 LangChain 上下文契约  | 已覆盖所有当前 Chain Runner，并提供层级和 hash                                   |
-| Search v3 是基础检索底座                         | 当前已有词法、语义和图信号；只叠加 Wiki 渐进发现与图扩展，不再建第二套搜索       |
-| Source hash 与 pipeline fingerprint 共同决定幂等 | 来源未变不代表解析、schema、模型或输出规则未变                                   |
-| 持久队列恢复后等待用户继续                       | 防止插件重启后意外调用模型和消耗额度                                             |
-| 用户显式附件高于自动检索                         | 尊重当前任务意图并降低上下文噪声                                                 |
-| 模型输出先是 Synthesis 或 Candidate              | 防止流畅回答直接污染长期知识                                                     |
-| 写入默认 preview/diff                            | 个人知识库最常见的高风险是误写而非网络攻击                                       |
-| LangChain 与 ACP 使用平行 Runtime                | 两者的上下文、工具和会话所有权不同                                               |
-| Graphiti 仅是可选外部投影                        | 时态语义值得预留，但 Markdown/Raw 必须保持 canonical，且首个闭环不应依赖额外服务 |
-| 外部实现按 Copy / Port / Reference 管理          | 能快速吸收好代码，同时保留来源、测试、许可证和平台边界                           |
-| 暂不引入子 Agent                                 | 当前更需要预算、引用、权限和持久化正确性                                         |
-| 以 Golden Flow 驱动架构                          | 先完成一个来源到可复用知识的完整体验，再逐层增加工作台、图谱与自治               |
+| 决策                                              | 理由                                                                             |
+| ------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Vault Markdown 是知识事实源                       | 用户可读、可编辑、可迁移，不依赖模型或服务商                                     |
+| Windows Obsidian Desktop 是唯一首期平台           | 产品、文件系统、性能、UI 和测试只对 Windows 做承诺，其他平台不占用当前开发范围   |
+| Raw Sources 与 LLM-maintained Wiki 分层           | 既保留来源真实性，又获得持续综合和链接的复利价值                                 |
+| Chat + 全页 Knowledge Studio                      | Chat 适合即时助手，摄入、审核、队列、维护和图谱需要完整工作区                    |
+| 指定 Wiki Root 采用 OKF v0.1                      | 提供最小、开放、可被其他 Agent 消费的文件契约                                    |
+| 普通 Vault 读取保持宽容                           | 不用标准化成本阻断现有 Obsidian 工作流                                           |
+| `index.md` 优先于全量扫描                         | 支持 Agent 渐进发现并降低 token 与检索成本                                       |
+| 多文件 Wiki 更新使用 ChangeSet                    | 让跨页面维护可预览、校验，并通过 journal 获得可恢复事务语义                      |
+| `PromptContextEnvelope` 是 LangChain 上下文契约   | 已覆盖所有当前 Chain Runner，并提供层级和 hash                                   |
+| Knowledge Prompt 使用独立确定性契约               | 编译 request/profile 可复现，不让 Raw/Wiki 文本进入 system instruction           |
+| 首个隔离 concrete provider route 为 DeepSeek 边界 | 官方 HTTPS/V4 allowlist、单次 non-streaming JSON Object、无 SDK fallback/retry   |
+| Search v3 是基础检索底座                          | 当前已有词法、语义和图信号；只叠加 Wiki 渐进发现与图扩展，不再建第二套搜索       |
+| Source hash 与 pipeline fingerprint 共同决定幂等  | 来源未变不代表解析、schema、模型或输出规则未变                                   |
+| 持久队列恢复后等待用户继续                        | 防止插件重启后意外调用模型和消耗额度                                             |
+| 用户显式附件高于自动检索                          | 尊重当前任务意图并降低上下文噪声                                                 |
+| 模型输出先是 Synthesis 或 Candidate               | 防止流畅回答直接污染长期知识                                                     |
+| 写入默认 preview/diff                             | 个人知识库最常见的高风险是误写而非网络攻击                                       |
+| LangChain 与 ACP 使用平行 Runtime                 | 两者的上下文、工具和会话所有权不同                                               |
+| Graphiti 仅是可选外部投影                         | 时态语义值得预留，但 Markdown/Raw 必须保持 canonical，且首个闭环不应依赖额外服务 |
+| 外部实现按 Copy / Port / Reference 管理           | 能快速吸收好代码，同时保留来源、测试、许可证和平台边界                           |
+| 暂不引入子 Agent                                  | 当前更需要预算、引用、权限和持久化正确性                                         |
+| 以 Golden Flow 驱动架构                           | 先完成一个来源到可复用知识的完整体验，再逐层增加工作台、图谱与自治               |
 
 ---
 

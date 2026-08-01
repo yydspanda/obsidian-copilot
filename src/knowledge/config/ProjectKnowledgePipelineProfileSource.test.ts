@@ -20,6 +20,10 @@ const BUNDLE_ID = "bundle-a";
 const MODEL_NAME = "deepseek-chat";
 const PROVIDER = "deepseek";
 const MODEL_KEY = `${MODEL_NAME}|${PROVIDER}`;
+const PROMPT_CONTRACT_IDENTITY = "a".repeat(64);
+const DEEPSEEK_ROUTE_IDENTITY = "b".repeat(64);
+const OPENAI_ROUTE_IDENTITY = "c".repeat(64);
+const OLLAMA_ROUTE_IDENTITY = "d".repeat(64);
 
 /** Creates one strict Bundle owned by the default test project. */
 function createOwner(): ConfiguredProjectKnowledgeBundle {
@@ -95,6 +99,12 @@ function createOptions(
     ],
     outputLanguage: "source-language",
     supportedProviders: [PROVIDER, "openai", "ollama"],
+    promptContractIdentity: PROMPT_CONTRACT_IDENTITY,
+    providerRouteIdentities: {
+      [PROVIDER]: DEEPSEEK_ROUTE_IDENTITY,
+      openai: OPENAI_ROUTE_IDENTITY,
+      ollama: OLLAMA_ROUTE_IDENTITY,
+    },
     ...overrides,
   };
 }
@@ -182,6 +192,8 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       configuration: {
         behaviorContractVersion: KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION,
         routeContractVersion: KNOWLEDGE_PRIVATE_MODEL_ROUTE_CONTRACT_VERSION,
+        promptContractIdentity: PROMPT_CONTRACT_IDENTITY,
+        providerRouteIdentity: DEEPSEEK_ROUTE_IDENTITY,
         adapterPolicy: "knowledge-projection-only-v1",
         routingPolicy: "private-bound-capability-v1",
         structuredOutput: "decoded-object-core-schema-v1",
@@ -334,6 +346,8 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
     expect(Object.keys(profile.model.configuration as Record<string, unknown>)).toEqual([
       "behaviorContractVersion",
       "routeContractVersion",
+      "promptContractIdentity",
+      "providerRouteIdentity",
       "adapterPolicy",
       "routingPolicy",
       "structuredOutput",
@@ -419,6 +433,37 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       expect(createProfileDigest(changed)).not.toBe(createProfileDigest(baseline));
     }
   );
+
+  it("binds prompt and provider-route contract identities into the profile digest", () => {
+    const baseline = resolveProfile();
+    const promptChanged = resolveProfile({
+      sourceOptions: createOptions({ promptContractIdentity: "e".repeat(64) }),
+    });
+    const routeChanged = resolveProfile({
+      sourceOptions: createOptions({
+        providerRouteIdentities: {
+          [PROVIDER]: "f".repeat(64),
+          openai: OPENAI_ROUTE_IDENTITY,
+          ollama: OLLAMA_ROUTE_IDENTITY,
+        },
+      }),
+    });
+
+    expect(createProfileDigest(promptChanged)).not.toBe(createProfileDigest(baseline));
+    expect(createProfileDigest(routeChanged)).not.toBe(createProfileDigest(baseline));
+  });
+
+  it("requires one valid provider-route identity for every allowed provider", () => {
+    expectProfileError(
+      () =>
+        resolveProfile({
+          sourceOptions: createOptions({
+            providerRouteIdentities: { [PROVIDER]: DEEPSEEK_ROUTE_IDENTITY },
+          }),
+        }),
+      "input_invalid"
+    );
+  });
 
   it("rejects accessors on an allowlisted model field without invoking them", () => {
     let reads = 0;

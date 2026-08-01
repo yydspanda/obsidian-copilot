@@ -123,6 +123,7 @@ interface KnowledgePrivateModelRouteState {
   descriptor: Readonly<KnowledgePrivateModelRouteDescriptor>;
   captured: CapturedRouteConfiguration;
   invoke: KnowledgePrivateModelInvoke;
+  profileDigest?: string;
 }
 
 interface AuthorizedPreparationSnapshot {
@@ -606,7 +607,10 @@ function assertRouteMatchesProfile(
     if (
       provider !== route.descriptor.provider ||
       modelName !== route.descriptor.model ||
-      configurationDigest !== route.captured.configurationDigest
+      configurationDigest !== route.captured.configurationDigest ||
+      (route.profileDigest !== undefined &&
+        route.profileDigest !==
+          digestJson("knowledge-authorized-model-profile-v1", profile as unknown as JsonValue))
     ) {
       throw new TypeError("Route profile mismatch");
     }
@@ -1110,9 +1114,14 @@ export class KnowledgePrivateModelRoute {
   constructor(
     token: symbol,
     descriptor: KnowledgePrivateModelRouteDescriptor,
-    invoke: KnowledgePrivateModelInvoke
+    invoke: KnowledgePrivateModelInvoke,
+    profileDigest?: string
   ) {
-    if (token !== ROUTE_TOKEN || typeof invoke !== "function") {
+    if (
+      token !== ROUTE_TOKEN ||
+      typeof invoke !== "function" ||
+      (profileDigest !== undefined && !/^[a-f0-9]{64}$/.test(profileDigest))
+    ) {
       throw new KnowledgeCompilerModelAdapterError("route_invalid");
     }
     const captured = captureRouteDescriptor(descriptor);
@@ -1122,6 +1131,7 @@ export class KnowledgePrivateModelRoute {
         descriptor: captured.descriptor,
         captured: captured.captured,
         invoke,
+        ...(profileDigest === undefined ? {} : { profileDigest }),
       })
     );
     Object.freeze(this);
@@ -1152,6 +1162,40 @@ export function bindKnowledgePrivateModelRoute(
   invoke: KnowledgePrivateModelInvoke
 ): KnowledgePrivateModelRoute {
   return new KnowledgePrivateModelRoute(ROUTE_TOKEN, descriptor, invoke);
+}
+
+/**
+ * Seals a private provider route to one complete secret-free pipeline profile.
+ *
+ * Concrete transports should prefer this binder whenever prompt behavior is
+ * derived from profile fields outside the model configuration. The adapter
+ * then rejects reuse with another output language, compiler, parser, or
+ * citation contract even when the provider/model pair is otherwise identical.
+ */
+export function bindKnowledgePrivateModelRouteToProfile(
+  profile: KnowledgeBundlePipelineProfile,
+  invoke: KnowledgePrivateModelInvoke
+): KnowledgePrivateModelRoute {
+  try {
+    const capturedProfile = captureProfile(profile);
+    const model = readOwnDataProperty(capturedProfile, "model");
+    const descriptor: KnowledgePrivateModelRouteDescriptor = {
+      provider: requireCanonicalText(readOwnDataProperty(model, "provider")),
+      model: requireCanonicalText(readOwnDataProperty(model, "model")),
+      configuration: readOwnDataProperty(model, "configuration") as JsonValue,
+    };
+    return new KnowledgePrivateModelRoute(
+      ROUTE_TOKEN,
+      descriptor,
+      invoke,
+      digestJson("knowledge-authorized-model-profile-v1", capturedProfile as unknown as JsonValue)
+    );
+  } catch (error) {
+    if (error instanceof KnowledgeCompilerModelAdapterError && error.code === "route_invalid") {
+      throw error;
+    }
+    throw new KnowledgeCompilerModelAdapterError("route_invalid");
+  }
 }
 
 /**

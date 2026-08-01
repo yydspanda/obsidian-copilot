@@ -543,6 +543,8 @@ describe("KnowledgePrivateModelRoute", () => {
         parsers: [createParserProfile()],
         outputLanguage: "source-language",
         supportedProviders: ["deepseek"],
+        promptContractIdentity: "e".repeat(64),
+        providerRouteIdentities: { deepseek: "f".repeat(64) },
       }
     ).resolve(createOwner());
 

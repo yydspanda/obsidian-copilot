@@ -3,6 +3,8 @@ export * from "@/knowledge/changeset/ChangeSetTransaction";
 export * from "@/knowledge/changeset/ChangeSetValidator";
 export * from "@/knowledge/changeset/TransactionStorage";
 export * from "@/knowledge/compiler/CompilerModelPort";
+export * from "@/knowledge/compiler/KnowledgeCompilerPromptEncoder";
+export * from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 export * from "@/knowledge/compiler/KnowledgeCompiler";
 export * from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 export * from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
