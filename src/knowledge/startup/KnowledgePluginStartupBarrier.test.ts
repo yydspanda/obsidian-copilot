@@ -2,6 +2,8 @@ import {
   KnowledgePluginStartupBarrier,
   type KnowledgePluginStartupBarrierDependencies,
   type KnowledgePluginBundleConfigLoadResult,
+  type KnowledgePluginRecoveryStartupPort,
+  type KnowledgePluginRecoveryStartupResult,
   type KnowledgePluginStartupState,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
@@ -28,6 +30,18 @@ function createConfiguredBundles(
   bundleIds: readonly string[] = ["personal"]
 ): KnowledgePluginBundleConfigLoadResult {
   return { kind: "configured", bundleIds };
+}
+
+/** Creates an observable one-shot recovery port. */
+function createRecovery(
+  start: (signal: AbortSignal) => Promise<KnowledgePluginRecoveryStartupResult> = async () => ({
+    kind: "observed_clear",
+  })
+): KnowledgePluginRecoveryStartupPort & {
+  start: jest.Mock<Promise<KnowledgePluginRecoveryStartupResult>, [AbortSignal]>;
+  close: jest.Mock<void, []>;
+} {
+  return { start: jest.fn(start), close: jest.fn() };
 }
 
 /** Creates default narrow dependencies and captures every Studio reset. */
@@ -111,6 +125,179 @@ describe("KnowledgePluginStartupBarrier", () => {
       status: "workflow_adapters_unavailable",
       bundleIds: ["personal"],
     });
+  });
+
+  it("runs one recovery generation after configured preflight and remains workflow unavailable", async () => {
+    const events: string[] = [];
+    const recovery = createRecovery(async (signal) => {
+      expect(signal.aborted).toBe(false);
+      events.push("recovery:start");
+      return { kind: "observed_clear" };
+    });
+    recovery.close.mockImplementation(() => events.push("recovery:close"));
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: async () => {
+          events.push("bundle:load");
+          return { kind: "configured", bundleIds: ["personal"], recovery };
+        },
+      },
+      studio: {
+        setUnavailable: (state) => events.push(`studio:${state.status}`),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(events).toEqual([
+      "studio:waiting_for_layout",
+      "studio:waiting_for_layout",
+      "bundle:load",
+      "recovery:start",
+      "recovery:close",
+      "studio:workflow_adapters_unavailable",
+    ]);
+    expect(recovery.start).toHaveBeenCalledTimes(1);
+    expect(recovery.close).toHaveBeenCalledTimes(1);
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "workflow_adapters_unavailable",
+      bundleIds: ["personal"],
+    });
+  });
+
+  it.each([
+    {
+      recoveryResult: {
+        kind: "attention_required" as const,
+        attentionKinds: [
+          "no_journal_decision_required",
+          "accepted_not_started",
+          "accepted_not_started",
+        ],
+      },
+      expected: {
+        generation: 1,
+        status: "recovery_attention_required",
+        bundleIds: ["personal"],
+        attentionKinds: ["accepted_not_started", "no_journal_decision_required"],
+      },
+    },
+    {
+      recoveryResult: {
+        kind: "blocked" as const,
+        attentionKinds: ["queue_recovery_required"],
+      },
+      expected: {
+        generation: 1,
+        status: "recovery_blocked",
+        bundleIds: ["personal"],
+        attentionKinds: ["queue_recovery_required"],
+      },
+    },
+    {
+      recoveryResult: {
+        kind: "unavailable" as const,
+        diagnosticCode: "runtime_state_invalid",
+      },
+      expected: {
+        generation: 1,
+        status: "recovery_unavailable",
+        bundleIds: ["personal"],
+        diagnosticCodes: ["runtime_state_invalid"],
+      },
+    },
+  ])(
+    "publishes sanitized recovery state for $recoveryResult.kind",
+    async ({ recoveryResult, expected }) => {
+      const recovery = createRecovery(async () => recoveryResult);
+      const { barrier } = createHarness({
+        bundleConfig: {
+          load: async () => ({ kind: "configured", bundleIds: ["personal"], recovery }),
+        },
+      });
+
+      await barrier.startAfterLayout();
+
+      expect(barrier.getState()).toEqual(expected);
+      expect(Object.isFrozen(barrier.getState())).toBe(true);
+      expect(JSON.stringify(barrier.getState())).not.toContain("private");
+      expect(recovery.close).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("rejects unrecognized recovery evidence instead of exposing or dropping it", async () => {
+    const rawAttention = "C:\\private\\vault";
+    const recovery = createRecovery(async () => ({
+      kind: "blocked",
+      attentionKinds: ["queue_recovery_required", rawAttention],
+    }));
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: async () => ({ kind: "configured", bundleIds: ["personal"], recovery }),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "recovery_unavailable",
+      bundleIds: ["personal"],
+      diagnosticCodes: ["recovery_result_invalid"],
+    });
+    expect(JSON.stringify(barrier.getState())).not.toContain(rawAttention);
+  });
+
+  it("sanitizes recovery failures without reclassifying strict Bundle configuration", async () => {
+    const recovery = createRecovery(async () => {
+      throw new Error("C:\\private\\vault and credential");
+    });
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: async () => ({ kind: "configured", bundleIds: ["personal"], recovery }),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "recovery_unavailable",
+      bundleIds: ["personal"],
+      diagnosticCodes: ["recovery_failed"],
+    });
+    expect(JSON.stringify(barrier.getState())).not.toContain("private");
+    expect(recovery.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes an in-flight recovery and suppresses its late result after cancellation", async () => {
+    const started = createDeferred<void>();
+    const recoveryReady = createDeferred<KnowledgePluginRecoveryStartupResult>();
+    let recoverySignal: AbortSignal | undefined;
+    const recovery = createRecovery(async (signal) => {
+      recoverySignal = signal;
+      started.resolve(undefined);
+      return recoveryReady.promise;
+    });
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: async () => ({ kind: "configured", bundleIds: ["personal"], recovery }),
+      },
+    });
+
+    const startup = barrier.startAfterLayout();
+    await started.promise;
+    barrier.cancel();
+
+    expect(recoverySignal?.aborted).toBe(true);
+    expect(recovery.close).toHaveBeenCalledTimes(1);
+    expect(barrier.getState()).toEqual({ generation: 2, status: "waiting_for_layout" });
+
+    recoveryReady.resolve({ kind: "observed_clear" });
+    await startup;
+    expect(barrier.getState()).toEqual({ generation: 2, status: "waiting_for_layout" });
+    expect(recovery.close).toHaveBeenCalledTimes(1);
   });
 
   it("stops before projects when the Runtime is unavailable or its check throws", async () => {

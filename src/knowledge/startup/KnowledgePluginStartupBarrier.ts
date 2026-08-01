@@ -5,6 +5,9 @@ export type KnowledgePluginStartupStatus =
   | "projects_unavailable"
   | "bundle_unconfigured"
   | "bundle_invalid"
+  | "recovery_unavailable"
+  | "recovery_attention_required"
+  | "recovery_blocked"
   | "workflow_adapters_unavailable";
 
 interface KnowledgePluginStartupStateBase {
@@ -23,6 +26,16 @@ export type KnowledgePluginStartupState =
   | (KnowledgePluginStartupStateBase & {
       status: "bundle_invalid";
       diagnosticCodes: readonly string[];
+    })
+  | (KnowledgePluginStartupStateBase & {
+      status: "recovery_unavailable";
+      bundleIds: readonly string[];
+      diagnosticCodes: readonly string[];
+    })
+  | (KnowledgePluginStartupStateBase & {
+      status: "recovery_attention_required" | "recovery_blocked";
+      bundleIds: readonly string[];
+      attentionKinds: readonly string[];
     })
   | (KnowledgePluginStartupStateBase & {
       status: "workflow_adapters_unavailable";
@@ -45,7 +58,28 @@ export interface KnowledgePluginProjectsPort {
 export type KnowledgePluginBundleConfigLoadResult =
   | { kind: "unconfigured" }
   | { kind: "invalid"; diagnosticCodes: readonly string[] }
-  | { kind: "configured"; bundleIds: readonly string[] };
+  | {
+      kind: "configured";
+      bundleIds: readonly string[];
+      recovery?: KnowledgePluginRecoveryStartupPort;
+    };
+
+/** Sanitized one-shot result returned by the production recovery boundary. */
+export type KnowledgePluginRecoveryStartupResult =
+  | { kind: "observed_clear" }
+  | {
+      kind: "attention_required" | "blocked";
+      attentionKinds: readonly string[];
+    }
+  | { kind: "unavailable"; diagnosticCode: string };
+
+/** One-shot recovery capability captured from the exact configured generation. */
+export interface KnowledgePluginRecoveryStartupPort {
+  /** Runs recovery observation/roll-forward without releasing or claiming Queue work. */
+  start(signal: AbortSignal): Promise<KnowledgePluginRecoveryStartupResult>;
+  /** Permanently closes this recovery generation and suppresses stale publication. */
+  close(): void;
+}
 
 /** Read-only boundary for validated project knowledge Bundle configuration. */
 export interface KnowledgePluginBundleConfigPort {
@@ -80,7 +114,27 @@ export type KnowledgePluginStartupStateListener = () => void;
 const BUNDLE_CONFIG_LOAD_FAILED = "bundle_config_load_failed";
 const BUNDLE_CONFIG_RESULT_INVALID = "bundle_config_result_invalid";
 const BUNDLE_CONFIG_INVALID = "bundle_config_invalid";
+const RECOVERY_FAILED = "recovery_failed";
+const RECOVERY_RESULT_INVALID = "recovery_result_invalid";
 const SAFE_DIAGNOSTIC_CODE_PATTERN = /^[a-z0-9][a-z0-9_.-]*$/;
+const SAFE_RECOVERY_DIAGNOSTIC_CODES = new Set([
+  "active_transaction_owner_unconfigured",
+  "input_invalid",
+  "recovery_failed",
+  "recovery_state_invalid",
+  "runtime_state_invalid",
+]);
+const SAFE_RECOVERY_ATTENTION_KINDS = new Set([
+  "accepted_apply_blocked",
+  "accepted_not_started",
+  "commit_finalizing",
+  "global_transaction_observed",
+  "no_journal_decision_required",
+  "queue_commit_pending_ack",
+  "queue_recovery_required",
+  "transaction_active",
+  "transaction_recovery_required",
+]);
 
 /**
  * Creates one frozen state with no raw error or untrusted configuration data.
@@ -89,11 +143,19 @@ const SAFE_DIAGNOSTIC_CODE_PATTERN = /^[a-z0-9][a-z0-9_.-]*$/;
  * @returns Immutable state observation
  */
 function freezeStartupState<T extends KnowledgePluginStartupState>(state: T): T {
-  if (state.status === "bundle_invalid") {
+  if (state.status === "bundle_invalid" || state.status === "recovery_unavailable") {
     Object.freeze(state.diagnosticCodes);
   }
-  if (state.status === "workflow_adapters_unavailable") {
+  if (
+    state.status === "recovery_unavailable" ||
+    state.status === "recovery_attention_required" ||
+    state.status === "recovery_blocked" ||
+    state.status === "workflow_adapters_unavailable"
+  ) {
     Object.freeze(state.bundleIds);
+  }
+  if (state.status === "recovery_attention_required" || state.status === "recovery_blocked") {
+    Object.freeze(state.attentionKinds);
   }
   return Object.freeze(state);
 }
@@ -104,13 +166,49 @@ function freezeStartupState<T extends KnowledgePluginStartupState>(state: T): T 
  * @param codes - Potentially repeated validation diagnostic codes
  * @returns Sorted immutable code collection
  */
-function sanitizeDiagnosticCodes(codes: readonly unknown[]): readonly string[] {
+function sanitizeDiagnosticCodes(
+  codes: readonly unknown[],
+  fallback: string = BUNDLE_CONFIG_INVALID
+): readonly string[] {
   const safeCodes = codes.filter(
     (code): code is string => typeof code === "string" && SAFE_DIAGNOSTIC_CODE_PATTERN.test(code)
   );
-  return Object.freeze(
-    Array.from(new Set(safeCodes.length > 0 ? safeCodes : [BUNDLE_CONFIG_INVALID])).sort()
-  );
+  return Object.freeze(Array.from(new Set(safeCodes.length > 0 ? safeCodes : [fallback])).sort());
+}
+
+/** Sanitizes recovery attention categories through the same closed text boundary. */
+function sanitizeAttentionKinds(kinds: readonly unknown[]): readonly string[] | undefined {
+  if (
+    kinds.length === 0 ||
+    kinds.some((kind) => typeof kind !== "string" || !SAFE_RECOVERY_ATTENTION_KINDS.has(kind))
+  ) {
+    return undefined;
+  }
+  return Object.freeze(Array.from(new Set(kinds as readonly string[])).sort());
+}
+
+/** Accepts only the fixed recovery composer diagnostic vocabulary. */
+function sanitizeRecoveryDiagnosticCode(code: unknown): string {
+  return typeof code === "string" && SAFE_RECOVERY_DIAGNOSTIC_CODES.has(code)
+    ? code
+    : RECOVERY_RESULT_INVALID;
+}
+
+/** Finds a callable data method without evaluating accessors on an injected object. */
+function hasCallableDataMethod(value: object, key: string): boolean {
+  try {
+    let current: object | null = value;
+    while (current) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor) {
+        return "value" in descriptor && typeof descriptor.value === "function";
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /**
@@ -134,15 +232,18 @@ function sanitizeBundleIds(bundleIds: unknown): readonly string[] | undefined {
 }
 
 /**
- * Coordinates only the plugin-level prerequisites that may be proven today.
+ * Coordinates plugin prerequisites and one exact recovery-only generation.
  *
- * This class deliberately never calls the startup recovery Gate, startup
- * release, Queue, model, watcher, or any workflow adapter. Even a valid Bundle
- * therefore ends in `workflow_adapters_unavailable`.
+ * Recovery is supplied as an opaque one-shot port only after strict Bundle and
+ * zero-network production preflight validation. The barrier never receives a
+ * startup release, Queue worker, model, watcher, no-journal action, or Wiki
+ * generation capability. Even observed-clear recovery therefore remains
+ * `workflow_adapters_unavailable`.
  */
 export class KnowledgePluginStartupBarrier {
   private generation = 0;
   private activeRun?: { generation: number; controller: AbortController };
+  private activeRecovery?: KnowledgePluginRecoveryStartupPort;
   private state: KnowledgePluginStartupState;
   private readonly listeners = new Set<KnowledgePluginStartupStateListener>();
 
@@ -180,6 +281,7 @@ export class KnowledgePluginStartupBarrier {
    */
   async startAfterLayout(): Promise<void> {
     this.activeRun?.controller.abort();
+    this.closeActiveRecovery();
     const generation = ++this.generation;
     const controller = new AbortController();
     this.activeRun = { generation, controller };
@@ -221,7 +323,7 @@ export class KnowledgePluginStartupBarrier {
       if (!this.isCurrent(generation, controller.signal)) {
         return;
       }
-      this.publishBundleResult(generation, bundleResult);
+      await this.publishBundleResult(generation, bundleResult, controller.signal);
     } finally {
       if (this.activeRun?.generation === generation) {
         this.activeRun = undefined;
@@ -236,10 +338,11 @@ export class KnowledgePluginStartupBarrier {
    * pre-layout waiting phase for a future explicit rerun.
    */
   cancel(): void {
-    if (!this.activeRun) {
+    if (!this.activeRun && !this.activeRecovery) {
       return;
     }
-    this.activeRun.controller.abort();
+    this.activeRun?.controller.abort();
+    this.closeActiveRecovery();
     const generation = ++this.generation;
     this.activeRun = undefined;
     this.publish(generation, freezeStartupState({ generation, status: "waiting_for_layout" }));
@@ -294,10 +397,11 @@ export class KnowledgePluginStartupBarrier {
    * @param generation - Generation owning the aggregate result
    * @param result - Safe project configuration aggregate
    */
-  private publishBundleResult(
+  private async publishBundleResult(
     generation: number,
-    result: KnowledgePluginBundleConfigLoadResult
-  ): void {
+    result: KnowledgePluginBundleConfigLoadResult,
+    signal: AbortSignal
+  ): Promise<void> {
     if (typeof result !== "object" || result === null || typeof result.kind !== "string") {
       this.publishInvalidBundle(generation, [BUNDLE_CONFIG_RESULT_INVALID]);
       return;
@@ -320,6 +424,15 @@ export class KnowledgePluginStartupBarrier {
         this.publishInvalidBundle(generation, [BUNDLE_CONFIG_RESULT_INVALID]);
         return;
       }
+      const recovery = this.readRecoveryPort(result);
+      if (recovery === null) {
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+        return;
+      }
+      if (recovery) {
+        await this.runRecovery(generation, signal, bundleIds, recovery);
+        return;
+      }
       this.publish(
         generation,
         freezeStartupState({
@@ -331,6 +444,134 @@ export class KnowledgePluginStartupBarrier {
       return;
     }
     this.publishInvalidBundle(generation, [BUNDLE_CONFIG_RESULT_INVALID]);
+  }
+
+  /** Reads an optional own data recovery port without invoking an accessor. */
+  private readRecoveryPort(
+    result: Extract<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
+  ): KnowledgePluginRecoveryStartupPort | undefined | null {
+    const descriptor = Object.getOwnPropertyDescriptor(result, "recovery");
+    if (!descriptor) {
+      return undefined;
+    }
+    const candidate: unknown = "value" in descriptor ? descriptor.value : undefined;
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      !hasCallableDataMethod(candidate, "start") ||
+      !hasCallableDataMethod(candidate, "close")
+    ) {
+      return null;
+    }
+    return candidate as KnowledgePluginRecoveryStartupPort;
+  }
+
+  /** Runs and closes one recovery generation before publishing its sanitized result. */
+  private async runRecovery(
+    generation: number,
+    signal: AbortSignal,
+    bundleIds: readonly string[],
+    recovery: KnowledgePluginRecoveryStartupPort
+  ): Promise<void> {
+    this.activeRecovery = recovery;
+    let result: KnowledgePluginRecoveryStartupResult;
+    try {
+      result = await recovery.start(signal);
+    } catch {
+      if (this.isCurrent(generation, signal)) {
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_FAILED);
+      }
+      return;
+    } finally {
+      if (this.activeRecovery === recovery) {
+        this.activeRecovery = undefined;
+        this.closeRecoverySafely(recovery);
+      }
+    }
+
+    if (!this.isCurrent(generation, signal)) {
+      return;
+    }
+    if (typeof result !== "object" || result === null || typeof result.kind !== "string") {
+      this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+      return;
+    }
+    if (result.kind === "observed_clear") {
+      this.publish(
+        generation,
+        freezeStartupState({
+          generation,
+          status: "workflow_adapters_unavailable",
+          bundleIds,
+        })
+      );
+      return;
+    }
+    if (result.kind === "unavailable") {
+      const diagnosticCode = sanitizeRecoveryDiagnosticCode(result.diagnosticCode);
+      this.publishRecoveryUnavailable(generation, bundleIds, diagnosticCode);
+      return;
+    }
+    if (result.kind === "attention_required" || result.kind === "blocked") {
+      if (!Array.isArray(result.attentionKinds)) {
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+        return;
+      }
+      const attentionKinds = sanitizeAttentionKinds(result.attentionKinds);
+      if (!attentionKinds) {
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+        return;
+      }
+      this.publish(
+        generation,
+        freezeStartupState({
+          generation,
+          status:
+            result.kind === "attention_required"
+              ? "recovery_attention_required"
+              : "recovery_blocked",
+          bundleIds,
+          attentionKinds,
+        })
+      );
+      return;
+    }
+    this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+  }
+
+  /** Publishes one fixed-code recovery failure without reclassifying Bundle configuration. */
+  private publishRecoveryUnavailable(
+    generation: number,
+    bundleIds: readonly string[],
+    diagnosticCode: string
+  ): void {
+    this.publish(
+      generation,
+      freezeStartupState({
+        generation,
+        status: "recovery_unavailable",
+        bundleIds,
+        diagnosticCodes: sanitizeDiagnosticCodes([diagnosticCode], RECOVERY_FAILED),
+      })
+    );
+  }
+
+  /** Closes the currently running recovery capability during replacement or cancellation. */
+  private closeActiveRecovery(): void {
+    const recovery = this.activeRecovery;
+    this.activeRecovery = undefined;
+    if (recovery) {
+      this.closeRecoverySafely(recovery);
+    }
+  }
+
+  /** Isolates recovery cleanup so fail-closed lifecycle state remains authoritative. */
+  private closeRecoverySafely(recovery: KnowledgePluginRecoveryStartupPort): void {
+    try {
+      recovery.close();
+    } catch {
+      // Recovery publication authority is already revoked by generation and signal checks.
+    }
   }
 
   /**

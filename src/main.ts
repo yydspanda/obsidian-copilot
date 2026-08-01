@@ -22,18 +22,21 @@ import { ProjectRegister } from "@/projects/projectRegister";
 import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/constants";
 import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
-import { ProjectKnowledgeBundleConfigSource } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
-import {
-  KnowledgeProductionPreflightComposer,
-  type KnowledgeProductionPreflightResult,
-} from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
+import {
+  KnowledgePluginProductionPreflightLifecycle,
+  type KnowledgePluginProductionPreflightAdmission,
+} from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import { KnowledgeProductionRecoveryComposer } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
+import { KnowledgePluginProductionRecoveryPort } from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
+import type { KnowledgeRuntimeStore } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { initializeKnowledgeRuntimeForCurrentGeneration } from "@/knowledge/startup/KnowledgeRuntimeFoundationInitializer";
 import {
   KnowledgePluginStartupBarrier,
   type KnowledgePluginBundleConfigLoadResult,
+  type KnowledgePluginRecoveryStartupPort,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 import { KnowledgeStudioStartupAvailabilityAdapter } from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
 import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
@@ -141,10 +144,17 @@ export default class CopilotPlugin extends Plugin {
   private lastSelectionSignature?: string;
   private webSelectionTracker?: WebSelectionTracker;
   private vaultDataManager?: VaultDataManager;
-  private knowledgeRuntime?: import("@/knowledge/runtime/KnowledgeRuntimeStore").KnowledgeRuntimeStore;
-  private knowledgeProductionPreflight?: KnowledgeProductionPreflightComposer;
+  private knowledgeRuntime?: KnowledgeRuntimeStore;
+  private knowledgeProductionRecovery?: KnowledgeProductionRecoveryComposer;
   private knowledgeProjectRecordsUnsubscriber?: () => void;
   private readonly knowledgeRendererFetchPort = captureKnowledgeRendererFetchPort();
+  private readonly knowledgeProductionPreflightLifecycle =
+    new KnowledgePluginProductionPreflightLifecycle({
+      getProjectRecords: () => getCachedProjectRecords(),
+      getSettings: () => getSettings(),
+      fetchPort: this.knowledgeRendererFetchPort,
+      createResources: () => createKnowledgeProductionPipelineResources(),
+    });
   private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
   private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
   private readonly knowledgeStudioStartupAvailability =
@@ -174,7 +184,7 @@ export default class CopilotPlugin extends Plugin {
     KeychainService.getInstance(this.app);
     await this.loadSettings();
     this.settingsUnsubscriber = subscribeToSettingsChange((prev, next) => {
-      this.closeKnowledgeProductionPreflight();
+      this.invalidateKnowledgeProductionGeneration();
       void (async () => {
         try {
           await persistSettings(next, (data) => this.saveData(data), prev);
@@ -213,7 +223,7 @@ export default class CopilotPlugin extends Plugin {
     // so stale scans cannot publish into the new plugin lifecycle.
     this.projectRegister = new ProjectRegister(this.app);
     this.knowledgeProjectRecordsUnsubscriber = subscribeToProjectRecords(() => {
-      this.closeKnowledgeProductionPreflight();
+      this.invalidateKnowledgeProductionGeneration();
     });
 
     // Initialize ProjectManager after the new project state owner is active.
@@ -417,11 +427,11 @@ export default class CopilotPlugin extends Plugin {
   /**
    * Creates the plugin-level fail-closed barrier over Runtime, Projects, and Bundle config.
    *
-   * The barrier intentionally has no ready delegate. Valid configuration still ends
-   * unavailable until recovery, compiler, watcher, and query adapters are composed.
+   * The barrier intentionally has no ready delegate. It composes recovery-only
+   * startup Gates, but still ends unavailable until release, worker, watcher,
+   * compiler, and query adapters are composed.
    */
   private initializeKnowledgeStartupBarrier(): KnowledgePluginStartupBarrier {
-    const bundleConfigSource = new ProjectKnowledgeBundleConfigSource();
     const barrier = new KnowledgePluginStartupBarrier({
       runtime: {
         isAvailable: () => !this.knowledgeLifecycleClosed && this.knowledgeRuntime !== undefined,
@@ -434,7 +444,7 @@ export default class CopilotPlugin extends Plugin {
         },
       },
       bundleConfig: {
-        load: async (signal) => this.loadKnowledgeBundleStartupConfig(bundleConfigSource, signal),
+        load: async (signal) => this.loadKnowledgeBundleStartupConfig(signal),
       },
       studio: {
         setUnavailable: (state) => {
@@ -451,86 +461,92 @@ export default class CopilotPlugin extends Plugin {
   /**
    * Loads and strictly validates every project-owned Bundle after project initialization.
    *
-   * @param source - Pure strict project Bundle configuration source
    * @param signal - Current startup generation cancellation
    * @returns Safe aggregate containing no raw invalid configuration
    */
   private async loadKnowledgeBundleStartupConfig(
-    source: ProjectKnowledgeBundleConfigSource,
     signal: AbortSignal
   ): Promise<KnowledgePluginBundleConfigLoadResult> {
     throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-    this.closeKnowledgeProductionPreflight();
-    const projectRecords = getCachedProjectRecords();
-    const result = source.load(
-      projectRecords.map(({ project }) => ({
-        id: project.id,
-        knowledgeBundle: project.knowledgeBundle,
-      }))
-    );
+    this.closeKnowledgeProductionRecovery();
+    const result = await this.knowledgeProductionPreflightLifecycle.load(signal);
     throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-
-    if (result.kind === "unconfigured") {
+    if (result.kind !== "configured") {
       return result;
     }
-    if (result.kind === "invalid") {
-      return {
-        kind: "invalid",
-        diagnosticCodes: result.diagnostics.map(({ code }) => code),
-      };
-    }
+    this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(result.admission);
+    const recovery = this.createKnowledgeProductionRecoveryPort(result.admission, signal);
+    return { kind: "configured", bundleIds: result.bundleIds, recovery };
+  }
 
-    const fetchPort = this.knowledgeRendererFetchPort;
-    if (!fetchPort) {
-      return {
-        kind: "invalid",
-        diagnosticCodes: ["production_preflight_route_dependency_invalid"],
-      };
+  /**
+   * Creates one one-shot recovery port over the exact preflight admission.
+   *
+   * The resulting Gate may only converge already-durable recovery evidence. It
+   * has no startup Release, watcher, worker, model, or new-transaction action.
+   *
+   * @param admission - Current generation's strict Bundle owners
+   * @param startupSignal - Outer startup generation cancellation
+   * @returns One-shot recovery capability consumed and closed by the startup barrier
+   */
+  private createKnowledgeProductionRecoveryPort(
+    admission: KnowledgePluginProductionPreflightAdmission,
+    startupSignal: AbortSignal
+  ): KnowledgePluginRecoveryStartupPort {
+    const runtime = this.knowledgeRuntime;
+    if (!runtime) {
+      throw new DOMException("The operation was aborted", "AbortError");
     }
-
-    const resources = createKnowledgeProductionPipelineResources();
-    const composer = new KnowledgeProductionPreflightComposer({
-      owners: result.bundles,
-      projects: projectRecords.map(({ project }) => ({
-        id: project.id,
-        projectModelKey: project.projectModelKey,
-        modelConfigs: project.modelConfigs,
-      })),
-      settings: getSettings(),
-      profileOptions: resources.profileOptions,
-      fetchPort,
+    const candidate = new KnowledgeProductionRecoveryComposer({
+      runtime,
+      vault: this.app.vault,
+      bundles: admission.owners.map(({ config }) => config),
     });
-    this.knowledgeProductionPreflight = composer;
-    const preflight = composer.preflight();
     try {
-      throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+      throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
+      this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
     } catch (error) {
-      this.closeKnowledgeProductionPreflight();
+      candidate.close();
       throw error;
     }
-    if (preflight.kind === "diagnostic") {
-      this.closeKnowledgeProductionPreflight();
-      return {
-        kind: "invalid",
-        diagnosticCodes: [this.toKnowledgeProductionPreflightDiagnostic(preflight)],
-      };
+    this.knowledgeProductionRecovery = candidate;
+    return new KnowledgePluginProductionRecoveryPort({
+      composer: candidate,
+      assertCurrent: () => this.assertCurrentKnowledgeRecovery(candidate, admission, runtime),
+      onClose: () => {
+        if (this.knowledgeProductionRecovery === candidate) {
+          this.knowledgeProductionRecovery = undefined;
+        }
+      },
+    });
+  }
+
+  /** Requires a recovery candidate to retain exact plugin and preflight ownership. */
+  private assertCurrentKnowledgeRecovery(
+    candidate: KnowledgeProductionRecoveryComposer,
+    admission: KnowledgePluginProductionPreflightAdmission,
+    runtime: KnowledgeRuntimeStore
+  ): void {
+    if (
+      this.knowledgeLifecycleClosed ||
+      this.knowledgeRuntime !== runtime ||
+      this.knowledgeProductionRecovery !== candidate
+    ) {
+      throw new DOMException("The operation was aborted", "AbortError");
     }
-
-    const bundleIds = result.bundles.map(({ config }) => config.id);
-    return { kind: "configured", bundleIds };
+    this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
   }
 
-  /** Converts one already sanitized preflight result into the startup diagnostic namespace. */
-  private toKnowledgeProductionPreflightDiagnostic(
-    result: Extract<KnowledgeProductionPreflightResult, { kind: "diagnostic" }>
-  ): string {
-    return `production_preflight_${result.code}`;
+  /** Synchronously invalidates the full preflight/recovery production generation. */
+  private invalidateKnowledgeProductionGeneration(): void {
+    this.closeKnowledgeProductionRecovery();
+    this.knowledgeProductionPreflightLifecycle.invalidate();
   }
 
-  /** Synchronously invalidates the current production preflight result generation. */
-  private closeKnowledgeProductionPreflight(): void {
-    this.knowledgeProductionPreflight?.close();
-    this.knowledgeProductionPreflight = undefined;
+  /** Synchronously closes the current recovery-only composer, if any. */
+  private closeKnowledgeProductionRecovery(): void {
+    this.knowledgeProductionRecovery?.close();
+    this.knowledgeProductionRecovery = undefined;
   }
 
   /**
@@ -565,7 +581,8 @@ export default class CopilotPlugin extends Plugin {
     // continuation can publish or initialize services during persistence flush.
     this.knowledgeLifecycleClosed = true;
     this.knowledgeRuntimeStartupGeneration += 1;
-    this.closeKnowledgeProductionPreflight();
+    this.closeKnowledgeProductionRecovery();
+    this.knowledgeProductionPreflightLifecycle.close();
     this.knowledgeLayoutCoordinator.close();
     this.knowledgeStudioSessionStore.dispose();
     this.knowledgeStudioPort.dispose();

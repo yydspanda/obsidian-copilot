@@ -24,11 +24,31 @@ export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): s
       return "No project has a Knowledge Bundle configuration. Add one to project.md before using Knowledge Studio.";
     case "bundle_invalid":
       return "A project Knowledge Bundle configuration is invalid or conflicts with another Bundle. Fix project.md and reload the plugin.";
+    case "recovery_unavailable":
+      return "Knowledge startup recovery could not be completed safely. New ingest work remains stopped and no unreviewed knowledge was generated.";
+    case "recovery_attention_required":
+      return "Knowledge startup found durable work that needs an explicit recovery decision. New ingest work remains stopped.";
+    case "recovery_blocked":
+      return "Knowledge startup is blocked by durable recovery state. New ingest work remains stopped to protect existing notes.";
     case "workflow_adapters_unavailable":
       return state.bundleIds.length === 1
-        ? "The project Knowledge Bundle is valid. Ingest, recovery, compiler, and query adapters remain unavailable until the complete Golden Flow is connected."
-        : "The project Knowledge Bundles are valid. Bundle selection, ingest, recovery, compiler, and query adapters remain unavailable until the complete Golden Flow is connected.";
+        ? "The project Knowledge Bundle is valid and startup recovery is clear. Queue release, ingest, watcher, compiler worker, and query adapters remain unavailable until the complete Golden Flow is connected."
+        : "The project Knowledge Bundles are valid and startup recovery is clear. Bundle selection, Queue release, ingest, watcher, compiler workers, and query adapters remain unavailable until the complete Golden Flow is connected.";
   }
+}
+
+/** Selects one exact configured Bundle for an unavailable recovery/workflow state. */
+function selectUnavailableBundleId(state: KnowledgePluginStartupState): string | undefined {
+  if (
+    (state.status === "recovery_unavailable" ||
+      state.status === "recovery_attention_required" ||
+      state.status === "recovery_blocked" ||
+      state.status === "workflow_adapters_unavailable") &&
+    state.bundleIds.length === 1
+  ) {
+    return state.bundleIds[0];
+  }
+  return undefined;
 }
 
 /**
@@ -56,11 +76,6 @@ export class KnowledgeStudioStartupAvailabilityAdapter
   setUnavailable(state: KnowledgePluginStartupState): void {
     const notice = getKnowledgeStartupNotice(state);
     this.port.replaceDelegate(new UnavailableKnowledgeStudioPort(notice));
-    this.sessions.replaceSelection(
-      state.status === "workflow_adapters_unavailable" && state.bundleIds.length === 1
-        ? state.bundleIds[0]
-        : undefined,
-      notice
-    );
+    this.sessions.replaceSelection(selectUnavailableBundleId(state), notice);
   }
 }

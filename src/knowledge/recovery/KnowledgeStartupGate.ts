@@ -600,27 +600,37 @@ export class KnowledgeStartupGate {
    * Produces one stable, non-authoritative recovery observation for a Bundle.
    *
    * @param bundleValue - Current strictly configured Bundle boundary
+   * @param assertCurrent - Optional per-run lifecycle proof checked between durable phases
    * @returns Stable recovery observation; no Queue resume occurs
    */
-  async run(bundleValue: unknown): Promise<KnowledgeStartupGateResult> {
+  async run(
+    bundleValue: unknown,
+    assertCurrent: () => void = () => undefined
+  ): Promise<KnowledgeStartupGateResult> {
+    assertCurrent();
     const bundle = parseStartupBundle(bundleValue);
     let observedQueue = parseStartupQueue(
       bundle.id,
       await this.dependencies.queue.recoverOnStartup(bundle.id)
     );
+    assertCurrent();
     let observedRuntimeRevision: number | undefined;
 
     for (let pass = 0; pass < this.maxStartupPasses; pass += 1) {
+      assertCurrent();
       const applyCommit = await this.reconcileApplyCommit(bundle);
+      assertCurrent();
       if (applyCommit.kind === "committed" || applyCommit.kind === "finalized_pending_ack") {
         observedQueue = observeQueueSnapshot(bundle.id, observedQueue, applyCommit.queueSnapshot);
       }
       const reviews = await this.dependencies.reviews.reconcile(bundle.id);
+      assertCurrent();
       this.assertReviewResult(bundle.id, reviews);
       const recovery = await this.dependencies.accepted.loadSnapshot(
         bundle.id,
         reviews.reviewRevision
       );
+      assertCurrent();
       assertRecoverySnapshotResult(bundle.id, reviews.reviewRevision, recovery);
       const runtimeRevision =
         recovery.kind === "loaded" ? recovery.snapshot.runtimeRevision : recovery.runtimeRevision;

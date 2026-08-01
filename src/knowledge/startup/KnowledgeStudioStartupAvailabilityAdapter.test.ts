@@ -72,6 +72,46 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
     expect(notice).toContain("configuration is invalid");
   });
 
+  it.each([
+    {
+      state: createState({
+        status: "recovery_unavailable",
+        bundleIds: Object.freeze(["personal"]),
+        diagnosticCodes: Object.freeze(["private-diagnostic-code"]),
+      }),
+      expectedNotice: "could not be completed safely",
+    },
+    {
+      state: createState({
+        status: "recovery_attention_required",
+        bundleIds: Object.freeze(["personal"]),
+        attentionKinds: Object.freeze(["accepted_not_started"]),
+      }),
+      expectedNotice: "explicit recovery decision",
+    },
+    {
+      state: createState({
+        status: "recovery_blocked",
+        bundleIds: Object.freeze(["personal"]),
+        attentionKinds: Object.freeze(["queue_recovery_required"]),
+      }),
+      expectedNotice: "protect existing notes",
+    },
+  ])("selects an exact unavailable Bundle for $state.status", async ({ state, expectedNotice }) => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const sessions = new KnowledgeStudioSessionStore("Waiting.");
+    const adapter = new KnowledgeStudioStartupAvailabilityAdapter(port, sessions);
+
+    adapter.setUnavailable(state);
+
+    const session = sessions.getState();
+    expect(session.bundleId).toBe("personal");
+    expect(session.unavailableNotice).toContain(expectedNotice);
+    expect(JSON.stringify(session)).not.toContain("private-diagnostic-code");
+    const snapshot = await port.load("personal", new AbortController().signal);
+    expect(snapshot).toMatchObject({ availability: "adapter_unavailable" });
+  });
+
   it("publishes the delegate before session observers receive an exact Bundle", () => {
     const calls: string[] = [];
     const port = {
