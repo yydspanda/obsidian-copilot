@@ -5,21 +5,22 @@ import type {
   BindSourceInputObservationRequest,
   SourceInputRevisionAllocation,
 } from "@/knowledge/ingest/InputRevisionAllocator";
+import {
+  KnowledgeSourceWatchPlan,
+  type WatchedKnowledgeSource,
+} from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import type { CommitSourceInputObservationResult } from "@/knowledge/ingest/SourceObservationHandoff";
-import { createSourceContentHash } from "@/knowledge/model/fingerprint";
+import { createSourceContentHash, isExactUint8Array } from "@/knowledge/model/fingerprint";
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_STAGE_ATTEMPTS = 2;
-
-/** One already-registered source that the watcher may observe. */
-export interface WatchedKnowledgeSource {
-  bundleId: string;
-  sourceId: string;
-  sourcePath: string;
-  sourceKey: string;
-  pipelineFingerprint: string;
-}
+// Capturing this intrinsic accessor is intentional; Reflect.apply supplies the candidate receiver.
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength"
+)?.get;
 
 /** Narrow durable hand-off capability available to the Vault watcher. */
 export interface VaultSourceObservationHandoffPort {
@@ -89,11 +90,11 @@ export interface ObsidianVaultSourceWatcherOptions {
   maxCommitAttempts?: number;
 }
 
-/** Reports invalid or conflicting immutable watcher input. */
+/** Reports a missing Bundle handoff or a reader owned by another App/Vault. */
 export class VaultSourceWatchPlanError extends TypeError {
-  /** Creates a sanitized invalid-plan error. */
+  /** Creates a sanitized watcher-dependency error. */
   constructor() {
-    super("The knowledge source watch plan is invalid");
+    super("The knowledge source watcher dependencies are invalid");
     this.name = "VaultSourceWatchPlanError";
   }
 }
@@ -160,11 +161,6 @@ interface SourceCaptureWork extends CaptureAuthority {
   handoff: VaultSourceObservationHandoffPort;
 }
 
-interface PreparedWatchPlan {
-  sources: readonly ImmutableWatchedKnowledgeSource[];
-  sourcesByPathKey: ReadonlyMap<string, readonly ImmutableWatchedKnowledgeSource[]>;
-}
-
 /**
  * Creates an AbortError without depending on a particular renderer Window.
  *
@@ -204,32 +200,28 @@ function requireAttemptCount(value: number): number {
  * Tests whether an unknown adapter payload is an ArrayBuffer in any realm.
  *
  * @param value - Unknown adapter result
- * @returns Whether the value exposes the ArrayBuffer intrinsic tag
+ * @returns Whether the value has the ArrayBuffer internal slot
  */
 function isArrayBuffer(value: unknown): value is ArrayBuffer {
-  return Object.prototype.toString.call(value) === "[object ArrayBuffer]";
+  if (typeof value !== "object" || value === null || !ARRAY_BUFFER_BYTE_LENGTH_GETTER) {
+    return false;
+  }
+  try {
+    Reflect.apply(ARRAY_BUFFER_BYTE_LENGTH_GETTER, value, []);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Tests whether an unknown value is a Uint8Array in any renderer realm.
+ * Validates a capture identity returned by an injected factory.
  *
- * @param value - Unknown exact-byte reader result
- * @returns Whether the value is a Uint8Array view
+ * @param value - Unknown-at-runtime capture identity
  */
-function isUint8Array(value: unknown): value is Uint8Array {
-  return (
-    ArrayBuffer.isView(value) && Object.prototype.toString.call(value) === "[object Uint8Array]"
-  );
-}
-
-/**
- * Validates a non-empty opaque identity without normalizing it.
- *
- * @param value - Identity supplied by a durable upstream adapter
- */
-function assertIdentifier(value: string): void {
+function assertCaptureIdentifier(value: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new VaultSourceWatchPlanError();
+    throw new VaultSourceObservationContractError();
   }
 }
 
@@ -246,97 +238,105 @@ function createBundleSourceKey(
 }
 
 /**
- * Produces the stable key for one Bundle/Windows-path pair.
+ * Reads required own data properties without invoking injected accessors.
  *
- * @param source - Registered source identity and Windows path key
- * @returns Collision key independent of path spelling
+ * @param value - Unknown success payload
+ * @param keys - Required own data-property names
+ * @returns Detached one-read field snapshot, or undefined for malformed input
  */
-function createBundlePathKey(
-  source: Pick<WatchedKnowledgeSource, "bundleId" | "sourceKey">
-): string {
-  return `${source.bundleId.length}:${source.bundleId}${source.sourceKey}`;
+function snapshotRequiredDataProperties(
+  value: unknown,
+  keys: readonly string[]
+): Readonly<Record<string, unknown>> | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const snapshot: Record<string, unknown> = {};
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      return undefined;
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
 }
 
 /**
- * Validates, freezes, sorts, and deduplicates one immutable watch plan.
+ * Resolves one callable data method once without invoking accessors.
  *
- * The same physical path may intentionally feed multiple Bundles. Within one
- * Bundle, however, both source id and Windows path ownership must be unique.
- *
- * @param sources - Already-registered sources with immutable pipeline identity
- * @returns Detached plan and Windows path lookup
+ * @param value - Unknown hand-off capability
+ * @param key - Required method name
+ * @returns Captured function and receiver, or undefined when malformed
  */
-function prepareWatchPlan(sources: readonly WatchedKnowledgeSource[]): PreparedWatchPlan {
-  const bySource = new Map<string, ImmutableWatchedKnowledgeSource>();
-  const byBundlePath = new Map<string, ImmutableWatchedKnowledgeSource>();
-
-  for (const input of sources) {
-    assertIdentifier(input.bundleId);
-    assertIdentifier(input.sourceId);
-    const parsedPath = parseVaultPath(input.sourcePath);
-    if (
-      !parsedPath.ok ||
-      input.sourceKey !== toWindowsPathKey(parsedPath.path) ||
-      !SHA256_PATTERN.test(input.pipelineFingerprint)
-    ) {
-      throw new VaultSourceWatchPlanError();
-    }
-
-    const source = Object.freeze({
-      bundleId: input.bundleId,
-      sourceId: input.sourceId,
-      sourcePath: parsedPath.path,
-      sourceKey: input.sourceKey,
-      pipelineFingerprint: input.pipelineFingerprint,
-    });
-    const sourceIdentityKey = createBundleSourceKey(source);
-    const pathIdentityKey = createBundlePathKey(source);
-    const existingSource = bySource.get(sourceIdentityKey);
-    const existingPath = byBundlePath.get(pathIdentityKey);
-
-    if (
-      (existingSource &&
-        (existingSource.sourceKey !== source.sourceKey ||
-          existingSource.sourcePath !== source.sourcePath ||
-          existingSource.pipelineFingerprint !== source.pipelineFingerprint)) ||
-      (existingPath &&
-        (existingPath.sourceId !== source.sourceId ||
-          existingPath.sourcePath !== source.sourcePath ||
-          existingPath.pipelineFingerprint !== source.pipelineFingerprint))
-    ) {
-      throw new VaultSourceWatchPlanError();
-    }
-
-    bySource.set(sourceIdentityKey, existingSource ?? source);
-    byBundlePath.set(pathIdentityKey, existingPath ?? source);
+function snapshotDataMethod(
+  value: unknown,
+  key: "allocate" | "commit"
+): { receiver: object; method: (...args: never[]) => unknown } | undefined {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return undefined;
   }
-
-  const preparedSources = [...bySource.values()].sort((left, right) => {
-    if (left.sourceKey < right.sourceKey) return -1;
-    if (left.sourceKey > right.sourceKey) return 1;
-    if (left.bundleId < right.bundleId) return -1;
-    if (left.bundleId > right.bundleId) return 1;
-    if (left.sourceId < right.sourceId) return -1;
-    if (left.sourceId > right.sourceId) return 1;
-    return 0;
-  });
-  const sourcesByPathKey = new Map<string, ImmutableWatchedKnowledgeSource[]>();
-  for (const source of preparedSources) {
-    const matching = sourcesByPathKey.get(source.sourceKey);
-    if (matching) {
-      matching.push(source);
-    } else {
-      sourcesByPathKey.set(source.sourceKey, [source]);
+  const receiver = value;
+  let owner: object | null = receiver;
+  const visited = new Set<object>();
+  while (owner) {
+    if (owner === Object.prototype || visited.has(owner)) {
+      return undefined;
     }
+    visited.add(owner);
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+    if (descriptor) {
+      if (!("value" in descriptor) || typeof descriptor.value !== "function") {
+        return undefined;
+      }
+      return { receiver, method: descriptor.value as (...args: never[]) => unknown };
+    }
+    owner = Object.getPrototypeOf(owner) as object | null;
   }
-  for (const matching of sourcesByPathKey.values()) {
-    Object.freeze(matching);
-  }
+  return undefined;
+}
 
-  return {
-    sources: Object.freeze(preparedSources),
-    sourcesByPathKey,
-  };
+/**
+ * Captures validated per-Bundle hand-off methods at watcher installation time.
+ *
+ * @param handoffs - Untrusted-at-runtime Bundle capability map
+ * @returns Detached map whose functions cannot be swapped after installation
+ */
+function snapshotHandoffPorts(
+  handoffs: ReadonlyMap<string, VaultSourceObservationHandoffPort>
+): ReadonlyMap<string, VaultSourceObservationHandoffPort> {
+  try {
+    const snapshot = new Map<string, VaultSourceObservationHandoffPort>();
+    for (const [bundleId, handoff] of handoffs) {
+      if (typeof bundleId !== "string" || bundleId.length === 0 || snapshot.has(bundleId)) {
+        throw new VaultSourceWatchPlanError();
+      }
+      const allocate = snapshotDataMethod(handoff, "allocate");
+      const commit = snapshotDataMethod(handoff, "commit");
+      if (!allocate || !commit) {
+        throw new VaultSourceWatchPlanError();
+      }
+      snapshot.set(
+        bundleId,
+        Object.freeze({
+          allocate: (request: AllocateSourceInputRevisionRequest) =>
+            Reflect.apply(allocate.method, allocate.receiver, [
+              request,
+            ]) as Promise<SourceInputRevisionAllocation>,
+          commit: (request: BindSourceInputObservationRequest) =>
+            Reflect.apply(commit.method, commit.receiver, [
+              request,
+            ]) as Promise<CommitSourceInputObservationResult>,
+        })
+      );
+    }
+    return snapshot;
+  } catch (error) {
+    if (error instanceof VaultSourceWatchPlanError) {
+      throw error;
+    }
+    throw new VaultSourceWatchPlanError();
+  }
 }
 
 /**
@@ -350,23 +350,28 @@ function verifySourceArtifact(
   artifact: ExactSourceArtifact,
   capturedPath: string
 ): ExactSourceArtifact {
+  const snapshot = snapshotRequiredDataProperties(artifact, [
+    "sourcePath",
+    "bytes",
+    "sourceContentHash",
+  ]);
   if (
-    typeof artifact !== "object" ||
-    artifact === null ||
-    artifact.sourcePath !== capturedPath ||
-    !isUint8Array(artifact.bytes)
+    !snapshot ||
+    snapshot.sourcePath !== capturedPath ||
+    !isExactUint8Array(snapshot.bytes) ||
+    typeof snapshot.sourceContentHash !== "string"
   ) {
     throw new VaultSourceObservationContractError();
   }
-  const bytes = artifact.bytes.slice();
+  const bytes = new Uint8Array(snapshot.bytes);
   const sourceContentHash = createSourceContentHash(bytes);
   if (
-    !SHA256_PATTERN.test(artifact.sourceContentHash) ||
-    artifact.sourceContentHash !== sourceContentHash
+    !SHA256_PATTERN.test(snapshot.sourceContentHash) ||
+    snapshot.sourceContentHash !== sourceContentHash
   ) {
     throw new VaultSourceObservationContractError();
   }
-  return { sourcePath: capturedPath, bytes, sourceContentHash };
+  return Object.freeze({ sourcePath: capturedPath, bytes, sourceContentHash });
 }
 
 /**
@@ -380,25 +385,31 @@ function verifyAllocation(
   allocation: SourceInputRevisionAllocation,
   work: SourceCaptureWork
 ): SourceInputRevisionAllocation {
+  const snapshot = snapshotRequiredDataProperties(allocation, [
+    "bundleId",
+    "sourceId",
+    "captureId",
+    "inputRevision",
+    "observationToken",
+  ]);
   if (
-    typeof allocation !== "object" ||
-    allocation === null ||
-    allocation.bundleId !== work.source.bundleId ||
-    allocation.sourceId !== work.source.sourceId ||
-    allocation.captureId !== work.captureId ||
-    !Number.isSafeInteger(allocation.inputRevision) ||
-    allocation.inputRevision < 1 ||
-    typeof allocation.observationToken !== "string" ||
-    allocation.observationToken.trim().length === 0
+    !snapshot ||
+    snapshot.bundleId !== work.source.bundleId ||
+    snapshot.sourceId !== work.source.sourceId ||
+    snapshot.captureId !== work.captureId ||
+    !Number.isSafeInteger(snapshot.inputRevision) ||
+    (snapshot.inputRevision as number) < 1 ||
+    typeof snapshot.observationToken !== "string" ||
+    snapshot.observationToken.trim().length === 0
   ) {
     throw new VaultSourceObservationContractError();
   }
   return Object.freeze({
-    bundleId: allocation.bundleId,
-    sourceId: allocation.sourceId,
-    captureId: allocation.captureId,
-    inputRevision: allocation.inputRevision,
-    observationToken: allocation.observationToken,
+    bundleId: snapshot.bundleId,
+    sourceId: snapshot.sourceId,
+    captureId: snapshot.captureId,
+    inputRevision: snapshot.inputRevision as number,
+    observationToken: snapshot.observationToken,
   });
 }
 
@@ -417,14 +428,26 @@ function verifySettlement(
   allocation: SourceInputRevisionAllocation,
   sourceContentHash: string
 ): CommitSourceInputObservationResult {
-  if (typeof settlement !== "object" || settlement === null) {
+  const kindSnapshot = snapshotRequiredDataProperties(settlement, ["kind"]);
+  if (!kindSnapshot || typeof kindSnapshot.kind !== "string") {
     throw new VaultSourceObservationContractError();
   }
-  if (settlement.kind === "committed") {
-    const { observation } = settlement;
+  if (kindSnapshot.kind === "committed") {
+    const committed = snapshotRequiredDataProperties(settlement, ["observation", "queueRevision"]);
+    const observation = committed
+      ? snapshotRequiredDataProperties(committed.observation, [
+          "bundleId",
+          "sourceId",
+          "captureId",
+          "inputRevision",
+          "observationToken",
+          "sourceContentHash",
+          "pipelineFingerprint",
+        ])
+      : undefined;
     if (
-      typeof observation !== "object" ||
-      observation === null ||
+      !committed ||
+      !observation ||
       observation.bundleId !== work.source.bundleId ||
       observation.sourceId !== work.source.sourceId ||
       observation.captureId !== work.captureId ||
@@ -432,25 +455,52 @@ function verifySettlement(
       observation.observationToken !== allocation.observationToken ||
       observation.sourceContentHash !== sourceContentHash ||
       observation.pipelineFingerprint !== work.source.pipelineFingerprint ||
-      !Number.isSafeInteger(settlement.queueRevision) ||
-      settlement.queueRevision < 1
+      !Number.isSafeInteger(committed.queueRevision) ||
+      (committed.queueRevision as number) < 1
     ) {
       throw new VaultSourceObservationContractError();
     }
-    return settlement;
+    return Object.freeze({
+      kind: "committed",
+      observation: Object.freeze({
+        bundleId: observation.bundleId,
+        sourceId: observation.sourceId,
+        captureId: observation.captureId,
+        inputRevision: observation.inputRevision,
+        observationToken: observation.observationToken,
+        sourceContentHash: observation.sourceContentHash,
+        pipelineFingerprint: observation.pipelineFingerprint,
+      }),
+      queueRevision: committed.queueRevision as number,
+    });
   }
+  const superseded = snapshotRequiredDataProperties(settlement, [
+    "bundleId",
+    "sourceId",
+    "captureId",
+    "inputRevision",
+    "supersededByInputRevision",
+  ]);
   if (
-    settlement.kind !== "superseded" ||
-    settlement.bundleId !== work.source.bundleId ||
-    settlement.sourceId !== work.source.sourceId ||
-    settlement.captureId !== work.captureId ||
-    settlement.inputRevision !== allocation.inputRevision ||
-    !Number.isSafeInteger(settlement.supersededByInputRevision) ||
-    settlement.supersededByInputRevision <= allocation.inputRevision
+    kindSnapshot.kind !== "superseded" ||
+    !superseded ||
+    superseded.bundleId !== work.source.bundleId ||
+    superseded.sourceId !== work.source.sourceId ||
+    superseded.captureId !== work.captureId ||
+    superseded.inputRevision !== allocation.inputRevision ||
+    !Number.isSafeInteger(superseded.supersededByInputRevision) ||
+    (superseded.supersededByInputRevision as number) <= allocation.inputRevision
   ) {
     throw new VaultSourceObservationContractError();
   }
-  return settlement;
+  return Object.freeze({
+    kind: "superseded",
+    bundleId: superseded.bundleId,
+    sourceId: superseded.sourceId,
+    captureId: superseded.captureId,
+    inputRevision: superseded.inputRevision,
+    supersededByInputRevision: superseded.supersededByInputRevision as number,
+  });
 }
 
 /**
@@ -501,7 +551,12 @@ export class ObsidianExactSourceArtifactReader {
       throw new SourceArtifactAdapterPayloadError();
     }
 
-    const bytes = new Uint8Array(payload).slice();
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(new Uint8Array(payload));
+    } catch {
+      throw new SourceArtifactAdapterPayloadError();
+    }
     return {
       sourcePath: parsed.path,
       bytes,
@@ -551,7 +606,7 @@ export class ObsidianVaultSourceWatcher {
   private readonly maxAllocateAttempts: number;
   private readonly maxReadAttempts: number;
   private readonly maxCommitAttempts: number;
-  private watchPlan: PreparedWatchPlan;
+  private watchPlan: KnowledgeSourceWatchPlan;
   private lifecycleGeneration = 0;
   private watchPlanGeneration = 1;
   private started = false;
@@ -566,22 +621,23 @@ export class ObsidianVaultSourceWatcher {
    * Creates one exact App/Vault watcher over an immutable registered-source plan.
    *
    * @param app - Exact plugin lifecycle owner
-   * @param sources - Registered source identities and precomputed pipeline hashes
+   * @param plan - Opaque plan built from validated Bundle and Manifest authority
    * @param handoffs - Per-Bundle durable hand-off capabilities
    * @param options - Retry, reader, id, and notification seams
    */
   constructor(
     app: App,
-    sources: readonly WatchedKnowledgeSource[],
+    plan: KnowledgeSourceWatchPlan,
     handoffs: ReadonlyMap<string, VaultSourceObservationHandoffPort>,
     options: ObsidianVaultSourceWatcherOptions = {}
   ) {
+    KnowledgeSourceWatchPlan.assert(plan);
     this.app = app;
     this.vault = app.vault;
-    this.watchPlan = prepareWatchPlan(sources);
-    this.handoffs = new Map(handoffs);
-    for (const source of this.watchPlan.sources) {
-      if (!this.handoffs.has(source.bundleId)) {
+    this.watchPlan = plan;
+    this.handoffs = snapshotHandoffPorts(handoffs);
+    for (const authority of this.watchPlan.getBundleAuthorities()) {
+      if (!this.handoffs.get(authority.bundleId)) {
         throw new VaultSourceWatchPlanError();
       }
     }
@@ -639,20 +695,21 @@ export class ObsidianVaultSourceWatcher {
    * Invalidates old source authority synchronously and installs a new immutable plan.
    *
    * Existing asynchronous captures may finish their current adapter operation,
-   * but generation checks prevent their next read/commit/publication step.
+   * including an already-started commit. Generation checks prevent their next
+   * read/commit stage and suppress stale notifications after that call returns.
    *
-   * @param sources - Complete replacement registered-source plan
+   * @param plan - Complete opaque replacement watch plan
    */
-  replaceWatchPlan(sources: readonly WatchedKnowledgeSource[]): void {
+  replaceWatchPlan(plan: KnowledgeSourceWatchPlan): void {
     this.assertOpen();
-    const replacement = prepareWatchPlan(sources);
-    for (const source of replacement.sources) {
-      if (!this.handoffs.has(source.bundleId)) {
+    KnowledgeSourceWatchPlan.assert(plan);
+    for (const authority of plan.getBundleAuthorities()) {
+      if (!this.handoffs.get(authority.bundleId)) {
         throw new VaultSourceWatchPlanError();
       }
     }
     this.watchPlanGeneration += 1;
-    this.watchPlan = replacement;
+    this.watchPlan = plan;
     this.quarantinedSourceKeys.clear();
     this.sourceGenerations.clear();
     if (this.started) {
@@ -667,16 +724,37 @@ export class ObsidianVaultSourceWatcher {
    */
   scan(): number {
     this.assertActive();
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const watchPlanGeneration = this.watchPlanGeneration;
+    const watchPlan = this.watchPlan;
     const observedPathKeys = new Set<string>();
     let scheduled = 0;
     for (const file of this.vault.getFiles()) {
+      if (
+        lifecycleGeneration !== this.lifecycleGeneration ||
+        watchPlanGeneration !== this.watchPlanGeneration
+      ) {
+        return scheduled;
+      }
       const parsed = parseVaultPath(file.path);
       if (parsed.ok) {
         observedPathKeys.add(toWindowsPathKey(parsed.path));
       }
       scheduled += this.scheduleFile(file, "initial_scan");
     }
-    for (const source of this.watchPlan.sources) {
+    if (
+      lifecycleGeneration !== this.lifecycleGeneration ||
+      watchPlanGeneration !== this.watchPlanGeneration
+    ) {
+      return scheduled;
+    }
+    for (const source of watchPlan.getSources()) {
+      if (
+        lifecycleGeneration !== this.lifecycleGeneration ||
+        watchPlanGeneration !== this.watchPlanGeneration
+      ) {
+        return scheduled;
+      }
       if (!observedPathKeys.has(source.sourceKey)) {
         this.emit({
           kind: "source_missing",
@@ -703,8 +781,9 @@ export class ObsidianVaultSourceWatcher {
   /**
    * Synchronously invalidates authority and removes only this lifecycle's EventRefs.
    *
-   * In-flight adapter calls cannot be cancelled, but after returning they may
-   * not read again, commit, or publish a notification.
+   * In-flight adapter calls cannot be cancelled, including an already-started
+   * commit. After returning they may not start a later read/commit stage or
+   * publish a stale notification.
    */
   close(): void {
     if (this.closed) {
@@ -753,7 +832,10 @@ export class ObsidianVaultSourceWatcher {
       return 0;
     }
     const capturedPath = parsed.path;
-    const matching = this.watchPlan.sourcesByPathKey.get(toWindowsPathKey(capturedPath)) ?? [];
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const watchPlanGeneration = this.watchPlanGeneration;
+    const watchPlan = this.watchPlan;
+    const matching = watchPlan.getSourcesForPathKey(toWindowsPathKey(capturedPath));
     let scheduled = 0;
 
     for (const source of matching) {
@@ -762,11 +844,14 @@ export class ObsidianVaultSourceWatcher {
         continue;
       }
       const authority: CaptureAuthority = Object.freeze({
-        lifecycleGeneration: this.lifecycleGeneration,
-        watchPlanGeneration: this.watchPlanGeneration,
+        lifecycleGeneration,
+        watchPlanGeneration,
         sourceAuthorityKey,
         sourceGeneration: this.sourceGenerations.get(sourceAuthorityKey) ?? 0,
       });
+      if (!this.isAuthorityCurrent(authority)) {
+        continue;
+      }
       const handoff = this.handoffs.get(source.bundleId);
       let captureId: string;
       try {
@@ -774,7 +859,7 @@ export class ObsidianVaultSourceWatcher {
           throw new VaultSourceWatchPlanError();
         }
         captureId = this.captureIdFactory();
-        assertIdentifier(captureId);
+        assertCaptureIdentifier(captureId);
         if (this.usedCaptureIds.has(captureId)) {
           throw new VaultSourceObservationContractError();
         }
@@ -865,15 +950,16 @@ export class ObsidianVaultSourceWatcher {
   private async allocate(
     work: SourceCaptureWork
   ): Promise<SourceInputRevisionAllocation | undefined> {
+    const request = Object.freeze({
+      bundleId: work.source.bundleId,
+      sourceId: work.source.sourceId,
+      captureId: work.captureId,
+    });
     let lastError: unknown;
     for (let attempt = 0; attempt < this.maxAllocateAttempts; attempt += 1) {
       if (!this.isAuthorityCurrent(work)) return undefined;
       try {
-        const allocation = await work.handoff.allocate({
-          bundleId: work.source.bundleId,
-          sourceId: work.source.sourceId,
-          captureId: work.captureId,
-        });
+        const allocation = await work.handoff.allocate(request);
         if (!this.isAuthorityCurrent(work)) return undefined;
         return verifyAllocation(allocation, work);
       } catch (error) {
@@ -957,12 +1043,15 @@ export class ObsidianVaultSourceWatcher {
     if (!this.started || this.closed) {
       return;
     }
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const watchPlanGeneration = this.watchPlanGeneration;
+    const watchPlan = this.watchPlan;
     const affected = new Map<string, ImmutableWatchedKnowledgeSource>();
     for (const path of paths) {
       const parsed = parseVaultPath(path);
       if (!parsed.ok) continue;
       const eventKey = toWindowsPathKey(parsed.path);
-      for (const source of this.watchPlan.sources) {
+      for (const source of watchPlan.getSources()) {
         if (source.sourceKey === eventKey || source.sourceKey.startsWith(`${eventKey}/`)) {
           affected.set(createBundleSourceKey(source), source);
         }
@@ -980,6 +1069,12 @@ export class ObsidianVaultSourceWatcher {
       this.quarantinedSourceKeys.add(sourceAuthorityKey);
     }
     for (const source of affected.values()) {
+      if (
+        lifecycleGeneration !== this.lifecycleGeneration ||
+        watchPlanGeneration !== this.watchPlanGeneration
+      ) {
+        return;
+      }
       this.emit({
         kind: "source_change_unsupported",
         change,

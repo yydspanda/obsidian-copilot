@@ -1,7 +1,37 @@
-import type { JsonValue, PipelineFingerprintInput } from "@/knowledge/model/types";
+import type {
+  JsonValue,
+  KnowledgeBundleConfig,
+  PipelineFingerprintInput,
+} from "@/knowledge/model/types";
 import { sha256, sha256Bytes } from "@/utils/hash";
 
+// Capturing this intrinsic accessor is intentional; Reflect.apply supplies the candidate receiver.
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const TYPED_ARRAY_TO_STRING_TAG_GETTER = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype) as object,
+  Symbol.toStringTag
+)?.get;
+
 const SENSITIVE_CONFIGURATION_KEYS = new Set([
+  "apikey",
+  "accesstoken",
+  "auth",
+  "authorization",
+  "bearertoken",
+  "clientsecret",
+  "cookie",
+  "cookies",
+  "credential",
+  "credentials",
+  "headers",
+  "password",
+  "privatekey",
+  "refreshtoken",
+  "secret",
+  "token",
+]);
+
+const SENSITIVE_CONFIGURATION_KEY_SUFFIXES = [
   "apikey",
   "accesstoken",
   "authorization",
@@ -13,8 +43,9 @@ const SENSITIVE_CONFIGURATION_KEYS = new Set([
   "privatekey",
   "refreshtoken",
   "secret",
+  "sessiontoken",
   "token",
-]);
+] as const;
 
 /**
  * Checks whether an unknown value is a plain JSON object.
@@ -96,7 +127,10 @@ function assertConfigurationContainsNoSecrets(value: unknown, ancestors: Set<obj
   } else {
     for (const [key, nestedValue] of Object.entries(value)) {
       const normalizedKey = key.replace(/[^a-z0-9]/gi, "").toLocaleLowerCase("en-US");
-      if (SENSITIVE_CONFIGURATION_KEYS.has(normalizedKey)) {
+      if (
+        SENSITIVE_CONFIGURATION_KEYS.has(normalizedKey) ||
+        SENSITIVE_CONFIGURATION_KEY_SUFFIXES.some((suffix) => normalizedKey.endsWith(suffix))
+      ) {
         throw new TypeError(`Pipeline configuration cannot include sensitive field '${key}'`);
       }
       assertConfigurationContainsNoSecrets(nestedValue, ancestors);
@@ -116,6 +150,26 @@ function assertConfigurationContainsNoSecrets(value: unknown, ancestors: Set<obj
  */
 export function normalizeCitationText(excerpt: string): string {
   return excerpt.replace(/\r\n?/g, "\n");
+}
+
+/**
+ * Tests exact Uint8Array identity without trusting a spoofable toStringTag.
+ *
+ * The captured TypedArray intrinsic reads the internal typed-array name across
+ * renderer realms. Uint16Array, DataView, and plain-object tag spoofing fail.
+ *
+ * @param value - Unknown exact-byte candidate
+ * @returns Whether the value is a Uint8Array-compatible byte view
+ */
+export function isExactUint8Array(value: unknown): value is Uint8Array {
+  if (!ArrayBuffer.isView(value) || !TYPED_ARRAY_TO_STRING_TAG_GETTER) {
+    return false;
+  }
+  try {
+    return Reflect.apply(TYPED_ARRAY_TO_STRING_TAG_GETTER, value, []) === "Uint8Array";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -163,6 +217,20 @@ export function canonicalizeJson(value: JsonValue): string {
 }
 
 /**
+ * Computes the exact identity of compiler-visible Bundle configuration.
+ *
+ * Callers must pass a strictly parsed and semantically validated Bundle. Array
+ * ordering remains significant because the compiler and model receive the same
+ * source-root ordering.
+ *
+ * @param bundle - Strict complete Bundle behavior and boundary configuration
+ * @returns Domain-separated lowercase SHA-256 digest
+ */
+export function createKnowledgeBundleConfigDigest(bundle: KnowledgeBundleConfig): string {
+  return sha256(`knowledge-bundle-config-v1\n${canonicalizeJson(bundle as unknown as JsonValue)}`);
+}
+
+/**
  * Computes a deterministic fingerprint for every behavior-affecting pipeline input.
  *
  * Callers must pass allowlisted model/parser configuration rather than complete
@@ -172,12 +240,17 @@ export function canonicalizeJson(value: JsonValue): string {
  * @returns Namespaced lowercase hexadecimal SHA-256 digest
  */
 export function createPipelineFingerprint(input: PipelineFingerprintInput): string {
+  assertConfigurationContainsNoSecrets(input.compilerConfiguration, new Set<object>());
   assertConfigurationContainsNoSecrets(input.parser.configuration, new Set<object>());
   assertConfigurationContainsNoSecrets(input.model.configuration, new Set<object>());
   const fingerprintData: JsonValue = {
     version: input.version,
     contractVersion: input.contractVersion,
-    compilerVersion: input.compilerVersion,
+    bundleConfigDigest: input.bundleConfigDigest,
+    compiler: {
+      version: input.compilerVersion,
+      configuration: input.compilerConfiguration,
+    },
     parser: {
       id: input.parser.id,
       version: input.parser.version,

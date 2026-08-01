@@ -1,9 +1,11 @@
 import {
   canonicalizeJson,
   createFileContentHash,
+  createKnowledgeBundleConfigDigest,
   createPipelineFingerprint,
   createQuoteHash,
   createSourceContentHash,
+  isExactUint8Array,
   normalizeCitationText,
 } from "@/knowledge/model/fingerprint";
 import type { JsonValue, PipelineFingerprintInput } from "@/knowledge/model/types";
@@ -14,6 +16,8 @@ function createFingerprintInput(): PipelineFingerprintInput {
     version: 1,
     contractVersion: 1,
     compilerVersion: "compiler-1",
+    compilerConfiguration: { maxContextPages: 20, maxTargets: 50 },
+    bundleConfigDigest: "c".repeat(64),
     parser: {
       id: "markdown",
       version: "parser-1",
@@ -57,6 +61,28 @@ describe("source and transaction hashes", () => {
   });
 });
 
+describe("isExactUint8Array", () => {
+  it("uses the TypedArray intrinsic brand instead of a spoofable toStringTag", () => {
+    const spoofedUint16 = new Uint16Array([0x1234]);
+    Object.defineProperty(spoofedUint16, Symbol.toStringTag, { value: "Uint8Array" });
+    const spoofedDataView = new DataView(new ArrayBuffer(2));
+    Object.defineProperty(spoofedDataView, Symbol.toStringTag, { value: "Uint8Array" });
+    const bytes = new Uint8Array([1, 2]);
+    let tagGetterCalls = 0;
+    Object.defineProperty(bytes, Symbol.toStringTag, {
+      get: () => {
+        tagGetterCalls += 1;
+        return "Uint16Array";
+      },
+    });
+
+    expect(isExactUint8Array(spoofedUint16)).toBe(false);
+    expect(isExactUint8Array(spoofedDataView)).toBe(false);
+    expect(isExactUint8Array(bytes)).toBe(true);
+    expect(tagGetterCalls).toBe(0);
+  });
+});
+
 describe("canonicalizeJson", () => {
   it("sorts nested object keys while preserving array order", () => {
     expect(canonicalizeJson({ z: 1, nested: { b: true, a: null }, a: ["x", "y"] })).toBe(
@@ -89,6 +115,7 @@ describe("createPipelineFingerprint", () => {
   it.each([
     ["contract", { contractVersion: 2 }],
     ["compiler", { compilerVersion: "compiler-2" }],
+    ["Bundle", { bundleConfigDigest: "d".repeat(64) }],
     ["schema", { schemaHash: "b".repeat(64) }],
     ["language", { outputLanguage: "en" }],
     ["OKF", { okfVersion: "0.2" }],
@@ -113,12 +140,52 @@ describe("createPipelineFingerprint", () => {
 
     expect(createPipelineFingerprint(changedParser)).not.toBe(createPipelineFingerprint(baseline));
     expect(createPipelineFingerprint(changedModel)).not.toBe(createPipelineFingerprint(baseline));
+
+    const changedCompiler = createFingerprintInput();
+    changedCompiler.compilerConfiguration = { maxContextPages: 21, maxTargets: 50 };
+    expect(createPipelineFingerprint(changedCompiler)).not.toBe(
+      createPipelineFingerprint(baseline)
+    );
   });
 
-  it("rejects credential-like fields before they can enter a fingerprint", () => {
+  it.each([
+    ["model", "apiKey", { temperature: 0, apiKey: "must-not-be-hashed" }],
+    ["parser", "x-api-key", { "x-api-key": "must-not-be-hashed" }],
+    ["compiler", "apiCredential", { apiCredential: "must-not-be-hashed" }],
+  ] as const)("rejects credential-like %s fields before hashing", (target, key, configuration) => {
     const input = createFingerprintInput();
-    input.model.configuration = { temperature: 0, apiKey: "must-not-be-hashed" };
+    if (target === "model") input.model.configuration = configuration;
+    if (target === "parser") input.parser.configuration = configuration;
+    if (target === "compiler") input.compilerConfiguration = configuration;
 
-    expect(() => createPipelineFingerprint(input)).toThrow("sensitive field 'apiKey'");
+    expect(() => createPipelineFingerprint(input)).toThrow(`sensitive field '${key}'`);
+  });
+});
+
+describe("createKnowledgeBundleConfigDigest", () => {
+  it("binds every compiler-visible Bundle behavior field", () => {
+    const bundle = {
+      version: 1 as const,
+      id: "personal",
+      sourceRoots: ["Sources"],
+      wikiRoot: "Wiki",
+      schemaRef: "Schemas/personal.md",
+      reviewMode: "always" as const,
+    };
+    const baseline = createKnowledgeBundleConfigDigest(bundle);
+
+    expect(createKnowledgeBundleConfigDigest({ ...bundle, wikiRoot: "AnotherWiki" })).not.toBe(
+      baseline
+    );
+    expect(
+      createKnowledgeBundleConfigDigest({ ...bundle, sourceRoots: ["OtherSources"] })
+    ).not.toBe(baseline);
+    expect(
+      createKnowledgeBundleConfigDigest({ ...bundle, schemaRef: "Schemas/other.md" })
+    ).not.toBe(baseline);
+    expect(createKnowledgeBundleConfigDigest({ ...bundle, reviewMode: "multi_file" })).not.toBe(
+      baseline
+    );
+    expect(createKnowledgeBundleConfigDigest({ ...bundle, id: "work" })).not.toBe(baseline);
   });
 });

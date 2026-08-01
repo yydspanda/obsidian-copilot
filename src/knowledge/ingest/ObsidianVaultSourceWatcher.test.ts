@@ -18,6 +18,12 @@ import type {
   BindSourceInputObservationRequest,
   SourceInputRevisionAllocation,
 } from "@/knowledge/ingest/InputRevisionAllocator";
+import {
+  buildKnowledgeSourceWatchPlan,
+  type KnowledgeBundlePipelineProfile,
+  type KnowledgeSourceWatchPlan,
+  type WatchedKnowledgeSource,
+} from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import { IngestQueue } from "@/knowledge/ingest/queue/IngestQueue";
 import {
   SourceObservationHandoff,
@@ -31,11 +37,16 @@ import {
   SourceArtifactUnavailableError,
   VaultSourceWatchPlanError,
   VaultSourceWatcherClosedError,
+  type ExactSourceArtifact,
   type VaultSourceObservationHandoffPort,
   type VaultSourceWatcherNotification,
-  type WatchedKnowledgeSource,
 } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
-import { createSourceContentHash } from "@/knowledge/model/fingerprint";
+import {
+  createKnowledgeBundleConfigDigest,
+  createPipelineFingerprint,
+  createSourceContentHash,
+} from "@/knowledge/model/fingerprint";
+import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
@@ -45,8 +56,89 @@ import {
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 
-const PIPELINE_A = "a".repeat(64);
-const PIPELINE_B = "b".repeat(64);
+const SCHEMA_BYTES = new TextEncoder().encode("# Test schema\r\n规则：精确字节\n");
+const SCHEMA_HASH = createSourceContentHash(SCHEMA_BYTES);
+
+/**
+ * Creates one strict caller-projected test pipeline profile.
+ *
+ * @param bundleId - Owning Bundle identity
+ * @param variant - Behavior variant expected by legacy watcher assertions
+ * @returns Complete Bundle pipeline profile
+ */
+function createPipelineProfile(
+  bundleId: string,
+  variant: "a" | "b"
+): KnowledgeBundlePipelineProfile {
+  return {
+    version: 1,
+    bundleId,
+    compiler: {
+      version: `test-compiler-${variant}`,
+      configuration: { maxContextPages: variant === "a" ? 20 : 30 },
+    },
+    parsers: [
+      {
+        id: `test-parser-${variant}`,
+        version: "1",
+        pathSuffixes: [".md", ".pdf"],
+        configuration: { variant },
+      },
+    ],
+    model: {
+      provider: "test-provider",
+      model: `test-model-${variant}`,
+      configuration: { temperature: variant === "a" ? 0 : 1 },
+    },
+    outputLanguage: "test-language",
+    okfVersion: "0.1",
+    citationContractVersion: 1,
+  };
+}
+
+/** Creates the exact Bundle config shared by watcher test fixtures and hashes. */
+function createTestBundle(bundleId: string): KnowledgeBundleConfig {
+  return {
+    version: 1,
+    id: bundleId,
+    sourceRoots: ["Sources"],
+    wikiRoot: `Wiki/${bundleId}`,
+    schemaRef: `Schemas/${bundleId}.md`,
+    reviewMode: "always",
+  };
+}
+
+/**
+ * Computes the exact source fingerprint emitted by a test pipeline variant.
+ *
+ * @param bundleId - Exact Bundle identity and behavior boundary
+ * @param variant - Pipeline behavior variant
+ * @returns Lowercase pipeline fingerprint
+ */
+function createTestPipelineFingerprint(bundleId: string, variant: "a" | "b"): string {
+  const profile = createPipelineProfile(bundleId, variant);
+  const parser = profile.parsers[0];
+  return createPipelineFingerprint({
+    version: 1,
+    contractVersion: 1,
+    compilerVersion: profile.compiler.version,
+    compilerConfiguration: profile.compiler.configuration,
+    bundleConfigDigest: createKnowledgeBundleConfigDigest(createTestBundle(bundleId)),
+    parser: {
+      id: parser.id,
+      version: parser.version,
+      configuration: parser.configuration,
+    },
+    schemaHash: SCHEMA_HASH,
+    model: profile.model,
+    outputLanguage: profile.outputLanguage,
+    okfVersion: profile.okfVersion,
+    citationContractVersion: profile.citationContractVersion,
+  });
+}
+
+const PIPELINE_A = createTestPipelineFingerprint("personal", "a");
+const PIPELINE_B = createTestPipelineFingerprint("personal", "b");
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -125,7 +217,7 @@ function createFolder(path: string): TFolder {
 }
 
 /**
- * Creates one valid immutable watch-plan input.
+ * Creates one source specification consumed by the strict watch-plan fixture.
  *
  * @param patch - Fields to replace
  * @returns Complete watched source
@@ -140,6 +232,78 @@ function createSource(patch: Partial<WatchedKnowledgeSource> = {}): WatchedKnowl
     pipelineFingerprint: PIPELINE_A,
     ...patch,
   };
+}
+
+/**
+ * Builds an opaque plan through the same strict authority boundary as production.
+ *
+ * Test sources use their expected fingerprint only to select a complete profile;
+ * the builder independently recomputes every actual source fingerprint.
+ *
+ * @param sources - Durable source specifications grouped by Bundle
+ * @returns Strict immutable plan accepted by the watcher
+ */
+function createWatchPlan(sources: readonly WatchedKnowledgeSource[]): KnowledgeSourceWatchPlan {
+  const byBundle = new Map<string, WatchedKnowledgeSource[]>();
+  for (const source of sources) {
+    const matching = byBundle.get(source.bundleId);
+    if (matching) {
+      matching.push(source);
+    } else {
+      byBundle.set(source.bundleId, [source]);
+    }
+  }
+
+  return buildKnowledgeSourceWatchPlan(
+    [...byBundle.entries()]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([bundleId, bundleSources]) => {
+        const fingerprints = new Set(bundleSources.map((source) => source.pipelineFingerprint));
+        if (fingerprints.size !== 1) {
+          throw new Error("A watcher test Bundle must use one pipeline fixture variant");
+        }
+        const fingerprint = bundleSources[0]?.pipelineFingerprint;
+        const variant = fingerprint === PIPELINE_B ? "b" : "a";
+        if (fingerprint !== PIPELINE_A && fingerprint !== PIPELINE_B) {
+          throw new Error("Unknown watcher test pipeline fixture");
+        }
+        const bundle = createTestBundle(bundleId);
+        return {
+          bundle,
+          manifest: {
+            version: 1 as const,
+            bundleId,
+            revision: 0,
+            entries: bundleSources.map((source) => ({
+              sourceId: source.sourceId,
+              sourceKey: source.sourceKey,
+              sourcePath: source.sourcePath,
+              custody: "user_managed" as const,
+            })),
+          },
+          schema: { path: bundle.schemaRef, bytes: SCHEMA_BYTES.slice() },
+          pipeline: createPipelineProfile(bundleId, variant),
+        };
+      })
+  );
+}
+
+/**
+ * Builds one Bundle authority whose durable Manifest currently has no sources.
+ *
+ * @param bundleId - Empty Bundle identity
+ * @returns Strict plan that still requires a Bundle handoff
+ */
+function createEmptyBundleWatchPlan(bundleId = "personal"): KnowledgeSourceWatchPlan {
+  const bundle = createTestBundle(bundleId);
+  return buildKnowledgeSourceWatchPlan([
+    {
+      bundle,
+      manifest: { version: 1, bundleId, revision: 0, entries: [] },
+      schema: { path: bundle.schemaRef, bytes: SCHEMA_BYTES.slice() },
+      pipeline: createPipelineProfile(bundleId, "a"),
+    },
+  ]);
 }
 
 type VaultEventName = "create" | "modify" | "delete" | "rename";
@@ -232,6 +396,11 @@ class VaultHarness {
 
 /** Recording durable hand-off with injectable allocation and commit behavior. */
 class RecordingHandoff implements VaultSourceObservationHandoffPort {
+  readonly allocateRequestReferences: {
+    bundleId: string;
+    sourceId: string;
+    captureId: string;
+  }[] = [];
   readonly allocateCalls: {
     bundleId: string;
     sourceId: string;
@@ -263,6 +432,7 @@ class RecordingHandoff implements VaultSourceObservationHandoffPort {
     captureId: string;
   }): Promise<SourceInputRevisionAllocation> {
     this.order.push(`allocate:${request.captureId}`);
+    this.allocateRequestReferences.push(request);
     this.allocateCalls.push({ ...request });
     if (this.allocateImplementation) {
       const allocation = await this.allocateImplementation(request, this.allocateCalls.length);
@@ -387,6 +557,12 @@ describe("ObsidianExactSourceArtifactReader", () => {
     harness.readBinaryImplementation = async () => "not-an-array-buffer";
     await expect(reader.read(file.path)).rejects.toBeInstanceOf(SourceArtifactAdapterPayloadError);
 
+    harness.readBinaryImplementation = async () => ({
+      byteLength: 4,
+      [Symbol.toStringTag]: "ArrayBuffer",
+    });
+    await expect(reader.read(file.path)).rejects.toBeInstanceOf(SourceArtifactAdapterPayloadError);
+
     harness.readBinaryImplementation = async () => createBuffer(1, 2, 3);
     await expect(reader.readExpected(file.path, "f".repeat(64))).rejects.toBeInstanceOf(
       SourceArtifactHashMismatchError
@@ -419,7 +595,7 @@ describe("ObsidianExactSourceArtifactReader", () => {
       () =>
         new ObsidianVaultSourceWatcher(
           secondApp,
-          [createSource({ sourcePath: "Sources/shared.md" })],
+          createWatchPlan([createSource({ sourcePath: "Sources/shared.md" })]),
           new Map([["personal", new RecordingHandoff()]]),
           { artifactReader: reader }
         )
@@ -437,7 +613,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const sink = new RecordingSink();
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       {
         captureIdFactory: () => {
@@ -479,7 +655,45 @@ describe("ObsidianVaultSourceWatcher", () => {
     });
   });
 
-  it("deduplicates an identical plan entry but observes one path independently per Bundle", async () => {
+  it("copies injected exact bytes without calling an instance-level slice override", async () => {
+    const harness = new VaultHarness();
+    const app = harness.createApp();
+    harness.addFile("Sources/研究.md", createBuffer(1, 2, 3));
+    const bytes = new Uint8Array([1, 2, 3]);
+    let sliceCalls = 0;
+    Object.defineProperty(bytes, "slice", {
+      value: () => {
+        sliceCalls += 1;
+        return new Uint8Array([9]);
+      },
+    });
+    const reader = new ObsidianExactSourceArtifactReader(app);
+    jest.spyOn(reader, "read").mockResolvedValue({
+      sourcePath: "Sources/研究.md",
+      bytes,
+      sourceContentHash: createSourceContentHash(new Uint8Array([1, 2, 3])),
+    });
+    const handoff = new RecordingHandoff();
+    const watcher = new ObsidianVaultSourceWatcher(
+      app,
+      createWatchPlan([createSource()]),
+      new Map([["personal", handoff]]),
+      {
+        artifactReader: reader,
+        captureIdFactory: () => "overridden-slice",
+      }
+    );
+
+    watcher.start();
+    await watcher.waitForIdle();
+
+    expect(sliceCalls).toBe(0);
+    expect(handoff.commitCalls[0]?.sourceContentHash).toBe(
+      createSourceContentHash(new Uint8Array([1, 2, 3]))
+    );
+  });
+
+  it("observes one physical path independently per Bundle", async () => {
     const harness = new VaultHarness();
     harness.addFile("Sources/shared.pdf", createBuffer(37, 80, 68, 70, 10));
     const first = new RecordingHandoff();
@@ -497,7 +711,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     });
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [personal, { ...personal }, work],
+      createWatchPlan([personal, work]),
       new Map([
         ["personal", first],
         ["work", second],
@@ -512,7 +726,9 @@ describe("ObsidianVaultSourceWatcher", () => {
     expect(second.allocateCalls).toHaveLength(1);
     expect(first.allocateCalls[0]?.captureId).not.toBe(second.allocateCalls[0]?.captureId);
     expect(first.commitCalls[0]?.pipelineFingerprint).toBe(PIPELINE_A);
-    expect(second.commitCalls[0]?.pipelineFingerprint).toBe(PIPELINE_B);
+    expect(second.commitCalls[0]?.pipelineFingerprint).toBe(
+      createTestPipelineFingerprint("work", "b")
+    );
     expect(harness.adapter.readBinary).toHaveBeenCalledTimes(2);
   });
 
@@ -524,13 +740,13 @@ describe("ObsidianVaultSourceWatcher", () => {
     let watcher: ObsidianVaultSourceWatcher;
     watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       {
         captureIdFactory: () => {
           if (!replaced) {
             replaced = true;
-            watcher.replaceWatchPlan([]);
+            watcher.replaceWatchPlan(createWatchPlan([]));
           }
           return "obsolete-plan-capture";
         },
@@ -543,6 +759,48 @@ describe("ObsidianVaultSourceWatcher", () => {
     expect(handoff.allocateCalls).toHaveLength(0);
     expect(harness.adapter.readBinary).not.toHaveBeenCalled();
     expect(handoff.commitCalls).toHaveLength(0);
+  });
+
+  it("invalidates an entire same-path multi-Bundle batch during reentrant replacement", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/shared.md", createBuffer(1));
+    const personalHandoff = new RecordingHandoff();
+    const workHandoff = new RecordingHandoff();
+    let captureFactoryCalls = 0;
+    let watcher: ObsidianVaultSourceWatcher;
+    watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([
+        createSource({ sourceId: "personal-source", sourcePath: "Sources/shared.md" }),
+        createSource({
+          bundleId: "work",
+          sourceId: "work-source",
+          sourcePath: "Sources/shared.md",
+          pipelineFingerprint: PIPELINE_B,
+        }),
+      ]),
+      new Map([
+        ["personal", personalHandoff],
+        ["work", workHandoff],
+      ]),
+      {
+        captureIdFactory: () => {
+          captureFactoryCalls += 1;
+          watcher.replaceWatchPlan(createWatchPlan([]));
+          return "obsolete-multi-bundle-capture";
+        },
+      }
+    );
+
+    watcher.start();
+    await watcher.waitForIdle();
+
+    expect(captureFactoryCalls).toBe(1);
+    expect(personalHandoff.allocateCalls).toHaveLength(0);
+    expect(workHandoff.allocateCalls).toHaveLength(0);
+    expect(harness.adapter.readBinary).not.toHaveBeenCalled();
+    expect(personalHandoff.commitCalls).toHaveLength(0);
+    expect(workHandoff.commitCalls).toHaveLength(0);
   });
 
   it("retries uncertain allocation and commit with the same capture, token, hash, and pipeline", async () => {
@@ -575,7 +833,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     };
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       { captureIdFactory: () => "stable-capture" }
     );
@@ -587,6 +845,8 @@ describe("ObsidianVaultSourceWatcher", () => {
       "stable-capture",
       "stable-capture",
     ]);
+    expect(handoff.allocateRequestReferences[1]).toBe(handoff.allocateRequestReferences[0]);
+    expect(Object.isFrozen(handoff.allocateRequestReferences[0])).toBe(true);
     expect(handoff.commitCalls).toHaveLength(2);
     expect(handoff.commitCalls[1]).toEqual(handoff.commitCalls[0]);
     expect(handoff.commitCalls[0]).toEqual({
@@ -606,7 +866,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const sink = new RecordingSink();
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       {
         captureIdFactory: () => "read-failure",
@@ -640,7 +900,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     handoff.allocateImplementation = async () => allocation.promise;
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       { captureIdFactory: () => "captured-before-await" }
     );
@@ -672,7 +932,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const lifecycleSink = new RecordingSink();
     const oldWatcher = new ObsidianVaultSourceWatcher(
       lifecycleHarness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", lifecycleHandoff]]),
       {
         captureIdFactory: () => "old-lifecycle",
@@ -695,7 +955,9 @@ describe("ObsidianVaultSourceWatcher", () => {
     expect(lifecycleHandoff.commitCalls).toHaveLength(0);
     expect(lifecycleSink.notifications).toHaveLength(0);
     expect(lifecycleHarness.vault.offref).toHaveBeenCalledTimes(4);
-    expect(() => oldWatcher.replaceWatchPlan([])).toThrow(VaultSourceWatcherClosedError);
+    expect(() => oldWatcher.replaceWatchPlan(createWatchPlan([]))).toThrow(
+      VaultSourceWatcherClosedError
+    );
 
     const planHarness = new VaultHarness();
     planHarness.addFile("Sources/A.md", createBuffer(1));
@@ -713,18 +975,18 @@ describe("ObsidianVaultSourceWatcher", () => {
     const ids = ["capture-a", "capture-c"];
     const planWatcher = new ObsidianVaultSourceWatcher(
       planHarness.createApp(),
-      [createSource({ sourceId: "source-a", sourcePath: "Sources/A.md" })],
+      createWatchPlan([createSource({ sourceId: "source-a", sourcePath: "Sources/A.md" })]),
       new Map([["personal", planHandoff]]),
       { captureIdFactory: () => ids.shift()! }
     );
     planWatcher.start();
     await Promise.resolve();
-    planWatcher.replaceWatchPlan([
-      createSource({ sourceId: "source-b", sourcePath: "Sources/B.md" }),
-    ]);
-    planWatcher.replaceWatchPlan([
-      createSource({ sourceId: "source-c", sourcePath: "Sources/C.md" }),
-    ]);
+    planWatcher.replaceWatchPlan(
+      createWatchPlan([createSource({ sourceId: "source-b", sourcePath: "Sources/B.md" })])
+    );
+    planWatcher.replaceWatchPlan(
+      createWatchPlan([createSource({ sourceId: "source-c", sourcePath: "Sources/C.md" })])
+    );
     planAllocation.resolve({
       bundleId: "personal",
       sourceId: "source-a",
@@ -754,7 +1016,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const readSink = new RecordingSink();
     const readWatcher = new ObsidianVaultSourceWatcher(
       readHarness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", readHandoff]]),
       {
         captureIdFactory: () => "read-in-flight",
@@ -779,7 +1041,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const commitSink = new RecordingSink();
     const commitWatcher = new ObsidianVaultSourceWatcher(
       commitHarness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", commitHandoff]]),
       {
         captureIdFactory: () => "commit-in-flight",
@@ -789,8 +1051,21 @@ describe("ObsidianVaultSourceWatcher", () => {
 
     commitWatcher.start();
     await waitUntil(() => commitHandoff.commitCalls.length === 1);
-    commitWatcher.replaceWatchPlan([]);
-    deferredCommit.reject(new Error("durable commit acknowledgement lost"));
+    const committedAllocation = [...commitHandoff.allocationsByToken.values()][0];
+    const committedRequest = commitHandoff.commitCalls[0];
+    if (!committedAllocation || !committedRequest) {
+      throw new Error("Expected one in-flight durable commit fixture");
+    }
+    commitWatcher.replaceWatchPlan(createWatchPlan([]));
+    deferredCommit.resolve({
+      kind: "committed",
+      observation: {
+        ...committedAllocation,
+        sourceContentHash: committedRequest.sourceContentHash,
+        pipelineFingerprint: committedRequest.pipelineFingerprint,
+      },
+      queueRevision: 1,
+    });
     await commitWatcher.waitForIdle();
 
     expect(commitHandoff.commitCalls).toHaveLength(1);
@@ -809,7 +1084,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     let captureSequence = 0;
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       {
         captureIdFactory: () => `capture-${++captureSequence}`,
@@ -836,7 +1111,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     });
 
     harness.readBinaryImplementation = undefined;
-    watcher.replaceWatchPlan([createSource()]);
+    watcher.replaceWatchPlan(createWatchPlan([createSource()]));
     await watcher.waitForIdle();
 
     expect(handoff.allocateCalls).toHaveLength(2);
@@ -859,10 +1134,10 @@ describe("ObsidianVaultSourceWatcher", () => {
     const captureIds = ["capture-a", "capture-b"];
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [
+      createWatchPlan([
         createSource({ sourceId: "source-a", sourcePath: "Sources/A.md" }),
         createSource({ sourceId: "source-b", sourcePath: "Sources/B.md" }),
-      ],
+      ]),
       new Map([["personal", handoff]]),
       { captureIdFactory: () => captureIds.shift()! }
     );
@@ -893,7 +1168,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     let captureSequence = 0;
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       {
         captureIdFactory: () => `rename-capture-${++captureSequence}`,
@@ -933,12 +1208,22 @@ describe("ObsidianVaultSourceWatcher", () => {
 
   it("keeps old cleanup from removing a replacement watcher's EventRefs", () => {
     const harness = new VaultHarness();
-    const first = new ObsidianVaultSourceWatcher(harness.createApp(), [], new Map(), {
-      captureIdFactory: () => "unused-first",
-    });
-    const second = new ObsidianVaultSourceWatcher(harness.createApp(), [], new Map(), {
-      captureIdFactory: () => "unused-second",
-    });
+    const first = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([]),
+      new Map(),
+      {
+        captureIdFactory: () => "unused-first",
+      }
+    );
+    const second = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([]),
+      new Map(),
+      {
+        captureIdFactory: () => "unused-second",
+      }
+    );
     first.start();
     second.start();
 
@@ -949,14 +1234,18 @@ describe("ObsidianVaultSourceWatcher", () => {
     }
     expect(second.owns(harness.createApp())).toBe(false);
     const exactApp = { vault: harness.vault } as unknown as App;
-    const owned = new ObsidianVaultSourceWatcher(exactApp, [], new Map());
+    const owned = new ObsidianVaultSourceWatcher(exactApp, createWatchPlan([]), new Map());
     expect(owned.owns(exactApp)).toBe(true);
   });
 
   it("releases partial EventRefs when listener registration fails and permits a clean retry", () => {
     const harness = new VaultHarness();
     harness.failOnEventRegistration = "delete";
-    const watcher = new ObsidianVaultSourceWatcher(harness.createApp(), [], new Map());
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([]),
+      new Map()
+    );
 
     expect(() => watcher.start()).toThrow("fake event registration failure");
     expect(harness.vault.offref).toHaveBeenCalledTimes(2);
@@ -977,7 +1266,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const sink = new RecordingSink();
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       {
         captureIdFactory: () => "should-not-be-used",
@@ -1035,7 +1324,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const readerSink = new RecordingSink();
     const readerWatcher = new ObsidianVaultSourceWatcher(
       readerApp,
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", readerHandoff]]),
       {
         artifactReader: lyingReader,
@@ -1069,7 +1358,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const allocationSink = new RecordingSink();
     const allocationWatcher = new ObsidianVaultSourceWatcher(
       allocationHarness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", allocationHandoff]]),
       {
         captureIdFactory: () => "lying-allocation",
@@ -1109,7 +1398,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const settlementSink = new RecordingSink();
     const settlementWatcher = new ObsidianVaultSourceWatcher(
       settlementHarness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", settlementHandoff]]),
       {
         captureIdFactory: () => "lying-settlement",
@@ -1133,40 +1422,349 @@ describe("ObsidianVaultSourceWatcher", () => {
     );
   });
 
-  it("rejects conflicting source/path ownership, invalid fingerprints, and missing handoffs", () => {
-    const harness = new VaultHarness();
-    const valid = createSource();
+  it("rejects accessor-backed success payloads without invoking their getters", async () => {
+    const readerHarness = new VaultHarness();
+    const readerApp = readerHarness.createApp();
+    readerHarness.addFile("Sources/研究.md", createBuffer(1));
+    const accessorReader = new ObsidianExactSourceArtifactReader(readerApp);
+    let artifactGetterCalls = 0;
+    const accessorArtifact = Object.defineProperties(
+      { sourcePath: "Sources/研究.md" },
+      {
+        bytes: {
+          enumerable: true,
+          get: () => {
+            artifactGetterCalls += 1;
+            return Uint8Array.from([1]);
+          },
+        },
+        sourceContentHash: {
+          enumerable: true,
+          get: () => {
+            artifactGetterCalls += 1;
+            return createSourceContentHash(createBuffer(1));
+          },
+        },
+      }
+    ) as ExactSourceArtifact;
+    jest.spyOn(accessorReader, "read").mockResolvedValue(accessorArtifact);
+    const readerHandoff = new RecordingHandoff();
+    const readerSink = new RecordingSink();
+    const readerWatcher = new ObsidianVaultSourceWatcher(
+      readerApp,
+      createWatchPlan([createSource()]),
+      new Map([["personal", readerHandoff]]),
+      {
+        artifactReader: accessorReader,
+        captureIdFactory: () => "accessor-artifact",
+        notificationSink: readerSink,
+      }
+    );
+    readerWatcher.start();
+    await readerWatcher.waitForIdle();
 
-    expect(
-      () =>
-        new ObsidianVaultSourceWatcher(
-          harness.createApp(),
-          [valid, { ...valid, sourcePath: "Sources/other.md", sourceKey: "sources/other.md" }],
-          new Map([["personal", new RecordingHandoff()]])
-        )
-    ).toThrow(VaultSourceWatchPlanError);
-    expect(
-      () =>
-        new ObsidianVaultSourceWatcher(
-          harness.createApp(),
-          [{ ...valid, pipelineFingerprint: "not-a-hash" }],
-          new Map([["personal", new RecordingHandoff()]])
-        )
-    ).toThrow(VaultSourceWatchPlanError);
-    expect(() => new ObsidianVaultSourceWatcher(harness.createApp(), [valid], new Map())).toThrow(
-      VaultSourceWatchPlanError
+    expect(artifactGetterCalls).toBe(0);
+    expect(readerHandoff.commitCalls).toHaveLength(0);
+    expect(readerSink.notifications).toContainEqual(
+      expect.objectContaining({ kind: "capture_failed", stage: "read" })
+    );
+
+    const allocationHarness = new VaultHarness();
+    allocationHarness.addFile("Sources/研究.md", createBuffer(2));
+    let allocationGetterCalls = 0;
+    let allocationCommitCalls = 0;
+    const allocationHandoff: VaultSourceObservationHandoffPort = {
+      allocate: async (request) =>
+        Object.defineProperty(
+          {
+            ...request,
+            observationToken: "accessor-allocation-token",
+          },
+          "inputRevision",
+          {
+            enumerable: true,
+            get: () => {
+              allocationGetterCalls += 1;
+              return 1;
+            },
+          }
+        ) as SourceInputRevisionAllocation,
+      commit: async () => {
+        allocationCommitCalls += 1;
+        throw new Error("accessor allocation must not reach commit");
+      },
+    };
+    const allocationSink = new RecordingSink();
+    const allocationWatcher = new ObsidianVaultSourceWatcher(
+      allocationHarness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", allocationHandoff]]),
+      {
+        captureIdFactory: () => "accessor-allocation",
+        notificationSink: allocationSink,
+      }
+    );
+    allocationWatcher.start();
+    await allocationWatcher.waitForIdle();
+
+    expect(allocationGetterCalls).toBe(0);
+    expect(allocationHarness.adapter.readBinary).not.toHaveBeenCalled();
+    expect(allocationCommitCalls).toBe(0);
+    expect(allocationSink.notifications).toContainEqual(
+      expect.objectContaining({ kind: "capture_failed", stage: "allocate" })
+    );
+
+    const settlementHarness = new VaultHarness();
+    settlementHarness.addFile("Sources/研究.md", createBuffer(3));
+    let settlementGetterCalls = 0;
+    const settlementHandoff = new RecordingHandoff();
+    settlementHandoff.commitImplementation = async () =>
+      Object.defineProperty({ kind: "committed", queueRevision: 1 }, "observation", {
+        enumerable: true,
+        get: () => {
+          settlementGetterCalls += 1;
+          return {};
+        },
+      }) as CommitSourceInputObservationResult;
+    const settlementSink = new RecordingSink();
+    const settlementWatcher = new ObsidianVaultSourceWatcher(
+      settlementHarness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", settlementHandoff]]),
+      {
+        captureIdFactory: () => "accessor-settlement",
+        notificationSink: settlementSink,
+      }
+    );
+    settlementWatcher.start();
+    await settlementWatcher.waitForIdle();
+
+    expect(settlementGetterCalls).toBe(0);
+    expect(settlementHandoff.commitCalls).toHaveLength(1);
+    expect(settlementSink.notifications).toContainEqual(
+      expect.objectContaining({ kind: "capture_failed", stage: "commit" })
+    );
+    expect(settlementSink.notifications).not.toContainEqual(
+      expect.objectContaining({ kind: "capture_settled" })
     );
   });
 
-  it("reports a missing planned source after listener registration without fabricating a capture", () => {
+  it("rejects a plan when its Bundle has no durable handoff", () => {
+    const harness = new VaultHarness();
+
+    expect(
+      () =>
+        new ObsidianVaultSourceWatcher(
+          harness.createApp(),
+          createWatchPlan([createSource()]),
+          new Map()
+        )
+    ).toThrow(VaultSourceWatchPlanError);
+    expect(
+      () =>
+        new ObsidianVaultSourceWatcher(harness.createApp(), createEmptyBundleWatchPlan(), new Map())
+    ).toThrow(VaultSourceWatchPlanError);
+
+    const malformedValues: unknown[] = [undefined, {}, { allocate: async () => undefined }];
+    for (const malformed of malformedValues) {
+      expect(
+        () =>
+          new ObsidianVaultSourceWatcher(
+            harness.createApp(),
+            createEmptyBundleWatchPlan(),
+            new Map([["personal", malformed as VaultSourceObservationHandoffPort]])
+          )
+      ).toThrow(VaultSourceWatchPlanError);
+    }
+
+    let accessorCalls = 0;
+    const accessorBacked = Object.defineProperties(
+      {},
+      {
+        allocate: {
+          enumerable: true,
+          get: () => {
+            accessorCalls += 1;
+            return async () => undefined;
+          },
+        },
+        commit: {
+          enumerable: true,
+          get: () => {
+            accessorCalls += 1;
+            return async () => undefined;
+          },
+        },
+      }
+    );
+    expect(
+      () =>
+        new ObsidianVaultSourceWatcher(
+          harness.createApp(),
+          createEmptyBundleWatchPlan(),
+          new Map([["personal", accessorBacked as unknown as VaultSourceObservationHandoffPort]])
+        )
+    ).toThrow(VaultSourceWatchPlanError);
+    expect(accessorCalls).toBe(0);
+
+    let cyclicPrototype!: object;
+    cyclicPrototype = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => cyclicPrototype,
+      }
+    );
+    expect(
+      () =>
+        new ObsidianVaultSourceWatcher(
+          harness.createApp(),
+          createEmptyBundleWatchPlan(),
+          new Map([["personal", cyclicPrototype as VaultSourceObservationHandoffPort]])
+        )
+    ).toThrow(VaultSourceWatchPlanError);
+  });
+
+  it("keeps the previous plan active after a replacement dependency check fails", async () => {
+    const harness = new VaultHarness();
+    const file = harness.addFile("Sources/研究.md", createBuffer(1));
+    const handoff = new RecordingHandoff();
+    let captureSequence = 0;
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => `capture-${++captureSequence}` }
+    );
+    watcher.start();
+    await watcher.waitForIdle();
+    handoff.allocateCalls.length = 0;
+    handoff.commitCalls.length = 0;
+
+    expect(() =>
+      watcher.replaceWatchPlan(
+        createWatchPlan([
+          createSource({
+            bundleId: "work",
+            sourceId: "work-source",
+            sourcePath: "Sources/研究.md",
+            pipelineFingerprint: PIPELINE_B,
+          }),
+        ])
+      )
+    ).toThrow(VaultSourceWatchPlanError);
+
+    harness.trigger("modify", file);
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls).toHaveLength(1);
+    expect(handoff.allocateCalls[0]).toMatchObject({
+      bundleId: "personal",
+      sourceId: "source-1",
+    });
+    expect(handoff.commitCalls).toHaveLength(1);
+  });
+
+  it("uses handoff methods captured at installation even if the handoff object is mutated", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", createBuffer(1));
+    const handoff = new RecordingHandoff();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => "captured-methods" }
+    );
+    handoff.allocate = async () => {
+      throw new Error("replacement method must not run");
+    };
+    handoff.commit = async () => {
+      throw new Error("replacement method must not run");
+    };
+
+    watcher.start();
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls).toHaveLength(1);
+    expect(handoff.commitCalls).toHaveLength(1);
+  });
+
+  it("stops stale missing and destructive notifications after a reentrant plan replacement", async () => {
+    const sources = [
+      createSource({ sourceId: "source-a", sourcePath: "Sources/A.md" }),
+      createSource({ sourceId: "source-b", sourcePath: "Sources/B.md" }),
+    ];
+
+    const missingHarness = new VaultHarness();
+    const missingNotifications: VaultSourceWatcherNotification[] = [];
+    let missingWatcher: ObsidianVaultSourceWatcher;
+    const missingSink = {
+      emit: (notification: VaultSourceWatcherNotification): void => {
+        missingNotifications.push(notification);
+        missingWatcher.replaceWatchPlan(createWatchPlan([]));
+      },
+    };
+    missingWatcher = new ObsidianVaultSourceWatcher(
+      missingHarness.createApp(),
+      createWatchPlan(sources),
+      new Map([["personal", new RecordingHandoff()]]),
+      { notificationSink: missingSink }
+    );
+
+    missingWatcher.start();
+
+    expect(missingNotifications).toHaveLength(1);
+    expect(missingNotifications[0]).toMatchObject({ kind: "source_missing" });
+
+    const destructiveHarness = new VaultHarness();
+    destructiveHarness.addFile("Sources/A.md", createBuffer(1));
+    destructiveHarness.addFile("Sources/B.md", createBuffer(2));
+    const destructiveNotifications: VaultSourceWatcherNotification[] = [];
+    let destructiveWatcher: ObsidianVaultSourceWatcher;
+    const destructiveSink = {
+      emit: (notification: VaultSourceWatcherNotification): void => {
+        destructiveNotifications.push(notification);
+        if (notification.kind === "source_change_unsupported") {
+          destructiveWatcher.replaceWatchPlan(createWatchPlan([]));
+        }
+      },
+    };
+    destructiveWatcher = new ObsidianVaultSourceWatcher(
+      destructiveHarness.createApp(),
+      createWatchPlan(sources),
+      new Map([["personal", new RecordingHandoff()]]),
+      {
+        captureIdFactory: (() => {
+          let sequence = 0;
+          return () => `destructive-capture-${++sequence}`;
+        })(),
+        notificationSink: destructiveSink,
+      }
+    );
+    destructiveWatcher.start();
+    await destructiveWatcher.waitForIdle();
+    destructiveNotifications.length = 0;
+
+    destructiveHarness.trigger("delete", createFolder("Sources"));
+
+    expect(destructiveNotifications).toHaveLength(1);
+    expect(destructiveNotifications[0]).toMatchObject({
+      kind: "source_change_unsupported",
+      change: "delete",
+    });
+  });
+
+  it("reports a startup-missing source without quarantining a later create", async () => {
     const harness = new VaultHarness();
     const handoff = new RecordingHandoff();
     const sink = new RecordingSink();
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
-      { notificationSink: sink }
+      {
+        captureIdFactory: () => "created-after-startup-missing",
+        notificationSink: sink,
+      }
     );
 
     watcher.start();
@@ -1181,6 +1779,19 @@ describe("ObsidianVaultSourceWatcher", () => {
       "listen:delete",
       "listen:rename",
     ]);
+
+    const created = harness.addFile("Sources/研究.md", createBuffer(1, 2, 3));
+    harness.trigger("create", created);
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls).toEqual([
+      {
+        bundleId: "personal",
+        sourceId: "source-1",
+        captureId: "created-after-startup-missing",
+      },
+    ]);
+    expect(handoff.commitCalls).toHaveLength(1);
   });
 
   it("converges out-of-order rapid modifies through Runtime v3 and Queue v5 authority", async () => {
@@ -1230,7 +1841,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     const captureIds = ["rapid-1", "rapid-2"];
     const watcher = new ObsidianVaultSourceWatcher(
       harness.createApp(),
-      [createSource()],
+      createWatchPlan([createSource()]),
       new Map([["personal", handoff]]),
       {
         captureIdFactory: () => captureIds.shift()!,

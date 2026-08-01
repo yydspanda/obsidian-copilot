@@ -226,6 +226,114 @@ export function validateSourceManifest(value: unknown): KnowledgeValidationResul
 }
 
 /**
+ * Validates one durable Manifest against its exact owning Bundle boundary.
+ *
+ * Standalone Manifest validation cannot prove that a registered source belongs
+ * to a configured source root or that generated pages remain inside the Wiki.
+ * This relationship validator is used by the watch-plan builder and remains
+ * reusable by future executor and startup adapters.
+ *
+ * @param manifestValue - Runtime value expected to contain a Source Manifest
+ * @param bundleValue - Runtime value expected to contain its owning Bundle
+ * @returns Aggregate structural, semantic, and relationship diagnostics
+ */
+export function validateSourceManifestForBundle(
+  manifestValue: unknown,
+  bundleValue: unknown
+): KnowledgeValidationResult {
+  const diagnostics: KnowledgeDiagnostic[] = [];
+  const parsedManifest = parseSourceManifest(manifestValue);
+  const parsedBundle = parseKnowledgeBundleConfig(bundleValue);
+
+  if (!parsedManifest.ok) {
+    appendNested(diagnostics, "manifest", toResult(parsedManifest.issues));
+  }
+  if (!parsedBundle.ok) {
+    appendNested(diagnostics, "bundle", toResult(parsedBundle.issues));
+  }
+  if (!parsedManifest.ok || !parsedBundle.ok) {
+    return toResult(diagnostics);
+  }
+
+  const manifestValidation = validateSourceManifest(parsedManifest.value);
+  const bundleValidation = validateKnowledgeBundleConfig(parsedBundle.value);
+  appendNested(diagnostics, "manifest", manifestValidation);
+  appendNested(diagnostics, "bundle", bundleValidation);
+  if (!manifestValidation.valid || !bundleValidation.valid) {
+    return toResult(diagnostics);
+  }
+
+  const manifest = parsedManifest.value;
+  const bundle = parsedBundle.value;
+  if (manifest.bundleId !== bundle.id) {
+    addError(
+      diagnostics,
+      "manifest_bundle_mismatch",
+      "manifest.bundleId",
+      "Source Manifest must belong to the selected Bundle"
+    );
+  }
+
+  manifest.entries.forEach((entry, sourceIndex) => {
+    const sourceField = `manifest.entries[${sourceIndex}].sourcePath`;
+    if (!bundle.sourceRoots.some((root) => isPathWithinRoot(entry.sourcePath, root))) {
+      addError(
+        diagnostics,
+        "manifest_source_outside_roots",
+        sourceField,
+        "Registered source must remain inside an owning source root"
+      );
+    }
+    if (isPathWithinRoot(entry.sourcePath, bundle.wikiRoot)) {
+      addError(
+        diagnostics,
+        "manifest_source_inside_wiki",
+        sourceField,
+        "Registered source cannot live inside the generated Wiki"
+      );
+    }
+    if (toWindowsPathKey(entry.sourcePath) === toWindowsPathKey(bundle.schemaRef)) {
+      addError(
+        diagnostics,
+        "manifest_source_is_schema",
+        sourceField,
+        "Bundle schema cannot also be registered as a source"
+      );
+    }
+
+    entry.lastSuccessful?.generatedPages.forEach((page, pageIndex) => {
+      const pageField = `manifest.entries[${sourceIndex}].lastSuccessful.generatedPages[${pageIndex}].path`;
+      if (!isPathWithinRoot(page.path, bundle.wikiRoot)) {
+        addError(
+          diagnostics,
+          "manifest_page_outside_wiki",
+          pageField,
+          "Generated page must remain inside the owning Wiki root"
+        );
+      }
+      if (toWindowsPathKey(page.path) === toWindowsPathKey(bundle.wikiRoot)) {
+        addError(
+          diagnostics,
+          "manifest_page_is_wiki_root",
+          pageField,
+          "Generated page cannot replace the Wiki root itself"
+        );
+      }
+      if (bundle.sourceRoots.some((root) => isPathWithinRoot(page.path, root))) {
+        addError(
+          diagnostics,
+          "manifest_page_inside_sources",
+          pageField,
+          "Generated page cannot live inside a source root"
+        );
+      }
+    });
+  });
+
+  return toResult(diagnostics);
+}
+
+/**
  * Validates a source locator, including its excerpt hash and coordinate ordering.
  *
  * @param value - Runtime value expected to contain a source locator

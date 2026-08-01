@@ -16,6 +16,7 @@ import {
   validateOkfDocument,
   validateSourceLocator,
   validateSourceManifest,
+  validateSourceManifestForBundle,
   validateVaultRelativePath,
 } from "@/knowledge/model/validation";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
@@ -32,6 +33,33 @@ function createBundle(): KnowledgeBundleConfig {
     wikiRoot: "Wiki",
     schemaRef: "Knowledge/schema.md",
     reviewMode: "multi_file",
+  };
+}
+
+/** Creates a valid durable Manifest owned by the default test Bundle. */
+function createManifest(
+  sourcePath = "Sources/研究.md",
+  generatedPagePath = "Wiki/研究.md"
+): SourceManifest {
+  return {
+    version: 1,
+    bundleId: "personal",
+    revision: 1,
+    entries: [
+      {
+        sourceId: "source-1",
+        sourcePath,
+        sourceKey: toWindowsPathKey(sourcePath),
+        custody: "user_managed",
+        lastSuccessful: {
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          generatedPages: [{ path: generatedPagePath, ownership: "generated" }],
+          changeSetId: "changeset-1",
+          completedAt: 100,
+        },
+      },
+    ],
   };
 }
 
@@ -224,6 +252,142 @@ describe("validateSourceManifest", () => {
     };
 
     expect(diagnosticCodes(validateSourceManifest(manifest))).toContain("source_key_duplicate");
+  });
+});
+
+describe("validateSourceManifestForBundle", () => {
+  it("accepts a valid Manifest whose sources and generated pages honor Bundle boundaries", () => {
+    expect(validateSourceManifestForBundle(createManifest(), createBundle())).toEqual({
+      valid: true,
+      diagnostics: [],
+    });
+  });
+
+  it("rejects a Manifest owned by another Bundle", () => {
+    const manifest = createManifest();
+    manifest.bundleId = "another-bundle";
+
+    const result = validateSourceManifestForBundle(manifest, createBundle());
+
+    expect(diagnosticCodes(result)).toContain("manifest_bundle_mismatch");
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "manifest_bundle_mismatch",
+          field: "manifest.bundleId",
+        }),
+      ])
+    );
+  });
+
+  it("rejects a registered source outside every configured source root", () => {
+    const result = validateSourceManifestForBundle(
+      createManifest("Elsewhere/研究.md"),
+      createBundle()
+    );
+
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "manifest_source_outside_roots",
+          field: "manifest.entries[0].sourcePath",
+        }),
+      ])
+    );
+  });
+
+  it("rejects a registered source inside the generated Wiki", () => {
+    const result = validateSourceManifestForBundle(
+      createManifest("wiki/Imported.md"),
+      createBundle()
+    );
+
+    expect(diagnosticCodes(result)).toEqual(
+      expect.arrayContaining(["manifest_source_outside_roots", "manifest_source_inside_wiki"])
+    );
+  });
+
+  it("rejects a registered source equal to the Bundle schema under Windows comparison", () => {
+    const bundle = createBundle();
+    bundle.schemaRef = "Sources/Schema.md";
+
+    const result = validateSourceManifestForBundle(createManifest("sources/schema.md"), bundle);
+
+    expect(diagnosticCodes(result)).toContain("manifest_source_is_schema");
+  });
+
+  it("rejects a generated page outside the owning Wiki", () => {
+    const result = validateSourceManifestForBundle(
+      createManifest("Sources/研究.md", "Elsewhere/研究.md"),
+      createBundle()
+    );
+
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "manifest_page_outside_wiki",
+          field: "manifest.entries[0].lastSuccessful.generatedPages[0].path",
+        }),
+      ])
+    );
+  });
+
+  it("rejects a generated page equal to the Wiki root under Windows comparison", () => {
+    const result = validateSourceManifestForBundle(
+      createManifest("Sources/研究.md", "wiki"),
+      createBundle()
+    );
+
+    expect(diagnosticCodes(result)).toContain("manifest_page_is_wiki_root");
+  });
+
+  it("rejects a generated page inside a raw source root", () => {
+    const result = validateSourceManifestForBundle(
+      createManifest("Sources/研究.md", "sources/Generated.md"),
+      createBundle()
+    );
+
+    expect(diagnosticCodes(result)).toEqual(
+      expect.arrayContaining(["manifest_page_outside_wiki", "manifest_page_inside_sources"])
+    );
+  });
+
+  it("prefixes strict schema diagnostics for both persisted inputs", () => {
+    const manifest = { ...createManifest(), unexpected: true };
+    const bundle = { ...createBundle(), unexpected: true };
+
+    const result = validateSourceManifestForBundle(manifest, bundle);
+
+    expect(result.valid).toBe(false);
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "schema_unrecognized_keys", field: "manifest" }),
+        expect.objectContaining({ code: "schema_unrecognized_keys", field: "bundle" }),
+      ])
+    );
+  });
+
+  it("preserves nested field paths beneath Manifest and Bundle prefixes", () => {
+    const manifest = createManifest() as unknown as Record<string, unknown>;
+    const bundle = createBundle() as unknown as Record<string, unknown>;
+    const entries = manifest.entries as Array<Record<string, unknown>>;
+    entries[0].custody = "untrusted";
+    bundle.reviewMode = "automatic";
+
+    const result = validateSourceManifestForBundle(manifest, bundle);
+
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "schema_invalid_enum_value",
+          field: "manifest.entries[0].custody",
+        }),
+        expect.objectContaining({
+          code: "schema_invalid_enum_value",
+          field: "bundle.reviewMode",
+        }),
+      ])
+    );
   });
 });
 

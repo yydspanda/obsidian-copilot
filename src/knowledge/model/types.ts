@@ -277,6 +277,8 @@ export interface PipelineFingerprintInput {
   version: typeof KNOWLEDGE_CONTRACT_VERSION;
   contractVersion: number;
   compilerVersion: string;
+  compilerConfiguration: JsonValue;
+  bundleConfigDigest: string;
   parser: {
     id: string;
     version: string;
