@@ -1,6 +1,7 @@
 import {
   bindKnowledgeCompilerModelAdapter,
   bindKnowledgePrivateModelRoute,
+  classifyKnowledgeCompilerModelAdapterFailure,
   KNOWLEDGE_DECODED_MODEL_OUTPUT_CONTRACT,
   KnowledgeCompilerModelAdapter,
   KnowledgeCompilerModelAdapterError,
@@ -359,6 +360,7 @@ function createCompileInput(
 function createCompiler(model: CompilerModelPort): KnowledgeCompiler {
   return new KnowledgeCompiler({
     model,
+    classifyModelFailure: classifyKnowledgeCompilerModelAdapterFailure,
     targetResolver: {
       resolve: async (targets: readonly CompilerTargetRequest[]) =>
         targets.map((target) => ({
@@ -454,6 +456,22 @@ async function authorizeGenerationWithCompiler(
 }
 
 describe("KnowledgePrivateModelRoute", () => {
+  it("rejects public construction and prototype forgery of adapter errors", () => {
+    const forged: unknown = Object.create(KnowledgeCompilerModelAdapterError.prototype, {
+      providerFailure: { value: "rate_limited", enumerable: true },
+    });
+
+    expect(() =>
+      Reflect.construct(KnowledgeCompilerModelAdapterError, [
+        Symbol("forged"),
+        "route_failed",
+        "rate_limited",
+      ])
+    ).toThrow(TypeError);
+    expect(KnowledgeCompilerModelAdapterError.inspect(forged)).toBeUndefined();
+    expect(classifyKnowledgeCompilerModelAdapterFailure(forged)).toBeUndefined();
+  });
+
   it("retains the private invoke closure only behind an opaque frozen capability", () => {
     const secretCanary = "sk-private-model-secret-canary";
     const invoke: KnowledgePrivateModelInvoke = async () => createAnalysisWireOutput();
@@ -518,22 +536,22 @@ describe("KnowledgePrivateModelRoute", () => {
       [
         {
           id: "project-personal",
-          projectModelKey: "deepseek-chat|deepseek",
+          projectModelKey: "deepseek-v4-flash|deepseek",
           modelConfigs: {},
         },
       ],
       {
         temperature: 0,
         maxTokens: 8192,
-        reasoningEffort: "medium",
+        reasoningEffort: "minimal",
         verbosity: "medium",
         activeModels: [
           {
-            name: "deepseek-chat",
+            name: "deepseek-v4-flash",
             provider: "deepseek",
             enabled: true,
             projectEnabled: true,
-            baseUrl: "https://api.deepseek.com/v1",
+            baseUrl: "https://api.deepseek.com",
           },
         ],
       },

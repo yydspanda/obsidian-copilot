@@ -267,16 +267,26 @@ export interface IngestExecutorFailureDetails {
   retryAfterMs?: number;
 }
 
+const ingestExecutorErrorSignals = new WeakMap<object, AbortSignal>();
+
 /** Typed executor failure safe for retry classification and persistence. */
 export class IngestExecutorError extends Error {
   /**
    * Creates a structured executor failure.
    *
    * @param details - Serializable failure and rate-limit metadata
+   * @param signal - Exact Queue-owned signal for the current execution attempt
    */
-  constructor(public readonly details: IngestExecutorFailureDetails) {
+  constructor(
+    public readonly details: IngestExecutorFailureDetails,
+    signal: AbortSignal
+  ) {
     super(details.message);
+    if (typeof signal !== "object" || signal === null) {
+      throw new TypeError("The ingest executor error signal is invalid");
+    }
     this.name = "IngestExecutorError";
+    ingestExecutorErrorSignals.set(this, signal);
   }
 }
 
@@ -3250,7 +3260,7 @@ export class IngestQueue {
     signal: AbortSignal
   ): Promise<ExecutedJobStatus | "stale"> {
     const timestamp = this.now();
-    const normalized = this.normalizeExecutorFailure(error, timestamp);
+    const normalized = this.normalizeExecutorFailure(error, timestamp, signal);
     const decision = this.decideRetrySafely({
       attempt,
       retryable: normalized.failure.retryable,
@@ -3422,17 +3432,19 @@ export class IngestQueue {
    *
    * @param error - Unknown executor rejection
    * @param occurredAt - Queue-owned failure timestamp
+   * @param signal - Exact Queue-owned signal paired with the current claim
    * @returns Serializable failure and explicit retry classification
    */
   private normalizeExecutorFailure(
     error: unknown,
-    occurredAt: number
+    occurredAt: number,
+    signal: AbortSignal
   ): {
     failure: KnowledgeFailure;
     rateLimited: boolean;
     retryAfterMs?: number;
   } {
-    if (error instanceof IngestExecutorError) {
+    if (error instanceof IngestExecutorError && ingestExecutorErrorSignals.get(error) === signal) {
       const { details } = error;
       if (
         isRecord(details) &&

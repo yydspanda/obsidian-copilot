@@ -1,0 +1,330 @@
+import { isCurrentDeepSeekModelIdentity } from "@/LLMProviders/deepseekModelPolicy";
+import {
+  createKnowledgeDeepSeekPrivateRoute,
+  KnowledgeDeepSeekTransportError,
+  type KnowledgeDeepSeekFetchPort,
+} from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
+import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
+import {
+  ProjectKnowledgePipelineProfileError,
+  ProjectKnowledgePipelineProfileSource,
+  type ProjectKnowledgePipelineProfileErrorCode,
+  type ProjectKnowledgePipelineProfileSourceOptions,
+  type ProjectKnowledgePipelineProjectInput,
+  type ProjectKnowledgePipelineSettingsInput,
+} from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
+import type { KnowledgeBundlePipelineProfile } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
+
+const MAX_GENERATION_RECORDS = 10_000;
+
+/** Hydrated settings projection consumed by one production Knowledge generation. */
+export interface KnowledgeProductionPreflightSettingsInput
+  extends ProjectKnowledgePipelineSettingsInput {
+  /** Hydrated provider credential used only when the selected model has no credential. */
+  deepseekApiKey: unknown;
+}
+
+/** One-shot production input whose sensitive capabilities are validated and then discarded. */
+export interface KnowledgeProductionPreflightComposerInput {
+  /** Aggregate, strictly configured Bundle owners from the startup barrier. */
+  owners: readonly ConfiguredProjectKnowledgeBundle[];
+  /** Project records captured from the same Projects generation as the owners. */
+  projects: readonly ProjectKnowledgePipelineProjectInput[];
+  /** Already hydrated settings; this composer never reads the keychain itself. */
+  settings: KnowledgeProductionPreflightSettingsInput;
+  /** Static compiler, parser, prompt, provider, and output behavior. */
+  profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
+  /** Native renderer fetch capability passed through route construction but never called. */
+  fetchPort: KnowledgeDeepSeekFetchPort;
+}
+
+/** Stable credential-free diagnostic categories returned by production preflight. */
+export type KnowledgeProductionPreflightDiagnosticCode =
+  | "closed"
+  | "input_invalid"
+  | "bundle_duplicate"
+  | "model_unsupported"
+  | `profile_${ProjectKnowledgePipelineProfileErrorCode}`
+  | "route_dependency_invalid"
+  | "route_profile_invalid"
+  | "route_model_unsupported"
+  | "route_configuration_unsupported"
+  | "route_endpoint_mismatch"
+  | "route_credential_invalid"
+  | "route_invalid";
+
+/** Secret-free status snapshot exposed to the startup and Studio adapters. */
+export type KnowledgeProductionPreflightResult =
+  | Readonly<{
+      kind: "ready";
+      bundleCount: number;
+    }>
+  | Readonly<{
+      kind: "diagnostic";
+      code: KnowledgeProductionPreflightDiagnosticCode;
+    }>;
+
+interface KnowledgeProductionPreflightComposerState {
+  result: KnowledgeProductionPreflightResult;
+}
+
+/** Internal static failure used without retaining an input value or cause. */
+class KnowledgeProductionPreflightFailure extends TypeError {
+  /** Creates one credential-free preflight failure. */
+  constructor(public readonly code: KnowledgeProductionPreflightDiagnosticCode) {
+    super("The production Knowledge preflight failed");
+    this.name = "KnowledgeProductionPreflightFailure";
+  }
+}
+
+const composerStates = new WeakMap<object, KnowledgeProductionPreflightComposerState>();
+
+const CLOSED_RESULT: KnowledgeProductionPreflightResult = Object.freeze({
+  kind: "diagnostic",
+  code: "closed",
+});
+
+const INVALID_RESULT: KnowledgeProductionPreflightResult = Object.freeze({
+  kind: "diagnostic",
+  code: "input_invalid",
+});
+
+const CLOSED_STATE: KnowledgeProductionPreflightComposerState = Object.freeze({
+  result: CLOSED_RESULT,
+});
+
+/** Reads an enumerable own data property without invoking an accessor. */
+function readDataProperty(value: unknown, key: string): unknown {
+  try {
+    if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+      throw new TypeError("Expected an object");
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError("Expected an own data property");
+    }
+    return descriptor.value;
+  } catch {
+    throw new KnowledgeProductionPreflightFailure("input_invalid");
+  }
+}
+
+/** Reads one optional model credential without evaluating accessors. */
+function readOptionalModelCredential(value: unknown): unknown {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new TypeError("Expected a model record");
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, "apiKey");
+    if (!descriptor) return undefined;
+    if (!("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError("Expected a credential data property");
+    }
+    return descriptor.value;
+  } catch {
+    throw new KnowledgeProductionPreflightFailure("route_credential_invalid");
+  }
+}
+
+/** Reads the hydrated provider credential without evaluating accessors. */
+function readProviderCredential(settings: unknown): unknown {
+  try {
+    if (typeof settings !== "object" || settings === null) {
+      throw new TypeError("Expected settings");
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(settings, "deepseekApiKey");
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError("Expected a hydrated credential data property");
+    }
+    return descriptor.value;
+  } catch {
+    throw new KnowledgeProductionPreflightFailure("route_credential_invalid");
+  }
+}
+
+/** Captures a bounded dense array without consulting iterator hooks. */
+function snapshotDenseArray(value: unknown): readonly unknown[] {
+  try {
+    if (!Array.isArray(value)) {
+      throw new TypeError("Expected an array");
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !lengthDescriptor ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > MAX_GENERATION_RECORDS ||
+      Reflect.ownKeys(value).length !== (lengthDescriptor.value as number) + 1
+    ) {
+      throw new TypeError("Expected a bounded dense array");
+    }
+    const snapshot: unknown[] = [];
+    for (let index = 0; index < (lengthDescriptor.value as number); index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError("Expected an array data property");
+      }
+      snapshot.push(descriptor.value);
+    }
+    return Object.freeze(snapshot);
+  } catch (error) {
+    if (error instanceof KnowledgeProductionPreflightFailure) throw error;
+    throw new KnowledgeProductionPreflightFailure("input_invalid");
+  }
+}
+
+/** Reads a canonical identity from a model record without coercion or trimming. */
+function readModelIdentity(value: unknown, key: "name" | "provider"): string {
+  const candidate = readDataProperty(value, key);
+  if (typeof candidate !== "string" || candidate.length === 0 || candidate.trim() !== candidate) {
+    throw new KnowledgeProductionPreflightFailure("input_invalid");
+  }
+  return candidate;
+}
+
+/** Selects the exact model credential, falling back only when it is absent or empty. */
+function selectCredential(
+  settings: KnowledgeProductionPreflightSettingsInput,
+  profile: KnowledgeBundlePipelineProfile
+): string {
+  const activeModels = snapshotDenseArray(readDataProperty(settings, "activeModels"));
+  const matches = activeModels.filter(
+    (model) =>
+      readModelIdentity(model, "name") === profile.model.model &&
+      readModelIdentity(model, "provider") === profile.model.provider
+  );
+  if (matches.length !== 1) {
+    throw new KnowledgeProductionPreflightFailure("input_invalid");
+  }
+  const modelCredential = readOptionalModelCredential(matches[0]);
+  const selected =
+    modelCredential === undefined || modelCredential === ""
+      ? readProviderCredential(settings)
+      : modelCredential;
+  if (typeof selected !== "string") {
+    throw new KnowledgeProductionPreflightFailure("route_credential_invalid");
+  }
+  return selected;
+}
+
+/** Maps a caught construction failure to a closed public diagnostic vocabulary. */
+function classifyPreflightFailure(error: unknown): KnowledgeProductionPreflightDiagnosticCode {
+  if (error instanceof KnowledgeProductionPreflightFailure) return error.code;
+  const profileCode = ProjectKnowledgePipelineProfileError.inspect(error);
+  if (profileCode !== undefined) return `profile_${profileCode}`;
+  const deepSeekCode = KnowledgeDeepSeekTransportError.inspect(error);
+  if (deepSeekCode !== undefined) {
+    switch (deepSeekCode) {
+      case "dependency_invalid":
+      case "profile_invalid":
+      case "model_unsupported":
+      case "configuration_unsupported":
+      case "endpoint_mismatch":
+      case "credential_invalid":
+        return `route_${deepSeekCode}`;
+      default:
+        return "route_invalid";
+    }
+  }
+  return "input_invalid";
+}
+
+/** Creates one frozen public diagnostic without retaining a caught error. */
+function createDiagnosticState(
+  code: KnowledgeProductionPreflightDiagnosticCode
+): KnowledgeProductionPreflightComposerState {
+  return Object.freeze({
+    result: Object.freeze({ kind: "diagnostic" as const, code }),
+  });
+}
+
+/** Eagerly composes and validates private routes without invoking a transport. */
+function composeGeneration(
+  input: KnowledgeProductionPreflightComposerInput
+): KnowledgeProductionPreflightComposerState {
+  try {
+    const owners = snapshotDenseArray(readDataProperty(input, "owners"));
+    const projects = snapshotDenseArray(readDataProperty(input, "projects"));
+    const settings = readDataProperty(input, "settings");
+    const profileOptions = readDataProperty(input, "profileOptions");
+    const fetchPort = readDataProperty(input, "fetchPort");
+    if (owners.length === 0) {
+      throw new KnowledgeProductionPreflightFailure("input_invalid");
+    }
+    if (typeof settings !== "object" || settings === null) {
+      throw new KnowledgeProductionPreflightFailure("input_invalid");
+    }
+    if (typeof profileOptions !== "object" || profileOptions === null) {
+      throw new KnowledgeProductionPreflightFailure("input_invalid");
+    }
+    if (typeof fetchPort !== "function") {
+      throw new KnowledgeProductionPreflightFailure("route_dependency_invalid");
+    }
+
+    const profileSource = new ProjectKnowledgePipelineProfileSource(
+      projects as readonly ProjectKnowledgePipelineProjectInput[],
+      settings as KnowledgeProductionPreflightSettingsInput,
+      profileOptions as ProjectKnowledgePipelineProfileSourceOptions
+    );
+    let bundleCount = 0;
+    const bundleIds = new Set<string>();
+    for (const owner of owners as readonly ConfiguredProjectKnowledgeBundle[]) {
+      const profile = profileSource.resolve(owner);
+      if (
+        profile.model.provider !== "deepseek" ||
+        !isCurrentDeepSeekModelIdentity(profile.model.model)
+      ) {
+        throw new KnowledgeProductionPreflightFailure("model_unsupported");
+      }
+      if (bundleIds.has(profile.bundleId)) {
+        throw new KnowledgeProductionPreflightFailure("bundle_duplicate");
+      }
+      const credential = selectCredential(
+        settings as KnowledgeProductionPreflightSettingsInput,
+        profile
+      );
+      createKnowledgeDeepSeekPrivateRoute(
+        profile,
+        credential,
+        fetchPort as KnowledgeDeepSeekFetchPort
+      );
+      bundleIds.add(profile.bundleId);
+      bundleCount += 1;
+    }
+    return Object.freeze({
+      result: Object.freeze({ kind: "ready" as const, bundleCount }),
+    });
+  } catch (error) {
+    return createDiagnosticState(classifyPreflightFailure(error));
+  }
+}
+
+/**
+ * Owns one fail-closed production Knowledge preflight generation.
+ *
+ * Construction eagerly validates exact project profiles, credentials, and
+ * private DeepSeek routes. It cannot perform network I/O because it never
+ * receives or exposes a route invocation request.
+ */
+export class KnowledgeProductionPreflightComposer {
+  /** Captures one immutable generation and performs synchronous zero-network preflight. */
+  constructor(input: KnowledgeProductionPreflightComposerInput) {
+    composerStates.set(this, composeGeneration(input));
+    Object.freeze(this);
+  }
+
+  /** Returns the generation's frozen secret-free readiness snapshot. */
+  preflight(): KnowledgeProductionPreflightResult {
+    return composerStates.get(this)?.result ?? INVALID_RESULT;
+  }
+
+  /** Synchronously and permanently fails this preflight generation closed. */
+  close(): void {
+    if (!composerStates.has(this)) return;
+    composerStates.set(this, CLOSED_STATE);
+  }
+}
+
+Object.freeze(KnowledgeProductionPreflightComposer.prototype);
+Object.freeze(KnowledgeProductionPreflightComposer);

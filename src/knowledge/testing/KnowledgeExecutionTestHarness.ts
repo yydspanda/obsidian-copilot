@@ -3,6 +3,7 @@ import {
   type IngestExecutionContext,
   type IngestExecutionResult,
 } from "@/knowledge/ingest/queue/IngestQueue";
+import type { RetryPolicy } from "@/knowledge/ingest/queue/RetryPolicy";
 import type { SourceManifest } from "@/knowledge/model/types";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
@@ -78,6 +79,7 @@ export interface KnowledgeExecutionTestHarnessOptions {
   jobId?: string;
   clock?: number;
   executionOwner?: KnowledgeExecutionOwner;
+  retryPolicy?: RetryPolicy;
 }
 
 /** Real Runtime, Queue, observation, Manifest, and proof capabilities for one test attempt. */
@@ -129,7 +131,9 @@ export async function createKnowledgeExecutionTestHarness(
     {
       clock: () => options.clock ?? 100,
       jobIdFactory: () => options.jobId ?? "job-execution",
-      retryPolicy: { decide: () => ({ kind: "fail", reason: "not_retryable" }) },
+      retryPolicy:
+        options.retryPolicy ??
+        ({ decide: () => ({ kind: "fail", reason: "not_retryable" }) } as const),
     }
   );
   await queue.enqueue(binding.observation);

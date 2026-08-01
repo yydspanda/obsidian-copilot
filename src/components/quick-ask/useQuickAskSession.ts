@@ -20,6 +20,11 @@ import { findCustomModel } from "@/utils";
 import { logError, logWarn } from "@/logger";
 import type { QuickAskMessage } from "./types";
 import type { CopilotSettings } from "@/settings/model";
+import {
+  assertSavedModelReferenceCanRun,
+  findFirstRunnableFallbackModel,
+  isSavedModelReferenceError,
+} from "@/LLMProviders/modelSelectionPolicy";
 
 interface UseQuickAskSessionParams {
   selectedText: string;
@@ -57,22 +62,33 @@ export function useQuickAskSession(params: UseQuickAskSessionParams): QuickAskSe
     };
   }, []);
 
-  // Safely resolve the selected model with fallback to first enabled model
-  const resolvedModel = useMemo(() => {
+  // Resolve ordinary stale selections with the historical fallback, while retired
+  // and unsupported direct-provider references remain explicit user decisions.
+  const modelResolution = useMemo((): {
+    model: CopilotSettings["activeModels"][number] | null;
+    error: string | null;
+  } => {
     try {
+      assertSavedModelReferenceCanRun(selectedModelKey);
       const model = findCustomModel(selectedModelKey, settings.activeModels);
+      assertSavedModelReferenceCanRun(selectedModelKey, model);
       if (!model.enabled) {
         logWarn("Selected model is disabled; falling back to first enabled model.", {
           selectedModelKey,
         });
-        return settings.activeModels.find((m) => m.enabled) ?? null;
+        return { model: findFirstRunnableFallbackModel(settings.activeModels), error: null };
       }
-      return model;
-    } catch {
+      return { model, error: null };
+    } catch (error) {
+      if (isSavedModelReferenceError(error)) {
+        logWarn(error.message);
+        return { model: null, error: error.message };
+      }
       logWarn("Selected model not found; falling back to first enabled model.");
-      return settings.activeModels.find((m) => m.enabled) ?? null;
+      return { model: findFirstRunnableFallbackModel(settings.activeModels), error: null };
     }
   }, [selectedModelKey, settings.activeModels]);
+  const resolvedModel = modelResolution.model;
 
   // Use shared streaming hook
   const {
@@ -86,8 +102,11 @@ export function useQuickAskSession(params: UseQuickAskSessionParams): QuickAskSe
     systemPrompt: QUICK_COMMAND_SYSTEM_PROMPT,
     excludeThinking: true,
     onNoModel: () => {
-      logError("No active model is configured. Please configure a model in Copilot settings.");
-      new Notice("No active model configured. Please configure a model in Copilot settings.");
+      const message =
+        modelResolution.error ??
+        "No active model configured. Please configure a model in Copilot settings.";
+      logError(message);
+      new Notice(message);
     },
     onNonAbortError: (error) => {
       logError("Error generating response:", error);

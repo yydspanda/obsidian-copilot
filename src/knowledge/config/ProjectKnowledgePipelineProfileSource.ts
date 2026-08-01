@@ -1,5 +1,9 @@
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
+  isCurrentDeepSeekModelIdentity,
+  isDeepSeekThinkingEffort,
+} from "@/LLMProviders/deepseekModelPolicy";
+import {
   KNOWLEDGE_CITATION_CONTRACT_VERSION,
   KNOWLEDGE_PIPELINE_PROFILE_VERSION,
   createKnowledgeSourceParserProfileDigest,
@@ -62,17 +66,78 @@ export type ProjectKnowledgePipelineProfileErrorCode =
   | "model_disabled"
   | "model_not_project_enabled"
   | "provider_unsupported"
+  | "model_unsupported"
+  | "configuration_unsupported"
   | "model_behavior_invalid"
   | "endpoint_invalid";
 
+const PROJECT_KNOWLEDGE_PIPELINE_PROFILE_ERROR_CODES =
+  new Set<ProjectKnowledgePipelineProfileErrorCode>([
+    "input_invalid",
+    "project_missing",
+    "model_key_invalid",
+    "model_missing",
+    "model_ambiguous",
+    "model_disabled",
+    "model_not_project_enabled",
+    "provider_unsupported",
+    "model_unsupported",
+    "configuration_unsupported",
+    "model_behavior_invalid",
+    "endpoint_invalid",
+  ]);
+const projectKnowledgePipelineProfileErrorCodes = new WeakMap<
+  object,
+  ProjectKnowledgePipelineProfileErrorCode
+>();
+const PROJECT_KNOWLEDGE_PIPELINE_PROFILE_ERROR_TOKEN = Symbol(
+  "ProjectKnowledgePipelineProfileError.constructor"
+);
+
 /** Sanitized profile-projection failure that never retains model settings. */
 export class ProjectKnowledgePipelineProfileError extends TypeError {
-  /** Creates one stable profile failure. */
-  constructor(public readonly code: ProjectKnowledgePipelineProfileErrorCode) {
+  /** Creates one stable profile failure for this module's private mint authority. */
+  constructor(token: symbol, code: ProjectKnowledgePipelineProfileErrorCode) {
     super("The project knowledge pipeline profile is invalid");
+    if (
+      token !== PROJECT_KNOWLEDGE_PIPELINE_PROFILE_ERROR_TOKEN ||
+      !PROJECT_KNOWLEDGE_PIPELINE_PROFILE_ERROR_CODES.has(code)
+    ) {
+      throw new TypeError("The project knowledge pipeline profile error is invalid");
+    }
     this.name = "ProjectKnowledgePipelineProfileError";
+    projectKnowledgePipelineProfileErrorCodes.set(this, code);
+    Object.freeze(this);
+  }
+
+  /** Reads one authentic fixed diagnostic code without trusting exposed properties. */
+  static inspect(value: unknown): ProjectKnowledgePipelineProfileErrorCode | undefined {
+    if (typeof value !== "object" || value === null) return undefined;
+    return projectKnowledgePipelineProfileErrorCodes.get(value);
+  }
+
+  /** Returns the fixed diagnostic code retained in module-private state. */
+  get code(): ProjectKnowledgePipelineProfileErrorCode {
+    const code = ProjectKnowledgePipelineProfileError.inspect(this);
+    if (code === undefined) {
+      throw new TypeError("The project knowledge pipeline profile error is invalid");
+    }
+    return code;
   }
 }
+
+/** Mints one authentic profile error without exposing construction authority. */
+function createProjectKnowledgePipelineProfileError(
+  code: ProjectKnowledgePipelineProfileErrorCode
+): ProjectKnowledgePipelineProfileError {
+  return new ProjectKnowledgePipelineProfileError(
+    PROJECT_KNOWLEDGE_PIPELINE_PROFILE_ERROR_TOKEN,
+    code
+  );
+}
+
+Object.freeze(ProjectKnowledgePipelineProfileError.prototype);
+Object.freeze(ProjectKnowledgePipelineProfileError);
 
 interface CapturedProject {
   id: string;
@@ -148,7 +213,7 @@ function readDataProperty(value: unknown, key: string): unknown {
     }
     return descriptor.value;
   } catch {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
 }
 
@@ -162,7 +227,7 @@ function readOptionalDataProperty(value: object, key: string): unknown {
     }
     return descriptor.value;
   } catch {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
 }
 
@@ -172,7 +237,7 @@ function requireCanonicalText(
   code: ProjectKnowledgePipelineProfileErrorCode
 ): string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
-    throw new ProjectKnowledgePipelineProfileError(code);
+    throw createProjectKnowledgePipelineProfileError(code);
   }
   return value;
 }
@@ -182,7 +247,7 @@ function readOptionalFiniteNumber(value: object, key: string): number | undefine
   const candidate = readOptionalDataProperty(value, key);
   if (candidate === undefined) return undefined;
   if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
   return candidate;
 }
@@ -192,7 +257,7 @@ function readOptionalPositiveInteger(value: object, key: string): number | undef
   const candidate = readOptionalDataProperty(value, key);
   if (candidate === undefined) return undefined;
   if (!Number.isSafeInteger(candidate) || (candidate as number) < 1) {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
   return candidate as number;
 }
@@ -202,7 +267,7 @@ function readOptionalBoolean(value: object, key: string): boolean | undefined {
   const candidate = readOptionalDataProperty(value, key);
   if (candidate === undefined) return undefined;
   if (typeof candidate !== "boolean") {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
   return candidate;
 }
@@ -216,7 +281,7 @@ function readOptionalEnum(
   const candidate = readOptionalDataProperty(value, key);
   if (candidate === undefined) return undefined;
   if (typeof candidate !== "string" || !allowed.includes(candidate)) {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
   return candidate;
 }
@@ -224,7 +289,7 @@ function readOptionalEnum(
 /** Reads a required closed-vocabulary text setting. */
 function requireEnum(value: unknown, allowed: readonly string[]): string {
   if (typeof value !== "string" || !allowed.includes(value)) {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
   return value;
 }
@@ -256,7 +321,7 @@ function snapshotDenseArray(value: unknown): readonly unknown[] {
     }
     return Object.freeze(result);
   } catch {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
 }
 
@@ -268,17 +333,17 @@ function snapshotJsonValue(
 ): JsonValue {
   budget.remaining -= 1;
   if (budget.remaining < 0) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new ProjectKnowledgePipelineProfileError("input_invalid");
+      throw createProjectKnowledgePipelineProfileError("input_invalid");
     }
     return value;
   }
   if (typeof value !== "object" || ancestors.has(value)) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   ancestors.add(value);
   try {
@@ -291,17 +356,17 @@ function snapshotJsonValue(
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      throw new ProjectKnowledgePipelineProfileError("input_invalid");
+      throw createProjectKnowledgePipelineProfileError("input_invalid");
     }
     const keys = Reflect.ownKeys(value);
     if (keys.some((key) => typeof key !== "string")) {
-      throw new ProjectKnowledgePipelineProfileError("input_invalid");
+      throw createProjectKnowledgePipelineProfileError("input_invalid");
     }
     const result: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
     for (const key of (keys as string[]).sort(compareText)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new ProjectKnowledgePipelineProfileError("input_invalid");
+        throw createProjectKnowledgePipelineProfileError("input_invalid");
       }
       Object.defineProperty(result, key, {
         value: snapshotJsonValue(descriptor.value, ancestors, budget),
@@ -320,13 +385,13 @@ function snapshotJsonValue(
 export function createKnowledgeModelEndpointIdentity(value: unknown): string | undefined {
   if (value === undefined || value === "") return undefined;
   if (typeof value !== "string" || value.trim() !== value) {
-    throw new ProjectKnowledgePipelineProfileError("endpoint_invalid");
+    throw createProjectKnowledgePipelineProfileError("endpoint_invalid");
   }
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new ProjectKnowledgePipelineProfileError("endpoint_invalid");
+    throw createProjectKnowledgePipelineProfileError("endpoint_invalid");
   }
   if (
     (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
@@ -335,7 +400,7 @@ export function createKnowledgeModelEndpointIdentity(value: unknown): string | u
     parsed.search !== "" ||
     parsed.hash !== ""
   ) {
-    throw new ProjectKnowledgePipelineProfileError("endpoint_invalid");
+    throw createProjectKnowledgePipelineProfileError("endpoint_invalid");
   }
   const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   return sha256(
@@ -375,7 +440,7 @@ function captureProject(value: unknown): CapturedProject {
     );
     const configs = readDataProperty(value, "modelConfigs");
     if (typeof configs !== "object" || configs === null || Array.isArray(configs)) {
-      throw new ProjectKnowledgePipelineProfileError("input_invalid");
+      throw createProjectKnowledgePipelineProfileError("input_invalid");
     }
     const allowedKeys = new Set(["temperature", "maxTokens"]);
     const configKeys = Reflect.ownKeys(configs);
@@ -384,7 +449,7 @@ function captureProject(value: unknown): CapturedProject {
       configKeys.some((key) => typeof key !== "string" || !allowedKeys.has(key)) ||
       (prototype !== Object.prototype && prototype !== null)
     ) {
-      throw new ProjectKnowledgePipelineProfileError("input_invalid");
+      throw createProjectKnowledgePipelineProfileError("input_invalid");
     }
     const temperature = readOptionalFiniteNumber(configs, "temperature");
     const maxTokens = readOptionalPositiveInteger(configs, "maxTokens");
@@ -395,8 +460,8 @@ function captureProject(value: unknown): CapturedProject {
       ...(maxTokens === undefined ? {} : { maxTokens }),
     });
   } catch (error) {
-    if (error instanceof ProjectKnowledgePipelineProfileError) throw error;
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    if (ProjectKnowledgePipelineProfileError.inspect(error) !== undefined) throw error;
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
 }
 
@@ -406,7 +471,7 @@ function captureActiveModel(
   selectedModelKeys: ReadonlySet<string>
 ): CapturedActiveModel {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   const name = requireCanonicalText(readDataProperty(value, "name"), "model_behavior_invalid");
   const provider = requireCanonicalText(
@@ -422,7 +487,7 @@ function captureActiveModel(
     (enabled !== undefined && typeof enabled !== "boolean") ||
     (projectEnabled !== undefined && typeof projectEnabled !== "boolean")
   ) {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
   const temperature = readOptionalFiniteNumber(value, "temperature");
   const maxTokens = readOptionalPositiveInteger(value, "maxTokens");
@@ -469,7 +534,7 @@ function captureSettings(
     !Number.isSafeInteger(maxTokens) ||
     (maxTokens as number) < 1
   ) {
-    throw new ProjectKnowledgePipelineProfileError("model_behavior_invalid");
+    throw createProjectKnowledgePipelineProfileError("model_behavior_invalid");
   }
   const reasoningEffort = requireEnum(
     readDataProperty(value, "reasoningEffort"),
@@ -507,10 +572,10 @@ function captureOptions(value: ProjectKnowledgePipelineProfileSourceOptions): {
     compilerConfiguration = snapshotJsonValue(readDataProperty(value, "compilerConfiguration"));
     parserSnapshot = snapshotJsonValue(readDataProperty(value, "parsers"));
   } catch {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   if (!Array.isArray(parserSnapshot) || parserSnapshot.length === 0) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   const parsers = parserSnapshot as unknown as readonly KnowledgeSourceParserProfile[];
   try {
@@ -520,20 +585,20 @@ function captureOptions(value: ProjectKnowledgePipelineProfileSourceOptions): {
       assertKnowledgeConfigurationContainsNoSecrets(parser.configuration);
     }
   } catch {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   const providers = snapshotDenseArray(readDataProperty(value, "supportedProviders")).map(
     (provider) => requireCanonicalText(provider, "input_invalid")
   );
   if (providers.length === 0 || new Set(providers).size !== providers.length) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   const promptContractIdentity = readDataProperty(value, "promptContractIdentity");
   if (
     typeof promptContractIdentity !== "string" ||
     !/^[a-f0-9]{64}$/.test(promptContractIdentity)
   ) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   const providerRouteSnapshot = snapshotJsonValue(
     readDataProperty(value, "providerRouteIdentities")
@@ -544,13 +609,13 @@ function captureOptions(value: ProjectKnowledgePipelineProfileSourceOptions): {
     Array.isArray(providerRouteSnapshot) ||
     Reflect.ownKeys(providerRouteSnapshot).length !== providers.length
   ) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   const providerRouteIdentities = Object.create(null) as Record<string, string>;
   for (const provider of providers) {
     const identity = readDataProperty(providerRouteSnapshot, provider);
     if (typeof identity !== "string" || !/^[a-f0-9]{64}$/.test(identity)) {
-      throw new ProjectKnowledgePipelineProfileError("input_invalid");
+      throw createProjectKnowledgePipelineProfileError("input_invalid");
     }
     Object.defineProperty(providerRouteIdentities, provider, {
       value: identity,
@@ -583,20 +648,58 @@ function selectModelBehavior(
     (candidate) => `${candidate.name}|${candidate.provider}` === project.projectModelKey
   );
   if (matches.length === 0) {
-    throw new ProjectKnowledgePipelineProfileError("model_missing");
+    throw createProjectKnowledgePipelineProfileError("model_missing");
   }
   if (matches.length !== 1) {
-    throw new ProjectKnowledgePipelineProfileError("model_ambiguous");
+    throw createProjectKnowledgePipelineProfileError("model_ambiguous");
   }
   const selected = matches[0];
   if (!selected.enabled) {
-    throw new ProjectKnowledgePipelineProfileError("model_disabled");
+    throw createProjectKnowledgePipelineProfileError("model_disabled");
   }
   if (!selected.projectEnabled) {
-    throw new ProjectKnowledgePipelineProfileError("model_not_project_enabled");
+    throw createProjectKnowledgePipelineProfileError("model_not_project_enabled");
   }
   if (!supportedProviders.has(selected.provider)) {
-    throw new ProjectKnowledgePipelineProfileError("provider_unsupported");
+    throw createProjectKnowledgePipelineProfileError("provider_unsupported");
+  }
+  let temperature = project.temperature ?? selected.temperature ?? settings.temperature;
+  const reasoningEffort = selected.reasoningEffort ?? settings.reasoningEffort;
+  if (selected.provider === "deepseek") {
+    if (!isCurrentDeepSeekModelIdentity(selected.name)) {
+      throw createProjectKnowledgePipelineProfileError("model_unsupported");
+    }
+    if (
+      selected.frequencyPenalty !== undefined ||
+      selected.numCtx !== undefined ||
+      selected.useResponsesApi !== undefined ||
+      selected.enablePromptCaching !== undefined ||
+      selected.routingIdentity !== undefined
+    ) {
+      throw createProjectKnowledgePipelineProfileError("configuration_unsupported");
+    }
+    const officialEndpointIdentity = createKnowledgeModelEndpointIdentity(
+      "https://api.deepseek.com"
+    );
+    if (
+      selected.endpointIdentity !== undefined &&
+      selected.endpointIdentity !== officialEndpointIdentity
+    ) {
+      throw createProjectKnowledgePipelineProfileError("endpoint_invalid");
+    }
+    if (reasoningEffort === "low" || reasoningEffort === "medium") {
+      throw createProjectKnowledgePipelineProfileError("configuration_unsupported");
+    }
+    if (isDeepSeekThinkingEffort(reasoningEffort)) {
+      if (
+        selected.topP !== undefined ||
+        (selected.temperature !== undefined && selected.temperature !== 0) ||
+        (project.temperature === undefined && temperature !== 0)
+      ) {
+        throw createProjectKnowledgePipelineProfileError("configuration_unsupported");
+      }
+      temperature = 0;
+    }
   }
   const configuration: JsonValue = Object.freeze({
     behaviorContractVersion: KNOWLEDGE_MODEL_BEHAVIOR_CONTRACT_VERSION,
@@ -608,9 +711,9 @@ function selectModelBehavior(
     structuredOutput: "decoded-object-core-schema-v1",
     streaming: false,
     modelFallback: false,
-    temperature: project.temperature ?? selected.temperature ?? settings.temperature,
+    temperature,
     maxTokens: project.maxTokens ?? selected.maxTokens ?? settings.maxTokens,
-    reasoningEffort: selected.reasoningEffort ?? settings.reasoningEffort,
+    reasoningEffort,
     verbosity: selected.verbosity ?? settings.verbosity,
     ...(selected.topP === undefined ? {} : { topP: selected.topP }),
     ...(selected.frequencyPenalty === undefined
@@ -636,11 +739,11 @@ function selectModelBehavior(
 /** Returns opaque source state only for an authentic constructed instance. */
 function requireProfileSourceState(value: unknown): ProjectKnowledgePipelineProfileSourceState {
   if (typeof value !== "object" || value === null) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   const state = profileSourceStates.get(value);
   if (!state) {
-    throw new ProjectKnowledgePipelineProfileError("input_invalid");
+    throw createProjectKnowledgePipelineProfileError("input_invalid");
   }
   return state;
 }
@@ -663,7 +766,7 @@ export class ProjectKnowledgePipelineProfileSource {
     const projectsById = new Map<string, CapturedProject>();
     for (const project of capturedProjects) {
       if (projectsById.has(project.id)) {
-        throw new ProjectKnowledgePipelineProfileError("input_invalid");
+        throw createProjectKnowledgePipelineProfileError("input_invalid");
       }
       projectsById.set(project.id, project);
     }
@@ -691,7 +794,7 @@ export class ProjectKnowledgePipelineProfileSource {
     const bundleId = requireCanonicalText(readDataProperty(config, "id"), "input_invalid");
     const project = state.projectsById.get(projectId);
     if (!project) {
-      throw new ProjectKnowledgePipelineProfileError("project_missing");
+      throw createProjectKnowledgePipelineProfileError("project_missing");
     }
     const model = selectModelBehavior(
       project,

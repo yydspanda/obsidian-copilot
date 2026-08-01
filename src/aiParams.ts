@@ -167,6 +167,8 @@ export interface CustomModel {
   believerExclusive?: boolean;
   capabilities?: ModelCapability[];
   displayName?: string;
+  /** Retired provider identity retained only so old selections fail visibly without fallback. */
+  retired?: boolean;
 
   // Embedding models only (Jina at the moment)
   dimensions?: number;

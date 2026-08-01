@@ -9,6 +9,7 @@ import { Root } from "react-dom/client";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
 import { getModelKeyFromModel, useSettingsValue } from "@/settings/model";
 import { getModelDisplayText } from "@/components/ui/model-display";
+import { isModelReferenceRunnable } from "@/LLMProviders/modelSelectionPolicy";
 import { cn } from "@/lib/utils";
 import { ChevronDown } from "lucide-react";
 import { logError } from "@/logger";
@@ -34,7 +35,7 @@ function CustomCommandSettingsModalContent({
 }) {
   const settings = useSettingsValue();
   const activeModels = settings.activeModels
-    .filter((m) => m.enabled)
+    .filter((m) => m.enabled && isModelReferenceRunnable(m))
     .map((model) => ({
       label: getModelDisplayText(model),
       value: getModelKeyFromModel(model),

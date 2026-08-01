@@ -12,9 +12,176 @@ import {
   DEFAULT_OPEN_AREA,
   DEFAULT_QA_EXCLUSIONS_SETTING,
   DEFAULT_SETTINGS,
+  ChatModelProviders,
   EmbeddingModelProviders,
+  ReasoningEffort,
   SEND_SHORTCUT,
 } from "@/constants";
+import { isCurrentDeepSeekModelIdentity } from "@/LLMProviders/deepseekModelPolicy";
+
+const RETIRED_DEEPSEEK_MODEL_NAMES = new Set(["deepseek-chat", "deepseek-reasoner"]);
+
+const DIRECT_DEEPSEEK_PROVIDER = String(ChatModelProviders.DEEPSEEK);
+const DEEPSEEK_REASONING_EFFORTS = new Set<ReasoningEffort>([
+  ReasoningEffort.MINIMAL,
+  ReasoningEffort.HIGH,
+  ReasoningEffort.XHIGH,
+]);
+
+/** Returns the first defined value for one model property across candidate records. */
+function firstDefinedModelValue<K extends keyof CustomModel>(
+  models: readonly CustomModel[],
+  key: K
+): CustomModel[K] | undefined {
+  for (const model of models) {
+    if (model[key] !== undefined) {
+      return model[key];
+    }
+  }
+  return undefined;
+}
+
+/** Restores one unique current DeepSeek identity to its reviewed built-in shape. */
+function restoreCurrentDeepSeekModel(
+  builtIn: CustomModel,
+  matches: readonly CustomModel[]
+): CustomModel {
+  const preferred =
+    matches.find((model) => model.isBuiltIn === true && model.retired !== true) ??
+    matches.find((model) => model.retired !== true) ??
+    matches.find((model) => model.isBuiltIn === true) ??
+    matches[0] ??
+    builtIn;
+  const candidates = [preferred, ...matches.filter((model) => model !== preferred)];
+  const explicitProjectStates = matches
+    .map((model) => model.projectEnabled)
+    .filter((value): value is boolean => typeof value === "boolean");
+  const persistedEffort = firstDefinedModelValue(candidates, "reasoningEffort");
+  const reasoningEffort =
+    persistedEffort !== undefined && DEEPSEEK_REASONING_EFFORTS.has(persistedEffort)
+      ? persistedEffort
+      : builtIn.reasoningEffort;
+  const thinkingEnabled =
+    reasoningEffort !== undefined && reasoningEffort !== ReasoningEffort.MINIMAL;
+  const persistedTemperature = firstDefinedModelValue(candidates, "temperature");
+  const temperature = thinkingEnabled
+    ? 0
+    : typeof persistedTemperature === "number" &&
+        Number.isFinite(persistedTemperature) &&
+        persistedTemperature >= 0 &&
+        persistedTemperature <= 2
+      ? persistedTemperature
+      : builtIn.temperature;
+  const persistedTopP = firstDefinedModelValue(candidates, "topP");
+  const topP =
+    !thinkingEnabled &&
+    typeof persistedTopP === "number" &&
+    Number.isFinite(persistedTopP) &&
+    persistedTopP >= 0 &&
+    persistedTopP <= 1
+      ? persistedTopP
+      : undefined;
+
+  return {
+    ...builtIn,
+    enabled: matches.some((model) => model.enabled),
+    projectEnabled:
+      explicitProjectStates.length > 0
+        ? explicitProjectStates.some(Boolean)
+        : builtIn.projectEnabled,
+    isBuiltIn: true,
+    ...(firstDefinedModelValue(candidates, "apiKey") === undefined
+      ? {}
+      : { apiKey: firstDefinedModelValue(candidates, "apiKey") }),
+    ...(firstDefinedModelValue(candidates, "baseUrl") === undefined
+      ? {}
+      : { baseUrl: firstDefinedModelValue(candidates, "baseUrl") }),
+    ...(firstDefinedModelValue(candidates, "enableCors") === undefined
+      ? {}
+      : { enableCors: firstDefinedModelValue(candidates, "enableCors") }),
+    ...(firstDefinedModelValue(candidates, "stream") === undefined
+      ? {}
+      : { stream: firstDefinedModelValue(candidates, "stream") }),
+    ...(firstDefinedModelValue(candidates, "streamUsage") === undefined
+      ? {}
+      : { streamUsage: firstDefinedModelValue(candidates, "streamUsage") }),
+    ...(firstDefinedModelValue(candidates, "maxTokens") === undefined
+      ? {}
+      : { maxTokens: firstDefinedModelValue(candidates, "maxTokens") }),
+    ...(firstDefinedModelValue(candidates, "verbosity") === undefined
+      ? {}
+      : { verbosity: firstDefinedModelValue(candidates, "verbosity") }),
+    ...(firstDefinedModelValue(candidates, "displayName") === undefined
+      ? {}
+      : { displayName: firstDefinedModelValue(candidates, "displayName") }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    ...(temperature === undefined ? {} : { temperature }),
+    ...(topP === undefined ? {} : { topP }),
+  };
+}
+
+/**
+ * Retires removed official DeepSeek identities and installs the current built-in catalog.
+ *
+ * Old identities deliberately remain disabled and visible. References are not
+ * rewritten to a V4 model because choosing Flash/Pro and thinking behavior is a
+ * user decision, and the runtime must never turn that decision into fallback.
+ *
+ * @param models - Persisted chat model catalog
+ * @returns Idempotently migrated catalog with no duplicate current identities
+ */
+export function migrateDeepSeekModelCatalog(models: readonly CustomModel[]): CustomModel[] {
+  const reviewedBuiltIns = new Map(
+    BUILTIN_CHAT_MODELS.filter(
+      (model) =>
+        model.provider === DIRECT_DEEPSEEK_PROVIDER && isCurrentDeepSeekModelIdentity(model.name)
+    ).map((model) => [model.name, model] as const)
+  );
+  const emittedCurrentIdentities = new Set<string>();
+  const migrated: CustomModel[] = [];
+
+  for (const model of models) {
+    if (model.provider !== DIRECT_DEEPSEEK_PROVIDER) {
+      migrated.push(model);
+      continue;
+    }
+    if (RETIRED_DEEPSEEK_MODEL_NAMES.has(model.name)) {
+      migrated.push({
+        ...model,
+        enabled: false,
+        projectEnabled: false,
+        retired: true,
+        displayName: `${model.name} (retired — choose a DeepSeek V4 model)`,
+      });
+      continue;
+    }
+    if (!isCurrentDeepSeekModelIdentity(model.name)) {
+      migrated.push(model);
+      continue;
+    }
+    if (emittedCurrentIdentities.has(model.name)) {
+      continue;
+    }
+
+    const builtIn = reviewedBuiltIns.get(model.name);
+    if (!builtIn) {
+      continue;
+    }
+    const matches = models.filter(
+      (candidate) =>
+        candidate.provider === DIRECT_DEEPSEEK_PROVIDER && candidate.name === model.name
+    );
+    migrated.push(restoreCurrentDeepSeekModel(builtIn, matches));
+    emittedCurrentIdentities.add(model.name);
+  }
+
+  for (const [identity, builtIn] of reviewedBuiltIns) {
+    if (!emittedCurrentIdentities.has(identity)) {
+      migrated.push({ ...builtIn });
+    }
+  }
+  return migrated;
+}
 
 /**
  * We used to store commands in the settings file with the following interface.
@@ -372,6 +539,10 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
 
   if (!settingsToSanitize.userId) {
     settingsToSanitize.userId = uuidv4();
+  }
+
+  if (Array.isArray(settingsToSanitize.activeModels)) {
+    settingsToSanitize.activeModels = migrateDeepSeekModelCatalog(settingsToSanitize.activeModels);
   }
 
   // fix: Maintain consistency between EmbeddingModelProviders.AZURE_OPENAI and ChatModelProviders.AZURE_OPENAI,

@@ -47,6 +47,7 @@ import {
   summarizeToolResult,
 } from "./utils/AgentReasoningState";
 import { findDuplicateQuery, stripLeakedRoleLines } from "./utils/queryDeduplication";
+import { shouldBlockDeepSeekThinkingAgentTools } from "@/LLMProviders/deepseekModelPolicy";
 
 const AGENT_LOOP_GUIDANCE = `## Agent Behavior
 - You have a limited number of tool calls. Use them wisely.
@@ -541,6 +542,8 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
     chatModel: BaseChatModel & {
       modelName?: string;
       model?: string;
+      modelKwargs?: unknown;
+      _llmType?: () => string;
       bindTools?: (tools: unknown[]) => unknown;
     },
     _updateLoadingMessage?: (message: string) => void // Unused, kept for potential future use
@@ -550,6 +553,14 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
 
     // Bind tools to the model for native function calling
     const modelName = chatModel.modelName || chatModel.model || "unknown";
+    const llmType = typeof chatModel._llmType === "function" ? chatModel._llmType() : undefined;
+    if (
+      shouldBlockDeepSeekThinkingAgentTools(llmType, chatModel.modelKwargs, availableTools.length)
+    ) {
+      throw new Error(
+        "DeepSeek thinking models cannot run Agent tools until reasoning-content replay is supported. Choose Minimal reasoning or another model."
+      );
+    }
     if (typeof chatModel.bindTools !== "function") {
       throw new Error(
         `Model ${modelName} does not support native tool calling (bindTools not available). ` +

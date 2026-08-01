@@ -79,8 +79,16 @@ Access to Mistral AI's models.
 Access to DeepSeek's chat and reasoning models.
 
 - **Get a key**: https://platform.deepseek.com/api-keys
-- **Models include**: deepseek-chat, deepseek-reasoner
+- **Models include**: `deepseek-v4-flash`, `deepseek-v4-pro`
 - **Setting key**: `deepseekApiKey`
+
+DeepSeek retired the former `deepseek-chat` and `deepseek-reasoner` API identities. Copilot keeps
+old saved entries visible but disabled so you can see what needs attention; it does not silently
+redirect an old chat, command, or project selection to a new model. Choose a V4 model explicitly.
+
+`deepseek-v4-flash` defaults to thinking off and supports the visible sampling controls.
+`deepseek-v4-pro` defaults to High thinking. While thinking is enabled, Copilot omits Temperature
+and Top P from the request, and Frequency Penalty is unavailable for direct DeepSeek models.
 
 ### Cohere
 
@@ -172,14 +180,14 @@ For any API that follows the OpenAI API format. Useful for custom deployments, p
 
 ## Provider-Specific Gotchas
 
-| Provider       | Common Issue                        | Fix                                                                                    |
-| -------------- | ----------------------------------- | -------------------------------------------------------------------------------------- |
-| Azure OpenAI   | Missing one of four required fields | Check all four settings: key, instance name, deployment name, API version              |
-| Amazon Bedrock | Rate limit or model not found       | Use cross-region inference profile IDs with `us.`, `eu.`, `apac.`, or `global.` prefix |
-| GitHub Copilot | Token expired                       | Re-authenticate via the OAuth button in API key dialog                                 |
-| Ollama         | Connection refused                  | Make sure Ollama is running (`ollama serve`) and the port is correct                   |
-| Google Gemini  | Quota exceeded                      | Use a different model or check your quota at console.cloud.google.com                  |
-| DeepSeek       | Streaming errors                    | Try disabling streaming in the per-session settings if you encounter issues            |
+| Provider       | Common Issue                        | Fix                                                                                             |
+| -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Azure OpenAI   | Missing one of four required fields | Check all four settings: key, instance name, deployment name, API version                       |
+| Amazon Bedrock | Rate limit or model not found       | Use cross-region inference profile IDs with `us.`, `eu.`, `apac.`, or `global.` prefix          |
+| GitHub Copilot | Token expired                       | Re-authenticate via the OAuth button in API key dialog                                          |
+| Ollama         | Connection refused                  | Make sure Ollama is running (`ollama serve`) and the port is correct                            |
+| Google Gemini  | Quota exceeded                      | Use a different model or check your quota at console.cloud.google.com                           |
+| DeepSeek       | Retired model or invalid parameters | Select a V4 model explicitly; thinking mode cannot use Temperature, Top P, or Frequency Penalty |
 
 ---
 

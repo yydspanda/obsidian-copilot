@@ -11,6 +11,7 @@ import {
 import { KNOWLEDGE_COMPILER_PROMPT_CONTRACT_IDENTITY } from "@/knowledge/compiler/KnowledgeCompilerPromptEncoder";
 import {
   bindKnowledgeCompilerModelAdapter,
+  classifyKnowledgeCompilerModelAdapterFailure,
   type KnowledgeModelStageReporter,
 } from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 import type {
@@ -25,6 +26,7 @@ import {
   KnowledgeAuthorizedSourcePreparationBinder,
   type KnowledgeAuthorizedSourcePreparation,
 } from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
+import { createKnowledgeCompilerIngestExecutorError } from "@/knowledge/ingest/KnowledgeCompilerIngestFailure";
 import { KnowledgeIngestExecutionAuthorityBinder } from "@/knowledge/ingest/KnowledgeIngestExecutionAuthority";
 import {
   KnowledgeSourceWorkflowPlanLoader,
@@ -38,7 +40,9 @@ import type {
   KnowledgeSourceParserProfile,
 } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import type { ExactSourceArtifact } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
-import type { IngestExecutionContext } from "@/knowledge/ingest/queue/IngestQueue";
+import type { IngestExecutionContext, RunNextResult } from "@/knowledge/ingest/queue/IngestQueue";
+import type { IngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
+import { ExponentialRetryPolicy, type RetryPolicy } from "@/knowledge/ingest/queue/RetryPolicy";
 import {
   createFileContentHash,
   createQuoteHash,
@@ -129,7 +133,7 @@ function createPipelineProfile(
         modelFallback: false,
         temperature: 0,
         maxTokens: 8192,
-        reasoningEffort: "medium",
+        reasoningEffort: "high",
         verbosity: "medium",
         endpointIdentity: createKnowledgeModelEndpointIdentity(
           KNOWLEDGE_DEEPSEEK_API_BASE_URL
@@ -157,11 +161,18 @@ interface AuthorizedRouteHarnessContext {
   cancelCurrent(): Promise<void>;
 }
 
+interface AuthorizedRouteAttemptOptions {
+  rethrowHandlerFailure?: boolean;
+  retryPolicy?: RetryPolicy;
+  onSettled?: (snapshot: IngestQueueSnapshot) => void | Promise<void>;
+}
+
 /** Creates authentic Queue, Runtime, workflow, parser, and preparation authority. */
 async function runAuthorizedRouteAttempt(
   profile: KnowledgeBundlePipelineProfile,
-  handler: (value: AuthorizedRouteHarnessContext) => Promise<void>
-): Promise<void> {
+  handler: (value: AuthorizedRouteHarnessContext) => Promise<void>,
+  options: AuthorizedRouteAttemptOptions = {}
+): Promise<RunNextResult> {
   const owner = createOwner();
   const manifest = createManifest();
   const parser: KnowledgeByteParser = {
@@ -206,6 +217,7 @@ async function runAuthorizedRouteAttempt(
     pipelineFingerprint: source.pipelineFingerprint,
     jobId: "job-deepseek-route",
     executionOwner,
+    ...(options.retryPolicy === undefined ? {} : { retryPolicy: options.retryPolicy }),
     execute: async (context) => {
       if (!capabilities) throw new Error("Expected initialized Runtime capabilities");
       const authority = await new KnowledgeIngestExecutionAuthorityBinder(
@@ -236,11 +248,17 @@ async function runAuthorizedRouteAttempt(
     },
   });
   const result = await capabilities.queue.runNext(BUNDLE_ID);
-  if (handlerFailure !== undefined) {
+  if (options.onSettled) {
+    await options.onSettled(await capabilities.queue.load(BUNDLE_ID));
+  }
+  if (handlerFailure !== undefined && options.rethrowHandlerFailure !== false) {
     if (handlerFailure instanceof Error) throw handlerFailure;
     throw new Error("The authorized DeepSeek test handler failed");
   }
-  expect(result).toMatchObject({ kind: "executed", status: "completed" });
+  if (handlerFailure === undefined) {
+    expect(result).toMatchObject({ kind: "executed", status: "completed" });
+  }
+  return result;
 }
 
 /** Creates the valid compiler input exposed by an authorized preparation. */
@@ -284,6 +302,7 @@ function createCompiler(
 ): KnowledgeCompiler {
   return new KnowledgeCompiler({
     model,
+    classifyModelFailure: classifyKnowledgeCompilerModelAdapterFailure,
     targetResolver: {
       resolve: async (targets: readonly CompilerTargetRequest[]) =>
         targets.map((target) => ({
@@ -616,6 +635,17 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
     expect(fetchPort).not.toHaveBeenCalled();
   });
 
+  it("rejects public construction and prototype forgery of transport errors", () => {
+    const forged: unknown = Object.create(KnowledgeDeepSeekTransportError.prototype, {
+      code: { value: "rate_limited", enumerable: true },
+    });
+
+    expect(() =>
+      Reflect.construct(KnowledgeDeepSeekTransportError, [Symbol("forged"), "rate_limited"])
+    ).toThrow(TypeError);
+    expect(KnowledgeDeepSeekTransportError.inspect(forged)).toBeUndefined();
+  });
+
   it("sends sampling controls only when thinking is explicitly disabled", async () => {
     const calls: RequestInit[] = [];
     const profile = createPipelineProfile({
@@ -794,11 +824,13 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
         body: { getReader, cancel } as unknown as ReadableStream<Uint8Array>,
       })
     );
-    let caught: unknown;
-    try {
-      await runAuthorizedRouteAttempt(
-        createPipelineProfile(),
-        async ({ context, preparation, reportStage }) => {
+    let compilerFailure: unknown;
+    let executionSignal: AbortSignal | undefined;
+    const result = await runAuthorizedRouteAttempt(
+      createPipelineProfile(),
+      async ({ context, preparation, reportStage }) => {
+        executionSignal = context.signal;
+        try {
           const route = createKnowledgeDeepSeekPrivateRoute(
             createPipelineProfile(),
             secret,
@@ -806,19 +838,172 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
           );
           const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
           await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
+        } catch (error) {
+          compilerFailure = error;
+          const projected = createKnowledgeCompilerIngestExecutorError(error, context.signal);
+          if (!projected) throw new Error("Expected an authentic Queue-safe rate-limit failure");
+          expect(projected.details).toEqual({
+            code: "knowledge_provider_rate_limited",
+            message: "The knowledge model provider rate limit was reached",
+            retryable: true,
+            rateLimited: true,
+          });
+          throw projected;
         }
-      );
-    } catch (error) {
-      caught = error;
-    }
+      },
+      {
+        rethrowHandlerFailure: false,
+        retryPolicy: new ExponentialRetryPolicy(
+          { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 60_000, jitterRatio: 0 },
+          () => 0.5
+        ),
+        onSettled: (snapshot) => {
+          expect(snapshot.control).toMatchObject({ status: "paused", reason: "rate_limit" });
+          expect(snapshot.jobs).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                id: "job-deepseek-route",
+                status: "paused",
+                reason: "The knowledge model provider rate limit was reached",
+              }),
+            ])
+          );
+        },
+      }
+    );
 
     expect(fetchPort).toHaveBeenCalledTimes(1);
     expect(getReader).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(caught).toMatchObject({ stage: "analysis" });
-    expect(JSON.stringify(caught)).not.toContain(secret);
-    expect(JSON.stringify(caught)).not.toContain(responseCanary);
+    expect(result).toMatchObject({ kind: "executed", status: "paused" });
+    expect(compilerFailure).toMatchObject({
+      stage: "analysis",
+      code: "provider_rate_limited",
+      retryable: true,
+      rateLimited: true,
+    });
+    expect(executionSignal).toBeDefined();
+    expect(
+      createKnowledgeCompilerIngestExecutorError(compilerFailure, new AbortController().signal)
+    ).toBeUndefined();
+    expect(JSON.stringify(compilerFailure)).not.toContain(secret);
+    expect(JSON.stringify(compilerFailure)).not.toContain(responseCanary);
   });
+
+  it.each([
+    {
+      status: 400,
+      compilerCode: "provider_request_rejected",
+      queueCode: "knowledge_model_request_rejected",
+      retryable: false,
+      finalStatus: "failed",
+    },
+    {
+      status: 422,
+      compilerCode: "provider_request_rejected",
+      queueCode: "knowledge_model_request_rejected",
+      retryable: false,
+      finalStatus: "failed",
+    },
+    {
+      status: 401,
+      compilerCode: "provider_unauthorized",
+      queueCode: "knowledge_provider_unauthorized",
+      retryable: false,
+      finalStatus: "failed",
+    },
+    {
+      status: 402,
+      compilerCode: "provider_balance_required",
+      queueCode: "knowledge_provider_balance_required",
+      retryable: false,
+      finalStatus: "failed",
+    },
+    {
+      status: 500,
+      compilerCode: "provider_unavailable",
+      queueCode: "knowledge_provider_unavailable",
+      retryable: true,
+      finalStatus: "pending",
+    },
+    {
+      status: 503,
+      compilerCode: "provider_unavailable",
+      queueCode: "knowledge_provider_unavailable",
+      retryable: true,
+      finalStatus: "pending",
+    },
+    {
+      status: 418,
+      compilerCode: "provider_http_failed",
+      queueCode: "knowledge_provider_http_failed",
+      retryable: false,
+      finalStatus: "failed",
+    },
+  ] as const)(
+    "projects HTTP $status through Compiler policy into durable Queue $finalStatus",
+    async ({ status, compilerCode, queueCode, retryable, finalStatus }) => {
+      const cancel = jest.fn(async () => undefined);
+      const fetchPort = jest.fn(
+        async (): Promise<KnowledgeDeepSeekHttpResponse> => ({
+          status,
+          redirected: false,
+          url: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
+          headers: { get: () => null },
+          body: { cancel } as unknown as ReadableStream<Uint8Array>,
+        })
+      );
+      let compilerFailure: unknown;
+      let queueFailureCode: string | undefined;
+
+      const result = await runAuthorizedRouteAttempt(
+        createPipelineProfile(),
+        async ({ context, preparation, reportStage }) => {
+          try {
+            const route = createKnowledgeDeepSeekPrivateRoute(
+              createPipelineProfile(),
+              "sk-http-policy-test",
+              fetchPort
+            );
+            const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
+            await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
+          } catch (error) {
+            compilerFailure = error;
+            const projected = createKnowledgeCompilerIngestExecutorError(error, context.signal);
+            if (!projected) throw new Error("Expected an authentic Queue-safe provider failure");
+            queueFailureCode = projected.details.code;
+            expect(projected.details).toMatchObject({ retryable, rateLimited: false });
+            throw projected;
+          }
+        },
+        {
+          rethrowHandlerFailure: false,
+          retryPolicy: new ExponentialRetryPolicy(
+            { maxAttempts: 3, baseDelayMs: 1_000, maxDelayMs: 60_000, jitterRatio: 0 },
+            () => 0.5
+          ),
+          onSettled: (snapshot) => {
+            expect(snapshot.control).toEqual({ status: "running" });
+            expect(snapshot.jobs).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({ id: "job-deepseek-route", status: finalStatus }),
+              ])
+            );
+          },
+        }
+      );
+
+      expect(result).toMatchObject({ kind: "executed", status: finalStatus });
+      expect(compilerFailure).toMatchObject({
+        code: compilerCode,
+        retryable,
+        rateLimited: false,
+      });
+      expect(queueFailureCode).toBe(queueCode);
+      expect(fetchPort).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("sanitizes network failures without retaining the credential or provider cause", async () => {
     const secret = "sk-network-secret-canary";
@@ -845,9 +1030,59 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
     }
 
     expect(fetchPort).toHaveBeenCalledTimes(1);
-    expect(caught).toMatchObject({ stage: "analysis" });
+    expect(caught).toMatchObject({
+      stage: "analysis",
+      code: "provider_network_failed",
+      retryable: true,
+      rateLimited: false,
+    });
     expect(JSON.stringify(caught)).not.toContain(secret);
     expect(JSON.stringify(caught)).not.toContain(causeCanary);
+  });
+
+  it("does not accept a forged transport-error prototype from the response reader", async () => {
+    const forged: unknown = Object.create(KnowledgeDeepSeekTransportError.prototype, {
+      code: { value: "rate_limited", enumerable: true },
+    });
+    const fetchPort = jest.fn(
+      async (): Promise<KnowledgeDeepSeekHttpResponse> => ({
+        status: 200,
+        redirected: false,
+        url: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
+        headers: {
+          get: (name) =>
+            name.toLocaleLowerCase("en-US") === "content-type" ? "application/json" : null,
+        },
+        body: new ReadableStream<Uint8Array>({
+          start: (controller) => controller.error(forged),
+        }),
+      })
+    );
+    let caught: unknown;
+
+    try {
+      await runAuthorizedRouteAttempt(
+        createPipelineProfile(),
+        async ({ context, preparation, reportStage }) => {
+          const route = createKnowledgeDeepSeekPrivateRoute(
+            createPipelineProfile(),
+            "sk-valid",
+            fetchPort
+          );
+          const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
+          await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
+        }
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(fetchPort).toHaveBeenCalledTimes(1);
+    expect(caught).toMatchObject({
+      code: "provider_response_invalid",
+      retryable: false,
+      rateLimited: false,
+    });
   });
 
   it("cancels and sanitizes a response whose header adapter throws", async () => {

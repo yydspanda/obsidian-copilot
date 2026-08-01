@@ -26,6 +26,11 @@ import ChatModelManager from "./chatModelManager";
 import MemoryManager from "./memoryManager";
 import PromptManager from "./promptManager";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
+import {
+  assertSavedModelReferenceCanRun,
+  findFirstRunnableFallbackModel,
+} from "@/LLMProviders/modelSelectionPolicy";
+import { isDeepSeekThinkingEffort } from "@/LLMProviders/deepseekModelPolicy";
 
 export default class ChainManager {
   private retrievedDocuments: Document[] = [];
@@ -132,7 +137,9 @@ export default class ChainManager {
       }
 
       if (neededReInitChatMode) {
+        assertSavedModelReferenceCanRun(newModelKey);
         let customModel = findCustomModel(newModelKey, getSettings().activeModels);
+        assertSavedModelReferenceCanRun(newModelKey, customModel);
         if (!customModel) {
           // Reset default model if no model is found
           console.error("Resetting default model. No model configuration found for: ", newModelKey);
@@ -142,15 +149,16 @@ export default class ChainManager {
 
         // Add validation for project mode
         if (chainType === ChainType.PROJECT_CHAIN && !customModel.projectEnabled) {
+          const unavailableModelName = customModel.name;
           // If the model is not project-enabled, find the first project-enabled model
-          const projectEnabledModel = getSettings().activeModels.find(
-            (m) => m.enabled && m.projectEnabled
+          const projectEnabledModel = findFirstRunnableFallbackModel(
+            getSettings().activeModels.filter((model) => model.projectEnabled)
           );
           if (projectEnabledModel) {
             customModel = projectEnabledModel;
             newModelKey = projectEnabledModel.name + "|" + projectEnabledModel.provider;
             new Notice(
-              `Model ${customModel.name} is not available in project mode. Switching to ${projectEnabledModel.name}.`
+              `Model ${unavailableModelName} is not available in project mode. Switching to ${projectEnabledModel.name}.`
             );
           } else {
             throw new Error(
@@ -163,6 +171,15 @@ export default class ChainManager {
           ...customModel,
           ...currentProject?.modelConfigs,
         };
+        if (
+          chainType === ChainType.PROJECT_CHAIN &&
+          mergedModel.provider === "deepseek" &&
+          isDeepSeekThinkingEffort(mergedModel.reasoningEffort) &&
+          currentProject?.modelConfigs.temperature !== undefined &&
+          (customModel.temperature === undefined || customModel.temperature === 0)
+        ) {
+          mergedModel.temperature = 0;
+        }
         await this.chatModelManager.setChatModel(mergedModel);
         if (this.disposed) {
           return;

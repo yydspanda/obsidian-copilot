@@ -11,6 +11,7 @@ import { getModelKeyFromModel, useSettingsValue } from "@/settings/model";
 import { checkModelApiKey, err2String } from "@/utils";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isModelReferenceRunnable } from "@/LLMProviders/modelSelectionPolicy";
 
 interface ModelSelectorProps {
   disabled?: boolean;
@@ -34,7 +35,8 @@ export function ModelSelector({
   const settings = useSettingsValue();
 
   const currentModel = settings.activeModels.find(
-    (model) => model.enabled && getModelKeyFromModel(model) === value
+    (model) =>
+      model.enabled && isModelReferenceRunnable(model) && getModelKeyFromModel(model) === value
   );
 
   const showModels = settings.activeModels;
@@ -62,7 +64,7 @@ export function ModelSelector({
 
       <DropdownMenuContent align="start" className="tw-max-h-64 tw-overflow-y-auto">
         {showModels
-          .filter((model) => model.enabled)
+          .filter((model) => model.enabled && isModelReferenceRunnable(model))
           .map((model) => {
             const { hasApiKey } = checkModelApiKey(model, settings);
             return (
@@ -83,7 +85,10 @@ export function ModelSelector({
                     setModelError(msg);
                     // Restore to the last valid model
                     const lastValidModel = showModels.find(
-                      (m) => m.enabled && getModelKeyFromModel(m) === value
+                      (m) =>
+                        m.enabled &&
+                        isModelReferenceRunnable(m) &&
+                        getModelKeyFromModel(m) === value
                     );
                     if (lastValidModel) {
                       onChange(getModelKeyFromModel(lastValidModel));

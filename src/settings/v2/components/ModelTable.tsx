@@ -198,6 +198,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
           <span className="tw-text-sm">Enabled</span>
           <Checkbox
             checked={model.enabled}
+            disabled={model.retired === true}
             onCheckedChange={(checked: boolean) => onUpdateModel({ ...model, enabled: checked })}
           />
         </div>
@@ -293,7 +294,7 @@ const DesktopSortableTableRow: React.FC<{
           <Checkbox
             id={`${getModelKeyFromModel(model)}-enabled`}
             checked={model.enabled}
-            disabled={model.enabled && isRequiredChatModel(model)}
+            disabled={model.retired === true || (model.enabled && isRequiredChatModel(model))}
             onCheckedChange={(checked: boolean) => onUpdateModel({ ...model, enabled: checked })}
             className="tw-mx-auto"
           />

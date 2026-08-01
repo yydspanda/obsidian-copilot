@@ -190,4 +190,89 @@ describe("ChainManager lifecycle", () => {
     expect(chatModelManager.validateChatModel).not.toHaveBeenCalled();
     expect(refreshVaultIndex).not.toHaveBeenCalled();
   });
+
+  it("normalizes stale project temperature against the effective DeepSeek fallback model", async () => {
+    const { getChainType, getCurrentProject } = jest.requireMock<{
+      getChainType: jest.Mock;
+      getCurrentProject: jest.Mock;
+    }>("@/aiParams");
+    const { getSettings } = jest.requireMock<{ getSettings: jest.Mock }>("@/settings/model");
+    const { findCustomModel } = jest.requireMock<{ findCustomModel: jest.Mock }>("@/utils");
+    const originalModel = {
+      enabled: true,
+      name: "project-original",
+      provider: "openai",
+      projectEnabled: false,
+    };
+    const fallbackModel = {
+      enabled: true,
+      name: "deepseek-v4-pro",
+      provider: "deepseek",
+      projectEnabled: true,
+      reasoningEffort: "high",
+      temperature: 0,
+    };
+    getChainType.mockReturnValue("project");
+    getCurrentProject.mockReturnValue({
+      projectModelKey: "project-original|openai",
+      modelConfigs: { temperature: 0.1 },
+    });
+    getSettings.mockReturnValue({
+      activeModels: [originalModel, fallbackModel],
+      temperature: 0.7,
+      enableSemanticSearchV3: false,
+    });
+    findCustomModel.mockImplementation((modelKey: string, models: (typeof originalModel)[]) =>
+      models.find((model) => `${model.name}|${model.provider}` === modelKey)
+    );
+
+    const manager = new ChainManager({} as App);
+    await flushPromises();
+
+    expect(chatModelManager.setChatModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "deepseek-v4-pro",
+        provider: "deepseek",
+        reasoningEffort: "high",
+        temperature: 0,
+      })
+    );
+    manager.dispose();
+  });
+
+  it("does not let a project override hide an invalid effective model temperature", async () => {
+    const { getChainType, getCurrentProject } = jest.requireMock<{
+      getChainType: jest.Mock;
+      getCurrentProject: jest.Mock;
+    }>("@/aiParams");
+    const { getSettings } = jest.requireMock<{ getSettings: jest.Mock }>("@/settings/model");
+    const { findCustomModel } = jest.requireMock<{ findCustomModel: jest.Mock }>("@/utils");
+    const invalidModel = {
+      enabled: true,
+      name: "deepseek-v4-pro",
+      provider: "deepseek",
+      projectEnabled: true,
+      reasoningEffort: "high",
+      temperature: 0.1,
+    };
+    getChainType.mockReturnValue("project");
+    getCurrentProject.mockReturnValue({
+      projectModelKey: "deepseek-v4-pro|deepseek",
+      modelConfigs: { temperature: 0.1 },
+    });
+    getSettings.mockReturnValue({
+      activeModels: [invalidModel],
+      temperature: 0.7,
+      enableSemanticSearchV3: false,
+    });
+    findCustomModel.mockReturnValue(invalidModel);
+
+    const manager = new ChainManager({} as App);
+    await flushPromises();
+
+    expect(chatModelManager.setChatModel).toHaveBeenCalledWith(
+      expect.objectContaining({ temperature: 0.1 })
+    );
+    manager.dispose();
+  });
 });

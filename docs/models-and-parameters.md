@@ -29,8 +29,8 @@ Copilot comes with a set of built-in models across many providers. Some are alwa
 | gemini-2.5-flash              | Google       | Vision                  |
 | gemini-3.5-flash              | Google       | Vision, Reasoning       |
 | grok-4-1-fast                 | XAI          | Vision                  |
-| deepseek-chat                 | DeepSeek     | —                       |
-| deepseek-reasoner             | DeepSeek     | Reasoning               |
+| deepseek-v4-flash             | DeepSeek     | Reasoning               |
+| deepseek-v4-pro               | DeepSeek     | Reasoning               |
 
 ### Model Capability Badges
 
@@ -140,11 +140,16 @@ When the conversation reaches this many tokens, older messages are automatically
 
 ### Reasoning Effort
 
-For reasoning-capable models (like deepseek-reasoner, claude-opus-4-6), controls how much internal reasoning the model does before responding.
+For reasoning-capable models (like `deepseek-v4-pro` and `claude-opus-4-6`), controls how much internal reasoning the model does before responding.
 
 - **Options**: minimal, low, medium, high, xhigh
 - **Default**: low
 - Higher effort = better results on complex tasks, slower responses
+
+Direct DeepSeek V4 models use an explicit mode. Minimal turns thinking off. High turns thinking on,
+and XHigh maps to DeepSeek's maximum effort. Low and Medium are not offered because DeepSeek maps
+both to High instead of honoring them as distinct effort levels. Thinking mode does not send
+Temperature or Top P. Frequency Penalty is not supported by the direct DeepSeek integration.
 
 ### Verbosity
 

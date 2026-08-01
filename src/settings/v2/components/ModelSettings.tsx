@@ -4,6 +4,7 @@ import { useApp } from "@/context";
 import { BUILTIN_CHAT_MODELS, BUILTIN_EMBEDDING_MODELS } from "@/constants";
 import EmbeddingManager from "@/LLMProviders/embeddingManager";
 import ProjectManager from "@/LLMProviders/projectManager";
+import { findFirstRunnableFallbackModel } from "@/LLMProviders/modelSelectionPolicy";
 import { logError } from "@/logger";
 import { CopilotSettings, setSettings, updateSetting, useSettingsValue } from "@/settings/model";
 import { ModelAddDialog } from "@/settings/v2/components/ModelAddDialog";
@@ -56,7 +57,7 @@ export const ModelSettings: React.FC = () => {
 
     let newDefaultModelKey = settings.defaultModelKey;
     if (modelKey === settings.defaultModelKey) {
-      const newDefaultModel = updatedActiveModels.find((model) => model.enabled);
+      const newDefaultModel = findFirstRunnableFallbackModel(updatedActiveModels);
       newDefaultModelKey = newDefaultModel
         ? `${newDefaultModel.name}|${newDefaultModel.provider}`
         : "";

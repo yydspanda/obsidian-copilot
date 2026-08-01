@@ -55,6 +55,14 @@ Choose which AI model to use for this project. The available options depend on w
 
 Override the default temperature and max tokens specifically for this project.
 
+For direct DeepSeek V4 models, the project keeps the selected model's explicit thinking mode.
+`deepseek-v4-pro` uses a zero temperature placeholder for High thinking, and Copilot does not send
+Temperature or Top P while thinking is enabled. If the selected model later changes from Minimal
+to High or XHigh, Copilot normalizes any older project temperature override to zero before the
+project runs. A project that still references a retired
+`deepseek-chat` or `deepseek-reasoner` identity stops and asks for a new selection instead of
+switching providers silently.
+
 ### System Prompt
 
 Set a custom system prompt for this project. This replaces (or supplements) the global default. See [System Prompts](system-prompts.md) for details.

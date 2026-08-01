@@ -316,6 +316,25 @@ export interface CompilerModelPort {
   generate(request: CompilerGenerationRequest, signal: AbortSignal): Promise<unknown>;
 }
 
+/** Stable infrastructure categories safe to translate into Queue retry facts. */
+export type KnowledgeCompilerInfrastructureFailureCode =
+  | "dependency_failed"
+  | "model_authority_failed"
+  | "model_output_invalid"
+  | "provider_request_rejected"
+  | "provider_unauthorized"
+  | "provider_balance_required"
+  | "provider_rate_limited"
+  | "provider_unavailable"
+  | "provider_network_failed"
+  | "provider_http_failed"
+  | "provider_response_invalid";
+
+/** Classifies an opaque dependency rejection as one stable provider-neutral code. */
+export type KnowledgeCompilerDependencyFailureClassifier = (
+  error: unknown
+) => KnowledgeCompilerInfrastructureFailureCode | undefined;
+
 /** Compile stages surfaced by controlled failures and infrastructure errors. */
 export type KnowledgeCompilerStage =
   | "input"
@@ -382,6 +401,8 @@ export interface KnowledgeCompilerLimits {
 /** Constructor dependencies for deterministic two-stage compilation. */
 export interface KnowledgeCompilerDependencies {
   model: CompilerModelPort;
+  /** Optional trusted classifier paired with the exact injected model boundary. */
+  classifyModelFailure?: KnowledgeCompilerDependencyFailureClassifier;
   targetResolver: CompilerTargetResolver;
   candidateValidator: CompilerCandidateValidator;
   limits?: Partial<KnowledgeCompilerLimits>;

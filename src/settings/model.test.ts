@@ -3,9 +3,17 @@ import {
   DEFAULT_QA_EXCLUSIONS_SETTING,
   DEFAULT_SYSTEM_PROMPT,
   DEFAULT_SETTINGS,
+  ChatModelProviders,
+  ChatModels,
+  ReasoningEffort,
   SEND_SHORTCUT,
 } from "@/constants";
-import { sanitizeQaExclusions, sanitizeSettings, CopilotSettings } from "@/settings/model";
+import {
+  migrateDeepSeekModelCatalog,
+  sanitizeQaExclusions,
+  sanitizeSettings,
+  CopilotSettings,
+} from "@/settings/model";
 import { getEffectiveUserPrompt, getSystemPrompt } from "@/system-prompts/systemPromptBuilder";
 import * as systemPromptsState from "@/system-prompts/state";
 import * as settingsModel from "@/settings/model";
@@ -215,6 +223,169 @@ describe("sanitizeSettings - legacy Miyo settings cleanup", () => {
     expect(sanitized.userId).toBeTruthy();
     expect(sanitized.activeEmbeddingModels[0].provider).not.toBe("azure_openai");
     expect("miyoRemoteVaultPath" in sanitizedRecord).toBe(false);
+  });
+});
+
+describe("DeepSeek V4 model catalog migration", () => {
+  it("keeps retired built-ins visible but disabled without rewriting saved selections", () => {
+    const retiredChatKey = "deepseek-chat|deepseek";
+    const retiredReasonerKey = "deepseek-reasoner|deepseek";
+    const legacySettings = {
+      ...DEFAULT_SETTINGS,
+      defaultModelKey: retiredChatKey,
+      quickCommandModelKey: retiredReasonerKey,
+      activeModels: [
+        {
+          name: "deepseek-chat",
+          provider: ChatModelProviders.DEEPSEEK,
+          enabled: true,
+          isBuiltIn: true,
+        },
+        {
+          name: "deepseek-reasoner",
+          provider: ChatModelProviders.DEEPSEEK,
+          enabled: true,
+          isBuiltIn: true,
+          projectEnabled: true,
+        },
+      ],
+    } as CopilotSettings;
+
+    const sanitized = sanitizeSettings(legacySettings);
+    const retired = sanitized.activeModels.filter((model) => model.retired);
+
+    expect(retired).toHaveLength(2);
+    expect(retired).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "deepseek-chat", enabled: false }),
+        expect.objectContaining({
+          name: "deepseek-reasoner",
+          enabled: false,
+          projectEnabled: false,
+        }),
+      ])
+    );
+    expect(sanitized.defaultModelKey).toBe(retiredChatKey);
+    expect(sanitized.quickCommandModelKey).toBe(retiredReasonerKey);
+  });
+
+  it("installs current V4 built-ins exactly once and retires direct-provider aliases", () => {
+    const customAlias = {
+      name: "deepseek-chat",
+      provider: ChatModelProviders.DEEPSEEK,
+      enabled: true,
+      isBuiltIn: false,
+      baseUrl: "https://example.test/v1",
+    };
+
+    const once = migrateDeepSeekModelCatalog([customAlias]);
+    const twice = migrateDeepSeekModelCatalog(once);
+
+    expect(
+      twice.filter((model) => model.name === String(ChatModels.DEEPSEEK_V4_FLASH))
+    ).toHaveLength(1);
+    expect(twice.filter((model) => model.name === String(ChatModels.DEEPSEEK_V4_PRO))).toHaveLength(
+      1
+    );
+    const preservedAlias = twice.find((model) => model.name === "deepseek-chat");
+    expect(preservedAlias).toMatchObject({
+      enabled: false,
+      isBuiltIn: false,
+      projectEnabled: false,
+      retired: true,
+      baseUrl: "https://example.test/v1",
+    });
+  });
+
+  it("deduplicates shadowed current identities and restores reviewed defaults", () => {
+    const migrated = migrateDeepSeekModelCatalog([
+      {
+        name: ChatModels.DEEPSEEK_V4_PRO,
+        provider: ChatModelProviders.DEEPSEEK,
+        enabled: true,
+        isBuiltIn: false,
+        apiKey: "model-key",
+        baseUrl: "https://proxy.example.test/v1",
+        reasoningEffort: "medium" as never,
+        temperature: 0.7,
+        topP: 0.8,
+        frequencyPenalty: 0,
+        retired: true,
+      },
+      {
+        name: ChatModels.DEEPSEEK_V4_PRO,
+        provider: ChatModelProviders.DEEPSEEK,
+        enabled: false,
+        isBuiltIn: true,
+        projectEnabled: true,
+      },
+    ]);
+    const matches = migrated.filter(
+      (model) =>
+        model.name === String(ChatModels.DEEPSEEK_V4_PRO) &&
+        model.provider === String(ChatModelProviders.DEEPSEEK)
+    );
+
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({
+      enabled: true,
+      isBuiltIn: true,
+      projectEnabled: true,
+      apiKey: "model-key",
+      baseUrl: "https://proxy.example.test/v1",
+      reasoningEffort: "high",
+      temperature: 0,
+    });
+    expect(matches[0].retired).toBeUndefined();
+    expect(matches[0].topP).toBeUndefined();
+    expect(matches[0].frequencyPenalty).toBeUndefined();
+  });
+
+  it("is deeply idempotent after restoring a retired current identity", () => {
+    const input = [
+      {
+        name: ChatModels.DEEPSEEK_V4_FLASH,
+        provider: ChatModelProviders.DEEPSEEK,
+        enabled: true,
+        isBuiltIn: false,
+        projectEnabled: false,
+        retired: true,
+        reasoningEffort: ReasoningEffort.MINIMAL,
+      },
+    ];
+
+    const once = migrateDeepSeekModelCatalog(input);
+    const twice = migrateDeepSeekModelCatalog(once);
+
+    expect(twice).toEqual(once);
+    expect(
+      twice.filter((model) => model.name === String(ChatModels.DEEPSEEK_V4_FLASH))
+    ).toHaveLength(1);
+    expect(twice[0]).toMatchObject({
+      enabled: true,
+      isBuiltIn: true,
+      projectEnabled: false,
+      reasoningEffort: "minimal",
+    });
+    expect(twice[0].retired).toBeUndefined();
+  });
+
+  it("gives Flash and Pro explicit project-safe behavior defaults", () => {
+    const models = migrateDeepSeekModelCatalog([]);
+
+    expect(
+      models.find((model) => model.name === String(ChatModels.DEEPSEEK_V4_FLASH))
+    ).toMatchObject({
+      projectEnabled: true,
+      reasoningEffort: "minimal",
+    });
+    expect(models.find((model) => model.name === String(ChatModels.DEEPSEEK_V4_PRO))).toMatchObject(
+      {
+        projectEnabled: true,
+        reasoningEffort: "high",
+        temperature: 0,
+      }
+    );
   });
 });
 

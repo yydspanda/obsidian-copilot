@@ -16,6 +16,7 @@ import type {
   KnowledgeCompileNoChanges,
   KnowledgeCompileProposal,
   KnowledgeCompileResult,
+  KnowledgeCompilerDependencyFailureClassifier,
   KnowledgeCompilerStage,
 } from "@/knowledge/compiler/CompilerModelPort";
 import {
@@ -138,6 +139,7 @@ interface CompilerHarnessOptions {
   generate?: GenerationHandler;
   resolve?: ResolverHandler;
   validate?: CandidateHandler;
+  classifyModelFailure?: KnowledgeCompilerDependencyFailureClassifier;
 }
 
 interface CompilerHarness {
@@ -326,6 +328,9 @@ function createHarness(options: CompilerHarnessOptions = {}): CompilerHarness {
   return {
     compiler: new KnowledgeCompiler({
       model,
+      ...(options.classifyModelFailure === undefined
+        ? {}
+        : { classifyModelFailure: options.classifyModelFailure }),
       targetResolver: resolver,
       candidateValidator: validator,
     }),
@@ -1319,15 +1324,45 @@ describe("KnowledgeCompiler dependency isolation and cancellation", () => {
       thrown = error;
     }
 
+    const modelStage = stage === "analysis" || stage === "generation";
     expect(thrown).toBeInstanceOf(KnowledgeCompilerInfrastructureError);
     expect(thrown).toMatchObject({
       name: "KnowledgeCompilerInfrastructureError",
       stage,
-      retryable: true,
+      code: modelStage ? "model_authority_failed" : "dependency_failed",
+      retryable: !modelStage,
+      rateLimited: false,
     });
     expect(String(thrown)).not.toContain("sk-test-secret");
     expect(JSON.stringify(thrown)).not.toContain("sk-test-secret");
     expect(thrown).not.toHaveProperty("cause");
+  });
+
+  it("rejects structural classifier facts instead of accepting retry booleans", async () => {
+    const harness = createHarness({
+      analyze: async () => {
+        throw new Error("raw provider failure");
+      },
+      classifyModelFailure: () =>
+        ({
+          code: "provider_rate_limited",
+          retryable: true,
+          rateLimited: true,
+        }) as never,
+    });
+    let thrown: unknown;
+
+    try {
+      await harness.compiler.compile(createCompileInput(), new AbortController().signal);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      code: "model_authority_failed",
+      retryable: false,
+      rateLimited: false,
+    });
   });
 
   it("passes the exact caller AbortSignal through every successful dependency", async () => {

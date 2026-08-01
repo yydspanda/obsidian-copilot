@@ -8,6 +8,7 @@ import { DEFAULT_OPEN_AREA, PLUS_UTM_MEDIUMS, SEND_SHORTCUT } from "@/constants"
 import { useApp } from "@/context";
 import { useTab } from "@/contexts/TabContext";
 import { cn } from "@/lib/utils";
+import { isModelReferenceRunnable } from "@/LLMProviders/modelSelectionPolicy";
 import { createPlusPageUrl } from "@/plusUtils";
 import { getModelKeyFromModel, updateSetting, useSettingsValue } from "@/settings/model";
 import { PlusSettings } from "@/settings/v2/components/PlusSettings";
@@ -85,10 +86,13 @@ export const BasicSettings: React.FC = () => {
   };
 
   const defaultModelActivated = !!settings.activeModels.find(
-    (m) => m.enabled && getModelKeyFromModel(m) === settings.defaultModelKey
+    (m) =>
+      m.enabled &&
+      isModelReferenceRunnable(m) &&
+      getModelKeyFromModel(m) === settings.defaultModelKey
   );
   const enableActivatedModels = settings.activeModels
-    .filter((m) => m.enabled)
+    .filter((m) => m.enabled && isModelReferenceRunnable(m))
     .map((model) => ({
       label: getModelDisplayWithIcons(model),
       value: getModelKeyFromModel(model),
@@ -164,7 +168,7 @@ export const BasicSettings: React.FC = () => {
             value={defaultModelActivated ? settings.defaultModelKey : "Select Model"}
             onChange={(value) => {
               const selectedModel = settings.activeModels.find(
-                (m) => m.enabled && getModelKeyFromModel(m) === value
+                (m) => m.enabled && isModelReferenceRunnable(m) && getModelKeyFromModel(m) === value
               );
               if (!selectedModel) return;
 

@@ -25,6 +25,11 @@ import {
   type StreamingChatTurnContext,
 } from "@/hooks/use-streaming-chat-session";
 import { ABORT_REASON } from "@/constants";
+import {
+  assertSavedModelReferenceCanRun,
+  findFirstRunnableFallbackModel,
+  isSavedModelReferenceError,
+} from "@/LLMProviders/modelSelectionPolicy";
 
 // ============================================================================
 // Behavior Config - Replaces mode-based branching
@@ -210,21 +215,28 @@ function CustomCommandChatModalContent({
     updateSetting("quickCommandIncludeNoteContext", checked);
   }, []);
 
-  // Safely resolve the selected model with fallback to first enabled model
-  const resolvedModel = useMemo((): CustomModel | null => {
+  // Preserve the ordinary stale-selection fallback while blocking retired and
+  // unsupported direct-provider references from silently changing models.
+  const modelResolution = useMemo((): { model: CustomModel | null; error: string | null } => {
     try {
+      assertSavedModelReferenceCanRun(userSelectedModelKey);
       const model = findCustomModel(userSelectedModelKey, settings.activeModels);
+      assertSavedModelReferenceCanRun(userSelectedModelKey, model);
       // Treat disabled models as invalid selections (ModelSelector won't present them)
       if (!model.enabled) {
         throw new Error(`Selected model is disabled: ${userSelectedModelKey}`);
       }
-      return model;
-    } catch {
+      return { model, error: null };
+    } catch (error) {
+      if (isSavedModelReferenceError(error)) {
+        return { model: null, error: error.message };
+      }
       // Stale model key can happen when a model is removed/renamed/disabled; don't crash the modal.
       // Avoid side effects during render; notify/log in the effect below.
-      return settings.activeModels.find((m) => m.enabled) ?? null;
+      return { model: findFirstRunnableFallbackModel(settings.activeModels), error: null };
     }
   }, [userSelectedModelKey, settings.activeModels]);
+  const resolvedModel = modelResolution.model;
 
   // Compute the key for the resolved model
   const resolvedModelKey = useMemo(() => {
@@ -247,7 +259,10 @@ function CustomCommandChatModalContent({
     systemPrompt: systemPrompt || "",
     excludeThinking: true,
     onNoModel: () => {
-      new Notice("No active model is configured. Please configure a model in Copilot settings.");
+      new Notice(
+        modelResolution.error ??
+          "No active model is configured. Please configure a model in Copilot settings."
+      );
       setIsLoading(false);
     },
     onNonAbortError: (error) => {

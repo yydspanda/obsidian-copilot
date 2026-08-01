@@ -1,5 +1,6 @@
 import {
   bindKnowledgePrivateModelRouteToProfile,
+  type KnowledgePrivateModelProviderFailureCode,
   type KnowledgePrivateModelRoute,
   type KnowledgePrivateModelStage,
 } from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
@@ -44,7 +45,7 @@ export const KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT = Object.freeze({
 
 const SUPPORTED_MODEL_IDENTITIES = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
 const SUPPORTED_MODELS = new Set<string>(SUPPORTED_MODEL_IDENTITIES);
-const SUPPORTED_REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const SUPPORTED_REASONING_EFFORTS = new Set(["minimal", "high", "xhigh"]);
 const SUPPORTED_VERBOSITIES = new Set(["low", "medium", "high"]);
 const REQUIRED_CONFIGURATION_KEYS = [
   "behaviorContractVersion",
@@ -71,7 +72,8 @@ export const KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY = sha256(
     models: [...SUPPORTED_MODEL_IDENTITIES],
     limits: KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT,
     requestPolicy: "post-json-object-two-messages-non-streaming-no-tools-no-fallback-no-retry-v1",
-    thinkingPolicy: "minimal-disabled-sampling-or-low-medium-high-xhigh-enabled-no-sampling-v1",
+    thinkingPolicy: "minimal-disabled-sampling-or-high-xhigh-enabled-no-sampling-v1",
+    errorPolicy: "private-branded-code-only-core-owned-retry-rate-limit-pause-network-retry-v1",
     responsePolicy:
       "status-200-exact-url-json-fatal-utf8-one-stop-assistant-no-tools-bounded-usage-v1",
   })}`
@@ -106,16 +108,90 @@ export type KnowledgeDeepSeekTransportErrorCode =
   | "insufficient_balance"
   | "rate_limited"
   | "provider_unavailable"
+  | "network_failed"
   | "http_failed"
   | "response_too_large"
   | "response_invalid";
 
+const DEEPSEEK_TRANSPORT_ERROR_TOKEN = Symbol("KnowledgeDeepSeekTransportError.constructor");
+const deepSeekTransportErrorCodes = new WeakMap<object, KnowledgeDeepSeekTransportErrorCode>();
+const DEEPSEEK_TRANSPORT_ERROR_CODES = new Set<KnowledgeDeepSeekTransportErrorCode>([
+  "dependency_invalid",
+  "profile_invalid",
+  "model_unsupported",
+  "configuration_unsupported",
+  "endpoint_mismatch",
+  "credential_invalid",
+  "request_too_large",
+  "request_rejected",
+  "unauthorized",
+  "insufficient_balance",
+  "rate_limited",
+  "provider_unavailable",
+  "network_failed",
+  "http_failed",
+  "response_too_large",
+  "response_invalid",
+]);
+
+/** Creates one authentic sanitized DeepSeek transport failure. */
+function createDeepSeekTransportError(
+  code: KnowledgeDeepSeekTransportErrorCode
+): KnowledgeDeepSeekTransportError {
+  return new KnowledgeDeepSeekTransportError(DEEPSEEK_TRANSPORT_ERROR_TOKEN, code);
+}
+
 /** Sanitized provider failure retaining no URL, prompt, response, key, or cause. */
 export class KnowledgeDeepSeekTransportError extends Error {
-  /** Creates one stable transport failure. */
-  constructor(public readonly code: KnowledgeDeepSeekTransportErrorCode) {
+  /** Creates one error only when called by this module's private helper. */
+  constructor(token: symbol, code: KnowledgeDeepSeekTransportErrorCode) {
     super("The private DeepSeek knowledge request failed");
+    if (token !== DEEPSEEK_TRANSPORT_ERROR_TOKEN || !DEEPSEEK_TRANSPORT_ERROR_CODES.has(code)) {
+      throw new TypeError("The private DeepSeek knowledge transport error is invalid");
+    }
     this.name = "KnowledgeDeepSeekTransportError";
+    deepSeekTransportErrorCodes.set(this, code);
+    Object.freeze(this);
+  }
+
+  /** Reads one authentic error without accepting constructor/prototype forgery. */
+  static inspect(value: unknown): KnowledgeDeepSeekTransportErrorCode | undefined {
+    if (typeof value !== "object" || value === null) return undefined;
+    return deepSeekTransportErrorCodes.get(value);
+  }
+
+  /** Returns the stable sanitized transport code retained in hidden state. */
+  get code(): KnowledgeDeepSeekTransportErrorCode {
+    const code = KnowledgeDeepSeekTransportError.inspect(this);
+    if (code === undefined) {
+      throw new TypeError("The private DeepSeek knowledge transport error is invalid");
+    }
+    return code;
+  }
+}
+
+Object.freeze(KnowledgeDeepSeekTransportError.prototype);
+Object.freeze(KnowledgeDeepSeekTransportError);
+
+/** Reads only module-recorded DeepSeek failure identity, never an exposed mutable property. */
+function classifyDeepSeekTransportFailure(
+  error: unknown
+): KnowledgePrivateModelProviderFailureCode | undefined {
+  const code = KnowledgeDeepSeekTransportError.inspect(error);
+  switch (code) {
+    case "request_rejected":
+    case "unauthorized":
+    case "insufficient_balance":
+    case "rate_limited":
+    case "provider_unavailable":
+    case "network_failed":
+    case "http_failed":
+    case "request_too_large":
+    case "response_too_large":
+    case "response_invalid":
+      return code;
+    default:
+      return undefined;
   }
 }
 
@@ -209,7 +285,7 @@ function snapshotProfile(profile: KnowledgeBundlePipelineProfile): KnowledgeBund
       0
     ) as unknown as KnowledgeBundlePipelineProfile;
   } catch {
-    throw new KnowledgeDeepSeekTransportError("profile_invalid");
+    throw createDeepSeekTransportError("profile_invalid");
   }
 }
 
@@ -357,7 +433,7 @@ function captureConfiguration(value: unknown): CapturedDeepSeekConfiguration {
       endpointIdentity !== undefined &&
       (typeof endpointIdentity !== "string" || endpointIdentity !== officialIdentity)
     ) {
-      throw new KnowledgeDeepSeekTransportError("endpoint_mismatch");
+      throw createDeepSeekTransportError("endpoint_mismatch");
     }
     return Object.freeze({
       temperature,
@@ -367,8 +443,8 @@ function captureConfiguration(value: unknown): CapturedDeepSeekConfiguration {
       ...(topP === undefined ? {} : { topP }),
     });
   } catch (error) {
-    if (error instanceof KnowledgeDeepSeekTransportError) throw error;
-    throw new KnowledgeDeepSeekTransportError("configuration_unsupported");
+    if (KnowledgeDeepSeekTransportError.inspect(error) !== undefined) throw error;
+    throw createDeepSeekTransportError("configuration_unsupported");
   }
 }
 
@@ -411,7 +487,7 @@ function captureProfile(profileValue: KnowledgeBundlePipelineProfile): CapturedD
       throw new TypeError("Unsupported profile");
     }
     if (!SUPPORTED_MODELS.has(model)) {
-      throw new KnowledgeDeepSeekTransportError("model_unsupported");
+      throw createDeepSeekTransportError("model_unsupported");
     }
     const configuration = captureConfiguration(readDataProperty(modelProfile, "configuration"));
     return Object.freeze({
@@ -427,8 +503,8 @@ function captureProfile(profileValue: KnowledgeBundlePipelineProfile): CapturedD
       }),
     });
   } catch (error) {
-    if (error instanceof KnowledgeDeepSeekTransportError) throw error;
-    throw new KnowledgeDeepSeekTransportError("profile_invalid");
+    if (KnowledgeDeepSeekTransportError.inspect(error) !== undefined) throw error;
+    throw createDeepSeekTransportError("profile_invalid");
   }
 }
 
@@ -441,7 +517,7 @@ function captureCredential(value: unknown): string {
     value.trim() !== value ||
     /\s/.test(value)
   ) {
-    throw new KnowledgeDeepSeekTransportError("credential_invalid");
+    throw createDeepSeekTransportError("credential_invalid");
   }
   return value;
 }
@@ -449,15 +525,15 @@ function captureCredential(value: unknown): string {
 /** Maps an HTTP status to a stable category without reading the response body. */
 function createHttpError(status: number): KnowledgeDeepSeekTransportError {
   if (status === 400 || status === 422) {
-    return new KnowledgeDeepSeekTransportError("request_rejected");
+    return createDeepSeekTransportError("request_rejected");
   }
-  if (status === 401) return new KnowledgeDeepSeekTransportError("unauthorized");
-  if (status === 402) return new KnowledgeDeepSeekTransportError("insufficient_balance");
-  if (status === 429) return new KnowledgeDeepSeekTransportError("rate_limited");
+  if (status === 401) return createDeepSeekTransportError("unauthorized");
+  if (status === 402) return createDeepSeekTransportError("insufficient_balance");
+  if (status === 429) return createDeepSeekTransportError("rate_limited");
   if (status === 500 || status === 503) {
-    return new KnowledgeDeepSeekTransportError("provider_unavailable");
+    return createDeepSeekTransportError("provider_unavailable");
   }
-  return new KnowledgeDeepSeekTransportError("http_failed");
+  return createDeepSeekTransportError("http_failed");
 }
 
 /** Starts best-effort reader cancellation without delaying the authoritative failure. */
@@ -490,12 +566,12 @@ async function readBoundedResponseBytes(
     contentLength = response.headers.get("content-length");
   } catch {
     cancelResponseBody(response.body);
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   }
   if (contentLength !== null) {
     if (!/^\d+$/.test(contentLength)) {
       cancelResponseBody(response.body);
-      throw new KnowledgeDeepSeekTransportError("response_invalid");
+      throw createDeepSeekTransportError("response_invalid");
     }
     const declared = Number(contentLength);
     if (
@@ -503,11 +579,11 @@ async function readBoundedResponseBytes(
       declared > KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.maxResponseBytes
     ) {
       cancelResponseBody(response.body);
-      throw new KnowledgeDeepSeekTransportError("response_too_large");
+      throw createDeepSeekTransportError("response_too_large");
     }
   }
   if (!response.body) {
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   }
   const reader = response.body.getReader();
   const abortReader = (): void => {
@@ -530,7 +606,7 @@ async function readBoundedResponseBytes(
       if (result.done) break;
       if (!isExactUint8Array(result.value)) {
         cancelReader(reader);
-        throw new KnowledgeDeepSeekTransportError("response_invalid");
+        throw createDeepSeekTransportError("response_invalid");
       }
       const nextTotal = totalBytes + result.value.byteLength;
       if (
@@ -538,7 +614,7 @@ async function readBoundedResponseBytes(
         nextTotal > KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.maxResponseBytes
       ) {
         cancelReader(reader);
-        throw new KnowledgeDeepSeekTransportError("response_too_large");
+        throw createDeepSeekTransportError("response_too_large");
       }
       bounded.set(result.value, totalBytes);
       totalBytes = nextTotal;
@@ -546,12 +622,12 @@ async function readBoundedResponseBytes(
   } catch (error) {
     if (signal.aborted) throw createAbortError();
     if (
-      error instanceof KnowledgeDeepSeekTransportError ||
+      KnowledgeDeepSeekTransportError.inspect(error) !== undefined ||
       error instanceof KnowledgeDeepSeekAbortError
     ) {
       throw error;
     }
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   } finally {
     signal.removeEventListener("abort", abortReader);
     try {
@@ -575,7 +651,7 @@ function parseProviderResponse(
     decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     parsed = JSON.parse(decoded) as unknown;
   } catch {
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   }
   try {
     if (
@@ -639,7 +715,7 @@ function parseProviderResponse(
     }
     return content;
   } catch {
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   }
 }
 
@@ -656,15 +732,10 @@ function createRequestBody(
       KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.promptTokenOverhead >
     KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.contextTokens
   ) {
-    throw new KnowledgeDeepSeekTransportError("request_too_large");
+    throw createDeepSeekTransportError("request_too_large");
   }
   const thinkingEnabled = captured.configuration.reasoningEffort !== "minimal";
-  const reasoningEffort =
-    captured.configuration.reasoningEffort === "low"
-      ? "low"
-      : captured.configuration.reasoningEffort === "xhigh"
-        ? "max"
-        : "high";
+  const reasoningEffort = captured.configuration.reasoningEffort === "xhigh" ? "max" : "high";
   const body: JsonValue = {
     model: captured.model,
     messages: prompt.messages as unknown as JsonValue,
@@ -688,7 +759,7 @@ function createRequestBody(
     new TextEncoder().encode(encoded).byteLength >
     KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.maxRequestBytes
   ) {
-    throw new KnowledgeDeepSeekTransportError("request_too_large");
+    throw createDeepSeekTransportError("request_too_large");
   }
   return encoded;
 }
@@ -725,7 +796,7 @@ async function invokeDeepSeek(
     response = await REFLECT_APPLY(fetchPort, undefined, [KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT, init]);
   } catch {
     if (signal.aborted) throw createAbortError();
-    throw new KnowledgeDeepSeekTransportError("http_failed");
+    throw createDeepSeekTransportError("network_failed");
   }
   if (signal.aborted) {
     cancelResponseBody(response.body);
@@ -737,18 +808,18 @@ async function invokeDeepSeek(
   }
   if (response.redirected || response.url !== KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT) {
     cancelResponseBody(response.body);
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   }
   let contentType: string | null;
   try {
     contentType = response.headers.get("content-type");
   } catch {
     cancelResponseBody(response.body);
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   }
   if (!contentType || !/^application\/json(?:\s*;|$)/i.test(contentType)) {
     cancelResponseBody(response.body);
-    throw new KnowledgeDeepSeekTransportError("response_invalid");
+    throw createDeepSeekTransportError("response_invalid");
   }
   const bytes = await readBoundedResponseBytes(response, signal);
   if (signal.aborted) throw createAbortError();
@@ -768,14 +839,16 @@ export function createKnowledgeDeepSeekPrivateRoute(
   fetchPort: KnowledgeDeepSeekFetchPort
 ): KnowledgePrivateModelRoute {
   if (typeof fetchPort !== "function") {
-    throw new KnowledgeDeepSeekTransportError("dependency_invalid");
+    throw createDeepSeekTransportError("dependency_invalid");
   }
   const captured = captureProfile(profile);
   const apiKey = captureCredential(apiKeyValue);
   if (KNOWLEDGE_COMPILER_PROMPT_CONTRACT_VERSION !== 1) {
-    throw new KnowledgeDeepSeekTransportError("configuration_unsupported");
+    throw createDeepSeekTransportError("configuration_unsupported");
   }
-  return bindKnowledgePrivateModelRouteToProfile(captured.profile, (stage, request, signal) =>
-    invokeDeepSeek(stage, request, signal, captured, apiKey, fetchPort)
+  return bindKnowledgePrivateModelRouteToProfile(
+    captured.profile,
+    (stage, request, signal) => invokeDeepSeek(stage, request, signal, captured, apiKey, fetchPort),
+    classifyDeepSeekTransportFailure
   );
 }

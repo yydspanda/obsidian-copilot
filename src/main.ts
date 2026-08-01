@@ -23,7 +23,13 @@ import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/c
 import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
 import { ProjectKnowledgeBundleConfigSource } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
+import {
+  KnowledgeProductionPreflightComposer,
+  type KnowledgeProductionPreflightResult,
+} from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
+import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
+import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import { initializeKnowledgeRuntimeForCurrentGeneration } from "@/knowledge/startup/KnowledgeRuntimeFoundationInitializer";
 import {
   KnowledgePluginStartupBarrier,
@@ -44,7 +50,7 @@ import {
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
 import { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
 import { isKnowledgeStudioPlatformSupported } from "@/knowledge/ui/platform";
-import { getCachedProjectRecords } from "@/projects/state";
+import { getCachedProjectRecords, subscribeToProjectRecords } from "@/projects/state";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
 import { checkIsPlusUser, refreshSelfHostModeValidation } from "@/plusUtils";
 import {
@@ -105,6 +111,15 @@ function throwIfKnowledgeStartupStopped(signal: AbortSignal, lifecycleClosed: bo
   }
 }
 
+/** Captures one renderer window's native fetch capability with a stable receiver. */
+function captureKnowledgeRendererFetchPort(): KnowledgeDeepSeekFetchPort | undefined {
+  const rendererWindow: Window = activeWindow;
+  if (typeof rendererWindow.fetch !== "function") {
+    return undefined;
+  }
+  return async (url, init): Promise<Response> => rendererWindow.fetch(url, init);
+}
+
 export default class CopilotPlugin extends Plugin {
   // Plugin components
   projectManager: ProjectManager;
@@ -127,6 +142,9 @@ export default class CopilotPlugin extends Plugin {
   private webSelectionTracker?: WebSelectionTracker;
   private vaultDataManager?: VaultDataManager;
   private knowledgeRuntime?: import("@/knowledge/runtime/KnowledgeRuntimeStore").KnowledgeRuntimeStore;
+  private knowledgeProductionPreflight?: KnowledgeProductionPreflightComposer;
+  private knowledgeProjectRecordsUnsubscriber?: () => void;
+  private readonly knowledgeRendererFetchPort = captureKnowledgeRendererFetchPort();
   private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
   private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
   private readonly knowledgeStudioStartupAvailability =
@@ -156,6 +174,7 @@ export default class CopilotPlugin extends Plugin {
     KeychainService.getInstance(this.app);
     await this.loadSettings();
     this.settingsUnsubscriber = subscribeToSettingsChange((prev, next) => {
+      this.closeKnowledgeProductionPreflight();
       void (async () => {
         try {
           await persistSettings(next, (data) => this.saveData(data), prev);
@@ -193,6 +212,9 @@ export default class CopilotPlugin extends Plugin {
     // Start the project-file lifecycle before the new ProjectManager subscribes
     // so stale scans cannot publish into the new plugin lifecycle.
     this.projectRegister = new ProjectRegister(this.app);
+    this.knowledgeProjectRecordsUnsubscriber = subscribeToProjectRecords(() => {
+      this.closeKnowledgeProductionPreflight();
+    });
 
     // Initialize ProjectManager after the new project state owner is active.
     this.projectManager = ProjectManager.getInstance(this.app, this);
@@ -438,8 +460,10 @@ export default class CopilotPlugin extends Plugin {
     signal: AbortSignal
   ): Promise<KnowledgePluginBundleConfigLoadResult> {
     throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+    this.closeKnowledgeProductionPreflight();
+    const projectRecords = getCachedProjectRecords();
     const result = source.load(
-      getCachedProjectRecords().map(({ project }) => ({
+      projectRecords.map(({ project }) => ({
         id: project.id,
         knowledgeBundle: project.knowledgeBundle,
       }))
@@ -456,8 +480,57 @@ export default class CopilotPlugin extends Plugin {
       };
     }
 
+    const fetchPort = this.knowledgeRendererFetchPort;
+    if (!fetchPort) {
+      return {
+        kind: "invalid",
+        diagnosticCodes: ["production_preflight_route_dependency_invalid"],
+      };
+    }
+
+    const resources = createKnowledgeProductionPipelineResources();
+    const composer = new KnowledgeProductionPreflightComposer({
+      owners: result.bundles,
+      projects: projectRecords.map(({ project }) => ({
+        id: project.id,
+        projectModelKey: project.projectModelKey,
+        modelConfigs: project.modelConfigs,
+      })),
+      settings: getSettings(),
+      profileOptions: resources.profileOptions,
+      fetchPort,
+    });
+    this.knowledgeProductionPreflight = composer;
+    const preflight = composer.preflight();
+    try {
+      throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+    } catch (error) {
+      this.closeKnowledgeProductionPreflight();
+      throw error;
+    }
+    if (preflight.kind === "diagnostic") {
+      this.closeKnowledgeProductionPreflight();
+      return {
+        kind: "invalid",
+        diagnosticCodes: [this.toKnowledgeProductionPreflightDiagnostic(preflight)],
+      };
+    }
+
     const bundleIds = result.bundles.map(({ config }) => config.id);
     return { kind: "configured", bundleIds };
+  }
+
+  /** Converts one already sanitized preflight result into the startup diagnostic namespace. */
+  private toKnowledgeProductionPreflightDiagnostic(
+    result: Extract<KnowledgeProductionPreflightResult, { kind: "diagnostic" }>
+  ): string {
+    return `production_preflight_${result.code}`;
+  }
+
+  /** Synchronously invalidates the current production preflight result generation. */
+  private closeKnowledgeProductionPreflight(): void {
+    this.knowledgeProductionPreflight?.close();
+    this.knowledgeProductionPreflight = undefined;
   }
 
   /**
@@ -492,9 +565,12 @@ export default class CopilotPlugin extends Plugin {
     // continuation can publish or initialize services during persistence flush.
     this.knowledgeLifecycleClosed = true;
     this.knowledgeRuntimeStartupGeneration += 1;
+    this.closeKnowledgeProductionPreflight();
     this.knowledgeLayoutCoordinator.close();
     this.knowledgeStudioSessionStore.dispose();
     this.knowledgeStudioPort.dispose();
+    this.knowledgeProjectRecordsUnsubscriber?.();
+    this.knowledgeProjectRecordsUnsubscriber = undefined;
     // Unsubscribe ProjectManager before releasing project state. Reversing
     // this order can notify an unloading manager and start a stale switch.
     this.projectManager?.onunload();

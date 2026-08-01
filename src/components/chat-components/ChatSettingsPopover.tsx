@@ -155,6 +155,19 @@ export function ChatSettingsPopover() {
     [localModel, debouncedSave]
   );
 
+  /** Applies dependent model parameter changes atomically to local and persisted state. */
+  const handleParamBatchChange = useCallback(
+    (updates: Partial<CustomModel>, resetFields: ReadonlyArray<keyof CustomModel>) => {
+      if (!localModel) return;
+
+      const updatedModel = { ...localModel, ...updates };
+      resetFields.forEach((field) => delete updatedModel[field]);
+      setLocalModel(updatedModel);
+      debouncedSave(updatedModel);
+    },
+    [localModel, debouncedSave]
+  );
+
   const handleReset = useCallback(() => {
     // Reset all optional parameters in one operation
     // Reason: Calling handleParamReset multiple times would capture stale localModel
@@ -287,6 +300,7 @@ export function ChatSettingsPopover() {
                 model={localModel}
                 settings={settings}
                 onChange={handleParamChange}
+                onChangeMany={handleParamBatchChange}
                 onReset={handleParamReset}
                 showTokenLimit={true}
               />

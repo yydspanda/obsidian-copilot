@@ -16,6 +16,10 @@ import {
   REASONING_EFFORT_OPTIONS,
   VERBOSITY_OPTIONS,
 } from "@/utils/modelParamsHelper";
+import {
+  createReasoningEffortModelUpdate,
+  getModelParameterUiPolicy,
+} from "@/components/ui/modelParameterPolicy";
 
 /**
  * Parameter range configuration
@@ -32,6 +36,10 @@ interface ModelParametersEditorProps {
   model: CustomModel;
   settings: CopilotSettings;
   onChange: (field: keyof CustomModel, value: CustomModel[keyof CustomModel]) => void;
+  onChangeMany: (
+    updates: Partial<CustomModel>,
+    resetFields: ReadonlyArray<keyof CustomModel>
+  ) => void;
   onReset?: (field: keyof CustomModel) => void;
   showTokenLimit?: boolean; // Whether to show Token limit, defaults to true
 }
@@ -44,6 +52,7 @@ export function ModelParametersEditor({
   model,
   settings,
   onChange,
+  onChangeMany,
   onReset,
   showTokenLimit = true,
 }: ModelParametersEditorProps) {
@@ -60,6 +69,7 @@ export function ModelParametersEditor({
   const numCtx = isOllamaModel ? (model.numCtx ?? PARAM_RANGES.numCtx.default) : model.numCtx;
   const reasoningEffort = model.reasoningEffort;
   const verbosity = model.verbosity;
+  const parameterUiPolicy = getModelParameterUiPolicy(model);
 
   // Check if this is an OpenAI native reasoning model
   const isOpenAIReasoningModel =
@@ -80,6 +90,12 @@ export function ModelParametersEditor({
     provider === ChatModelProviders.LM_STUDIO ||
     hasReasoningCapability;
   const showVerbosity = model.name.startsWith("gpt-5") && provider === ChatModelProviders.OPENAI;
+
+  /** Applies reasoning changes and dependent DeepSeek sampling resets atomically. */
+  const handleReasoningEffortChange = (value: string) => {
+    const update = createReasoningEffortModelUpdate(model, value as ReasoningEffort);
+    onChangeMany(update.updates, update.resetFields);
+  };
 
   return (
     <div className="tw-space-y-4">
@@ -142,62 +158,68 @@ export function ModelParametersEditor({
       )}
 
       {/* Temperature */}
-      <FormField>
-        <ParameterControl
-          type="slider"
-          optional={false}
-          label="Temperature"
-          value={temperature}
-          onChange={(value) => onChange("temperature", value)}
-          min={PARAM_RANGES.temperature.min}
-          max={PARAM_RANGES.temperature.max}
-          step={PARAM_RANGES.temperature.step}
-          defaultValue={PARAM_RANGES.temperature.default}
-          helpText={`Default is ${PARAM_RANGES.temperature.default}. Higher values will result in more creativeness, but also more mistakes. Set to 0 for no randomness.`}
-        />
-      </FormField>
+      {parameterUiPolicy.showTemperature && (
+        <FormField>
+          <ParameterControl
+            type="slider"
+            optional={false}
+            label="Temperature"
+            value={temperature}
+            onChange={(value) => onChange("temperature", value)}
+            min={PARAM_RANGES.temperature.min}
+            max={PARAM_RANGES.temperature.max}
+            step={PARAM_RANGES.temperature.step}
+            defaultValue={PARAM_RANGES.temperature.default}
+            helpText={`Default is ${PARAM_RANGES.temperature.default}. Higher values will result in more creativeness, but also more mistakes. Set to 0 for no randomness.`}
+          />
+        </FormField>
+      )}
 
       {/* Top-P */}
-      <FormField>
-        <ParameterControl
-          type="slider"
-          optional={true}
-          label="Top-P"
-          value={topP}
-          onChange={(value) => onChange("topP", value)}
-          disableFn={onReset ? () => onReset("topP") : undefined}
-          min={PARAM_RANGES.topP.min}
-          max={PARAM_RANGES.topP.max}
-          step={PARAM_RANGES.topP.step}
-          defaultValue={PARAM_RANGES.topP.default}
-          helpText={`Default value is ${PARAM_RANGES.topP.default}, the smaller the value, the less variety in the answers, the easier to understand, the larger the value, the larger the range of the AI's vocabulary, the more diverse`}
-        />
-      </FormField>
+      {parameterUiPolicy.showTopP && (
+        <FormField>
+          <ParameterControl
+            type="slider"
+            optional={true}
+            label="Top-P"
+            value={topP}
+            onChange={(value) => onChange("topP", value)}
+            disableFn={onReset ? () => onReset("topP") : undefined}
+            min={PARAM_RANGES.topP.min}
+            max={PARAM_RANGES.topP.max}
+            step={PARAM_RANGES.topP.step}
+            defaultValue={PARAM_RANGES.topP.default}
+            helpText={`Default value is ${PARAM_RANGES.topP.default}, the smaller the value, the less variety in the answers, the easier to understand, the larger the value, the larger the range of the AI's vocabulary, the more diverse`}
+          />
+        </FormField>
+      )}
 
       {/* Frequency Penalty */}
-      <FormField>
-        <ParameterControl
-          type="slider"
-          optional={true}
-          label="Frequency Penalty"
-          value={frequencyPenalty}
-          onChange={(value) => onChange("frequencyPenalty", value)}
-          disableFn={onReset ? () => onReset("frequencyPenalty") : undefined}
-          min={PARAM_RANGES.frequencyPenalty.min}
-          max={PARAM_RANGES.frequencyPenalty.max}
-          step={PARAM_RANGES.frequencyPenalty.step}
-          defaultValue={PARAM_RANGES.frequencyPenalty.default}
-          helpText={
-            <>
-              <p>
-                The frequency penalty parameter tells the model not to repeat a word that has
-                already been used multiple times in the conversation.
-              </p>
-              <em>The higher the value, the more the model is penalized for repeating words.</em>
-            </>
-          }
-        />
-      </FormField>
+      {parameterUiPolicy.showFrequencyPenalty && (
+        <FormField>
+          <ParameterControl
+            type="slider"
+            optional={true}
+            label="Frequency Penalty"
+            value={frequencyPenalty}
+            onChange={(value) => onChange("frequencyPenalty", value)}
+            disableFn={onReset ? () => onReset("frequencyPenalty") : undefined}
+            min={PARAM_RANGES.frequencyPenalty.min}
+            max={PARAM_RANGES.frequencyPenalty.max}
+            step={PARAM_RANGES.frequencyPenalty.step}
+            defaultValue={PARAM_RANGES.frequencyPenalty.default}
+            helpText={
+              <>
+                <p>
+                  The frequency penalty parameter tells the model not to repeat a word that has
+                  already been used multiple times in the conversation.
+                </p>
+                <em>The higher the value, the more the model is penalized for repeating words.</em>
+              </>
+            }
+          />
+        </FormField>
+      )}
 
       {/* Reasoning Effort - For models with reasoning capability */}
       {showReasoningEffort && (
@@ -207,21 +229,29 @@ export function ModelParametersEditor({
             optional={true}
             label="Reasoning Effort"
             value={reasoningEffort}
-            onChange={(value) => onChange("reasoningEffort", value)}
+            onChange={handleReasoningEffortChange}
             disableFn={onReset ? () => onReset("reasoningEffort") : undefined}
-            defaultValue={settings.reasoningEffort ?? getDefaultReasoningEffort()}
-            options={[
-              ...(model.name.startsWith("gpt-5") && model.provider === "openai"
-                ? [{ value: ReasoningEffort.MINIMAL, label: "Minimal" }]
-                : []),
-              ...REASONING_EFFORT_OPTIONS.filter(
-                (opt) =>
-                  opt.value !== ReasoningEffort.MINIMAL && opt.value !== ReasoningEffort.XHIGH
-              ),
-              ...(model.name.startsWith("gpt-5.4") && model.provider === "openai"
-                ? [{ value: ReasoningEffort.XHIGH, label: "Extra High" }]
-                : []),
-            ]}
+            defaultValue={
+              parameterUiPolicy.isDirectDeepSeek
+                ? ReasoningEffort.MINIMAL
+                : (settings.reasoningEffort ?? getDefaultReasoningEffort())
+            }
+            options={
+              parameterUiPolicy.reasoningEffortOptions
+                ? [...parameterUiPolicy.reasoningEffortOptions]
+                : [
+                    ...(model.name.startsWith("gpt-5") && model.provider === "openai"
+                      ? [{ value: ReasoningEffort.MINIMAL, label: "Minimal" }]
+                      : []),
+                    ...REASONING_EFFORT_OPTIONS.filter(
+                      (opt) =>
+                        opt.value !== ReasoningEffort.MINIMAL && opt.value !== ReasoningEffort.XHIGH
+                    ),
+                    ...(model.name.startsWith("gpt-5.4") && model.provider === "openai"
+                      ? [{ value: ReasoningEffort.XHIGH, label: "Extra High" }]
+                      : []),
+                  ]
+            }
             helpText={
               <>
                 <p>
@@ -229,14 +259,24 @@ export function ModelParametersEditor({
                   more thorough reasoning but takes longer.
                 </p>
                 <ul className="tw-mt-2 tw-space-y-1 tw-text-xs">
-                  {model.name.startsWith("gpt-5") && model.provider === "openai" && (
-                    <li>Minimal: Fastest responses, minimal reasoning (GPT-5 only)</li>
-                  )}
-                  <li>Low: Faster responses, basic reasoning (default)</li>
-                  <li>Medium: Balanced performance</li>
-                  <li>High: Thorough reasoning, slower responses</li>
-                  {model.name.startsWith("gpt-5.4") && model.provider === "openai" && (
-                    <li>Extra High: Maximum reasoning depth (GPT-5.4 only)</li>
+                  {parameterUiPolicy.isDirectDeepSeek ? (
+                    <>
+                      <li>Minimal: Disable thinking and allow sampling controls</li>
+                      <li>High: Enable thorough thinking</li>
+                      <li>Extra High: Enable maximum thinking depth</li>
+                    </>
+                  ) : (
+                    <>
+                      {model.name.startsWith("gpt-5") && model.provider === "openai" && (
+                        <li>Minimal: Fastest responses, minimal reasoning (GPT-5 only)</li>
+                      )}
+                      <li>Low: Faster responses, basic reasoning (default)</li>
+                      <li>Medium: Balanced performance</li>
+                      <li>High: Thorough reasoning, slower responses</li>
+                      {model.name.startsWith("gpt-5.4") && model.provider === "openai" && (
+                        <li>Extra High: Maximum reasoning depth (GPT-5.4 only)</li>
+                      )}
+                    </>
                   )}
                 </ul>
                 {!hasReasoningCapability && !isOpenAIReasoningModel && (

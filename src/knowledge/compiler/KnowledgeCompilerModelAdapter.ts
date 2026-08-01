@@ -5,6 +5,7 @@ import {
   type CompilerBoundTarget,
   type CompilerGenerationRequest,
   type CompilerModelPort,
+  type KnowledgeCompilerInfrastructureFailureCode,
 } from "@/knowledge/compiler/CompilerModelPort";
 import { parseCompilerAnalysisModelOutput } from "@/knowledge/compiler/analysisSchema";
 import { parseCompilerGenerationModelOutput } from "@/knowledge/compiler/generationSchema";
@@ -35,6 +36,7 @@ const PRIVATE_ROUTING_POLICY = "private-bound-capability-v1";
 const SUPPORTED_MODEL_BEHAVIOR_CONTRACT_VERSION = 1 as const;
 const ROUTE_TOKEN = Symbol("KnowledgePrivateModelRoute.constructor");
 const ADAPTER_TOKEN = Symbol("KnowledgeCompilerModelAdapter.constructor");
+const ADAPTER_ERROR_TOKEN = Symbol("KnowledgeCompilerModelAdapterError.constructor");
 const REFLECT_APPLY = Reflect.apply;
 const MAX_PRIVATE_MODEL_WIRE_CHARACTERS = 16_000_000;
 const MAX_PRIVATE_MODEL_WIRE_BYTES = 32_000_000;
@@ -55,6 +57,24 @@ export type KnowledgePrivateModelInvoke = (
   request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>,
   signal: AbortSignal
 ) => Promise<string>;
+
+/** Sanitized concrete-provider categories retained across the private route boundary. */
+export type KnowledgePrivateModelProviderFailureCode =
+  | "request_rejected"
+  | "unauthorized"
+  | "insufficient_balance"
+  | "rate_limited"
+  | "provider_unavailable"
+  | "network_failed"
+  | "http_failed"
+  | "request_too_large"
+  | "response_too_large"
+  | "response_invalid";
+
+/** Route-owned classifier that translates only its concrete sanitized failures. */
+export type KnowledgePrivateModelFailureClassifier = (
+  error: unknown
+) => KnowledgePrivateModelProviderFailureCode | undefined;
 
 /** Queue-owned monotonic stage reporter captured by one job-bound adapter. */
 export type KnowledgeModelStageReporter = (stage: "analyzing" | "generating") => Promise<void>;
@@ -96,14 +116,105 @@ export type KnowledgeCompilerModelAdapterErrorCode =
   | "output_too_large"
   | "adapter_invalid";
 
+interface KnowledgeCompilerModelAdapterErrorState {
+  code: KnowledgeCompilerModelAdapterErrorCode;
+  providerFailure?: KnowledgePrivateModelProviderFailureCode;
+}
+
+const adapterErrorStates = new WeakMap<object, Readonly<KnowledgeCompilerModelAdapterErrorState>>();
+const ADAPTER_ERROR_CODES = new Set<KnowledgeCompilerModelAdapterErrorCode>([
+  "dependency_invalid",
+  "preparation_invalid",
+  "preparation_reused",
+  "route_invalid",
+  "profile_mismatch",
+  "request_invalid",
+  "request_not_authorized",
+  "generation_not_authorized",
+  "signal_mismatch",
+  "stage_invalid",
+  "authority_stale",
+  "route_failed",
+  "output_invalid",
+  "output_too_large",
+  "adapter_invalid",
+]);
+const PROVIDER_FAILURE_CODES = new Set<KnowledgePrivateModelProviderFailureCode>([
+  "request_rejected",
+  "unauthorized",
+  "insufficient_balance",
+  "rate_limited",
+  "provider_unavailable",
+  "network_failed",
+  "http_failed",
+  "request_too_large",
+  "response_too_large",
+  "response_invalid",
+]);
+
+/** Returns hidden adapter-error state only for a module-minted instance. */
+function requireKnowledgeCompilerModelAdapterErrorState(
+  value: unknown
+): Readonly<KnowledgeCompilerModelAdapterErrorState> {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("The knowledge compiler model adapter error is invalid");
+  }
+  const state = adapterErrorStates.get(value);
+  if (!state) {
+    throw new TypeError("The knowledge compiler model adapter error is invalid");
+  }
+  return state;
+}
+
+/** Creates one authentic sanitized adapter error with optional provider identity. */
+function createKnowledgeCompilerModelAdapterError(
+  code: KnowledgeCompilerModelAdapterErrorCode,
+  providerFailure?: KnowledgePrivateModelProviderFailureCode
+): KnowledgeCompilerModelAdapterError {
+  return new KnowledgeCompilerModelAdapterError(ADAPTER_ERROR_TOKEN, code, providerFailure);
+}
+
 /** Sanitized model-boundary error retaining no lower-level cause or response value. */
 export class KnowledgeCompilerModelAdapterError extends Error {
-  /** Creates one stable error safe for durable diagnostics. */
-  constructor(public readonly code: KnowledgeCompilerModelAdapterErrorCode) {
+  /** Creates one error only when called by this module's private helper. */
+  constructor(
+    token: symbol,
+    code: KnowledgeCompilerModelAdapterErrorCode,
+    providerFailure?: KnowledgePrivateModelProviderFailureCode
+  ) {
     super("The private knowledge compiler model operation failed");
+    if (
+      token !== ADAPTER_ERROR_TOKEN ||
+      !ADAPTER_ERROR_CODES.has(code) ||
+      (providerFailure !== undefined && !PROVIDER_FAILURE_CODES.has(providerFailure))
+    ) {
+      throw new TypeError("The knowledge compiler model adapter error is invalid");
+    }
     this.name = "KnowledgeCompilerModelAdapterError";
+    adapterErrorStates.set(
+      this,
+      Object.freeze({
+        code,
+        ...(providerFailure === undefined ? {} : { providerFailure }),
+      })
+    );
+    Object.freeze(this);
+  }
+
+  /** Reads one authentic adapter error without accepting prototype forgery. */
+  static inspect(value: unknown): Readonly<KnowledgeCompilerModelAdapterErrorState> | undefined {
+    if (typeof value !== "object" || value === null) return undefined;
+    return adapterErrorStates.get(value);
+  }
+
+  /** Returns the stable adapter code retained in hidden state. */
+  get code(): KnowledgeCompilerModelAdapterErrorCode {
+    return requireKnowledgeCompilerModelAdapterErrorState(this).code;
   }
 }
+
+Object.freeze(KnowledgeCompilerModelAdapterError.prototype);
+Object.freeze(KnowledgeCompilerModelAdapterError);
 
 interface CapturedRouteConfiguration {
   behaviorContractVersion: typeof SUPPORTED_MODEL_BEHAVIOR_CONTRACT_VERSION;
@@ -123,6 +234,7 @@ interface KnowledgePrivateModelRouteState {
   descriptor: Readonly<KnowledgePrivateModelRouteDescriptor>;
   captured: CapturedRouteConfiguration;
   invoke: KnowledgePrivateModelInvoke;
+  classifyFailure?: KnowledgePrivateModelFailureClassifier;
   profileDigest?: string;
 }
 
@@ -212,7 +324,7 @@ function createAbortError(): Error {
 /** Requires one non-empty canonical identity string. */
 function requireCanonicalText(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
-    throw new KnowledgeCompilerModelAdapterError("route_invalid");
+    throw createKnowledgeCompilerModelAdapterError("route_invalid");
   }
   return value;
 }
@@ -220,7 +332,7 @@ function requireCanonicalText(value: unknown): string {
 /** Requires one plaintext-free SHA-256 route identity. */
 function requireRouteIdentity(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) {
-    throw new KnowledgeCompilerModelAdapterError("route_invalid");
+    throw createKnowledgeCompilerModelAdapterError("route_invalid");
   }
   return value;
 }
@@ -270,7 +382,7 @@ function hasExactKeys(value: unknown, expectedKeys: readonly string[]): boolean 
 function addCharacters(budget: SnapshotBudget, count: number, limits: JsonSnapshotLimits): void {
   budget.characters += count;
   if (!Number.isSafeInteger(budget.characters) || budget.characters > limits.maxTotalCharacters) {
-    throw new KnowledgeCompilerModelAdapterError("output_too_large");
+    throw createKnowledgeCompilerModelAdapterError("output_too_large");
   }
 }
 
@@ -283,11 +395,11 @@ function snapshotJsonValue(
   depth: number
 ): JsonValue {
   if (depth > limits.maxDepth) {
-    throw new KnowledgeCompilerModelAdapterError("output_too_large");
+    throw createKnowledgeCompilerModelAdapterError("output_too_large");
   }
   budget.nodes += 1;
   if (budget.nodes > limits.maxNodes) {
-    throw new KnowledgeCompilerModelAdapterError("output_too_large");
+    throw createKnowledgeCompilerModelAdapterError("output_too_large");
   }
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -296,15 +408,15 @@ function snapshotJsonValue(
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      throw new KnowledgeCompilerModelAdapterError("output_invalid");
+      throw createKnowledgeCompilerModelAdapterError("output_invalid");
     }
     return value;
   }
   if (typeof value !== "object") {
-    throw new KnowledgeCompilerModelAdapterError("output_invalid");
+    throw createKnowledgeCompilerModelAdapterError("output_invalid");
   }
   if (ancestors.has(value)) {
-    throw new KnowledgeCompilerModelAdapterError("output_invalid");
+    throw createKnowledgeCompilerModelAdapterError("output_invalid");
   }
   ancestors.add(value);
   try {
@@ -318,21 +430,21 @@ function snapshotJsonValue(
         lengthDescriptor.enumerable ||
         lengthDescriptor.configurable
       ) {
-        throw new KnowledgeCompilerModelAdapterError("output_invalid");
+        throw createKnowledgeCompilerModelAdapterError("output_invalid");
       }
       const length = lengthDescriptor.value as number;
       if (length > limits.maxArrayLength) {
-        throw new KnowledgeCompilerModelAdapterError("output_too_large");
+        throw createKnowledgeCompilerModelAdapterError("output_too_large");
       }
       const ownKeys = Reflect.ownKeys(value);
       if (ownKeys.length !== length + 1 || ownKeys.some((key) => typeof key === "symbol")) {
-        throw new KnowledgeCompilerModelAdapterError("output_invalid");
+        throw createKnowledgeCompilerModelAdapterError("output_invalid");
       }
       const snapshot: JsonValue[] = [];
       for (let index = 0; index < length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-          throw new KnowledgeCompilerModelAdapterError("output_invalid");
+          throw createKnowledgeCompilerModelAdapterError("output_invalid");
         }
         snapshot.push(snapshotJsonValue(descriptor.value, limits, budget, ancestors, depth + 1));
       }
@@ -340,20 +452,20 @@ function snapshotJsonValue(
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      throw new KnowledgeCompilerModelAdapterError("output_invalid");
+      throw createKnowledgeCompilerModelAdapterError("output_invalid");
     }
     const keys = Reflect.ownKeys(value);
     if (keys.some((key) => typeof key !== "string")) {
-      throw new KnowledgeCompilerModelAdapterError("output_invalid");
+      throw createKnowledgeCompilerModelAdapterError("output_invalid");
     }
     if (keys.length > limits.maxObjectProperties) {
-      throw new KnowledgeCompilerModelAdapterError("output_too_large");
+      throw createKnowledgeCompilerModelAdapterError("output_too_large");
     }
     const snapshot = Object.create(null) as Record<string, JsonValue>;
     for (const key of (keys as string[]).sort(compareText)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new KnowledgeCompilerModelAdapterError("output_invalid");
+        throw createKnowledgeCompilerModelAdapterError("output_invalid");
       }
       addCharacters(budget, key.length, limits);
       Object.defineProperty(snapshot, key, {
@@ -365,8 +477,8 @@ function snapshotJsonValue(
     }
     return Object.freeze(snapshot);
   } catch (error) {
-    if (error instanceof KnowledgeCompilerModelAdapterError) throw error;
-    throw new KnowledgeCompilerModelAdapterError("output_invalid");
+    if (KnowledgeCompilerModelAdapterError.inspect(error)) throw error;
+    throw createKnowledgeCompilerModelAdapterError("output_invalid");
   } finally {
     ancestors.delete(value);
   }
@@ -380,25 +492,25 @@ function snapshotJson(value: unknown, limits: JsonSnapshotLimits): JsonValue {
 /** Decodes bounded provider JSON text before any object-level inspection can trigger callbacks. */
 function decodePrivateModelWireOutput(value: unknown): JsonValue {
   if (typeof value !== "string") {
-    throw new KnowledgeCompilerModelAdapterError("output_invalid");
+    throw createKnowledgeCompilerModelAdapterError("output_invalid");
   }
   if (value.length > MAX_PRIVATE_MODEL_WIRE_CHARACTERS) {
-    throw new KnowledgeCompilerModelAdapterError("output_too_large");
+    throw createKnowledgeCompilerModelAdapterError("output_too_large");
   }
   let bytes: Uint8Array;
   try {
     bytes = new TextEncoder().encode(value);
   } catch {
-    throw new KnowledgeCompilerModelAdapterError("output_invalid");
+    throw createKnowledgeCompilerModelAdapterError("output_invalid");
   }
   if (bytes.byteLength > MAX_PRIVATE_MODEL_WIRE_BYTES) {
-    throw new KnowledgeCompilerModelAdapterError("output_too_large");
+    throw createKnowledgeCompilerModelAdapterError("output_too_large");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value) as unknown;
   } catch {
-    throw new KnowledgeCompilerModelAdapterError("output_invalid");
+    throw createKnowledgeCompilerModelAdapterError("output_invalid");
   }
   return snapshotJson(parsed, FIXED_KNOWLEDGE_DECODED_MODEL_OUTPUT_LIMITS);
 }
@@ -418,7 +530,7 @@ function captureProfile(value: unknown): KnowledgeBundlePipelineProfile {
       readOwnDataProperty(readOwnDataProperty(snapshot, "model"), "configuration")
     );
   } catch {
-    throw new KnowledgeCompilerModelAdapterError("preparation_invalid");
+    throw createKnowledgeCompilerModelAdapterError("preparation_invalid");
   }
   return snapshot as unknown as KnowledgeBundlePipelineProfile;
 }
@@ -486,30 +598,43 @@ function captureRouteDescriptor(value: unknown): {
       }),
     };
   } catch {
-    throw new KnowledgeCompilerModelAdapterError("route_invalid");
+    throw createKnowledgeCompilerModelAdapterError("route_invalid");
   }
 }
 
 /** Returns hidden route state only for a module-created route capability. */
 function requireRouteState(value: unknown): KnowledgePrivateModelRouteState {
   if (typeof value !== "object" || value === null) {
-    throw new KnowledgeCompilerModelAdapterError("route_invalid");
+    throw createKnowledgeCompilerModelAdapterError("route_invalid");
   }
   const state = routeStates.get(value);
   if (!state) {
-    throw new KnowledgeCompilerModelAdapterError("route_invalid");
+    throw createKnowledgeCompilerModelAdapterError("route_invalid");
   }
   return state;
+}
+
+/** Runs only the classifier captured by the exact opaque route and sanitizes classifier failure. */
+function classifyRouteFailure(
+  route: KnowledgePrivateModelRouteState,
+  error: unknown
+): KnowledgePrivateModelProviderFailureCode | undefined {
+  if (!route.classifyFailure) return undefined;
+  try {
+    return REFLECT_APPLY(route.classifyFailure, undefined, [error]);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Returns hidden adapter state only for a module-created job-bound adapter. */
 function requireAdapterState(value: unknown): KnowledgeCompilerModelAdapterState {
   if (typeof value !== "object" || value === null) {
-    throw new KnowledgeCompilerModelAdapterError("adapter_invalid");
+    throw createKnowledgeCompilerModelAdapterError("adapter_invalid");
   }
   const state = adapterStates.get(value);
   if (!state) {
-    throw new KnowledgeCompilerModelAdapterError("adapter_invalid");
+    throw createKnowledgeCompilerModelAdapterError("adapter_invalid");
   }
   return state;
 }
@@ -587,7 +712,7 @@ function capturePreparation(preparation: KnowledgeAuthorizedSourcePreparation): 
       foundation,
     };
   } catch {
-    throw new KnowledgeCompilerModelAdapterError("preparation_invalid");
+    throw createKnowledgeCompilerModelAdapterError("preparation_invalid");
   }
 }
 
@@ -615,7 +740,7 @@ function assertRouteMatchesProfile(
       throw new TypeError("Route profile mismatch");
     }
   } catch {
-    throw new KnowledgeCompilerModelAdapterError("profile_mismatch");
+    throw createKnowledgeCompilerModelAdapterError("profile_mismatch");
   }
 }
 
@@ -680,7 +805,7 @@ function snapshotCompilerRequest(
     }
     return snapshot as unknown as Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>;
   } catch {
-    throw new KnowledgeCompilerModelAdapterError("request_invalid");
+    throw createKnowledgeCompilerModelAdapterError("request_invalid");
   }
 }
 
@@ -698,7 +823,7 @@ function assertRequestFoundation(
     digestJson("knowledge-model-request-schema-v1", request.schema as unknown as JsonValue) !==
       digestJson("knowledge-model-request-schema-v1", foundation.schema)
   ) {
-    throw new KnowledgeCompilerModelAdapterError("request_not_authorized");
+    throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
   }
 }
 
@@ -726,7 +851,7 @@ function assertGenerationCrossStageAuthority(
         analysisRequest.contextPages as unknown as JsonValue
       )
   ) {
-    throw new KnowledgeCompilerModelAdapterError("request_not_authorized");
+    throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
   }
 }
 
@@ -744,7 +869,7 @@ function captureAuthorizedRequest(
     value === null ||
     value !== authorization.requestIdentity
   ) {
-    throw new KnowledgeCompilerModelAdapterError(
+    throw createKnowledgeCompilerModelAdapterError(
       stage === "analysis" ? "request_not_authorized" : "generation_not_authorized"
     );
   }
@@ -755,14 +880,14 @@ function captureAuthorizedRequest(
       ? "knowledge-authorized-analysis-request-v1"
       : "knowledge-authorized-generation-request-v1";
   if (digestJson(domain, request as unknown as JsonValue) !== authorization.requestDigest) {
-    throw new KnowledgeCompilerModelAdapterError(
+    throw createKnowledgeCompilerModelAdapterError(
       stage === "analysis" ? "request_not_authorized" : "generation_not_authorized"
     );
   }
   if (stage === "generation") {
     const analysisAuthorization = state.analysisAuthorization;
     if (!analysisAuthorization) {
-      throw new KnowledgeCompilerModelAdapterError("generation_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
     assertGenerationCrossStageAuthority(
       request as CompilerGenerationRequest,
@@ -830,11 +955,11 @@ function authorizeAnalysisModelCall(
     const call = KnowledgeCompilerModelCallAuthorization.consume(authorization, "analysis");
     KnowledgeCompilerModelSession.assert(call.session);
     if (call.signal !== state.signal) {
-      throw new KnowledgeCompilerModelAdapterError("signal_mismatch");
+      throw createKnowledgeCompilerModelAdapterError("signal_mismatch");
     }
     if (state.signal.aborted) throw createAbortError();
     if (typeof call.request !== "object" || call.request === null) {
-      throw new KnowledgeCompilerModelAdapterError("request_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
     }
     const request = snapshotCompilerRequest(call.request, "analysis") as CompilerAnalysisRequest;
     assertRequestFoundation(request, state.foundation);
@@ -851,10 +976,10 @@ function authorizeAnalysisModelCall(
   } catch (error) {
     state.analysisState = "failed";
     if (state.signal.aborted) throw createAbortError();
-    if (error instanceof KnowledgeCompilerModelAdapterError && error.code === "signal_mismatch") {
+    if (KnowledgeCompilerModelAdapterError.inspect(error)?.code === "signal_mismatch") {
       throw error;
     }
-    throw new KnowledgeCompilerModelAdapterError("request_not_authorized");
+    throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
   }
 }
 
@@ -868,7 +993,7 @@ function authorizeGenerationModelCall(
     const call = KnowledgeCompilerModelCallAuthorization.consume(authorization, "generation");
     KnowledgeCompilerModelSession.assert(call.session);
     if (call.signal !== state.signal) {
-      throw new KnowledgeCompilerModelAdapterError("signal_mismatch");
+      throw createKnowledgeCompilerModelAdapterError("signal_mismatch");
     }
     if (state.signal.aborted) throw createAbortError();
     if (
@@ -880,7 +1005,7 @@ function authorizeGenerationModelCall(
       typeof call.request !== "object" ||
       call.request === null
     ) {
-      throw new KnowledgeCompilerModelAdapterError("generation_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
     const analysis = snapshotJson(call.analysis, {
       maxDepth: 64,
@@ -897,7 +1022,7 @@ function authorizeGenerationModelCall(
       maxTotalCharacters: 16_000_000,
     }) as unknown as readonly CompilerBoundTarget[];
     if (!Array.isArray(targets)) {
-      throw new KnowledgeCompilerModelAdapterError("generation_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
     const request = snapshotCompilerRequest(
       call.request,
@@ -906,7 +1031,7 @@ function authorizeGenerationModelCall(
     assertRequestFoundation(request, state.foundation);
     const analysisAuthorization = state.analysisAuthorization;
     if (!analysisAuthorization) {
-      throw new KnowledgeCompilerModelAdapterError("generation_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
     assertGenerationCrossStageAuthority(request, analysisAuthorization.request);
     const analysisDigest = digestJson("knowledge-analysis-v1", analysis as unknown as JsonValue);
@@ -925,7 +1050,7 @@ function authorizeGenerationModelCall(
       digestJson("knowledge-analysis-output-v1", state.analysisOutput) !==
         state.analysisOutputDigest
     ) {
-      throw new KnowledgeCompilerModelAdapterError("generation_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
     state.generationAuthorization = Object.freeze({
       requestIdentity: call.request,
@@ -941,10 +1066,10 @@ function authorizeGenerationModelCall(
   } catch (error) {
     state.generationState = "failed";
     if (state.signal.aborted) throw createAbortError();
-    if (error instanceof KnowledgeCompilerModelAdapterError && error.code === "signal_mismatch") {
+    if (KnowledgeCompilerModelAdapterError.inspect(error)?.code === "signal_mismatch") {
       throw error;
     }
-    throw new KnowledgeCompilerModelAdapterError("generation_not_authorized");
+    throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
   }
 }
 
@@ -962,7 +1087,7 @@ function authorizeCompilerModelCall(
     authorizeGenerationModelCall(state, authorization);
     return;
   }
-  throw new KnowledgeCompilerModelAdapterError("stage_invalid");
+  throw createKnowledgeCompilerModelAdapterError("stage_invalid");
 }
 
 /** Revalidates the exact preparation, signal, profile, and Runtime proof. */
@@ -974,13 +1099,13 @@ async function reprove(
     AuthorizedSourcePreparation.assert(state.preparation);
     if (state.signal.aborted) throw createAbortError();
     if (state.preparation.getSignal() !== state.signal) {
-      throw new KnowledgeCompilerModelAdapterError("signal_mismatch");
+      throw createKnowledgeCompilerModelAdapterError("signal_mismatch");
     }
     let currentProfile: KnowledgeBundlePipelineProfile;
     try {
       currentProfile = captureProfile(state.preparation.getProfile());
     } catch {
-      throw new KnowledgeCompilerModelAdapterError("profile_mismatch");
+      throw createKnowledgeCompilerModelAdapterError("profile_mismatch");
     }
     if (
       digestJson(
@@ -988,14 +1113,14 @@ async function reprove(
         currentProfile as unknown as JsonValue
       ) !== state.profileDigest
     ) {
-      throw new KnowledgeCompilerModelAdapterError("profile_mismatch");
+      throw createKnowledgeCompilerModelAdapterError("profile_mismatch");
     }
     await state.preparation.reprove(stage);
     if (state.signal.aborted) throw createAbortError();
   } catch (error) {
     if (state.signal.aborted) throw createAbortError();
-    if (error instanceof KnowledgeCompilerModelAdapterError) throw error;
-    throw new KnowledgeCompilerModelAdapterError("authority_stale");
+    if (KnowledgeCompilerModelAdapterError.inspect(error)) throw error;
+    throw createKnowledgeCompilerModelAdapterError("authority_stale");
   }
 }
 
@@ -1008,7 +1133,7 @@ async function reportStage(
     await REFLECT_APPLY(state.reportStage, undefined, [stage]);
   } catch {
     if (state.signal.aborted) throw createAbortError();
-    throw new KnowledgeCompilerModelAdapterError("stage_invalid");
+    throw createKnowledgeCompilerModelAdapterError("stage_invalid");
   }
 }
 
@@ -1021,15 +1146,15 @@ async function invokeModel(
 ): Promise<unknown> {
   const queueStage = modelStage === "analysis" ? "analyzing" : "generating";
   if (signal !== state.signal) {
-    throw new KnowledgeCompilerModelAdapterError("signal_mismatch");
+    throw createKnowledgeCompilerModelAdapterError("signal_mismatch");
   }
   if (state.signal.aborted) throw createAbortError();
   if (modelStage === "analysis") {
     if (state.analysisState === "unavailable") {
-      throw new KnowledgeCompilerModelAdapterError("request_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
     }
     if (state.analysisState !== "available") {
-      throw new KnowledgeCompilerModelAdapterError("stage_invalid");
+      throw createKnowledgeCompilerModelAdapterError("stage_invalid");
     }
     state.analysisState = "validating";
   } else {
@@ -1038,7 +1163,7 @@ async function invokeModel(
       state.generationState !== "available" ||
       !state.generationAuthorization
     ) {
-      throw new KnowledgeCompilerModelAdapterError("generation_not_authorized");
+      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
     state.generationState = "validating";
   }
@@ -1052,8 +1177,8 @@ async function invokeModel(
     } else {
       state.generationState = "failed";
     }
-    if (error instanceof KnowledgeCompilerModelAdapterError) throw error;
-    throw new KnowledgeCompilerModelAdapterError("request_invalid");
+    if (KnowledgeCompilerModelAdapterError.inspect(error)) throw error;
+    throw createKnowledgeCompilerModelAdapterError("request_invalid");
   }
   if (modelStage === "analysis") {
     state.analysisState = "running";
@@ -1066,21 +1191,24 @@ async function invokeModel(
     let raw: string;
     try {
       raw = await REFLECT_APPLY(state.route.invoke, undefined, [modelStage, request, state.signal]);
-    } catch {
+    } catch (error) {
       if (state.signal.aborted) throw createAbortError();
-      throw new KnowledgeCompilerModelAdapterError("route_failed");
+      throw createKnowledgeCompilerModelAdapterError(
+        "route_failed",
+        classifyRouteFailure(state.route, error)
+      );
     }
     if (state.signal.aborted) throw createAbortError();
     const output = decodePrivateModelWireOutput(raw);
     if (typeof output !== "object" || output === null || Array.isArray(output)) {
-      throw new KnowledgeCompilerModelAdapterError("output_invalid");
+      throw createKnowledgeCompilerModelAdapterError("output_invalid");
     }
     const structurallyValid =
       modelStage === "analysis"
         ? parseCompilerAnalysisModelOutput(output).ok
         : parseCompilerGenerationModelOutput(output).ok;
     if (!structurallyValid) {
-      throw new KnowledgeCompilerModelAdapterError("output_invalid");
+      throw createKnowledgeCompilerModelAdapterError("output_invalid");
     }
     await reprove(state, queueStage);
     if (modelStage === "analysis") {
@@ -1098,8 +1226,8 @@ async function invokeModel(
       state.generationState = "failed";
     }
     if (state.signal.aborted) throw createAbortError();
-    if (error instanceof KnowledgeCompilerModelAdapterError) throw error;
-    throw new KnowledgeCompilerModelAdapterError("route_failed");
+    if (KnowledgeCompilerModelAdapterError.inspect(error)) throw error;
+    throw createKnowledgeCompilerModelAdapterError("route_failed");
   }
 }
 
@@ -1115,14 +1243,16 @@ export class KnowledgePrivateModelRoute {
     token: symbol,
     descriptor: KnowledgePrivateModelRouteDescriptor,
     invoke: KnowledgePrivateModelInvoke,
+    classifyFailure?: KnowledgePrivateModelFailureClassifier,
     profileDigest?: string
   ) {
     if (
       token !== ROUTE_TOKEN ||
       typeof invoke !== "function" ||
+      (classifyFailure !== undefined && typeof classifyFailure !== "function") ||
       (profileDigest !== undefined && !/^[a-f0-9]{64}$/.test(profileDigest))
     ) {
-      throw new KnowledgeCompilerModelAdapterError("route_invalid");
+      throw createKnowledgeCompilerModelAdapterError("route_invalid");
     }
     const captured = captureRouteDescriptor(descriptor);
     routeStates.set(
@@ -1131,6 +1261,7 @@ export class KnowledgePrivateModelRoute {
         descriptor: captured.descriptor,
         captured: captured.captured,
         invoke,
+        ...(classifyFailure === undefined ? {} : { classifyFailure }),
         ...(profileDigest === undefined ? {} : { profileDigest }),
       })
     );
@@ -1159,9 +1290,10 @@ Object.freeze(KnowledgePrivateModelRoute);
  */
 export function bindKnowledgePrivateModelRoute(
   descriptor: KnowledgePrivateModelRouteDescriptor,
-  invoke: KnowledgePrivateModelInvoke
+  invoke: KnowledgePrivateModelInvoke,
+  classifyFailure?: KnowledgePrivateModelFailureClassifier
 ): KnowledgePrivateModelRoute {
-  return new KnowledgePrivateModelRoute(ROUTE_TOKEN, descriptor, invoke);
+  return new KnowledgePrivateModelRoute(ROUTE_TOKEN, descriptor, invoke, classifyFailure);
 }
 
 /**
@@ -1174,7 +1306,8 @@ export function bindKnowledgePrivateModelRoute(
  */
 export function bindKnowledgePrivateModelRouteToProfile(
   profile: KnowledgeBundlePipelineProfile,
-  invoke: KnowledgePrivateModelInvoke
+  invoke: KnowledgePrivateModelInvoke,
+  classifyFailure?: KnowledgePrivateModelFailureClassifier
 ): KnowledgePrivateModelRoute {
   try {
     const capturedProfile = captureProfile(profile);
@@ -1188,13 +1321,14 @@ export function bindKnowledgePrivateModelRouteToProfile(
       ROUTE_TOKEN,
       descriptor,
       invoke,
+      classifyFailure,
       digestJson("knowledge-authorized-model-profile-v1", capturedProfile as unknown as JsonValue)
     );
   } catch (error) {
-    if (error instanceof KnowledgeCompilerModelAdapterError && error.code === "route_invalid") {
+    if (KnowledgeCompilerModelAdapterError.inspect(error)?.code === "route_invalid") {
       throw error;
     }
-    throw new KnowledgeCompilerModelAdapterError("route_invalid");
+    throw createKnowledgeCompilerModelAdapterError("route_invalid");
   }
 }
 
@@ -1210,13 +1344,13 @@ export class KnowledgeCompilerModelAdapter implements CompilerModelPort {
     reportStageValue: KnowledgeModelStageReporter
   ) {
     if (token !== ADAPTER_TOKEN || typeof reportStageValue !== "function") {
-      throw new KnowledgeCompilerModelAdapterError("adapter_invalid");
+      throw createKnowledgeCompilerModelAdapterError("adapter_invalid");
     }
     const authorized = capturePreparation(preparation);
     const routeState = requireRouteState(route);
     assertRouteMatchesProfile(routeState, authorized.profile);
     if (reservedAdapterPreparations.has(preparation)) {
-      throw new KnowledgeCompilerModelAdapterError("preparation_reused");
+      throw createKnowledgeCompilerModelAdapterError("preparation_reused");
     }
     reservedAdapterPreparations.add(preparation);
     adapterStates.set(this, {
@@ -1256,6 +1390,48 @@ export class KnowledgeCompilerModelAdapter implements CompilerModelPort {
 
 Object.freeze(KnowledgeCompilerModelAdapter.prototype);
 Object.freeze(KnowledgeCompilerModelAdapter);
+
+/**
+ * Classifies only sanitized failures created by this model boundary.
+ *
+ * The returned value contains no provider payload, request, URL, credential,
+ * or original cause. Queue policy remains responsible for scheduling retries.
+ *
+ * @param error - Opaque rejection caught by the Compiler
+ * @returns Provider-neutral retry facts, or undefined for an unrelated error
+ */
+export function classifyKnowledgeCompilerModelAdapterFailure(
+  error: unknown
+): KnowledgeCompilerInfrastructureFailureCode | undefined {
+  const state = KnowledgeCompilerModelAdapterError.inspect(error);
+  if (!state) return undefined;
+
+  switch (state.providerFailure) {
+    case "rate_limited":
+      return "provider_rate_limited";
+    case "provider_unavailable":
+      return "provider_unavailable";
+    case "network_failed":
+      return "provider_network_failed";
+    case "unauthorized":
+      return "provider_unauthorized";
+    case "insufficient_balance":
+      return "provider_balance_required";
+    case "request_rejected":
+    case "request_too_large":
+      return "provider_request_rejected";
+    case "response_too_large":
+    case "response_invalid":
+      return "provider_response_invalid";
+    case "http_failed":
+      return "provider_http_failed";
+  }
+
+  if (state.code === "output_invalid" || state.code === "output_too_large") {
+    return "model_output_invalid";
+  }
+  return "model_authority_failed";
+}
 
 /** Creates job-bound adapters while keeping the constructor token module-private. */
 export function bindKnowledgeCompilerModelAdapter(

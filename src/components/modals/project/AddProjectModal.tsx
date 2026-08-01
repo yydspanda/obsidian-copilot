@@ -27,6 +27,11 @@ import { createPluginRoot } from "@/utils/react/createPluginRoot";
 import { App, Modal, Notice } from "obsidian";
 import React, { useMemo, useState } from "react";
 import { Root } from "react-dom/client";
+import {
+  getProjectTemperatureControl,
+  normalizeProjectModelConfigsForSelection,
+} from "@/components/ui/modelParameterPolicy";
+import { isModelReferenceRunnable } from "@/LLMProviders/modelSelectionPolicy";
 
 interface AddProjectModalContentProps {
   initialProject?: ProjectConfig;
@@ -82,6 +87,18 @@ function AddProjectModalContent({
         formData.contextSource?.youtubeUrls || ""
       ),
     [formData.contextSource?.webUrls, formData.contextSource?.youtubeUrls]
+  );
+  const selectedProjectModel = useMemo(
+    () =>
+      settings.activeModels.find(
+        (model) => getModelKeyFromModel(model) === formData.projectModelKey
+      ),
+    [formData.projectModelKey, settings.activeModels]
+  );
+  const projectTemperatureControl = getProjectTemperatureControl(
+    selectedProjectModel,
+    formData.modelConfigs?.temperature,
+    DEFAULT_MODEL_SETTING.TEMPERATURE
   );
 
   // Reason: Shared hook handles cache loading, file enumeration, and processingData construction.
@@ -153,6 +170,22 @@ function AddProjectModalContent({
     });
   };
 
+  /** Selects a project model and applies any provider-required project overrides atomically. */
+  const handleProjectModelChange = (value: string) => {
+    const selectedModel = settings.activeModels.find(
+      (model) =>
+        model.enabled && isModelReferenceRunnable(model) && getModelKeyFromModel(model) === value
+    );
+    if (!selectedModel) return;
+
+    checkModelApiKey(selectedModel, settings);
+    setFormData((previous) => ({
+      ...previous,
+      projectModelKey: value.trim(),
+      modelConfigs: normalizeProjectModelConfigsForSelection(previous.modelConfigs, selectedModel),
+    }));
+  };
+
   /** Handle URL adds from UrlTagInput, serialize back to formData strings */
   const handleUrlAdd = (newUrls: UrlItem[]) => {
     const allUrls = [...urlItems, ...newUrls];
@@ -206,7 +239,13 @@ function AddProjectModalContent({
 
   const handleSave = async () => {
     const trimmedName = formData.name?.trim() ?? "";
-    const saveData = { ...formData, name: trimmedName };
+    const saveData = {
+      ...formData,
+      name: trimmedName,
+      modelConfigs: selectedProjectModel
+        ? normalizeProjectModelConfigsForSelection(formData.modelConfigs, selectedProjectModel)
+        : formData.modelConfigs,
+    };
 
     const requiredFields = ["name", "projectModelKey"];
     const missingFields = requiredFields.filter((field) => !saveData[field as keyof ProjectConfig]);
@@ -310,23 +349,11 @@ function AddProjectModalContent({
               >
                 <ObsidianNativeSelect
                   value={formData.projectModelKey}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    const selectedModel = settings.activeModels.find(
-                      (m) => m.enabled && getModelKeyFromModel(m) === value
-                    );
-                    if (!selectedModel) return;
-
-                    const { hasApiKey, errorNotice } = checkModelApiKey(selectedModel, settings);
-                    if (!hasApiKey && errorNotice) {
-                      // Keep selection allowed; error will surface in chat on send
-                    }
-                    handleInputChange("projectModelKey", value);
-                  }}
+                  onChange={(event) => handleProjectModelChange(event.target.value)}
                   onBlur={() => setTouched((prev) => ({ ...prev, projectModelKey: true }))}
                   placeholder="Select a model"
                   options={settings.activeModels
-                    .filter((m) => m.enabled && m.projectEnabled)
+                    .filter((m) => m.enabled && isModelReferenceRunnable(m) && m.projectEnabled)
                     .map((model) => ({
                       label: getModelDisplayWithIcons(model),
                       value: getModelKeyFromModel(model),
@@ -336,11 +363,12 @@ function AddProjectModalContent({
 
               <FormField label="Temperature">
                 <SettingSlider
-                  value={formData.modelConfigs?.temperature ?? DEFAULT_MODEL_SETTING.TEMPERATURE}
+                  value={projectTemperatureControl.value}
                   onChange={(value) => handleInputChange("modelConfigs.temperature", value)}
                   min={0}
                   max={2}
                   step={0.01}
+                  disabled={projectTemperatureControl.disabled}
                   className="tw-w-full"
                 />
               </FormField>

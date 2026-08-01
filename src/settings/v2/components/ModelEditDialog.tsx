@@ -93,6 +93,19 @@ const ModelEditModalContent: React.FC<ModelEditModalContentProps> = ({
     [debouncedOnUpdate, originalModel]
   );
 
+  /** Applies dependent parameter changes in one state update and one persisted write. */
+  const handleLocalBatchUpdate = useCallback(
+    (updates: Partial<CustomModel>, resetFields: ReadonlyArray<keyof CustomModel>) => {
+      setLocalModel((prevModel) => {
+        const updatedModel = { ...prevModel, ...updates };
+        resetFields.forEach((field) => delete updatedModel[field]);
+        debouncedOnUpdate(originalModel, updatedModel);
+        return updatedModel;
+      });
+    },
+    [debouncedOnUpdate, originalModel]
+  );
+
   if (!localModel) return null;
 
   const getPlaceholderUrl = () => {
@@ -329,6 +342,7 @@ const ModelEditModalContent: React.FC<ModelEditModalContentProps> = ({
               model={localModel}
               settings={settings}
               onChange={handleLocalUpdate}
+              onChangeMany={handleLocalBatchUpdate}
               onReset={handleLocalReset}
               showTokenLimit={true}
             />

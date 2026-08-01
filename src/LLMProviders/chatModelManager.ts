@@ -39,8 +39,17 @@ import { Notice } from "obsidian";
 import { ChatOpenRouter } from "./ChatOpenRouter";
 import { ChatLMStudio } from "./ChatLMStudio";
 import { BedrockChatModel, type BedrockChatModelFields } from "./BedrockChatModel";
+import {
+  createDeepSeekChatModelPolicy,
+  resolveDeepSeekTemperatureOverride,
+} from "./deepseekModelPolicy";
 import { GitHubCopilotChatModel } from "@/LLMProviders/githubCopilot/GitHubCopilotChatModel";
 import { GitHubCopilotResponsesModel } from "@/LLMProviders/githubCopilot/GitHubCopilotResponsesModel";
+import {
+  assertSavedModelReferenceCanRun,
+  isModelReferenceRunnable,
+  isSavedModelReferenceError,
+} from "@/LLMProviders/modelSelectionPolicy";
 import type { SafetySetting } from "@google/generative-ai";
 
 const GOOGLE_SAFETY_SETTINGS_BLOCK_NONE: SafetySetting[] = [
@@ -55,7 +64,7 @@ const GOOGLE_SAFETY_SETTINGS_BLOCK_NONE: SafetySetting[] = [
 // vocabulary from tiktoken.pages.dev, which blocks all LLM calls when the CDN is
 // unreachable. This char/4 estimation is the same fallback LangChain uses internally
 // before tiktoken loads. Actual token usage comes from API response metadata.
- 
+
 (
   BaseLanguageModel.prototype as { getNumTokens: (...args: unknown[]) => Promise<number> }
 ).getNumTokens = async (content: string | Array<{ type: string; text?: string }>) => {
@@ -202,7 +211,19 @@ export default class ChatModelManager {
     const modelName = customModel.name;
     const modelInfo = getModelInfo(modelName);
     const { isThinkingEnabled, usesAdaptiveThinking } = modelInfo;
-    const resolvedTemperature = this.getTemperatureForModel(modelInfo, customModel, settings);
+    const deepSeekPolicy =
+      (customModel.provider as ChatModelProviders) === ChatModelProviders.DEEPSEEK
+        ? createDeepSeekChatModelPolicy({
+            model: modelName,
+            reasoningEffort: customModel.reasoningEffort,
+            temperature: customModel.temperature ?? settings.temperature,
+            topP: customModel.topP,
+            frequencyPenalty: customModel.frequencyPenalty,
+          })
+        : undefined;
+    const resolvedTemperature = deepSeekPolicy
+      ? deepSeekPolicy.temperature
+      : this.getTemperatureForModel(modelInfo, customModel, settings);
     const maxTokens = customModel.maxTokens ?? settings.maxTokens;
 
     // Base config - temperature will be handled by provider-specific methods
@@ -424,6 +445,12 @@ export default class ChatModelManager {
           baseURL: customModel.baseUrl || ProviderInfo[ChatModelProviders.DEEPSEEK].host,
           fetch: customModel.enableCors ? safeFetch : undefined,
         },
+        ...(deepSeekPolicy === undefined
+          ? {}
+          : {
+              modelKwargs: deepSeekPolicy.modelKwargs,
+              ...(deepSeekPolicy.topP === undefined ? {} : { topP: deepSeekPolicy.topP }),
+            }),
       },
       [ChatModelProviders.AMAZON_BEDROCK]: {} as BedrockChatModelFields,
       [ChatModelProviders.GITHUB_COPILOT]: {
@@ -602,7 +629,6 @@ export default class ChatModelManager {
           ChatModelProviders.LM_STUDIO,
           ChatModelProviders.OPENAI_FORMAT,
           ChatModelProviders.MISTRAL,
-          ChatModelProviders.DEEPSEEK,
           ChatModelProviders.SILICONFLOW,
         ].includes(provider)
       ) {
@@ -622,7 +648,6 @@ export default class ChatModelManager {
           ChatModelProviders.LM_STUDIO,
           ChatModelProviders.OPENAI_FORMAT,
           ChatModelProviders.MISTRAL,
-          ChatModelProviders.DEEPSEEK,
           ChatModelProviders.SILICONFLOW,
         ].includes(provider)
       ) {
@@ -642,7 +667,7 @@ export default class ChatModelManager {
     const allModels = activeModels ?? BUILTIN_CHAT_MODELS;
 
     allModels.forEach((model) => {
-      if (model.enabled) {
+      if (model.enabled && isModelReferenceRunnable(model)) {
         if (!Object.values(ChatModelProviders).contains(model.provider as ChatModelProviders)) {
           console.warn(`Unknown provider: ${model.provider} for model: ${model.name}`);
           return;
@@ -735,23 +760,34 @@ export default class ChatModelManager {
     try {
       const currentModelKey = getModelKey();
       if (currentModelKey) {
+        assertSavedModelReferenceCanRun(currentModelKey);
         const model = findCustomModel(currentModelKey, settings.activeModels);
+        assertSavedModelReferenceCanRun(currentModelKey, model);
 
         // Validate it (trust believerExclusive if user selected it)
         if (this.isModelConfigValid(model, settings)) {
           return model;
         }
       }
-    } catch {
+    } catch (error) {
+      if (isSavedModelReferenceError(error)) {
+        throw error;
+      }
       // Model not found or invalid, fall through to fallback
     }
 
     // Fallback: Find first valid model in settings.activeModels
     // Skip believerExclusive models in fallback to avoid selecting them for non-Believer users
     for (const model of settings.activeModels) {
-      if (model.enabled && !model.believerExclusive && this.isModelConfigValid(model, settings)) {
-        return model;
+      if (!model.enabled || model.believerExclusive) continue;
+      const fallbackModelKey = getModelKeyFromModel(model);
+      try {
+        assertSavedModelReferenceCanRun(fallbackModelKey, model);
+      } catch (error) {
+        if (isSavedModelReferenceError(error)) continue;
+        throw error;
       }
+      if (this.isModelConfigValid(model, settings)) return model;
     }
 
     // No valid model found
@@ -767,11 +803,15 @@ export default class ChatModelManager {
    */
   async getChatModelWithTemperature(temperature: number): Promise<BaseChatModel> {
     const modelConfig = this.resolveModelForTemperatureOverride();
+    const resolvedTemperature =
+      (modelConfig.provider as ChatModelProviders) === ChatModelProviders.DEEPSEEK
+        ? resolveDeepSeekTemperatureOverride(modelConfig.reasoningEffort, temperature)
+        : temperature;
 
     // Create a temporary model config with overridden temperature
     const modelWithTempOverride: CustomModel = {
       ...modelConfig,
-      temperature,
+      temperature: resolvedTemperature,
     };
 
     return await this.createModelInstance(modelWithTempOverride);

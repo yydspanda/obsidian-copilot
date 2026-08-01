@@ -17,8 +17,8 @@ import type { KnowledgeBundleConfig, SourceManifest } from "@/knowledge/model/ty
 
 const PROJECT_ID = "project-a";
 const BUNDLE_ID = "bundle-a";
-const MODEL_NAME = "deepseek-chat";
-const PROVIDER = "deepseek";
+const MODEL_NAME = "test-model";
+const PROVIDER = "test-provider";
 const MODEL_KEY = `${MODEL_NAME}|${PROVIDER}`;
 const PROMPT_CONTRACT_IDENTITY = "a".repeat(64);
 const DEEPSEEK_ROUTE_IDENTITY = "b".repeat(64);
@@ -536,4 +536,108 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       expect(JSON.stringify(failure)).not.toContain(canary);
     }
   );
+
+  describe("DeepSeek production behavior", () => {
+    /** Resolves one direct DeepSeek profile through the production allowlist. */
+    function resolveDeepSeekProfile(
+      modelOverrides: Record<string, unknown> = {},
+      projectOverrides: Partial<ProjectKnowledgePipelineProjectInput> = {}
+    ): KnowledgeBundlePipelineProfile {
+      const modelName = (modelOverrides.name as string | undefined) ?? "deepseek-v4-flash";
+      return resolveProfile({
+        project: createProject({
+          projectModelKey: `${modelName}|deepseek`,
+          ...projectOverrides,
+        }),
+        settings: createSettings(
+          [
+            createModel({
+              name: modelName,
+              provider: "deepseek",
+              reasoningEffort: "minimal",
+              ...modelOverrides,
+            }),
+          ],
+          { reasoningEffort: "minimal" }
+        ),
+        sourceOptions: createOptions({
+          supportedProviders: ["deepseek"],
+          providerRouteIdentities: { deepseek: DEEPSEEK_ROUTE_IDENTITY },
+        }),
+      });
+    }
+
+    it("accepts explicit non-thinking sampling for a current V4 model", () => {
+      expect(
+        resolveDeepSeekProfile({ temperature: 0.2, topP: 0.8 }).model.configuration
+      ).toMatchObject({
+        temperature: 0.2,
+        topP: 0.8,
+        reasoningEffort: "minimal",
+      });
+    });
+
+    it("accepts explicit thinking only with the zero placeholder and no top-p", () => {
+      expect(
+        resolveDeepSeekProfile({
+          name: "deepseek-v4-pro",
+          reasoningEffort: "high",
+          temperature: 0,
+        }).model.configuration
+      ).toMatchObject({
+        temperature: 0,
+        reasoningEffort: "high",
+      });
+    });
+
+    it("normalizes a stale project temperature after the selected model enables thinking", () => {
+      expect(
+        resolveDeepSeekProfile(
+          {
+            name: "deepseek-v4-pro",
+            reasoningEffort: "high",
+            temperature: 0,
+          },
+          { modelConfigs: { temperature: 0.1 } }
+        ).model.configuration
+      ).toMatchObject({
+        temperature: 0,
+        reasoningEffort: "high",
+      });
+    });
+
+    it("does not let a project override hide an invalid thinking-model temperature", () => {
+      expectProfileError(
+        () =>
+          resolveDeepSeekProfile(
+            {
+              name: "deepseek-v4-pro",
+              reasoningEffort: "high",
+              temperature: 0.1,
+            },
+            { modelConfigs: { temperature: 0.1 } }
+          ),
+        "configuration_unsupported"
+      );
+    });
+
+    it.each([
+      [{ name: "deepseek-chat" }, "model_unsupported"],
+      [{ reasoningEffort: "low", temperature: 0 }, "configuration_unsupported"],
+      [{ reasoningEffort: "medium", temperature: 0 }, "configuration_unsupported"],
+      [{ reasoningEffort: "high", temperature: 0.1 }, "configuration_unsupported"],
+      [{ reasoningEffort: "high", temperature: 0, topP: 0.8 }, "configuration_unsupported"],
+      [{ frequencyPenalty: 0 }, "configuration_unsupported"],
+      [{ numCtx: 32768 }, "configuration_unsupported"],
+      [{ useResponsesApi: false }, "configuration_unsupported"],
+      [{ enablePromptCaching: false }, "configuration_unsupported"],
+      [{ bedrockRegion: "ap-southeast-1" }, "configuration_unsupported"],
+      [{ baseUrl: "https://example.com" }, "endpoint_invalid"],
+    ] satisfies readonly [Record<string, unknown>, ProjectKnowledgePipelineProfileErrorCode][])(
+      "rejects unsupported direct configuration %# before route construction",
+      (override, code) => {
+        expectProfileError(() => resolveDeepSeekProfile(override), code);
+      }
+    );
+  });
 });

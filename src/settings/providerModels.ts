@@ -1,4 +1,5 @@
 import { ChatModelProviders, SettingKeyProviders } from "@/constants";
+import { isCurrentDeepSeekModelIdentity } from "@/LLMProviders/deepseekModelPolicy";
 import { logError } from "@/logger";
 
 /**
@@ -468,11 +469,13 @@ const providerAdapters: ProviderModelAdapters = {
     })) || [],
 
   [ChatModelProviders.DEEPSEEK]: (data): StandardModel[] =>
-    data.data?.map((model) => ({
-      id: model.id,
-      name: model.id,
-      provider: ChatModelProviders.DEEPSEEK,
-    })) || [],
+    data.data
+      ?.filter((model) => isCurrentDeepSeekModelIdentity(model.id))
+      .map((model) => ({
+        id: model.id,
+        name: model.id,
+        provider: ChatModelProviders.DEEPSEEK,
+      })) || [],
 
   [ChatModelProviders.GROQ]: (data): StandardModel[] =>
     data.data?.map((model) => ({

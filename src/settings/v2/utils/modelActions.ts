@@ -1,5 +1,10 @@
 import { CustomModel } from "@/aiParams";
-import { ChatModelProviders, SettingKeyProviders } from "@/constants";
+import {
+  ChatModelProviders,
+  ModelCapability,
+  ReasoningEffort,
+  SettingKeyProviders,
+} from "@/constants";
 import { getDecryptedKey } from "@/encryptionService";
 import { GitHubCopilotProvider } from "@/LLMProviders/githubCopilot/GitHubCopilotProvider";
 import ProjectManager from "@/LLMProviders/projectManager";
@@ -112,12 +117,7 @@ export async function verifyAndAddModel(
       ? undefined
       : getApiKeyForProvider(model.provider);
 
-  const customModel: CustomModel = {
-    name: model.name,
-    provider: model.provider,
-    apiKey,
-    enabled: true,
-  };
+  const customModel: CustomModel = { ...buildCustomModel(model), apiKey };
 
   // Verify model if not skipped
   let verificationFailed = false;
@@ -164,6 +164,18 @@ export function buildCustomModel(model: {
   name: string;
   provider: SettingKeyProviders;
 }): CustomModel {
+  if (model.provider === ChatModelProviders.DEEPSEEK) {
+    return {
+      name: model.name,
+      provider: model.provider,
+      enabled: true,
+      projectEnabled: true,
+      capabilities: [ModelCapability.REASONING],
+      reasoningEffort:
+        model.name === "deepseek-v4-pro" ? ReasoningEffort.HIGH : ReasoningEffort.MINIMAL,
+      ...(model.name === "deepseek-v4-pro" ? { temperature: 0 } : {}),
+    };
+  }
   return {
     name: model.name,
     provider: model.provider,

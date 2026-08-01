@@ -1172,7 +1172,9 @@ describe("IngestQueue execution and reruns", () => {
   it("promotes the latest rerun when its processing predecessor fails", async () => {
     const failure = createDeferred<IngestExecutionResult>();
     const started = createDeferred<void>();
-    const harness = createHarness(async () => {
+    let attemptSignal: AbortSignal | undefined;
+    const harness = createHarness(async (context) => {
+      attemptSignal = context.signal;
       started.resolve();
       return failure.promise;
     });
@@ -1180,14 +1182,18 @@ describe("IngestQueue execution and reruns", () => {
     const running = harness.queue.runNext("personal");
     await started.promise;
     await harness.queue.enqueue(createRequest({ sourceContentHash: HASH_C, inputRevision: 2 }));
+    if (!attemptSignal) throw new Error("Expected a Queue execution signal");
 
     failure.reject(
-      new IngestExecutorError({
-        code: "invalid_output",
-        message: "Compiler output was invalid",
-        retryable: false,
-        rateLimited: false,
-      })
+      new IngestExecutorError(
+        {
+          code: "invalid_output",
+          message: "Compiler output was invalid",
+          retryable: false,
+          rateLimited: false,
+        },
+        attemptSignal
+      )
     );
     await expect(running).resolves.toMatchObject({ status: "failed" });
     const snapshot = harness.storage.getSnapshot("personal");
@@ -1225,15 +1231,18 @@ describe("IngestQueue execution and reruns", () => {
 describe("IngestQueue retries and rate limits", () => {
   it("schedules deterministic exponential retry and honors nextAttemptAt", async () => {
     let call = 0;
-    const harness = createHarness(async () => {
+    const harness = createHarness(async (context) => {
       call += 1;
       if (call === 1) {
-        throw new IngestExecutorError({
-          code: "provider_timeout",
-          message: "Provider timed out",
-          retryable: true,
-          rateLimited: false,
-        });
+        throw new IngestExecutorError(
+          {
+            code: "provider_timeout",
+            message: "Provider timed out",
+            retryable: true,
+            rateLimited: false,
+          },
+          context.signal
+        );
       }
       return { kind: "no_changes", changeSetId: "changeset-after-retry" };
     });
@@ -1258,13 +1267,16 @@ describe("IngestQueue retries and rate limits", () => {
   });
 
   it("terminates after the configured total execution bound", async () => {
-    const harness = createHarness(async () => {
-      throw new IngestExecutorError({
-        code: "temporary",
-        message: "Still unavailable",
-        retryable: true,
-        rateLimited: false,
-      });
+    const harness = createHarness(async (context) => {
+      throw new IngestExecutorError(
+        {
+          code: "temporary",
+          message: "Still unavailable",
+          retryable: true,
+          rateLimited: false,
+        },
+        context.signal
+      );
     }, 2);
     await harness.queue.enqueue(createRequest());
     await harness.queue.runNext("personal");
@@ -1279,15 +1291,18 @@ describe("IngestQueue retries and rate limits", () => {
 
   it("pauses the queue on an explicit provider rate limit until user resume", async () => {
     let rateLimited = true;
-    const harness = createHarness(async () => {
+    const harness = createHarness(async (context) => {
       if (rateLimited) {
-        throw new IngestExecutorError({
-          code: "provider_rate_limit",
-          message: "Provider requested a pause",
-          retryable: true,
-          rateLimited: true,
-          retryAfterMs: 500,
-        });
+        throw new IngestExecutorError(
+          {
+            code: "provider_rate_limit",
+            message: "Provider requested a pause",
+            retryable: true,
+            rateLimited: true,
+            retryAfterMs: 500,
+          },
+          context.signal
+        );
       }
       return { kind: "no_changes", changeSetId: "changeset-resumed" };
     });
@@ -1311,6 +1326,39 @@ describe("IngestQueue retries and rate limits", () => {
     });
   });
 
+  it("fails closed when an attempt-bound rate-limit error is replayed by a later attempt", async () => {
+    let captured: IngestExecutorError | undefined;
+    const harness = createHarness(async (context) => {
+      if (!captured) {
+        captured = new IngestExecutorError(
+          {
+            code: "provider_rate_limit",
+            message: "Provider requested a pause",
+            retryable: true,
+            rateLimited: true,
+          },
+          context.signal
+        );
+      }
+      throw captured;
+    });
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({ status: "paused" });
+    await harness.queue.resume("personal");
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({ status: "failed" });
+    const snapshot = harness.storage.getSnapshot("personal");
+    expect(snapshot.control).toEqual({ status: "running" });
+    expect(snapshot.jobs).toHaveLength(1);
+    expect(snapshot.jobs[0]).toMatchObject({
+      status: "failed",
+      failure: {
+        code: "unexpected_executor_failure",
+        retryable: false,
+      },
+    });
+  });
+
   it("sanitizes unknown executor errors instead of persisting their message", async () => {
     const harness = createHarness(async () => {
       throw new Error("secret provider payload");
@@ -1325,22 +1373,28 @@ describe("IngestQueue retries and rate limits", () => {
 
   it("sanitizes malformed or credential-bearing typed executor failures", async () => {
     let call = 0;
-    const harness = createHarness(async () => {
+    const harness = createHarness(async (context) => {
       call += 1;
       if (call === 1) {
-        throw new IngestExecutorError({
-          code: 42,
-          message: "Malformed adapter payload",
-          retryable: true,
-          rateLimited: false,
-        } as never);
+        throw new IngestExecutorError(
+          {
+            code: 42,
+            message: "Malformed adapter payload",
+            retryable: true,
+            rateLimited: false,
+          } as never,
+          context.signal
+        );
       }
-      throw new IngestExecutorError({
-        code: "provider_error",
-        message: "authorization=Bearer sk-examplecredential123",
-        retryable: false,
-        rateLimited: false,
-      });
+      throw new IngestExecutorError(
+        {
+          code: "provider_error",
+          message: "authorization=Bearer sk-examplecredential123",
+          retryable: false,
+          rateLimited: false,
+        },
+        context.signal
+      );
     });
     await harness.queue.enqueue(createRequest());
     await harness.queue.runNext("personal");
@@ -1998,13 +2052,16 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
       )
     ).rejects.toBeInstanceOf(IngestQueueTransitionError);
 
-    harness.executor.handler = async () => {
-      throw new IngestExecutorError({
-        code: "invalid_source",
-        message: "Source is invalid",
-        retryable: false,
-        rateLimited: false,
-      });
+    harness.executor.handler = async (context) => {
+      throw new IngestExecutorError(
+        {
+          code: "invalid_source",
+          message: "Source is invalid",
+          retryable: false,
+          rateLimited: false,
+        },
+        context.signal
+      );
     };
     await harness.queue.runNext("personal");
     await expect(harness.queue.retryFailed("personal", "job-1")).rejects.toBeInstanceOf(
@@ -2013,13 +2070,16 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
   });
 
   it("allows an explicit retry of a retryable failed job with a fresh attempt budget", async () => {
-    const harness = createHarness(async () => {
-      throw new IngestExecutorError({
-        code: "temporary",
-        message: "Temporary failure",
-        retryable: true,
-        rateLimited: false,
-      });
+    const harness = createHarness(async (context) => {
+      throw new IngestExecutorError(
+        {
+          code: "temporary",
+          message: "Temporary failure",
+          retryable: true,
+          rateLimited: false,
+        },
+        context.signal
+      );
     }, 1);
     await harness.queue.enqueue(createRequest());
     await harness.queue.runNext("personal");

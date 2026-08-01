@@ -13,6 +13,7 @@ import {
   type CompilerGenerationAnalysis,
   type CompilerGenerationRequest,
   type CompilerGenerationTarget,
+  type KnowledgeCompilerInfrastructureFailureCode,
   type CompilerSourceIdentity,
   type CompilerTargetAuthorization,
   type CompilerTargetObservation,
@@ -422,20 +423,151 @@ type GenerationProjectionResult =
   | { ok: true; changes: KnowledgeFileChange[]; diagnostics: KnowledgeDiagnostic[] }
   | { ok: false; diagnostics: KnowledgeDiagnostic[] };
 
+interface KnowledgeCompilerInfrastructureFailurePolicy {
+  retryable: boolean;
+  rateLimited: boolean;
+}
+
+interface KnowledgeCompilerInfrastructureErrorProjection
+  extends KnowledgeCompilerInfrastructureFailurePolicy {
+  stage: Exclude<KnowledgeCompilerStage, "input">;
+  code: KnowledgeCompilerInfrastructureFailureCode;
+}
+
+interface KnowledgeCompilerInfrastructureErrorState {
+  projection: Readonly<KnowledgeCompilerInfrastructureErrorProjection>;
+  signal: AbortSignal;
+}
+
+const KNOWLEDGE_COMPILER_INFRASTRUCTURE_ERROR_TOKEN = Symbol(
+  "KnowledgeCompilerInfrastructureError.constructor"
+);
+const knowledgeCompilerInfrastructureErrorStates = new WeakMap<
+  object,
+  Readonly<KnowledgeCompilerInfrastructureErrorState>
+>();
+const KNOWLEDGE_COMPILER_INFRASTRUCTURE_FAILURE_POLICIES: Readonly<
+  Record<KnowledgeCompilerInfrastructureFailureCode, KnowledgeCompilerInfrastructureFailurePolicy>
+> = Object.freeze({
+  dependency_failed: Object.freeze({ retryable: true, rateLimited: false }),
+  model_authority_failed: Object.freeze({ retryable: false, rateLimited: false }),
+  model_output_invalid: Object.freeze({ retryable: false, rateLimited: false }),
+  provider_request_rejected: Object.freeze({ retryable: false, rateLimited: false }),
+  provider_unauthorized: Object.freeze({ retryable: false, rateLimited: false }),
+  provider_balance_required: Object.freeze({ retryable: false, rateLimited: false }),
+  provider_rate_limited: Object.freeze({ retryable: true, rateLimited: true }),
+  provider_unavailable: Object.freeze({ retryable: true, rateLimited: false }),
+  provider_network_failed: Object.freeze({ retryable: true, rateLimited: false }),
+  provider_http_failed: Object.freeze({ retryable: false, rateLimited: false }),
+  provider_response_invalid: Object.freeze({ retryable: false, rateLimited: false }),
+});
+
+/** Returns hidden infrastructure-error state only for a Compiler-minted instance. */
+function requireKnowledgeCompilerInfrastructureErrorProjection(
+  value: unknown
+): Readonly<KnowledgeCompilerInfrastructureErrorProjection> {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("The knowledge compiler infrastructure error is invalid");
+  }
+  const state = knowledgeCompilerInfrastructureErrorStates.get(value);
+  if (!state) {
+    throw new TypeError("The knowledge compiler infrastructure error is invalid");
+  }
+  return state.projection;
+}
+
+/** Creates one authentic sanitized Compiler infrastructure failure. */
+function createKnowledgeCompilerInfrastructureError(
+  stage: Exclude<KnowledgeCompilerStage, "input">,
+  code: KnowledgeCompilerInfrastructureFailureCode,
+  signal: AbortSignal
+): KnowledgeCompilerInfrastructureError {
+  return new KnowledgeCompilerInfrastructureError(
+    KNOWLEDGE_COMPILER_INFRASTRUCTURE_ERROR_TOKEN,
+    stage,
+    code,
+    signal
+  );
+}
+
 /** Sanitized dependency failure that never retains provider output or raw errors. */
 export class KnowledgeCompilerInfrastructureError extends Error {
-  public readonly retryable = true;
-
   /**
    * Creates a safe infrastructure failure for one compiler dependency.
    *
+   * @param token - Module-private construction authority
    * @param stage - Dependency stage that failed to return a value
+   * @param code - Stable failure classification whose Queue policy is fixed by Core
+   * @param signal - Exact Queue-owned signal associated with the failed attempt
    */
-  constructor(public readonly stage: Exclude<KnowledgeCompilerStage, "input">) {
+  constructor(
+    token: symbol,
+    stage: Exclude<KnowledgeCompilerStage, "input">,
+    code: KnowledgeCompilerInfrastructureFailureCode,
+    signal: AbortSignal
+  ) {
     super(`Knowledge compiler dependency failed during ${stage}`);
+    if (
+      token !== KNOWLEDGE_COMPILER_INFRASTRUCTURE_ERROR_TOKEN ||
+      !Object.prototype.hasOwnProperty.call(
+        KNOWLEDGE_COMPILER_INFRASTRUCTURE_FAILURE_POLICIES,
+        code
+      )
+    ) {
+      throw new TypeError("The knowledge compiler infrastructure error is invalid");
+    }
     this.name = "KnowledgeCompilerInfrastructureError";
+    if (typeof signal !== "object" || signal === null) {
+      throw new TypeError("The knowledge compiler infrastructure error is invalid");
+    }
+    const policy = KNOWLEDGE_COMPILER_INFRASTRUCTURE_FAILURE_POLICIES[code];
+    const projection = Object.freeze({
+      stage,
+      code,
+      retryable: policy.retryable,
+      rateLimited: policy.rateLimited,
+    });
+    knowledgeCompilerInfrastructureErrorStates.set(this, Object.freeze({ projection, signal }));
+    Object.freeze(this);
+  }
+
+  /** Reads one authentic error without accepting constructor/prototype forgery. */
+  static inspect(
+    value: unknown
+  ): Readonly<KnowledgeCompilerInfrastructureErrorProjection> | undefined {
+    if (typeof value !== "object" || value === null) return undefined;
+    return knowledgeCompilerInfrastructureErrorStates.get(value)?.projection;
+  }
+
+  /** Returns whether an authentic error belongs to the exact Queue execution signal. */
+  static matchesSignal(value: unknown, signal: AbortSignal): boolean {
+    if (typeof value !== "object" || value === null) return false;
+    return knowledgeCompilerInfrastructureErrorStates.get(value)?.signal === signal;
+  }
+
+  /** Returns the dependency stage retained in hidden state. */
+  get stage(): Exclude<KnowledgeCompilerStage, "input"> {
+    return requireKnowledgeCompilerInfrastructureErrorProjection(this).stage;
+  }
+
+  /** Returns the stable provider-neutral classification retained in hidden state. */
+  get code(): KnowledgeCompilerInfrastructureFailureCode {
+    return requireKnowledgeCompilerInfrastructureErrorProjection(this).code;
+  }
+
+  /** Returns the Core-owned retry classification retained in hidden state. */
+  get retryable(): boolean {
+    return requireKnowledgeCompilerInfrastructureErrorProjection(this).retryable;
+  }
+
+  /** Returns the Core-owned rate-limit classification retained in hidden state. */
+  get rateLimited(): boolean {
+    return requireKnowledgeCompilerInfrastructureErrorProjection(this).rateLimited;
   }
 }
+
+Object.freeze(KnowledgeCompilerInfrastructureError.prototype);
+Object.freeze(KnowledgeCompilerInfrastructureError);
 
 /** Cancellation signal surfaced without retaining an arbitrary signal reason. */
 export class KnowledgeCompilerAbortError extends Error {
@@ -2680,12 +2812,61 @@ export class KnowledgeCompiler {
         throw new KnowledgeCompilerAbortError(stage);
       }
       return result;
-    } catch {
+    } catch (error) {
       if (signal.aborted) {
         throw new KnowledgeCompilerAbortError(stage);
       }
-      throw new KnowledgeCompilerInfrastructureError(stage);
+      throw createKnowledgeCompilerInfrastructureError(
+        stage,
+        this.classifyDependencyFailure(stage, error),
+        signal
+      );
     }
+  }
+
+  /**
+   * Invokes only the classifier paired with the exact model dependency.
+   *
+   * Unknown classifier output fails closed for model stages. Other dependency
+   * stages retain the existing bounded-retry classification.
+   *
+   * @param stage - Dependency stage that rejected
+   * @param error - Opaque rejection, never retained
+   * @returns One stable provider-neutral code whose retry facts are Core-owned
+   */
+  private classifyDependencyFailure(
+    stage: Exclude<KnowledgeCompilerStage, "input">,
+    error: unknown
+  ): KnowledgeCompilerInfrastructureFailureCode {
+    const classifier = this.dependencies.classifyModelFailure;
+    if (stage !== "analysis" && stage !== "generation") {
+      return "dependency_failed";
+    }
+    if (classifier === undefined) {
+      return "model_authority_failed";
+    }
+    try {
+      const code = classifier(error);
+      const allowedCodes = new Set<KnowledgeCompilerInfrastructureFailureCode>([
+        "dependency_failed",
+        "model_authority_failed",
+        "model_output_invalid",
+        "provider_request_rejected",
+        "provider_unauthorized",
+        "provider_balance_required",
+        "provider_rate_limited",
+        "provider_unavailable",
+        "provider_network_failed",
+        "provider_http_failed",
+        "provider_response_invalid",
+      ]);
+      if (code !== undefined && allowedCodes.has(code)) {
+        return code;
+      }
+    } catch {
+      // A classifier is diagnostic-only and cannot expose or replace its original error.
+    }
+    return "model_authority_failed";
   }
 
   /**
