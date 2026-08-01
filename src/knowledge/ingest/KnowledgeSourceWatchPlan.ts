@@ -1,5 +1,6 @@
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
+  assertKnowledgeConfigurationContainsNoSecrets,
   canonicalizeJson,
   createKnowledgeBundleConfigDigest,
   createPipelineFingerprint,
@@ -74,6 +75,15 @@ export interface WatchedKnowledgeSource {
   pipelineFingerprint: string;
 }
 
+/** Config-free parser routing authority retained for one durable source. */
+export interface KnowledgeSourceParserAuthority {
+  bundleId: string;
+  sourceId: string;
+  parserId: string;
+  parserVersion: string;
+  parserProfileDigest: string;
+}
+
 /** Immutable Bundle-level authority retained without schema bytes or pipeline settings. */
 export interface KnowledgeBundleWatchAuthority {
   bundleId: string;
@@ -128,6 +138,7 @@ export class KnowledgeSourceWatchPlanBuildError extends TypeError {
 
 type ImmutableWatchedKnowledgeSource = Readonly<WatchedKnowledgeSource>;
 type ImmutableBundleWatchAuthority = Readonly<KnowledgeBundleWatchAuthority>;
+type ImmutableSourceParserAuthority = Readonly<KnowledgeSourceParserAuthority>;
 
 interface NormalizedParserProfile {
   id: string;
@@ -168,6 +179,8 @@ interface KnowledgeSourceWatchPlanState {
   sources: readonly ImmutableWatchedKnowledgeSource[];
   sourcesByPathKey: ReadonlyMap<string, readonly ImmutableWatchedKnowledgeSource[]>;
   sourcesByIdentity: ReadonlyMap<string, ImmutableWatchedKnowledgeSource>;
+  parserAuthorities: readonly ImmutableSourceParserAuthority[];
+  parserAuthoritiesBySource: ReadonlyMap<string, ImmutableSourceParserAuthority>;
   authorities: readonly ImmutableBundleWatchAuthority[];
   authoritiesByBundle: ReadonlyMap<string, ImmutableBundleWatchAuthority>;
   digest: string;
@@ -774,14 +787,25 @@ function projectBundleWatchInput(
   bundleIndex: number
 ): {
   sources: readonly ImmutableWatchedKnowledgeSource[];
+  parserAuthorities: readonly ImmutableSourceParserAuthority[];
   authority: ImmutableBundleWatchAuthority;
 } {
   const entries = [...input.manifest.entries].sort(
     (left, right) =>
       compareText(left.sourceKey, right.sourceKey) || compareText(left.sourceId, right.sourceId)
   );
+  const parserAuthorities: ImmutableSourceParserAuthority[] = [];
   const sources = entries.map((entry, sourceIndex) => {
     const parser = selectSourceParser(input.pipeline, entry.sourceKey, bundleIndex, sourceIndex);
+    parserAuthorities.push(
+      Object.freeze({
+        bundleId: input.bundle.id,
+        sourceId: entry.sourceId,
+        parserId: parser.id,
+        parserVersion: parser.version,
+        parserProfileDigest: createKnowledgeSourceParserProfileDigest(parser),
+      })
+    );
     return Object.freeze({
       bundleId: input.bundle.id,
       sourceId: entry.sourceId,
@@ -806,7 +830,62 @@ function projectBundleWatchInput(
     pipelineProfileDigest: input.pipelineProfileDigest,
     sourceCount: sources.length,
   });
-  return { sources: Object.freeze(sources), authority };
+  return {
+    sources: Object.freeze(sources),
+    parserAuthorities: Object.freeze(parserAuthorities),
+    authority,
+  };
+}
+
+/**
+ * Computes the config-free identity of one strict parser capability profile.
+ *
+ * The digest includes suffix routing because changing which paths a parser owns
+ * must invalidate an execution binding even when an existing source would still
+ * select the same implementation.
+ *
+ * @param parser - Strict parser profile or its normalized internal projection
+ * @returns Domain-separated parser capability digest
+ */
+export function createKnowledgeSourceParserProfileDigest(
+  parser: KnowledgeSourceParserProfile
+): string {
+  let snapshot: JsonValue;
+  try {
+    snapshot = snapshotJsonValue(parser);
+  } catch {
+    throw new KnowledgeSourceWatchPlanBuildError("parser_registry_invalid");
+  }
+  if (
+    !isExactRecord(snapshot, ["id", "version", "pathSuffixes", "configuration"]) ||
+    !isCanonicalText(snapshot.id) ||
+    !isCanonicalText(snapshot.version) ||
+    !Array.isArray(snapshot.pathSuffixes) ||
+    snapshot.pathSuffixes.length === 0
+  ) {
+    throw new KnowledgeSourceWatchPlanBuildError("parser_registry_invalid");
+  }
+  const normalizedSuffixes = snapshot.pathSuffixes.map(normalizePathSuffix);
+  if (normalizedSuffixes.some((suffix) => suffix === undefined)) {
+    throw new KnowledgeSourceWatchPlanBuildError("parser_registry_invalid");
+  }
+  const pathSuffixes = [...(normalizedSuffixes as string[])].sort(compareText);
+  if (new Set(pathSuffixes).size !== pathSuffixes.length) {
+    throw new KnowledgeSourceWatchPlanBuildError("parser_registry_invalid");
+  }
+  try {
+    assertKnowledgeConfigurationContainsNoSecrets(snapshot.configuration);
+  } catch {
+    throw new KnowledgeSourceWatchPlanBuildError("parser_registry_invalid");
+  }
+  return sha256(
+    `knowledge-source-parser-profile-v1\n${canonicalizeJson({
+      id: snapshot.id,
+      version: snapshot.version,
+      pathSuffixes,
+      configuration: snapshot.configuration,
+    })}`
+  );
 }
 
 /**
@@ -818,12 +897,14 @@ function projectBundleWatchInput(
  */
 function createWatchPlanDigest(
   sources: readonly ImmutableWatchedKnowledgeSource[],
+  parserAuthorities: readonly ImmutableSourceParserAuthority[],
   authorities: readonly ImmutableBundleWatchAuthority[]
 ): string {
   const value: JsonValue = {
     version: KNOWLEDGE_PIPELINE_PROFILE_VERSION,
     authorities: authorities.map((authority) => ({ ...authority })),
     sources: sources.map((source) => ({ ...source })),
+    parserAuthorities: parserAuthorities.map((authority) => ({ ...authority })),
   };
   return sha256(`knowledge-source-watch-plan-v1\n${canonicalizeJson(value)}`);
 }
@@ -857,6 +938,7 @@ export class KnowledgeSourceWatchPlan {
   private constructor(
     token: symbol,
     sources: readonly ImmutableWatchedKnowledgeSource[],
+    parserAuthorities: readonly ImmutableSourceParserAuthority[],
     authorities: readonly ImmutableBundleWatchAuthority[]
   ) {
     if (token !== PLAN_CONSTRUCTOR_TOKEN) {
@@ -880,9 +962,16 @@ export class KnowledgeSourceWatchPlan {
       sources,
       sourcesByPathKey,
       sourcesByIdentity,
+      parserAuthorities,
+      parserAuthoritiesBySource: new Map(
+        parserAuthorities.map((authority) => [
+          createBundleSourceKey(authority.bundleId, authority.sourceId),
+          authority,
+        ])
+      ),
       authorities,
       authoritiesByBundle: new Map(authorities.map((authority) => [authority.bundleId, authority])),
-      digest: createWatchPlanDigest(sources, authorities),
+      digest: createWatchPlanDigest(sources, parserAuthorities, authorities),
     });
     planStates.set(this, state);
     Object.freeze(this);
@@ -916,10 +1005,12 @@ export class KnowledgeSourceWatchPlan {
       validateCrossBundleBoundaries(inputs);
 
       const sources: ImmutableWatchedKnowledgeSource[] = [];
+      const parserAuthorities: ImmutableSourceParserAuthority[] = [];
       const authorities: ImmutableBundleWatchAuthority[] = [];
       inputs.forEach((input, bundleIndex) => {
         const projection = projectBundleWatchInput(input, bundleIndex);
         sources.push(...projection.sources);
+        parserAuthorities.push(...projection.parserAuthorities);
         authorities.push(projection.authority);
       });
       sources.sort(
@@ -929,9 +1020,15 @@ export class KnowledgeSourceWatchPlan {
           compareText(left.sourceId, right.sourceId)
       );
 
+      parserAuthorities.sort(
+        (left, right) =>
+          compareText(left.bundleId, right.bundleId) || compareText(left.sourceId, right.sourceId)
+      );
+
       return new KnowledgeSourceWatchPlan(
         PLAN_CONSTRUCTOR_TOKEN,
         Object.freeze(sources),
+        Object.freeze(parserAuthorities),
         Object.freeze(authorities)
       );
     } catch (error) {
@@ -975,6 +1072,22 @@ export class KnowledgeSourceWatchPlan {
    */
   getSource(bundleId: string, sourceId: string): ImmutableWatchedKnowledgeSource | undefined {
     return requirePlanState(this).sourcesByIdentity.get(createBundleSourceKey(bundleId, sourceId));
+  }
+
+  /**
+   * Resolves the exact parser capability selected while the source fingerprint was built.
+   *
+   * @param bundleId - Exact Bundle identity
+   * @param sourceId - Exact durable source identity
+   * @returns Config-free immutable parser authority when registered
+   */
+  getSourceParserAuthority(
+    bundleId: string,
+    sourceId: string
+  ): ImmutableSourceParserAuthority | undefined {
+    return requirePlanState(this).parserAuthoritiesBySource.get(
+      createBundleSourceKey(bundleId, sourceId)
+    );
   }
 
   /** Returns every Bundle authority, including Bundles with an empty Manifest. */

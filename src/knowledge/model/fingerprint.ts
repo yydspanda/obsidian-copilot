@@ -108,7 +108,7 @@ function canonicalizeValue(value: unknown, ancestors: Set<object>): string {
 /**
  * Rejects configuration fields likely to contain credentials before hashing.
  *
- * @param value - Model or parser configuration supplied by a caller allowlist
+ * @param value - Compiler, parser, or model configuration supplied by a caller allowlist
  * @param ancestors - Objects already inspected on the current recursion stack
  */
 function assertConfigurationContainsNoSecrets(value: unknown, ancestors: Set<object>): void {
@@ -137,6 +137,15 @@ function assertConfigurationContainsNoSecrets(value: unknown, ancestors: Set<obj
     }
   }
   ancestors.delete(value);
+}
+
+/**
+ * Rejects credential-like fields before a detached configuration is retained or fingerprinted.
+ *
+ * @param value - Strict detached JSON configuration
+ */
+export function assertKnowledgeConfigurationContainsNoSecrets(value: unknown): void {
+  assertConfigurationContainsNoSecrets(value, new Set<object>());
 }
 
 /**
@@ -240,9 +249,9 @@ export function createKnowledgeBundleConfigDigest(bundle: KnowledgeBundleConfig)
  * @returns Namespaced lowercase hexadecimal SHA-256 digest
  */
 export function createPipelineFingerprint(input: PipelineFingerprintInput): string {
-  assertConfigurationContainsNoSecrets(input.compilerConfiguration, new Set<object>());
-  assertConfigurationContainsNoSecrets(input.parser.configuration, new Set<object>());
-  assertConfigurationContainsNoSecrets(input.model.configuration, new Set<object>());
+  assertKnowledgeConfigurationContainsNoSecrets(input.compilerConfiguration);
+  assertKnowledgeConfigurationContainsNoSecrets(input.parser.configuration);
+  assertKnowledgeConfigurationContainsNoSecrets(input.model.configuration);
   const fingerprintData: JsonValue = {
     version: input.version,
     contractVersion: input.contractVersion,

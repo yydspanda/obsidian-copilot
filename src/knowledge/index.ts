@@ -5,6 +5,7 @@ export * from "@/knowledge/changeset/TransactionStorage";
 export * from "@/knowledge/compiler/CompilerModelPort";
 export * from "@/knowledge/compiler/KnowledgeCompiler";
 export * from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
+export * from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 export {
   parseCompilerAnalysisModelOutput,
   type CompilerAnalysisModelOutput,
@@ -18,6 +19,7 @@ export * from "@/knowledge/ingest/queue/QueueStorage";
 export * from "@/knowledge/ingest/queue/RetryPolicy";
 export * from "@/knowledge/ingest/InputRevisionAllocator";
 export * from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
+export * from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
 export * from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 export * from "@/knowledge/ingest/SourceObservationHandoff";
 export * from "@/knowledge/manifest/ManifestCommitIntent";
@@ -39,6 +41,8 @@ export {
 export * from "@/knowledge/model/types";
 export * from "@/knowledge/model/validation";
 export * from "@/knowledge/paths/vaultPath";
+export * from "@/knowledge/parser/KnowledgeByteParser";
+export * from "@/knowledge/parser/Utf8TextKnowledgeByteParser";
 export * from "@/knowledge/review/ChangeSetReviewRepository";
 export * from "@/knowledge/review/ReviewDecision";
 export * from "@/knowledge/review/ReviewQueueStartupReconciler";

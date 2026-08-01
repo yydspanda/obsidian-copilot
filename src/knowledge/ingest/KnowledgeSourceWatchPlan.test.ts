@@ -1,6 +1,7 @@
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
   buildKnowledgeSourceWatchPlan,
+  createKnowledgeSourceParserProfileDigest,
   KNOWLEDGE_CITATION_CONTRACT_VERSION,
   KNOWLEDGE_PIPELINE_PROFILE_VERSION,
   type KnowledgeBundlePipelineProfile,
@@ -276,6 +277,16 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
     expect(plan.getSource("personal", "missing")).toBeUndefined();
     expect(plan.getSourcesForPathKey("sources/研究.md")).toEqual(plan.getSources());
     expect(plan.getSourcesForPathKey("SOURCES/研究.MD")).toEqual([]);
+    const parserAuthority = plan.getSourceParserAuthority("personal", "source-1");
+    expect(parserAuthority).toEqual({
+      bundleId: "personal",
+      sourceId: "source-1",
+      parserId: expectedParser.id,
+      parserVersion: expectedParser.version,
+      parserProfileDigest: createKnowledgeSourceParserProfileDigest(expectedParser),
+    });
+    expect(Object.isFrozen(parserAuthority)).toBe(true);
+    expect(plan.getSourceParserAuthority("personal", "missing")).toBeUndefined();
 
     const authority = requireOnlyAuthority(plan);
     expect(authority).toMatchObject({
@@ -325,6 +336,9 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
 
     expect(second.getDigest()).toBe(first.getDigest());
     expect(second.getSources()).toEqual(first.getSources());
+    expect(second.getSourceParserAuthority("alpha", "source-1")).toEqual(
+      first.getSourceParserAuthority("alpha", "source-1")
+    );
     expect(second.getBundleAuthorities()).toEqual(first.getBundleAuthorities());
     expect(second.getBundleAuthorities().map(({ bundleId }) => bundleId)).toEqual([
       "alpha",
@@ -392,6 +406,37 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
     );
     expect(plan.getSource("personal", "pdf-source")?.pipelineFingerprint).not.toBe(
       plan.getSource("personal", "markdown-source")?.pipelineFingerprint
+    );
+    expect(plan.getSourceParserAuthority("personal", "markdown-source")).toMatchObject({
+      parserId: "markdown",
+      parserVersion: "markdown-1",
+      parserProfileDigest: createKnowledgeSourceParserProfileDigest(markdownParser),
+    });
+    expect(plan.getSourceParserAuthority("personal", "pdf-source")).toMatchObject({
+      parserId: "pdf",
+      parserVersion: "pdf-2",
+      parserProfileDigest: createKnowledgeSourceParserProfileDigest(pdfParser),
+    });
+  });
+
+  it("binds parser capability changes without coupling the binding to model behavior", () => {
+    const baselineInput = createFixture();
+    const baseline = buildKnowledgeSourceWatchPlan([baselineInput]);
+    const parserChangedInput = createFixture();
+    parserChangedInput.pipeline.parsers[0].configuration = { preserveHeadings: false };
+    const parserChanged = buildKnowledgeSourceWatchPlan([parserChangedInput]);
+    const modelChangedInput = createFixture();
+    modelChangedInput.pipeline.model.configuration = { temperature: 0.4, maxTokens: 4096 };
+    const modelChanged = buildKnowledgeSourceWatchPlan([modelChangedInput]);
+
+    expect(
+      parserChanged.getSourceParserAuthority("personal", "source-1")?.parserProfileDigest
+    ).not.toBe(baseline.getSourceParserAuthority("personal", "source-1")?.parserProfileDigest);
+    expect(modelChanged.getSourceParserAuthority("personal", "source-1")?.parserProfileDigest).toBe(
+      baseline.getSourceParserAuthority("personal", "source-1")?.parserProfileDigest
+    );
+    expect(requireOnlySource(modelChanged).pipelineFingerprint).not.toBe(
+      requireOnlySource(baseline).pipelineFingerprint
     );
   });
 
