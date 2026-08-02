@@ -8,6 +8,7 @@ import {
 import {
   IngestQueue,
   type EnqueueIngestRequest,
+  type IngestExecutor,
   type IngestExecutionContext,
 } from "@/knowledge/ingest/queue/IngestQueue";
 import {
@@ -30,6 +31,7 @@ import {
   type KnowledgeSourceObservationStartupReproofResult,
 } from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator";
 import { KnowledgeSourceObservationStartupReconciler } from "@/knowledge/startup/KnowledgeSourceObservationStartupReconciler";
+import { KnowledgeProductionWorkerSession } from "@/knowledge/startup/KnowledgeProductionWorkerSession";
 
 /** Exact production resources consumed by one observation-only workflow generation. */
 export interface KnowledgeProductionObservationComposerInput {
@@ -74,9 +76,20 @@ class KnowledgeObservationExecutionUnavailableError extends Error {
 
 /** Queue executor that makes the startup-held Queue incapable of running work. */
 class StartupHeldObservationIngestExecutor {
+  private executor?: IngestExecutor;
+
   /** Rejects every accidental execution attempt without inspecting its context. */
-  async execute(_context: IngestExecutionContext): Promise<never> {
-    throw new KnowledgeObservationExecutionUnavailableError();
+  async execute(context: IngestExecutionContext) {
+    if (!this.executor) throw new KnowledgeObservationExecutionUnavailableError();
+    return this.executor.execute(context);
+  }
+
+  /** Installs one explicit executor after the caller has proved worker readiness. */
+  setExecutor(executor: IngestExecutor): void {
+    if (this.executor || typeof executor?.execute !== "function") {
+      throw new KnowledgeObservationExecutionUnavailableError();
+    }
+    this.executor = executor;
   }
 }
 
@@ -87,6 +100,8 @@ interface KnowledgeProductionObservationComposition {
   owners: ReturnType<KnowledgePluginProductionWorkflowLease["getOwners"]>;
   artifactReader: ObsidianExactSourceArtifactReader;
   handoffs: ReadonlyMap<string, SourceObservationHandoff>;
+  queue: IngestQueue;
+  heldExecutor: StartupHeldObservationIngestExecutor;
 }
 
 interface KnowledgeProductionObservationInternalState {
@@ -190,7 +205,8 @@ function composeObservation(
   const parsers = workflowLease.getParsers();
   const executionOwner = createKnowledgeExecutionOwner();
   const queueStorage = new KnowledgeRuntimeQueueStorage(runtime, executionOwner);
-  const queue = new IngestQueue(queueStorage, new StartupHeldObservationIngestExecutor());
+  const heldExecutor = new StartupHeldObservationIngestExecutor();
+  const queue = new IngestQueue(queueStorage, heldExecutor);
   const enqueueOnly = Object.freeze({
     enqueue: (request: EnqueueIngestRequest) => queue.enqueue(request),
   });
@@ -226,6 +242,8 @@ function composeObservation(
     owners,
     artifactReader,
     handoffs,
+    queue,
+    heldExecutor,
   });
   workflowLease.assertCurrent();
   return composition;
@@ -399,6 +417,37 @@ export class KnowledgeProductionObservationComposer {
       this.close();
       throw createAbortError();
     }
+  }
+
+  /** Binds one explicit executor to the exact released Queue and returns a bounded worker. */
+  createWorkerSession(
+    executor: IngestExecutor,
+    isReleased: () => boolean
+  ): KnowledgeProductionWorkerSession {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (!composition || !state.coordinator || !state.lastResult) {
+      throw createAbortError();
+    }
+    if (
+      state.lastResult.kind !== "observation_converged" &&
+      state.lastResult.kind !== "observation_reproved"
+    ) {
+      throw createAbortError();
+    }
+    if (typeof isReleased !== "function") {
+      throw createAbortError();
+    }
+    composition.heldExecutor.setExecutor(executor);
+    return new KnowledgeProductionWorkerSession({
+      queue: composition.queue,
+      bundleIds: composition.owners.map(({ config }) => config.id),
+      isReleased,
+      assertCurrent: () => {
+        assertCompositionCurrent(state, state.generation, composition);
+        this.assertHealthy();
+      },
+    });
   }
 
   /** Synchronously closes listeners and invalidates all future plan/capture continuations. */
