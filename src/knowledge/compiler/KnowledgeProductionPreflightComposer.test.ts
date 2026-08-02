@@ -11,6 +11,7 @@ import {
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
   ProjectKnowledgePipelineProfileError,
+  ProjectKnowledgePipelineProfileSource,
   type ProjectKnowledgePipelineProfileSourceOptions,
   type ProjectKnowledgePipelineProjectInput,
 } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
@@ -290,6 +291,64 @@ describe("KnowledgeProductionPreflightComposer", () => {
 
     expect(composer.preflight()).toEqual({ kind: "ready", bundleCount: 1 });
     expect(input.fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("uses the exact explicitly supplied profile source when it matches the input snapshot", () => {
+    const owners = [createOwner()];
+    const projects = [createProject()];
+    const settings = createSettings();
+    const profileOptions = createProfileOptions();
+    const source = new ProjectKnowledgePipelineProfileSource(projects, settings, profileOptions);
+    const composer = new KnowledgeProductionPreflightComposer(
+      createInput({
+        owners,
+        projects,
+        settings,
+        profileOptions,
+        profileSource: source,
+      })
+    );
+
+    expect(composer.preflight()).toEqual({ kind: "ready", bundleCount: 1 });
+  });
+
+  it("rejects an authentic shared profile source from a different input snapshot", () => {
+    const fetchPort = createFetchPort();
+    const source = new ProjectKnowledgePipelineProfileSource(
+      [createProject()],
+      createSettings(),
+      createProfileOptions({ outputLanguage: "different-language" })
+    );
+    const composer = new KnowledgeProductionPreflightComposer(
+      createInput({ profileSource: source, fetchPort })
+    );
+
+    expect(composer.preflight()).toEqual({
+      kind: "diagnostic",
+      code: "input_invalid",
+    });
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("resolves an authentic subclass through the frozen base authority method", () => {
+    let overrideCalls = 0;
+    class OverridingProfileSource extends ProjectKnowledgePipelineProfileSource {
+      /** Must not replace the authentic base resolution boundary. */
+      override resolve(owner: ConfiguredProjectKnowledgeBundle) {
+        overrideCalls += 1;
+        return super.resolve(owner);
+      }
+    }
+    const projects = [createProject()];
+    const settings = createSettings();
+    const profileOptions = createProfileOptions();
+    const source = new OverridingProfileSource(projects, settings, profileOptions);
+    const composer = new KnowledgeProductionPreflightComposer(
+      createInput({ projects, settings, profileOptions, profileSource: source })
+    );
+
+    expect(composer.preflight()).toEqual({ kind: "ready", bundleCount: 1 });
+    expect(overrideCalls).toBe(0);
   });
 
   it("does not trust or read a forged profile-error code thrown by an input proxy", () => {

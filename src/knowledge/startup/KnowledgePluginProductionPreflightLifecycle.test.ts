@@ -4,14 +4,19 @@ import type {
   KnowledgeProductionPreflightResult,
   KnowledgeProductionPreflightSettingsInput,
 } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
-import type { ProjectKnowledgePipelineProfileSourceOptions } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
+import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
+import { ProjectKnowledgePipelineProfileSource } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import {
   KnowledgePluginProductionPreflightLifecycle,
+  KnowledgePluginProductionWorkflowLease,
   type KnowledgePluginProductionPreflightLifecycleDependencies,
   type KnowledgePluginProductionPreflightPort,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
-import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import {
+  createKnowledgeProductionPipelineResources,
+  type KnowledgeProductionPipelineResources,
+} from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 
 const PROJECT_ID = "project-personal";
 const MODEL_NAME = "deepseek-v4-pro";
@@ -41,6 +46,14 @@ function createProjectRecord(bundle: unknown = createBundle()) {
   };
 }
 
+/** Creates the detached complete owner shape produced by the workflow-plan loader. */
+function cloneOwner(owner: ConfiguredProjectKnowledgeBundle): ConfiguredProjectKnowledgeBundle {
+  return {
+    projectId: owner.projectId,
+    config: { ...owner.config, sourceRoots: [...owner.config.sourceRoots] },
+  };
+}
+
 /** Creates already-hydrated settings without exposing a real credential. */
 function createSettings(): KnowledgeProductionPreflightSettingsInput {
   return {
@@ -63,24 +76,9 @@ function createSettings(): KnowledgeProductionPreflightSettingsInput {
   };
 }
 
-/** Creates sufficient static profile data for a fake preflight boundary. */
-function createProfileOptions(): ProjectKnowledgePipelineProfileSourceOptions {
-  return {
-    compilerVersion: "knowledge-compiler-v1",
-    compilerConfiguration: { protocolVersion: 1 },
-    parsers: [
-      {
-        id: "knowledge-utf8-text",
-        version: "1",
-        pathSuffixes: [".md"],
-        configuration: { encoding: "utf-8-fatal" },
-      },
-    ],
-    outputLanguage: "source-language",
-    supportedProviders: ["deepseek"],
-    promptContractIdentity: "test-prompt-contract",
-    providerRouteIdentities: { deepseek: "test-route-contract" },
-  };
+/** Creates matching parser capabilities and secret-free profile behavior. */
+function createResources(): KnowledgeProductionPipelineResources {
+  return createKnowledgeProductionPipelineResources();
 }
 
 /** Creates a native-fetch-shaped capability that fails on accidental invocation. */
@@ -116,7 +114,7 @@ function createDependencies(
     getProjectRecords: jest.fn(() => [createProjectRecord()]),
     getSettings: jest.fn(() => createSettings()),
     fetchPort: createFetchPort(),
-    createResources: jest.fn(() => ({ profileOptions: createProfileOptions() })),
+    createResources: jest.fn(() => createResources()),
     createPreflight: jest.fn(() => createCandidate()),
     ...overrides,
   };
@@ -157,7 +155,7 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
       fetchPort,
       createResources: () => {
         events.push("resources");
-        return { profileOptions: createProfileOptions() };
+        return createResources();
       },
       createPreflight: (input) => {
         events.push("preflight:construct");
@@ -188,9 +186,144 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     expect(Object.isFrozen(result.admission.owners)).toBe(true);
     expect(Object.isFrozen(result.admission.owners[0]?.config)).toBe(true);
     expect(Object.isFrozen(result.admission.owners[0]?.config.sourceRoots)).toBe(true);
+    expect(result.admission.workflowLease.getOwners()).toBe(result.admission.owners);
+    expect(Object.isFrozen(result.admission.workflowLease.getParsers())).toBe(true);
+    expect(preflightInput?.profileSource).toBeInstanceOf(ProjectKnowledgePipelineProfileSource);
     expect(fetchPort).not.toHaveBeenCalled();
     expect(candidate.close).not.toHaveBeenCalled();
     expect(() => lifecycle.assertCurrentAdmission(result.admission)).not.toThrow();
+  });
+
+  it("uses one authentic profile source for preflight and the same workflow generation", async () => {
+    let preflightSource: ProjectKnowledgePipelineProfileSource | undefined;
+    let preflightProfile: unknown;
+    const candidate = createCandidate();
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle(
+      createDependencies({
+        createPreflight: (input) => {
+          preflightSource = input.profileSource;
+          candidate.preflight.mockImplementation(() => {
+            if (!input.profileSource) throw new Error("Expected lifecycle profile source");
+            preflightProfile = input.profileSource.resolve(input.owners[0]);
+            return { kind: "ready", bundleCount: 1 };
+          });
+          return candidate;
+        },
+      })
+    );
+
+    const result = await lifecycle.load(new AbortController().signal);
+    if (result.kind !== "configured") throw new Error("Expected configured preflight");
+    const detachedOwner = cloneOwner(result.admission.owners[0]);
+    const workflowProfile = result.admission.workflowLease.resolve(
+      detachedOwner,
+      new AbortController().signal
+    );
+
+    expect(preflightSource).toBeInstanceOf(ProjectKnowledgePipelineProfileSource);
+    expect(workflowProfile).toEqual(preflightProfile);
+    expect(Object.isFrozen(workflowProfile)).toBe(true);
+  });
+
+  it("resolves a strict detached owner but rejects any changed complete config", async () => {
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle(createDependencies());
+    const result = await lifecycle.load(new AbortController().signal);
+    if (result.kind !== "configured") throw new Error("Expected configured preflight");
+    const owner = result.admission.owners[0];
+    const detachedOwner = cloneOwner(owner);
+
+    expect(
+      result.admission.workflowLease.resolve(detachedOwner, new AbortController().signal)
+    ).toMatchObject({ bundleId: owner.config.id });
+    expect(() =>
+      result.admission.workflowLease.resolve(
+        {
+          ...detachedOwner,
+          config: { ...detachedOwner.config, wikiRoot: "Wiki/forged" },
+        },
+        new AbortController().signal
+      )
+    ).toThrow(TypeError);
+    const aborted = new AbortController();
+    aborted.abort();
+    expect(() => result.admission.workflowLease.resolve(detachedOwner, aborted.signal)).toThrow(
+      "The operation was aborted"
+    );
+  });
+
+  it("revokes before a stable invalidation snapshot and isolates throwing observers", async () => {
+    const candidate = createCandidate();
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle(
+      createDependencies({ createPreflight: () => candidate })
+    );
+    const result = await lifecycle.load(new AbortController().signal);
+    if (result.kind !== "configured") throw new Error("Expected configured preflight");
+    const lease = result.admission.workflowLease;
+    const detachedOwner = cloneOwner(lease.getOwners()[0]);
+    const events: string[] = [];
+    let unsubscribeSecond: () => void = () => undefined;
+    lease.subscribeInvalidation(() => {
+      events.push(`first:${String(lease.isCurrent())}`);
+      unsubscribeSecond();
+      throw new Error("Observer failure must stay isolated");
+    });
+    unsubscribeSecond = lease.subscribeInvalidation(() => {
+      events.push(`second:${String(lease.isCurrent())}`);
+    });
+    const unsubscribeRemoved = lease.subscribeInvalidation(() => events.push("removed"));
+    unsubscribeRemoved();
+    unsubscribeRemoved();
+
+    lifecycle.invalidate();
+
+    expect(events).toEqual(["first:false", "second:false"]);
+    expect(candidate.close).toHaveBeenCalledTimes(1);
+    expect(lease.isCurrent()).toBe(false);
+    expect(() => lease.assertCurrent()).toThrow("The operation was aborted");
+    expect(() => lease.getOwners()).toThrow("The operation was aborted");
+    expect(() => lease.getParsers()).toThrow("The operation was aborted");
+    expect(() => lease.resolve(detachedOwner, new AbortController().signal)).toThrow(
+      "The operation was aborted"
+    );
+    lease.subscribeInvalidation(() => events.push("late"))();
+    lifecycle.invalidate();
+    expect(events).toEqual(["first:false", "second:false", "late"]);
+  });
+
+  it("authenticates only minted secret-free leases without exposing mint or close authority", async () => {
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle(createDependencies());
+    const result = await lifecycle.load(new AbortController().signal);
+    if (result.kind !== "configured") throw new Error("Expected configured preflight");
+    const lease = result.admission.workflowLease;
+    const owner = lease.getOwners()[0];
+    const profile = lease.resolve(cloneOwner(owner), new AbortController().signal);
+    const exposed = JSON.stringify({ admission: result.admission, profile });
+
+    expect(() => KnowledgePluginProductionWorkflowLease.assert(lease)).not.toThrow();
+    expect(Reflect.ownKeys(lease)).toEqual([]);
+    expect(exposed).not.toContain("test-only-model-credential");
+    expect(exposed).not.toContain("test-only-provider-credential");
+    expect(exposed).not.toContain("apiKey");
+    expect(() =>
+      KnowledgePluginProductionWorkflowLease.assert(
+        Object.create(KnowledgePluginProductionWorkflowLease.prototype)
+      )
+    ).toThrow(TypeError);
+    expect(() =>
+      KnowledgePluginProductionWorkflowLease.assert({
+        getOwners: () => result.admission.owners,
+        getParsers: () => lease.getParsers(),
+        isCurrent: () => true,
+      })
+    ).toThrow(TypeError);
+    expect(() => {
+      Reflect.construct(KnowledgePluginProductionWorkflowLease, [
+        Symbol("forged"),
+        result.admission.owners,
+        lease.getParsers(),
+        {},
+      ]);
+    }).toThrow(TypeError);
   });
 
   it("closes a candidate constructed during synchronous Settings/Projects invalidation", async () => {
@@ -241,6 +374,7 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     lifecycle.invalidate();
 
     expect(candidate.close).toHaveBeenCalledTimes(1);
+    expect(result.admission.workflowLease.isCurrent()).toBe(false);
     expect(createPreflight).toHaveBeenCalledTimes(1);
     let failure: unknown;
     try {
@@ -266,6 +400,8 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
 
     expect(first.close).toHaveBeenCalledTimes(1);
     expect(second.close).not.toHaveBeenCalled();
+    expect(firstResult.admission.workflowLease.isCurrent()).toBe(false);
+    expect(secondResult.admission.workflowLease.isCurrent()).toBe(true);
     expect(() => lifecycle.assertCurrentAdmission(firstResult.admission)).toThrow();
     expect(() => lifecycle.assertCurrentAdmission(secondResult.admission)).not.toThrow();
   });
@@ -285,7 +421,7 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
 
   it("fails before Settings/resources/composer when renderer fetch is unavailable", async () => {
     const getSettings = jest.fn(() => createSettings());
-    const createResources = jest.fn(() => ({ profileOptions: createProfileOptions() }));
+    const createResources = jest.fn(() => createKnowledgeProductionPipelineResources());
     const createPreflight = jest.fn(() => createCandidate());
     const lifecycle = new KnowledgePluginProductionPreflightLifecycle(
       createDependencies({
@@ -344,12 +480,14 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     const lifecycle = new KnowledgePluginProductionPreflightLifecycle(
       createDependencies({ fetchPort, createPreflight: () => candidate })
     );
-    await lifecycle.load(new AbortController().signal);
+    const result = await lifecycle.load(new AbortController().signal);
+    if (result.kind !== "configured") throw new Error("Expected configured preflight");
 
     lifecycle.close();
     lifecycle.close();
 
     expect(candidate.close).toHaveBeenCalledTimes(1);
+    expect(result.admission.workflowLease.isCurrent()).toBe(false);
     await expect(lifecycle.load(new AbortController().signal)).rejects.toMatchObject({
       name: "AbortError",
     });

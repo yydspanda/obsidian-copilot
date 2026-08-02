@@ -10,10 +10,14 @@ import {
   type ConfiguredProjectKnowledgeBundle,
   type ProjectKnowledgeBundleConfigInput,
 } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
-import type {
-  ProjectKnowledgePipelineProfileSourceOptions,
-  ProjectKnowledgePipelineProjectInput,
+import {
+  ProjectKnowledgePipelineProfileError,
+  ProjectKnowledgePipelineProfileSource,
+  type ProjectKnowledgePipelineProfileSourceOptions,
+  type ProjectKnowledgePipelineProjectInput,
 } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
+import type { KnowledgeBundlePipelineProfile } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
+import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import type { KnowledgePluginBundleConfigLoadResult } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
 /** Minimal project snapshot consumed by one production preflight generation. */
@@ -23,6 +27,8 @@ export interface KnowledgePluginProductionPreflightProjectRecord {
 
 /** Static, secret-free resources shared by preflight and the future worker generation. */
 export interface KnowledgePluginProductionPreflightResources {
+  /** Exact parser capabilities whose profiles participate in this generation. */
+  parsers: readonly KnowledgeByteParser[];
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
 }
 
@@ -58,6 +64,8 @@ export interface KnowledgePluginProductionPreflightAdmission {
   readonly generation: number;
   /** Strict Bundle owners captured from the exact Projects snapshot used by preflight. */
   readonly owners: readonly ConfiguredProjectKnowledgeBundle[];
+  /** Unforgeable secret-free capabilities retained for the exact workflow generation. */
+  readonly workflowLease: KnowledgePluginProductionWorkflowLease;
 }
 
 /** Startup result plus an in-process admission used by the next recovery boundary. */
@@ -70,6 +78,25 @@ export type KnowledgePluginProductionPreflightLoadResult =
     };
 
 const ROUTE_DEPENDENCY_DIAGNOSTIC = "production_preflight_route_dependency_invalid";
+const MAX_WORKFLOW_PARSERS = 10_000;
+const WORKFLOW_LEASE_CONSTRUCTOR_TOKEN = Symbol(
+  "KnowledgePluginProductionWorkflowLease.constructor"
+);
+
+// Capturing the frozen base method prevents a subclass override from replacing WeakMap authority.
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const PROJECT_PROFILE_SOURCE_RESOLVE = ProjectKnowledgePipelineProfileSource.prototype.resolve;
+
+/** Module-private state held only by authentic workflow leases. */
+interface KnowledgePluginProductionWorkflowLeaseState {
+  current: boolean;
+  owners?: readonly ConfiguredProjectKnowledgeBundle[];
+  parsers?: readonly KnowledgeByteParser[];
+  profileSource?: ProjectKnowledgePipelineProfileSource;
+  invalidationListeners: Set<() => void>;
+}
+
+const workflowLeaseStates = new WeakMap<object, KnowledgePluginProductionWorkflowLeaseState>();
 
 /** Narrows the injected Projects result without changing its declared element type to `any`. */
 function isProjectRecordArray(
@@ -83,18 +110,225 @@ function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
 }
 
-/** Freezes the narrow immutable admission passed to future production composition. */
-function createAdmission(
-  generation: number,
+/** Returns hidden mutable state only for an authentic workflow lease. */
+function requireWorkflowLeaseState(value: unknown): KnowledgePluginProductionWorkflowLeaseState {
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("The production workflow lease is invalid");
+  }
+  const state = workflowLeaseStates.get(value);
+  if (!state) {
+    throw new TypeError("The production workflow lease is invalid");
+  }
+  return state;
+}
+
+/** Calls one invalidation observer without allowing it to block revocation or cleanup. */
+function notifyWorkflowLeaseInvalidation(listener: () => void): void {
+  try {
+    listener();
+  } catch {
+    // Revocation observers cannot recover authority or prevent other observers.
+  }
+}
+
+/** Synchronously revokes one authentic lease before notifying a stable observer snapshot. */
+function closeWorkflowLease(lease: KnowledgePluginProductionWorkflowLease): void {
+  const state = requireWorkflowLeaseState(lease);
+  if (!state.current) return;
+
+  state.current = false;
+  const listeners = [...state.invalidationListeners];
+  state.invalidationListeners.clear();
+  state.owners = undefined;
+  state.parsers = undefined;
+  state.profileSource = undefined;
+  for (const listener of listeners) {
+    notifyWorkflowLeaseInvalidation(listener);
+  }
+}
+
+/** Captures strict frozen owner projections used by preflight and its workflow lease. */
+function snapshotOwners(
   owners: readonly ConfiguredProjectKnowledgeBundle[]
-): KnowledgePluginProductionPreflightAdmission {
+): readonly ConfiguredProjectKnowledgeBundle[] {
   const snapshot: ConfiguredProjectKnowledgeBundle[] = owners.map(({ projectId, config }) => {
     const configSnapshot = { ...config, sourceRoots: [...config.sourceRoots] };
     Object.freeze(configSnapshot.sourceRoots);
     Object.freeze(configSnapshot);
     return Object.freeze({ projectId, config: configSnapshot });
   });
-  return Object.freeze({ generation, owners: Object.freeze(snapshot) });
+  return Object.freeze(snapshot);
+}
+
+/** Reads one exact enumerable data-only record without invoking accessors. */
+function snapshotExactRecord(
+  value: unknown,
+  keys: readonly string[]
+): Readonly<Record<string, unknown>> | undefined {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return undefined;
+    }
+    const expectedKeys = [...keys].sort();
+    const ownKeys = Reflect.ownKeys(value);
+    if (
+      ownKeys.length !== expectedKeys.length ||
+      ownKeys.some((key) => typeof key !== "string") ||
+      (ownKeys as string[]).sort().some((key, index) => key !== expectedKeys[index])
+    ) {
+      return undefined;
+    }
+    const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      snapshot[key] = descriptor.value;
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reads one dense string array without consulting iterators or element accessors. */
+function snapshotStringArray(value: unknown): readonly string[] | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined;
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !lengthDescriptor ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 1 ||
+      Reflect.ownKeys(value).length !== (lengthDescriptor.value as number) + 1
+    ) {
+      return undefined;
+    }
+    const snapshot: string[] = [];
+    for (let index = 0; index < (lengthDescriptor.value as number); index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (
+        !descriptor ||
+        !("value" in descriptor) ||
+        !descriptor.enumerable ||
+        typeof descriptor.value !== "string"
+      ) {
+        return undefined;
+      }
+      snapshot.push(descriptor.value);
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Compares one detached owner with a retained owner across its complete strict config. */
+function isSameWorkflowOwner(value: unknown, retained: ConfiguredProjectKnowledgeBundle): boolean {
+  const owner = snapshotExactRecord(value, ["projectId", "config"]);
+  const config = owner
+    ? snapshotExactRecord(owner.config, [
+        "version",
+        "id",
+        "sourceRoots",
+        "wikiRoot",
+        "schemaRef",
+        "reviewMode",
+      ])
+    : undefined;
+  const sourceRoots = config ? snapshotStringArray(config.sourceRoots) : undefined;
+  if (!owner || !config || !sourceRoots) return false;
+  return (
+    owner.projectId === retained.projectId &&
+    config.version === retained.config.version &&
+    config.id === retained.config.id &&
+    config.wikiRoot === retained.config.wikiRoot &&
+    config.schemaRef === retained.config.schemaRef &&
+    config.reviewMode === retained.config.reviewMode &&
+    sourceRoots.length === retained.config.sourceRoots.length &&
+    sourceRoots.every((root, index) => root === retained.config.sourceRoots[index])
+  );
+}
+
+/** Finds one callable data method without invoking getters on a capability or its prototypes. */
+function hasDataMethod(value: unknown, key: "getProfile" | "parse"): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    return false;
+  }
+  try {
+    let owner: object | null = value;
+    const visited = new Set<object>();
+    while (owner && !visited.has(owner)) {
+      visited.add(owner);
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) {
+        return "value" in descriptor && typeof descriptor.value === "function";
+      }
+      owner = Object.getPrototypeOf(owner) as object | null;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/** Captures a bounded dense parser capability array without consulting iterator hooks. */
+function snapshotParsers(value: unknown): readonly KnowledgeByteParser[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError("Knowledge workflow parsers are unavailable");
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    !lengthDescriptor ||
+    !("value" in lengthDescriptor) ||
+    !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value < 1 ||
+    lengthDescriptor.value > MAX_WORKFLOW_PARSERS ||
+    Reflect.ownKeys(value).length !== (lengthDescriptor.value as number) + 1
+  ) {
+    throw new TypeError("Knowledge workflow parsers are unavailable");
+  }
+
+  const parsers: KnowledgeByteParser[] = [];
+  for (let index = 0; index < (lengthDescriptor.value as number); index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (
+      !descriptor ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable ||
+      !hasDataMethod(descriptor.value, "getProfile") ||
+      !hasDataMethod(descriptor.value, "parse")
+    ) {
+      throw new TypeError("Knowledge workflow parsers are unavailable");
+    }
+    parsers.push(descriptor.value as KnowledgeByteParser);
+  }
+  return Object.freeze(parsers);
+}
+
+/** Mints one module-authentic workflow lease without exposing its construction token. */
+function createWorkflowLease(
+  owners: readonly ConfiguredProjectKnowledgeBundle[],
+  parsers: readonly KnowledgeByteParser[],
+  profileSource: ProjectKnowledgePipelineProfileSource
+): KnowledgePluginProductionWorkflowLease {
+  return new KnowledgePluginProductionWorkflowLease(
+    WORKFLOW_LEASE_CONSTRUCTOR_TOKEN,
+    owners,
+    parsers,
+    profileSource
+  );
+}
+
+/** Freezes the narrow immutable admission passed to future production composition. */
+function createAdmission(
+  generation: number,
+  owners: readonly ConfiguredProjectKnowledgeBundle[],
+  workflowLease: KnowledgePluginProductionWorkflowLease
+): KnowledgePluginProductionPreflightAdmission {
+  return Object.freeze({ generation, owners, workflowLease });
 }
 
 /** Maps an already-sanitized preflight diagnostic into the startup namespace. */
@@ -102,6 +336,130 @@ function toStartupDiagnostic(
   result: Extract<KnowledgeProductionPreflightResult, { kind: "diagnostic" }>
 ): string {
   return `production_preflight_${result.code}`;
+}
+
+/**
+ * Opaque, synchronously revocable capability for one exact production workflow generation.
+ *
+ * Owners, parsers, and the authentic profile source live only in module-private
+ * WeakMap state. Closing the owning plugin lifecycle removes those references
+ * before a stable snapshot of invalidation observers is called.
+ */
+export class KnowledgePluginProductionWorkflowLease {
+  /** Rejects direct construction without the module-private lifecycle token. */
+  constructor(
+    token: symbol,
+    owners: readonly ConfiguredProjectKnowledgeBundle[],
+    parsers: readonly KnowledgeByteParser[],
+    profileSource: ProjectKnowledgePipelineProfileSource
+  ) {
+    if (token !== WORKFLOW_LEASE_CONSTRUCTOR_TOKEN) {
+      throw new TypeError("The production workflow lease is invalid");
+    }
+    workflowLeaseStates.set(this, {
+      current: true,
+      owners,
+      parsers,
+      profileSource,
+      invalidationListeners: new Set(),
+    });
+    Object.freeze(this);
+  }
+
+  /** Authenticates a lifecycle-minted lease without granting mint or close authority. */
+  static assert(value: unknown): asserts value is KnowledgePluginProductionWorkflowLease {
+    requireWorkflowLeaseState(value);
+  }
+
+  /** Returns whether this exact workflow generation still owns its capabilities. */
+  isCurrent(): boolean {
+    return requireWorkflowLeaseState(this).current;
+  }
+
+  /** Throws the standard cancellation category after synchronous workflow revocation. */
+  assertCurrent(): void {
+    if (!requireWorkflowLeaseState(this).current) {
+      throw createAbortError();
+    }
+  }
+
+  /** Returns the exact frozen owners used by this generation's production preflight. */
+  getOwners(): readonly ConfiguredProjectKnowledgeBundle[] {
+    const state = requireWorkflowLeaseState(this);
+    if (!state.current || !state.owners) {
+      throw createAbortError();
+    }
+    return state.owners;
+  }
+
+  /** Returns the exact frozen parser capability registry captured for this generation. */
+  getParsers(): readonly KnowledgeByteParser[] {
+    const state = requireWorkflowLeaseState(this);
+    if (!state.current || !state.parsers) {
+      throw createAbortError();
+    }
+    return state.parsers;
+  }
+
+  /**
+   * Resolves one exact owner through the same authentic source used by preflight.
+   *
+   * @param owner - Retained or strict detached owner matching one exact generation owner
+   * @param signal - Caller-owned workflow cancellation signal
+   * @returns Frozen, secret-free pipeline profile
+   */
+  resolve(
+    owner: ConfiguredProjectKnowledgeBundle,
+    signal: AbortSignal
+  ): KnowledgeBundlePipelineProfile {
+    const state = requireWorkflowLeaseState(this);
+    if (signal.aborted || !state.current || !state.owners || !state.profileSource) {
+      throw createAbortError();
+    }
+    const owners = state.owners;
+    const profileSource = state.profileSource;
+    const matches = owners.filter((candidate) => isSameWorkflowOwner(owner, candidate));
+    if (signal.aborted || !state.current) {
+      throw createAbortError();
+    }
+    if (matches.length !== 1) {
+      throw new TypeError("The production workflow owner is invalid");
+    }
+    const profile = Reflect.apply(PROJECT_PROFILE_SOURCE_RESOLVE, profileSource, [matches[0]]);
+    if (signal.aborted || !state.current) {
+      throw createAbortError();
+    }
+    return profile;
+  }
+
+  /**
+   * Observes one future synchronous revocation without receiving close authority.
+   *
+   * A listener registered after revocation is called synchronously. Unsubscribe is
+   * idempotent, and observer failures are isolated from lifecycle cleanup.
+   *
+   * @param listener - Value-free revocation callback
+   * @returns Idempotent unsubscribe function
+   */
+  subscribeInvalidation(listener: () => void): () => void {
+    if (typeof listener !== "function") {
+      throw new TypeError("The workflow invalidation listener is invalid");
+    }
+    const state = requireWorkflowLeaseState(this);
+    if (!state.current) {
+      notifyWorkflowLeaseInvalidation(listener);
+      return () => undefined;
+    }
+
+    let subscribed = true;
+    const observer = () => listener();
+    state.invalidationListeners.add(observer);
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      state.invalidationListeners.delete(observer);
+    };
+  }
 }
 
 /**
@@ -167,25 +525,62 @@ export class KnowledgePluginProductionPreflightLifecycle {
     this.assertCurrent(generation, signal);
     const resources = this.dependencies.createResources();
     this.assertCurrent(generation, signal);
+    const projects = Object.freeze(
+      projectRecords.map(({ project }) =>
+        Object.freeze({
+          id: project.id,
+          projectModelKey: project.projectModelKey,
+          modelConfigs: project.modelConfigs,
+        })
+      )
+    );
+    let profileSource: ProjectKnowledgePipelineProfileSource;
+    let parsers: readonly KnowledgeByteParser[];
+    let admission: KnowledgePluginProductionPreflightAdmission;
+    let workflowLease: KnowledgePluginProductionWorkflowLease | undefined;
+    try {
+      parsers = snapshotParsers(resources.parsers);
+      profileSource = new ProjectKnowledgePipelineProfileSource(
+        projects,
+        settings,
+        resources.profileOptions
+      );
+      const owners = snapshotOwners(result.bundles);
+      workflowLease = createWorkflowLease(owners, parsers, profileSource);
+      admission = createAdmission(generation, owners, workflowLease);
+      this.assertCurrent(generation, signal);
+    } catch (error) {
+      if (workflowLease) {
+        closeWorkflowLease(workflowLease);
+      }
+      this.assertCurrent(generation, signal);
+      const profileCode = ProjectKnowledgePipelineProfileError.inspect(error);
+      return {
+        kind: "invalid",
+        diagnosticCodes: [
+          profileCode
+            ? `production_preflight_profile_${profileCode}`
+            : "production_preflight_input_invalid",
+        ],
+      };
+    }
+
     const createPreflight = this.dependencies.createPreflight;
-    const admission = createAdmission(generation, result.bundles);
     let candidate: KnowledgePluginProductionPreflightPort;
     try {
       const input: KnowledgeProductionPreflightComposerInput = {
         owners: admission.owners,
-        projects: projectRecords.map(({ project }) => ({
-          id: project.id,
-          projectModelKey: project.projectModelKey,
-          modelConfigs: project.modelConfigs,
-        })),
+        projects,
         settings,
         profileOptions: resources.profileOptions,
+        profileSource,
         fetchPort: this.dependencies.fetchPort,
       };
       candidate = createPreflight
         ? createPreflight(input)
         : new KnowledgeProductionPreflightComposer(input);
     } catch {
+      closeWorkflowLease(admission.workflowLease);
       this.assertCurrent(generation, signal);
       return {
         kind: "invalid",
@@ -196,7 +591,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
     try {
       this.assertCurrent(generation, signal);
     } catch (error) {
-      candidate.close();
+      this.closeCandidate(candidate, generation, admission);
       throw error;
     }
 
@@ -205,7 +600,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
     try {
       preflight = candidate.preflight();
     } catch {
-      this.closeCandidate(candidate, generation);
+      this.closeCandidate(candidate, generation, admission);
       this.assertCurrent(generation, signal);
       return {
         kind: "invalid",
@@ -215,11 +610,12 @@ export class KnowledgePluginProductionPreflightLifecycle {
     try {
       this.assertCurrent(generation, signal);
     } catch (error) {
-      this.closeCandidate(candidate, generation);
+      this.closeCandidate(candidate, generation, admission);
       throw error;
     }
     if (preflight.kind === "diagnostic") {
-      this.closeCandidate(candidate, generation);
+      this.closeCandidate(candidate, generation, admission);
+      this.assertCurrent(generation, signal);
       return {
         kind: "invalid",
         diagnosticCodes: [toStartupDiagnostic(preflight)],
@@ -242,7 +638,8 @@ export class KnowledgePluginProductionPreflightLifecycle {
     if (
       this.closed ||
       this.current?.generation !== admission.generation ||
-      this.current.admission !== admission
+      this.current.admission !== admission ||
+      !admission.workflowLease.isCurrent()
     ) {
       throw createAbortError();
     }
@@ -273,8 +670,10 @@ export class KnowledgePluginProductionPreflightLifecycle {
       throw createAbortError();
     }
     this.generation += 1;
+    const generation = this.generation;
     this.closeCurrent();
-    return this.generation;
+    this.assertCurrent(generation, signal);
+    return generation;
   }
 
   /** Captures a dense project snapshot without retaining project-file metadata. */
@@ -307,11 +706,17 @@ export class KnowledgePluginProductionPreflightLifecycle {
   /** Closes and removes one candidate only if it is still the installed generation. */
   private closeCandidate(
     candidate: KnowledgePluginProductionPreflightPort,
-    generation: number
+    generation: number,
+    admission: KnowledgePluginProductionPreflightAdmission
   ): void {
-    candidate.close();
     if (this.current?.generation === generation && this.current.preflight === candidate) {
       this.current = undefined;
+    }
+    closeWorkflowLease(admission.workflowLease);
+    try {
+      candidate.close();
+    } catch {
+      // Authority is already synchronously revoked; cleanup failure stays private.
     }
   }
 
@@ -319,9 +724,17 @@ export class KnowledgePluginProductionPreflightLifecycle {
   private closeCurrent(): void {
     const current = this.current;
     this.current = undefined;
-    current?.preflight.close();
+    if (!current) return;
+    closeWorkflowLease(current.admission.workflowLease);
+    try {
+      current.preflight.close();
+    } catch {
+      // Authority is already synchronously revoked; cleanup failure stays private.
+    }
   }
 }
 
+Object.freeze(KnowledgePluginProductionWorkflowLease.prototype);
+Object.freeze(KnowledgePluginProductionWorkflowLease);
 Object.freeze(KnowledgePluginProductionPreflightLifecycle.prototype);
 Object.freeze(KnowledgePluginProductionPreflightLifecycle);

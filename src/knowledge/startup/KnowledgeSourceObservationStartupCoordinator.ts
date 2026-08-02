@@ -65,6 +65,13 @@ export type KnowledgeSourceObservationStartupCoordinatorResult =
       code: KnowledgeSourceObservationStartupDiagnosticCode;
     }>;
 
+/** Repeatable post-start proof returned without granting Queue or worker authority. */
+export type KnowledgeSourceObservationStartupReproofResult =
+  | Readonly<{
+      kind: "observation_reproved";
+    }>
+  | Extract<KnowledgeSourceObservationStartupCoordinatorResult, { kind: "blocked" | "diagnostic" }>;
+
 interface CapturedMethod {
   receiver: object;
   method: (...args: never[]) => unknown;
@@ -305,6 +312,10 @@ export class KnowledgeSourceObservationStartupCoordinator {
   private operationController?: AbortController;
   private callerSignal?: AbortSignal;
   private callerAbort?: () => void;
+  private observationConverged = false;
+  private sessionHealthy = false;
+  private reproofInFlight = false;
+  private healthCheckInProgress = false;
 
   /** Creates one generation-owned observation session without Queue authority. */
   constructor(dependencies: KnowledgeSourceObservationStartupCoordinatorDependencies) {
@@ -416,7 +427,7 @@ export class KnowledgeSourceObservationStartupCoordinator {
       }
       this.assertCurrent(generation, signal);
       if (blockerKinds.length > 0) {
-        return Object.freeze({ kind: "blocked", blockerKinds });
+        return this.finishBlocked(blockerKinds);
       }
       if (
         finalReconciliation.deferredAllocatedCount > 0 ||
@@ -425,11 +436,10 @@ export class KnowledgeSourceObservationStartupCoordinator {
         const blockerKinds: readonly "source_observation_pending"[] = Object.freeze([
           "source_observation_pending",
         ]);
-        return Object.freeze({
-          kind: "blocked",
-          blockerKinds,
-        });
+        return this.finishBlocked(blockerKinds);
       }
+      this.observationConverged = true;
+      this.sessionHealthy = true;
       return Object.freeze({
         kind: "observation_converged",
         scheduledCaptureCount,
@@ -448,12 +458,139 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
   }
 
+  /**
+   * Re-proves current captures, durable observations, and watcher blockers.
+   *
+   * Reproof is available only after the exact startup signal produced the first
+   * converged result. Calls are one-at-a-time; a mismatched, aborted, concurrent,
+   * or stale call permanently invalidates the session rather than transferring
+   * its authority to another lifecycle.
+   *
+   * @param signal - Exact caller signal retained by the successful startup run
+   * @returns A fresh health result carrying no Queue-release or worker authority
+   */
+  async reprove(signal: AbortSignal): Promise<KnowledgeSourceObservationStartupReproofResult> {
+    if (
+      this.closed ||
+      !this.started ||
+      !this.observationConverged ||
+      !this.sessionHealthy ||
+      this.reproofInFlight ||
+      this.healthCheckInProgress ||
+      signal !== this.callerSignal ||
+      signal.aborted
+    ) {
+      this.closeSafely();
+      throw createAbortError();
+    }
+
+    this.reproofInFlight = true;
+    this.sessionHealthy = false;
+    this.generation += 1;
+    const generation = this.generation;
+    const controller = new AbortController();
+    this.operationController = controller;
+
+    try {
+      this.assertCurrent(generation, signal);
+      const firstWaitFailure = await this.waitForWatcher(generation, signal);
+      if (firstWaitFailure) return firstWaitFailure;
+
+      let reconciliation: KnowledgeSourceObservationStartupResult;
+      try {
+        reconciliation = snapshotReconciliationResult(
+          await this.dependencies.reconciler.reconcile(controller.signal)
+        );
+      } catch (error) {
+        this.assertCurrent(generation, signal);
+        if (isAbortError(error)) {
+          throw createAbortError();
+        }
+        if (isKnowledgeSourceObservationStartupError(error)) {
+          return this.finishDiagnostic(toRecoveryDiagnostic(error));
+        }
+        return this.finishDiagnostic("observation_recovery_recovery_work_invalid");
+      }
+      this.assertCurrent(generation, signal);
+
+      const finalWaitFailure = await this.waitForWatcher(generation, signal);
+      if (finalWaitFailure) return finalWaitFailure;
+
+      let blockerKinds: readonly VaultSourceWatcherStartupBlocker["kind"][];
+      try {
+        blockerKinds = snapshotBlockerKinds(this.dependencies.watcher.getStartupBlockers());
+      } catch {
+        this.assertCurrent(generation, signal);
+        return this.finishDiagnostic("watcher_state_invalid");
+      }
+      this.assertCurrent(generation, signal);
+      if (blockerKinds.length > 0) {
+        return this.finishBlocked(blockerKinds);
+      }
+      if (reconciliation.deferredAllocatedCount > 0 || reconciliation.deferredDriftCount > 0) {
+        return this.finishBlocked(Object.freeze(["source_observation_pending"]));
+      }
+
+      this.sessionHealthy = true;
+      return Object.freeze({ kind: "observation_reproved" });
+    } catch {
+      this.closeSafely();
+      throw createAbortError();
+    } finally {
+      if (this.operationController === controller) {
+        this.operationController = undefined;
+      }
+      this.reproofInFlight = false;
+    }
+  }
+
+  /**
+   * Synchronously proves that the converged session is still current and blocker-free.
+   *
+   * This method deliberately returns no transferable token. A failed proof closes
+   * the whole session, so a caller cannot retain an earlier successful observation
+   * after a rename, delete, lifecycle replacement, or concurrent reproof.
+   */
+  assertHealthy(): void {
+    if (
+      this.closed ||
+      !this.started ||
+      !this.observationConverged ||
+      !this.sessionHealthy ||
+      this.reproofInFlight ||
+      this.healthCheckInProgress ||
+      !this.callerSignal ||
+      this.callerSignal.aborted
+    ) {
+      this.closeSafely();
+      throw createAbortError();
+    }
+
+    this.healthCheckInProgress = true;
+    const generation = this.generation;
+    const signal = this.callerSignal;
+    try {
+      this.assertCurrent(generation, signal);
+      const blockerKinds = snapshotBlockerKinds(this.dependencies.watcher.getStartupBlockers());
+      this.assertCurrent(generation, signal);
+      if (blockerKinds.length > 0) {
+        throw createAbortError();
+      }
+    } catch {
+      this.closeSafely();
+      throw createAbortError();
+    } finally {
+      this.healthCheckInProgress = false;
+    }
+  }
+
   /** Synchronously invalidates listener, crawl, and recovery continuations exactly once. */
   close(): void {
     if (this.closed) {
       return;
     }
     this.closed = true;
+    this.sessionHealthy = false;
     this.generation += 1;
     this.operationController?.abort();
     if (this.callerSignal && this.callerAbort) {
@@ -500,25 +637,48 @@ export class KnowledgeSourceObservationStartupCoordinator {
     return Object.freeze({ kind: "diagnostic", code });
   }
 
+  /** Revokes a permanently blocked generation after snapshotting its safe reasons. */
+  private finishBlocked(
+    blockerKinds: readonly (
+      | VaultSourceWatcherStartupBlocker["kind"]
+      | "source_observation_pending"
+    )[]
+  ): Extract<KnowledgeSourceObservationStartupCoordinatorResult, { kind: "blocked" }> {
+    const result = Object.freeze({
+      kind: "blocked" as const,
+      blockerKinds: Object.freeze([...blockerKinds]),
+    });
+    this.closeSafely();
+    return result;
+  }
+
+  /** Closes authority without allowing cleanup failure to escape a safe result. */
+  private closeSafely(): void {
+    try {
+      this.close();
+    } catch {
+      // Local generation and health are already invalid before dependency cleanup.
+    }
+  }
+
+  /** Checks only coordinator-owned lifecycle state without invoking an external port. */
+  private assertLocalCurrent(generation: number, signal: AbortSignal): void {
+    if (
+      this.closed ||
+      this.generation !== generation ||
+      signal !== this.callerSignal ||
+      signal.aborted ||
+      this.operationController?.signal.aborted
+    ) {
+      throw createAbortError();
+    }
+  }
+
   /** Re-proves local, caller, and plugin lifecycle ownership around every boundary. */
   private assertCurrent(generation: number, signal: AbortSignal): void {
-    if (
-      this.closed ||
-      this.generation !== generation ||
-      signal.aborted ||
-      this.operationController?.signal.aborted
-    ) {
-      throw createAbortError();
-    }
+    this.assertLocalCurrent(generation, signal);
     this.dependencies.assertCurrent();
-    if (
-      this.closed ||
-      this.generation !== generation ||
-      signal.aborted ||
-      this.operationController?.signal.aborted
-    ) {
-      throw createAbortError();
-    }
+    this.assertLocalCurrent(generation, signal);
   }
 }
 

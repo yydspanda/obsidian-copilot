@@ -147,6 +147,39 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
     expect(watcher.waitForIdle).toHaveBeenCalledTimes(2);
   });
 
+  it("retains a synchronous health proof and supports repeated serial reproof", async () => {
+    const order: string[] = [];
+    const watcher = createWatcher(order);
+    const reconciler = createReconciler(undefined, order);
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+
+    await expect(coordinator.start(controller.signal)).resolves.toMatchObject({
+      kind: "observation_converged",
+    });
+    expect(() => coordinator.assertHealthy()).not.toThrow();
+
+    const firstReproofStart = order.length;
+    await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+      kind: "observation_reproved",
+    });
+    expect(order.slice(firstReproofStart)).toEqual(["idle", "reconcile-3", "idle", "blockers"]);
+    expect(() => coordinator.assertHealthy()).not.toThrow();
+
+    const secondReproofStart = order.length;
+    await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+      kind: "observation_reproved",
+    });
+    expect(order.slice(secondReproofStart)).toEqual(["idle", "reconcile-4", "idle", "blockers"]);
+    expect(() => coordinator.assertHealthy()).not.toThrow();
+
+    expect(watcher.scan).toHaveBeenCalledTimes(1);
+    expect(watcher.waitForIdle).toHaveBeenCalledTimes(6);
+    expect(reconciler.reconcile).toHaveBeenCalledTimes(4);
+  });
+
   it("lets the crawl heal a pre-crawl pipeline mismatch before final proof", async () => {
     const watcher = createWatcher();
     const reconciler = createReconciler();
@@ -227,6 +260,9 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
       kind: "blocked",
       blockerKinds: ["source_missing", "source_path_invalid"],
     });
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
   });
 
   it.each([{ deferredAllocatedCount: 1 }, { deferredDriftCount: 1 }] as const)(
@@ -242,6 +278,306 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
         kind: "blocked",
         blockerKinds: ["source_observation_pending"],
       });
+      expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+    }
+  );
+
+  it("detects a destructive watcher blocker synchronously after startup convergence", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    watcher.getStartupBlockers.mockReturnValue([
+      {
+        kind: "source_change_unsupported",
+        change: "rename",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+    await expect(coordinator.reprove(controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+
+  it("reproves post-start work before returning a newly observed delete blocker", async () => {
+    const order: string[] = [];
+    const watcher = createWatcher(order);
+    const reconciler = createReconciler(undefined, order);
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    watcher.getStartupBlockers.mockImplementation(() => {
+      order.push("blockers");
+      return [
+        {
+          kind: "source_change_unsupported",
+          change: "delete",
+          bundleId: "personal",
+          sourceId: "source-1",
+        },
+      ];
+    });
+
+    await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+      kind: "blocked",
+      blockerKinds: ["source_change_unsupported"],
+    });
+    expect(order.slice(-6)).toEqual([
+      "idle",
+      "reconcile-3",
+      "idle",
+      "blockers",
+      "watcher-close",
+      "reconciler-close",
+    ]);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it.each([{ deferredAllocatedCount: 1 }, { deferredDriftCount: 1 }] as const)(
+    "closes a reproof that still has residual observation work: %o",
+    async (patch) => {
+      const watcher = createWatcher();
+      const reconciler = createReconciler([
+        createReconciliation(),
+        createReconciliation(),
+        createReconciliation(patch),
+      ]);
+      const controller = new AbortController();
+      const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+        createDependencies(watcher, reconciler)
+      );
+      await coordinator.start(controller.signal);
+
+      await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+        kind: "blocked",
+        blockerKinds: ["source_observation_pending"],
+      });
+      expect(watcher.close).toHaveBeenCalledTimes(1);
+      expect(reconciler.close).toHaveBeenCalledTimes(1);
+      expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+    }
+  );
+
+  it("sanitizes a reproof failure and permanently revokes session health", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    reconciler.reconcile.mockRejectedValueOnce(
+      new KnowledgeSourceObservationStartupError("source_authority_missing")
+    );
+
+    await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+      kind: "diagnostic",
+      code: "observation_recovery_source_authority_missing",
+    });
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it("maps malformed reproof blocker state to a closed diagnostic session", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    watcher.getStartupBlockers.mockReturnValue({ secret: "vault/path" } as never);
+
+    await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+      kind: "diagnostic",
+      code: "watcher_state_invalid",
+    });
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it("cannot publish reproof health when final blocker inspection aborts the startup signal", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    watcher.getStartupBlockers.mockImplementation(() => {
+      controller.abort();
+      return [];
+    });
+
+    await expect(coordinator.reprove(controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it("cannot publish initial health when blocker inspection invalidates the outer generation", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    let current = true;
+    watcher.getStartupBlockers.mockImplementation(() => {
+      current = false;
+      return [];
+    });
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(
+        watcher,
+        reconciler,
+        jest.fn(() => {
+          if (!current) throw new Error("stale outer generation");
+        })
+      )
+    );
+
+    await expect(coordinator.start(new AbortController().signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot publish reproof health when blocker inspection invalidates the outer generation", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    let current = true;
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(
+        watcher,
+        reconciler,
+        jest.fn(() => {
+          if (!current) throw new Error("stale outer generation");
+        })
+      )
+    );
+    await coordinator.start(controller.signal);
+    watcher.getStartupBlockers.mockImplementation(() => {
+      current = false;
+      return [];
+    });
+
+    await expect(coordinator.reprove(controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it("cannot retain synchronous health when blocker inspection invalidates the outer generation", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    let current = true;
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(
+        watcher,
+        reconciler,
+        jest.fn(() => {
+          if (!current) throw new Error("stale outer generation");
+        })
+      )
+    );
+    await coordinator.start(controller.signal);
+    watcher.getStartupBlockers.mockImplementation(() => {
+      current = false;
+      return [];
+    });
+
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates concurrent reproof instead of allowing either call to publish health", async () => {
+    const deferred = createDeferred<void>();
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    watcher.waitForIdle.mockImplementationOnce(() => deferred.promise);
+
+    const first = coordinator.reprove(controller.signal);
+    const firstRejection = expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await waitUntil(() => watcher.waitForIdle.mock.calls.length === 3);
+    const secondRejection = expect(coordinator.reprove(controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    deferred.resolve(undefined);
+
+    await Promise.all([firstRejection, secondRejection]);
+    expect(reconciler.reconcile).toHaveBeenCalledTimes(2);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it("aborts an active reproof when the original startup signal is cancelled", async () => {
+    const deferred = createDeferred<void>();
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    watcher.waitForIdle.mockImplementationOnce(() => deferred.promise);
+
+    const running = coordinator.reprove(controller.signal);
+    const rejection = expect(running).rejects.toMatchObject({ name: "AbortError" });
+    await waitUntil(() => watcher.waitForIdle.mock.calls.length === 3);
+    controller.abort();
+    deferred.resolve(undefined);
+
+    await rejection;
+    expect(reconciler.reconcile).toHaveBeenCalledTimes(2);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it.each(["different", "aborted"] as const)(
+    "invalidates a %s reproof signal without transferring session health",
+    async (mode) => {
+      const watcher = createWatcher();
+      const reconciler = createReconciler();
+      const startupController = new AbortController();
+      const otherController = new AbortController();
+      if (mode === "aborted") {
+        otherController.abort();
+      }
+      const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+        createDependencies(watcher, reconciler)
+      );
+      await coordinator.start(startupController.signal);
+
+      await expect(coordinator.reprove(otherController.signal)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      expect(watcher.close).toHaveBeenCalledTimes(1);
+      expect(reconciler.close).toHaveBeenCalledTimes(1);
+      expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
     }
   );
 

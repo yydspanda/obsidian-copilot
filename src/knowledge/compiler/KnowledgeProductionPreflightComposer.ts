@@ -14,8 +14,14 @@ import {
   type ProjectKnowledgePipelineSettingsInput,
 } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 import type { KnowledgeBundlePipelineProfile } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
+import { canonicalizeJson } from "@/knowledge/model/fingerprint";
+import type { JsonValue } from "@/knowledge/model/types";
 
 const MAX_GENERATION_RECORDS = 10_000;
+
+// Capturing the frozen base method prevents an authentic subclass from replacing the WeakMap check.
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const PROJECT_PROFILE_SOURCE_RESOLVE = ProjectKnowledgePipelineProfileSource.prototype.resolve;
 
 /** Hydrated settings projection consumed by one production Knowledge generation. */
 export interface KnowledgeProductionPreflightSettingsInput
@@ -34,6 +40,14 @@ export interface KnowledgeProductionPreflightComposerInput {
   settings: KnowledgeProductionPreflightSettingsInput;
   /** Static compiler, parser, prompt, provider, and output behavior. */
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
+  /**
+   * Optional authentic secret-free profile source shared with the plugin workflow lease.
+   *
+   * Direct Core callers may omit this field and let the composer capture one from
+   * `projects`, `settings`, and `profileOptions`. Production plugin composition
+   * supplies the exact instance retained by its generation-owned workflow lease.
+   */
+  profileSource?: ProjectKnowledgePipelineProfileSource;
   /** Native renderer fetch capability passed through route construction but never called. */
   fetchPort: KnowledgeDeepSeekFetchPort;
 }
@@ -107,6 +121,65 @@ function readDataProperty(value: unknown, key: string): unknown {
   } catch {
     throw new KnowledgeProductionPreflightFailure("input_invalid");
   }
+}
+
+/**
+ * Resolves the authentic profile source used by one preflight generation.
+ *
+ * A supplied source is never replaced by the independently captured baseline:
+ * production relies on object identity to bind preflight to its workflow lease.
+ * Calling `resolve` later also re-proves the source's module-private WeakMap
+ * authority, so a prototype-forged instance still fails closed.
+ */
+function resolveProfileSource(
+  input: KnowledgeProductionPreflightComposerInput,
+  baseline: ProjectKnowledgePipelineProfileSource
+): ProjectKnowledgePipelineProfileSource {
+  const descriptor = Object.getOwnPropertyDescriptor(input, "profileSource");
+  if (descriptor) {
+    if (
+      !("value" in descriptor) ||
+      !descriptor.enumerable ||
+      !(descriptor.value instanceof ProjectKnowledgePipelineProfileSource)
+    ) {
+      throw new KnowledgeProductionPreflightFailure("input_invalid");
+    }
+    return descriptor.value;
+  }
+  return baseline;
+}
+
+/**
+ * Re-proves that a shared authentic source describes this exact input snapshot.
+ *
+ * The shared object identity remains available to the workflow lease, while an
+ * independently captured baseline prevents a valid source from another plugin
+ * generation from authorizing different project, settings, or static behavior.
+ */
+function assertProfileMatchesBaseline(
+  profile: KnowledgeBundlePipelineProfile,
+  baselineSource: ProjectKnowledgePipelineProfileSource,
+  owner: ConfiguredProjectKnowledgeBundle
+): void {
+  try {
+    const baselineProfile = resolveProfile(baselineSource, owner);
+    if (
+      canonicalizeJson(profile as unknown as JsonValue) !==
+      canonicalizeJson(baselineProfile as unknown as JsonValue)
+    ) {
+      throw new TypeError("The shared profile source does not match the input snapshot");
+    }
+  } catch {
+    throw new KnowledgeProductionPreflightFailure("input_invalid");
+  }
+}
+
+/** Resolves through the frozen base implementation so subclass overrides cannot bypass authority. */
+function resolveProfile(
+  source: ProjectKnowledgePipelineProfileSource,
+  owner: ConfiguredProjectKnowledgeBundle
+): KnowledgeBundlePipelineProfile {
+  return Reflect.apply(PROJECT_PROFILE_SOURCE_RESOLVE, source, [owner]);
 }
 
 /** Reads one optional model credential without evaluating accessors. */
@@ -262,15 +335,19 @@ function composeGeneration(
       throw new KnowledgeProductionPreflightFailure("route_dependency_invalid");
     }
 
-    const profileSource = new ProjectKnowledgePipelineProfileSource(
+    const baselineProfileSource = new ProjectKnowledgePipelineProfileSource(
       projects as readonly ProjectKnowledgePipelineProjectInput[],
       settings as KnowledgeProductionPreflightSettingsInput,
       profileOptions as ProjectKnowledgePipelineProfileSourceOptions
     );
+    const profileSource = resolveProfileSource(input, baselineProfileSource);
     let bundleCount = 0;
     const bundleIds = new Set<string>();
     for (const owner of owners as readonly ConfiguredProjectKnowledgeBundle[]) {
-      const profile = profileSource.resolve(owner);
+      const profile = resolveProfile(profileSource, owner);
+      if (profileSource !== baselineProfileSource) {
+        assertProfileMatchesBaseline(profile, baselineProfileSource, owner);
+      }
       if (
         profile.model.provider !== "deepseek" ||
         !isCurrentDeepSeekModelIdentity(profile.model.model)
