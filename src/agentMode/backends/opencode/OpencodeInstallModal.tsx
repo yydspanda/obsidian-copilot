@@ -11,51 +11,19 @@ import {
 } from "@/agentMode/backends/opencode/OpencodeBinaryManager";
 import type { OpencodeBinaryManager } from "@/agentMode/backends/opencode/OpencodeBinaryManager";
 import { detectOpencodeCliPath } from "@/agentMode/backends/opencode/descriptor";
+import { phaseLabel, phaseProgress } from "@/agentMode/backends/opencode/installProgress";
 import { ReactModal } from "@/components/modals/ReactModal";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { formatBinaryPathForDisplay } from "@/utils/binaryPath";
+import { formatBytes } from "@/utils/formatBytes";
 import { OPENCODE_PINNED_VERSION } from "@/constants";
 import { cn } from "@/lib/utils";
 import { logError } from "@/logger";
 import { useSettingsValue } from "@/settings/model";
 import { App, Notice } from "obsidian";
 import React from "react";
-
-const formatBytes = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-};
-
-const phaseLabel = (e: ProgressEvent | null): string => {
-  if (!e) return "Starting…";
-  switch (e.phase) {
-    case "resolve":
-      return e.message;
-    case "download":
-      if (e.total) {
-        const pct = Math.floor((e.received / e.total) * 100);
-        return `Downloading ${e.assetName} — ${formatBytes(e.received)} / ${formatBytes(e.total)} (${pct}%)`;
-      }
-      return `Downloading ${e.assetName} — ${formatBytes(e.received)}`;
-    case "extract":
-      return e.message;
-    case "done":
-      return "Done";
-  }
-};
-
-const phaseProgress = (e: ProgressEvent | null): number | undefined => {
-  if (!e) return undefined;
-  if (e.phase === "download" && e.total) {
-    return Math.min(100, Math.floor((e.received / e.total) * 100));
-  }
-  if (e.phase === "extract") return 98;
-  if (e.phase === "done") return 100;
-  return undefined;
-};
 
 type RunState =
   | { kind: "idle" }
