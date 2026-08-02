@@ -62,6 +62,7 @@ export type KnowledgePluginBundleConfigLoadResult =
       kind: "configured";
       bundleIds: readonly string[];
       recovery?: KnowledgePluginRecoveryStartupPort;
+      observation?: KnowledgePluginObservationStartupPort;
     };
 
 /** Sanitized one-shot result returned by the production recovery boundary. */
@@ -80,6 +81,20 @@ export interface KnowledgePluginRecoveryStartupPort {
   /** Permanently closes this recovery generation and suppresses stale publication. */
   close(): void;
 }
+
+/** One long-lived observation capability started only after recovery is clear. */
+export interface KnowledgePluginObservationStartupPort {
+  /** Starts listener-first observation for the exact current startup generation. */
+  start(signal: AbortSignal): Promise<KnowledgePluginObservationStartupResult>;
+  /** Permanently closes the live watcher and suppresses stale publication. */
+  close(): void;
+}
+
+/** Sanitized observation result accepted by the startup barrier. */
+export type KnowledgePluginObservationStartupResult =
+  | Readonly<{ kind: "observation_converged"; scheduledCaptureCount: number }>
+  | Readonly<{ kind: "blocked"; blockerKinds: readonly string[] }>
+  | Readonly<{ kind: "diagnostic"; code: string }>;
 
 /** Read-only boundary for validated project knowledge Bundle configuration. */
 export interface KnowledgePluginBundleConfigPort {
@@ -194,6 +209,26 @@ function sanitizeRecoveryDiagnosticCode(code: unknown): string {
     : RECOVERY_RESULT_INVALID;
 }
 
+/** Accepts only a complete, value-free observation convergence result. */
+function isObservationConverged(
+  value: unknown
+): value is Readonly<{ kind: "observation_converged"; scheduledCaptureCount: number }> {
+  if (typeof value !== "object" || value === null) return false;
+  const kind = Object.getOwnPropertyDescriptor(value, "kind");
+  const scheduled = Object.getOwnPropertyDescriptor(value, "scheduledCaptureCount");
+  return (
+    kind !== undefined &&
+    "value" in kind &&
+    kind.enumerable === true &&
+    kind.value === "observation_converged" &&
+    scheduled !== undefined &&
+    "value" in scheduled &&
+    scheduled.enumerable === true &&
+    Number.isSafeInteger(scheduled.value) &&
+    scheduled.value >= 0
+  );
+}
+
 /** Finds a callable data method without evaluating accessors on an injected object. */
 function hasCallableDataMethod(value: object, key: string): boolean {
   try {
@@ -235,15 +270,16 @@ function sanitizeBundleIds(bundleIds: unknown): readonly string[] | undefined {
  * Coordinates plugin prerequisites and one exact recovery-only generation.
  *
  * Recovery is supplied as an opaque one-shot port only after strict Bundle and
- * zero-network production preflight validation. The barrier never receives a
- * startup release, Queue worker, model, watcher, no-journal action, or Wiki
- * generation capability. Even observed-clear recovery therefore remains
- * `workflow_adapters_unavailable`.
+ * zero-network production preflight validation. A separate observation port may
+ * be retained after observed-clear recovery, but the barrier never receives a
+ * startup release, Queue worker, model, no-journal action, or Wiki generation
+ * capability. The published state remains `workflow_adapters_unavailable`.
  */
 export class KnowledgePluginStartupBarrier {
   private generation = 0;
   private activeRun?: { generation: number; controller: AbortController };
   private activeRecovery?: KnowledgePluginRecoveryStartupPort;
+  private activeObservation?: KnowledgePluginObservationStartupPort;
   private state: KnowledgePluginStartupState;
   private readonly listeners = new Set<KnowledgePluginStartupStateListener>();
 
@@ -281,6 +317,7 @@ export class KnowledgePluginStartupBarrier {
    */
   async startAfterLayout(): Promise<void> {
     this.activeRun?.controller.abort();
+    this.closeActiveObservation();
     this.closeActiveRecovery();
     const generation = ++this.generation;
     const controller = new AbortController();
@@ -338,10 +375,11 @@ export class KnowledgePluginStartupBarrier {
    * pre-layout waiting phase for a future explicit rerun.
    */
   cancel(): void {
-    if (!this.activeRun && !this.activeRecovery) {
+    if (!this.activeRun && !this.activeRecovery && !this.activeObservation) {
       return;
     }
     this.activeRun?.controller.abort();
+    this.closeActiveObservation();
     this.closeActiveRecovery();
     const generation = ++this.generation;
     this.activeRun = undefined;
@@ -426,13 +464,21 @@ export class KnowledgePluginStartupBarrier {
       }
       const recovery = this.readRecoveryPort(result);
       if (recovery === null) {
+        this.closeObservationSafelyFromResult(result);
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
         return;
       }
       if (recovery) {
-        await this.runRecovery(generation, signal, bundleIds, recovery);
+        const observation = this.readObservationPort(result);
+        if (observation === null) {
+          this.closeObservationSafelyFromResult(result);
+          this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+          return;
+        }
+        await this.runRecovery(generation, signal, bundleIds, recovery, observation);
         return;
       }
+      this.closeObservationSafelyFromResult(result);
       this.publish(
         generation,
         freezeStartupState({
@@ -466,18 +512,49 @@ export class KnowledgePluginStartupBarrier {
     return candidate as KnowledgePluginRecoveryStartupPort;
   }
 
+  /** Reads an optional own data observation port without invoking an accessor. */
+  private readObservationPort(
+    result: Extract<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
+  ): KnowledgePluginObservationStartupPort | undefined | null {
+    const descriptor = Object.getOwnPropertyDescriptor(result, "observation");
+    if (!descriptor) return undefined;
+    const candidate: unknown = "value" in descriptor ? descriptor.value : undefined;
+    if (candidate === undefined) return undefined;
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      !hasCallableDataMethod(candidate, "start") ||
+      !hasCallableDataMethod(candidate, "close")
+    ) {
+      return null;
+    }
+    return candidate as KnowledgePluginObservationStartupPort;
+  }
+
+  /** Closes an observation supplied by a malformed or recovery-only result. */
+  private closeObservationSafelyFromResult(
+    result: Extract<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
+  ): void {
+    const observation = this.readObservationPort(result);
+    if (observation && observation !== this.activeObservation) {
+      this.closeObservationSafely(observation);
+    }
+  }
+
   /** Runs and closes one recovery generation before publishing its sanitized result. */
   private async runRecovery(
     generation: number,
     signal: AbortSignal,
     bundleIds: readonly string[],
-    recovery: KnowledgePluginRecoveryStartupPort
+    recovery: KnowledgePluginRecoveryStartupPort,
+    observation?: KnowledgePluginObservationStartupPort
   ): Promise<void> {
     this.activeRecovery = recovery;
     let result: KnowledgePluginRecoveryStartupResult;
     try {
       result = await recovery.start(signal);
     } catch {
+      this.closeObservationSafely(observation);
       if (this.isCurrent(generation, signal)) {
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_FAILED);
       }
@@ -490,13 +567,21 @@ export class KnowledgePluginStartupBarrier {
     }
 
     if (!this.isCurrent(generation, signal)) {
+      this.closeObservationSafely(observation);
       return;
     }
     if (typeof result !== "object" || result === null || typeof result.kind !== "string") {
+      this.closeObservationSafely(observation);
       this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
       return;
     }
     if (result.kind === "observed_clear") {
+      if (
+        observation &&
+        !(await this.startObservation(generation, signal, bundleIds, observation))
+      ) {
+        return;
+      }
       this.publish(
         generation,
         freezeStartupState({
@@ -508,11 +593,13 @@ export class KnowledgePluginStartupBarrier {
       return;
     }
     if (result.kind === "unavailable") {
+      this.closeObservationSafely(observation);
       const diagnosticCode = sanitizeRecoveryDiagnosticCode(result.diagnosticCode);
       this.publishRecoveryUnavailable(generation, bundleIds, diagnosticCode);
       return;
     }
     if (result.kind === "attention_required" || result.kind === "blocked") {
+      this.closeObservationSafely(observation);
       if (!Array.isArray(result.attentionKinds)) {
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
         return;
@@ -536,7 +623,38 @@ export class KnowledgePluginStartupBarrier {
       );
       return;
     }
+    this.closeObservationSafely(observation);
     this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+  }
+
+  /** Starts and retains one observation session after a clear recovery result. */
+  private async startObservation(
+    generation: number,
+    signal: AbortSignal,
+    bundleIds: readonly string[],
+    observation: KnowledgePluginObservationStartupPort
+  ): Promise<boolean> {
+    this.activeObservation = observation;
+    let result: KnowledgePluginObservationStartupResult;
+    try {
+      result = await observation.start(signal);
+    } catch {
+      this.closeActiveObservation();
+      if (this.isCurrent(generation, signal)) {
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_FAILED);
+      }
+      return false;
+    }
+    if (!this.isCurrent(generation, signal)) {
+      this.closeActiveObservation();
+      return false;
+    }
+    if (!isObservationConverged(result)) {
+      this.closeActiveObservation();
+      this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+      return false;
+    }
+    return true;
   }
 
   /** Publishes one fixed-code recovery failure without reclassifying Bundle configuration. */
@@ -562,6 +680,27 @@ export class KnowledgePluginStartupBarrier {
     this.activeRecovery = undefined;
     if (recovery) {
       this.closeRecoverySafely(recovery);
+    }
+  }
+
+  /** Closes the current long-lived observation capability during replacement/cancellation. */
+  private closeActiveObservation(): void {
+    const observation = this.activeObservation;
+    this.activeObservation = undefined;
+    if (observation) {
+      this.closeObservationSafely(observation);
+    }
+  }
+
+  /** Isolates observation cleanup so generation invalidation remains authoritative. */
+  private closeObservationSafely(
+    observation: KnowledgePluginObservationStartupPort | undefined
+  ): void {
+    if (!observation) return;
+    try {
+      observation.close();
+    } catch {
+      // Observation authority is already revoked by generation and signal checks.
     }
   }
 

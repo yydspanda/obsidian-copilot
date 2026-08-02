@@ -4,6 +4,8 @@ import {
   type KnowledgePluginBundleConfigLoadResult,
   type KnowledgePluginRecoveryStartupPort,
   type KnowledgePluginRecoveryStartupResult,
+  type KnowledgePluginObservationStartupPort,
+  type KnowledgePluginObservationStartupResult,
   type KnowledgePluginStartupState,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
@@ -39,6 +41,19 @@ function createRecovery(
   })
 ): KnowledgePluginRecoveryStartupPort & {
   start: jest.Mock<Promise<KnowledgePluginRecoveryStartupResult>, [AbortSignal]>;
+  close: jest.Mock<void, []>;
+} {
+  return { start: jest.fn(start), close: jest.fn() };
+}
+
+/** Creates an observable long-lived observation port. */
+function createObservation(
+  start: (signal: AbortSignal) => Promise<KnowledgePluginObservationStartupResult> = async () => ({
+    kind: "observation_converged",
+    scheduledCaptureCount: 1,
+  })
+): KnowledgePluginObservationStartupPort & {
+  start: jest.Mock<Promise<KnowledgePluginObservationStartupResult>, [AbortSignal]>;
   close: jest.Mock<void, []>;
 } {
   return { start: jest.fn(start), close: jest.fn() };
@@ -163,6 +178,74 @@ describe("KnowledgePluginStartupBarrier", () => {
       generation: 1,
       status: "workflow_adapters_unavailable",
       bundleIds: ["personal"],
+    });
+  });
+
+  it("starts observation only after clear recovery and retains it until cancellation", async () => {
+    const events: string[] = [];
+    const recovery = createRecovery(async () => {
+      events.push("recovery:start");
+      return { kind: "observed_clear" };
+    });
+    recovery.close.mockImplementation(() => events.push("recovery:close"));
+    const observation = createObservation(async (signal) => {
+      expect(signal.aborted).toBe(false);
+      events.push("observation:start");
+      return { kind: "observation_converged", scheduledCaptureCount: 1 };
+    });
+    observation.close.mockImplementation(() => events.push("observation:close"));
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: async () => ({
+          kind: "configured",
+          bundleIds: ["personal"],
+          recovery,
+          observation,
+        }),
+      },
+      studio: {
+        setUnavailable: (state) => events.push(`studio:${state.status}`),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(events).toEqual([
+      "studio:waiting_for_layout",
+      "studio:waiting_for_layout",
+      "recovery:start",
+      "recovery:close",
+      "observation:start",
+      "studio:workflow_adapters_unavailable",
+    ]);
+    expect(observation.close).not.toHaveBeenCalled();
+
+    barrier.cancel();
+
+    expect(observation.close).toHaveBeenCalledTimes(1);
+    expect(barrier.getState()).toEqual({ generation: 2, status: "waiting_for_layout" });
+  });
+
+  it("closes observation when clear recovery is followed by a malformed result", async () => {
+    const recovery = createRecovery();
+    const observation = createObservation(async () => ({
+      kind: "observation_converged",
+      scheduledCaptureCount: -1,
+    }));
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: async () => ({ kind: "configured", bundleIds: ["personal"], recovery, observation }),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(observation.close).toHaveBeenCalledTimes(1);
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "recovery_unavailable",
+      bundleIds: ["personal"],
+      diagnosticCodes: ["recovery_result_invalid"],
     });
   });
 
