@@ -86,6 +86,8 @@ export interface KnowledgePluginRecoveryStartupPort {
 export interface KnowledgePluginObservationStartupPort {
   /** Starts listener-first observation for the exact current startup generation. */
   start(signal: AbortSignal): Promise<KnowledgePluginObservationStartupResult>;
+  /** Re-proves observation and conditionally releases the held startup Queue. */
+  release?(signal: AbortSignal): Promise<KnowledgePluginObservationReleaseResult>;
   /** Permanently closes the live watcher and suppresses stale publication. */
   close(): void;
 }
@@ -95,6 +97,12 @@ export type KnowledgePluginObservationStartupResult =
   | Readonly<{ kind: "observation_converged"; scheduledCaptureCount: number }>
   | Readonly<{ kind: "blocked"; blockerKinds: readonly string[] }>
   | Readonly<{ kind: "diagnostic"; code: string }>;
+
+/** Sanitized result of the optional fresh Gate/release hand-off. */
+export type KnowledgePluginObservationReleaseResult =
+  | Readonly<{ kind: "released"; bundleIds: readonly string[] }>
+  | Readonly<{ kind: "blocked"; bundleId: string }>
+  | Readonly<{ kind: "observation_changed"; bundleId: string }>;
 
 /** Read-only boundary for validated project knowledge Bundle configuration. */
 export interface KnowledgePluginBundleConfigPort {
@@ -653,6 +661,21 @@ export class KnowledgePluginStartupBarrier {
       this.closeActiveObservation();
       this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
       return false;
+    }
+    if (typeof observation.release === "function") {
+      let releaseResult: KnowledgePluginObservationReleaseResult;
+      try {
+        releaseResult = await observation.release(signal);
+      } catch {
+        this.closeActiveObservation();
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_FAILED);
+        return false;
+      }
+      if (releaseResult.kind !== "released") {
+        this.closeActiveObservation();
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+        return false;
+      }
     }
     return true;
   }

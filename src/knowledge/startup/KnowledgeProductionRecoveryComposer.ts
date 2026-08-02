@@ -23,6 +23,7 @@ import {
   type KnowledgeStartupGateDisposition,
   type KnowledgeStartupGateResult,
 } from "@/knowledge/recovery/KnowledgeStartupGate";
+import { KnowledgeStartupReleaseCoordinator } from "@/knowledge/recovery/KnowledgeStartupRelease";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
 import { ReviewQueueStartupReconciler } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import {
@@ -33,6 +34,7 @@ import {
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
   KnowledgeRuntimeTransactionStorage,
+  KnowledgeRuntimeStartupReleasePort,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledgeFileStore";
 
@@ -61,6 +63,12 @@ export interface KnowledgeProductionRecoveryBundleResult {
   disposition: KnowledgeStartupGateDisposition;
   attentionKinds: readonly KnowledgeStartupAttention["kind"][];
 }
+
+/** Sanitized outcome of a fresh Gate plus conditional release pass. */
+export type KnowledgeProductionFreshReleaseResult =
+  | Readonly<{ kind: "released"; bundleIds: readonly string[] }>
+  | Readonly<{ kind: "blocked"; bundleId: string }>
+  | Readonly<{ kind: "observation_changed"; bundleId: string }>;
 
 /** Immutable lifecycle state published by the recovery-only composer. */
 export type KnowledgeProductionRecoveryState =
@@ -133,6 +141,7 @@ interface KnowledgeProductionRecoveryComposition {
   bundlesById: ReadonlyMap<string, KnowledgeBundleConfig>;
   transaction: ChangeSetTransaction;
   gate: KnowledgeStartupGate;
+  release: KnowledgeStartupReleaseCoordinator;
 }
 
 interface KnowledgeProductionRecoveryInternalState {
@@ -303,11 +312,15 @@ function composeRecovery(
     reviews: new ReviewQueueStartupReconciler({ reviews, queue }),
     accepted: new KnowledgeRuntimeNoJournalApplyRecoveryPort(runtime),
   });
+  const release = new KnowledgeStartupReleaseCoordinator(
+    new KnowledgeRuntimeStartupReleasePort(runtime)
+  );
   return Object.freeze({
     bundles,
     bundlesById: new Map(bundles.map((bundle) => [bundle.id, bundle])),
     transaction,
     gate,
+    release,
   });
 }
 
@@ -528,6 +541,36 @@ export class KnowledgeProductionRecoveryComposer {
       });
     internal.operationTail = work;
     await work;
+  }
+
+  /** Runs a fresh Gate and conditionally releases every configured Bundle Queue. */
+  async releaseFresh(assertCurrent: () => void): Promise<KnowledgeProductionFreshReleaseResult> {
+    const internal = composerStates.get(this);
+    if (!internal || internal.closed || !internal.composition) {
+      throw new KnowledgeProductionRecoveryGenerationError();
+    }
+    const { composition } = internal;
+    for (const bundle of composition.bundles) {
+      assertCurrent();
+      const gateResult = await composition.gate.run(bundle, assertCurrent);
+      assertCurrent();
+      if (gateResult.disposition !== "observed_clear") {
+        return {
+          kind: "blocked",
+          bundleId: bundle.id,
+        };
+      }
+      const result = await composition.release.release(gateResult);
+      assertCurrent();
+      if (result.kind === "released" || result.kind === "unchanged") {
+        continue;
+      }
+      if (result.kind === "observation_changed") {
+        return { kind: "observation_changed", bundleId: bundle.id };
+      }
+      return { kind: "blocked", bundleId: bundle.id };
+    }
+    return { kind: "released", bundleIds: Object.freeze(composition.bundles.map(({ id }) => id)) };
   }
 
   /** Permanently closes capabilities and prevents every stale completion from publishing. */

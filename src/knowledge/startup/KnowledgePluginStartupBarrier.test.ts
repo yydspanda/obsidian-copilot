@@ -6,6 +6,7 @@ import {
   type KnowledgePluginRecoveryStartupResult,
   type KnowledgePluginObservationStartupPort,
   type KnowledgePluginObservationStartupResult,
+  type KnowledgePluginObservationReleaseResult,
   type KnowledgePluginStartupState,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
@@ -224,6 +225,36 @@ describe("KnowledgePluginStartupBarrier", () => {
 
     expect(observation.close).toHaveBeenCalledTimes(1);
     expect(barrier.getState()).toEqual({ generation: 2, status: "waiting_for_layout" });
+  });
+
+  it("performs an optional fresh observation release after convergence", async () => {
+    const events: string[] = [];
+    const recovery = createRecovery();
+    const observation = createObservation();
+    const release = jest.fn<Promise<KnowledgePluginObservationReleaseResult>, [AbortSignal]>(
+      async () => {
+        events.push("release");
+        return { kind: "released", bundleIds: ["personal"] };
+      }
+    );
+    const port = { ...observation, release };
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: async () => ({
+          kind: "configured",
+          bundleIds: ["personal"],
+          recovery,
+          observation: port,
+        }),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["release"]);
+    expect(observation.close).not.toHaveBeenCalled();
+    barrier.cancel();
   });
 
   it("closes observation when clear recovery is followed by a malformed result", async () => {

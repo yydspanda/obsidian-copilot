@@ -37,6 +37,7 @@ import { initializeKnowledgeRuntimeForCurrentGeneration } from "@/knowledge/star
 import {
   KnowledgePluginStartupBarrier,
   type KnowledgePluginBundleConfigLoadResult,
+  type KnowledgePluginObservationStartupPort,
   type KnowledgePluginRecoveryStartupPort,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 import { KnowledgeStudioStartupAvailabilityAdapter } from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
@@ -147,7 +148,8 @@ export default class CopilotPlugin extends Plugin {
   private vaultDataManager?: VaultDataManager;
   private knowledgeRuntime?: KnowledgeRuntimeStore;
   private knowledgeProductionRecovery?: KnowledgeProductionRecoveryComposer;
-  private knowledgeProductionObservation?: KnowledgeProductionObservationComposer;
+  private knowledgeProductionObservation?: KnowledgePluginObservationStartupPort;
+  private knowledgeProductionRelease?: KnowledgeProductionRecoveryComposer;
   private knowledgeProjectRecordsUnsubscriber?: () => void;
   private readonly knowledgeRendererFetchPort = captureKnowledgeRendererFetchPort();
   private readonly knowledgeProductionPreflightLifecycle =
@@ -534,7 +536,7 @@ export default class CopilotPlugin extends Plugin {
   private createKnowledgeProductionObservationPort(
     admission: KnowledgePluginProductionPreflightAdmission,
     startupSignal: AbortSignal
-  ): KnowledgeProductionObservationComposer {
+  ): KnowledgePluginObservationStartupPort {
     const runtime = this.knowledgeRuntime;
     if (!runtime) {
       throw new DOMException("The operation was aborted", "AbortError");
@@ -544,15 +546,48 @@ export default class CopilotPlugin extends Plugin {
       runtime,
       workflowLease: admission.workflowLease,
     });
+    const releaseComposer = new KnowledgeProductionRecoveryComposer({
+      runtime,
+      vault: this.app.vault,
+      bundles: admission.owners.map(({ config }) => config),
+    });
     try {
       throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
       this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
     } catch (error) {
       candidate.close();
+      releaseComposer.close();
       throw error;
     }
-    this.knowledgeProductionObservation = candidate;
-    return candidate;
+    const port: KnowledgePluginObservationStartupPort = {
+      start: (signal) => candidate.start(signal),
+      release: async (signal) => {
+        const reproof = await candidate.reprove(signal);
+        if (reproof.kind !== "observation_reproved") {
+          throw new DOMException("The operation was aborted", "AbortError");
+        }
+        candidate.assertHealthy();
+        const result = await releaseComposer.releaseFresh(() => {
+          throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+          this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
+          candidate.assertHealthy();
+        });
+        return result;
+      },
+      close: () => {
+        candidate.close();
+        releaseComposer.close();
+        if (this.knowledgeProductionObservation === port) {
+          this.knowledgeProductionObservation = undefined;
+        }
+        if (this.knowledgeProductionRelease === releaseComposer) {
+          this.knowledgeProductionRelease = undefined;
+        }
+      },
+    };
+    this.knowledgeProductionObservation = port;
+    this.knowledgeProductionRelease = releaseComposer;
+    return port;
   }
 
   /** Requires a recovery candidate to retain exact plugin and preflight ownership. */
@@ -588,6 +623,8 @@ export default class CopilotPlugin extends Plugin {
   private closeKnowledgeProductionObservation(): void {
     this.knowledgeProductionObservation?.close();
     this.knowledgeProductionObservation = undefined;
+    this.knowledgeProductionRelease?.close();
+    this.knowledgeProductionRelease = undefined;
   }
 
   /**
