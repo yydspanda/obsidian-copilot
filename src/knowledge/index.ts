@@ -65,6 +65,8 @@ export * from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
 export * from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 export * from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 export * from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
+export * from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator";
+export * from "@/knowledge/startup/KnowledgeSourceObservationStartupReconciler";
 export * from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
 export * from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 export * from "@/knowledge/ui/DelegatingKnowledgeStudioPort";

@@ -55,6 +55,8 @@ import {
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import { KnowledgeSourceObservationStartupCoordinator } from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator";
+import { KnowledgeSourceObservationStartupReconciler } from "@/knowledge/startup/KnowledgeSourceObservationStartupReconciler";
 
 const SCHEMA_BYTES = new TextEncoder().encode("# Test schema\r\n规则：精确字节\n");
 const SCHEMA_HASH = createSourceContentHash(SCHEMA_BYTES);
@@ -655,6 +657,131 @@ describe("ObsidianVaultSourceWatcher", () => {
     });
   });
 
+  it("can establish listener ownership before an explicit production crawl", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", encodeText("source"));
+    const handoff = new RecordingHandoff(harness.order);
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => "split-start-capture" }
+    );
+
+    watcher.startListening();
+
+    expect(harness.order).toEqual([
+      "listen:create",
+      "listen:modify",
+      "listen:delete",
+      "listen:rename",
+    ]);
+    expect(handoff.allocateCalls).toHaveLength(0);
+    expect(watcher.scan()).toBe(1);
+    await watcher.waitForIdle();
+    expect(handoff.allocateCalls).toEqual([
+      {
+        bundleId: "personal",
+        sourceId: "source-1",
+        captureId: "split-start-capture",
+      },
+    ]);
+  });
+
+  it("keeps start idempotent after the initial crawl has been activated", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", encodeText("source"));
+    const handoff = new RecordingHandoff();
+    let captureSequence = 0;
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => `idempotent-start-${++captureSequence}` }
+    );
+
+    watcher.start();
+    await watcher.waitForIdle();
+    watcher.start();
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls).toHaveLength(1);
+    expect(handoff.commitCalls).toHaveLength(1);
+    for (const name of ["create", "modify", "delete", "rename"] as const) {
+      expect(harness.handlers.get(name)?.size).toBe(1);
+    }
+  });
+
+  it("does not crawl a replacement plan during the listener-only startup phase", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/B.md", encodeText("replacement"));
+    const handoff = new RecordingHandoff();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource({ sourceId: "source-a", sourcePath: "Sources/A.md" })]),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => "replacement-before-crawl" }
+    );
+
+    watcher.startListening();
+    watcher.replaceWatchPlan(
+      createWatchPlan([createSource({ sourceId: "source-b", sourcePath: "Sources/B.md" })])
+    );
+
+    expect(handoff.allocateCalls).toHaveLength(0);
+    expect(watcher.getStartupBlockers()).toEqual([]);
+    expect(watcher.scan()).toBe(1);
+    await watcher.waitForIdle();
+    expect(handoff.allocateCalls).toEqual([
+      {
+        bundleId: "personal",
+        sourceId: "source-b",
+        captureId: "replacement-before-crawl",
+      },
+    ]);
+  });
+
+  it("crawls a replacement plan installed reentrantly while Vault files are loaded", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/A.md", encodeText("obsolete"));
+    harness.addFile("Sources/B.md", encodeText("current"));
+    const handoff = new RecordingHandoff();
+    const replacementPlan = createWatchPlan([
+      createSource({ sourceId: "source-b", sourcePath: "Sources/B.md" }),
+    ]);
+    let captureSequence = 0;
+    let getFilesCalls = 0;
+    let watcher!: ObsidianVaultSourceWatcher;
+    watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource({ sourceId: "source-a", sourcePath: "Sources/A.md" })]),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => `reentrant-crawl-${++captureSequence}` }
+    );
+    harness.vault.getFiles.mockImplementation(() => {
+      getFilesCalls += 1;
+      if (getFilesCalls === 1) {
+        watcher.replaceWatchPlan(replacementPlan);
+      }
+      return [...harness.loadedFiles.values()];
+    });
+
+    watcher.start();
+    await watcher.waitForIdle();
+    watcher.start();
+
+    expect(harness.vault.getFiles).toHaveBeenCalledTimes(2);
+    expect(handoff.allocateCalls).toEqual([
+      {
+        bundleId: "personal",
+        sourceId: "source-b",
+        captureId: "reentrant-crawl-1",
+      },
+    ]);
+    expect(handoff.commitCalls).toHaveLength(1);
+    expect(watcher.getStartupBlockers()).toEqual([]);
+  });
+
   it("copies injected exact bytes without calling an instance-level slice override", async () => {
     const harness = new VaultHarness();
     const app = harness.createApp();
@@ -889,6 +1016,38 @@ describe("ObsidianVaultSourceWatcher", () => {
       captureId: "read-failure",
       stage: "read",
     });
+    expect(watcher.getStartupBlockers()).toEqual([
+      {
+        kind: "capture_failed",
+        stage: "read",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+  });
+
+  it("blocks readiness when capture preparation cannot issue a valid identity", () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", createBuffer(1));
+    const handoff = new RecordingHandoff();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => "" }
+    );
+
+    watcher.start();
+
+    expect(handoff.allocateCalls).toHaveLength(0);
+    expect(watcher.getStartupBlockers()).toEqual([
+      {
+        kind: "capture_failed",
+        stage: "prepare",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
   });
 
   it("captures the event path synchronously even if Obsidian mutates TFile.path during allocate", async () => {
@@ -1109,6 +1268,12 @@ describe("ObsidianVaultSourceWatcher", () => {
       bundleId: "personal",
       sourceId: "source-1",
     });
+    expect(watcher.getStartupBlockers()).toContainEqual({
+      kind: "source_change_unsupported",
+      change: "delete",
+      bundleId: "personal",
+      sourceId: "source-1",
+    });
 
     harness.readBinaryImplementation = undefined;
     watcher.replaceWatchPlan(createWatchPlan([createSource()]));
@@ -1253,6 +1418,29 @@ describe("ObsidianVaultSourceWatcher", () => {
     expect(harness.handlers.get("modify")?.size).toBe(0);
 
     harness.failOnEventRegistration = undefined;
+    expect(() => watcher.start()).not.toThrow();
+    for (const name of ["create", "modify", "delete", "rename"] as const) {
+      expect(harness.handlers.get(name)?.size).toBe(1);
+    }
+  });
+
+  it("rolls back listener ownership when the initial Vault crawl throws", () => {
+    const harness = new VaultHarness();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([]),
+      new Map()
+    );
+    harness.vault.getFiles.mockImplementationOnce(() => {
+      throw new Error("fake crawl failure");
+    });
+
+    expect(() => watcher.start()).toThrow("fake crawl failure");
+    expect(harness.vault.offref).toHaveBeenCalledTimes(4);
+    for (const name of ["create", "modify", "delete", "rename"] as const) {
+      expect(harness.handlers.get(name)?.size).toBe(0);
+    }
+
     expect(() => watcher.start()).not.toThrow();
     for (const name of ["create", "modify", "delete", "rename"] as const) {
       expect(harness.handlers.get(name)?.size).toBe(1);
@@ -1753,7 +1941,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     });
   });
 
-  it("reports a startup-missing source without quarantining a later create", async () => {
+  it("quarantines a startup-missing source until a new plan generation revalidates it", async () => {
     const harness = new VaultHarness();
     const handoff = new RecordingHandoff();
     const sink = new RecordingSink();
@@ -1773,6 +1961,9 @@ describe("ObsidianVaultSourceWatcher", () => {
     expect(sink.notifications).toEqual([
       { kind: "source_missing", bundleId: "personal", sourceId: "source-1" },
     ]);
+    expect(watcher.getStartupBlockers()).toEqual([
+      { kind: "source_missing", bundleId: "personal", sourceId: "source-1" },
+    ]);
     expect(harness.order.slice(0, 4)).toEqual([
       "listen:create",
       "listen:modify",
@@ -1784,6 +1975,11 @@ describe("ObsidianVaultSourceWatcher", () => {
     harness.trigger("create", created);
     await watcher.waitForIdle();
 
+    expect(handoff.allocateCalls).toHaveLength(0);
+
+    watcher.replaceWatchPlan(createWatchPlan([createSource()]));
+    await watcher.waitForIdle();
+
     expect(handoff.allocateCalls).toEqual([
       {
         bundleId: "personal",
@@ -1792,6 +1988,144 @@ describe("ObsidianVaultSourceWatcher", () => {
       },
     ]);
     expect(handoff.commitCalls).toHaveLength(1);
+    expect(watcher.getStartupBlockers()).toEqual([]);
+  });
+
+  it("blocks case-only source drift and Windows-key collisions during startup crawl", () => {
+    const caseHarness = new VaultHarness();
+    caseHarness.addFile("sources/研究.md", createBuffer(1));
+    const caseHandoff = new RecordingHandoff();
+    const caseWatcher = new ObsidianVaultSourceWatcher(
+      caseHarness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", caseHandoff]])
+    );
+
+    caseWatcher.start();
+
+    expect(caseHandoff.allocateCalls).toHaveLength(0);
+    expect(caseWatcher.getStartupBlockers()).toEqual([
+      {
+        kind: "source_path_invalid",
+        reason: "case_mismatch",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+
+    const collisionHarness = new VaultHarness();
+    collisionHarness.addFile("Sources/研究.md", createBuffer(1));
+    collisionHarness.addFile("sources/研究.md", createBuffer(2));
+    const collisionHandoff = new RecordingHandoff();
+    const collisionWatcher = new ObsidianVaultSourceWatcher(
+      collisionHarness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", collisionHandoff]])
+    );
+
+    collisionWatcher.start();
+
+    expect(collisionHandoff.allocateCalls).toHaveLength(0);
+    expect(collisionWatcher.getStartupBlockers()).toEqual([
+      {
+        kind: "source_path_invalid",
+        reason: "windows_collision",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+  });
+
+  it("converges allocated and drifted bound restart work through a newer authoritative crawl", async () => {
+    const runtime = new KnowledgeRuntimeStore(new MemoryAtomicRuntimeFile(), {
+      opaqueIdFactory: (() => {
+        let id = 0;
+        return () => (++id).toString(16).padStart(32, "0");
+      })(),
+      clock: (() => {
+        let now = 100;
+        return () => ++now;
+      })(),
+    });
+    await runtime.initialize();
+    const storage = new KnowledgeRuntimeQueueStorage(runtime);
+    const queue = new IngestQueue(
+      storage,
+      {
+        /** Fails if observation startup unexpectedly starts Queue execution. */
+        execute: async () => {
+          throw new Error("Observation startup must not run Queue work");
+        },
+      },
+      { clock: () => 1_000, jobIdFactory: () => "job-authoritative-crawl" }
+    );
+    const revisions = new KnowledgeRuntimeInputRevisionAllocator(runtime);
+    const observations = new KnowledgeRuntimeInputObservationBinder(runtime);
+    const handoff = new SourceObservationHandoff(revisions, observations, queue);
+    const staleBytes = createBuffer(1);
+    const currentBytes = createBuffer(2);
+    const stale = await revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "restart-bound",
+    });
+    await observations.bind({
+      observationToken: stale.observationToken,
+      sourceContentHash: createSourceContentHash(staleBytes),
+      pipelineFingerprint: PIPELINE_A,
+    });
+    await revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "restart-allocated",
+    });
+
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", currentBytes);
+    const app = harness.createApp();
+    const plan = createWatchPlan([createSource()]);
+    const watcher = new ObsidianVaultSourceWatcher(app, plan, new Map([["personal", handoff]]), {
+      captureIdFactory: () => "authoritative-crawl",
+    });
+    const reconciler = new KnowledgeSourceObservationStartupReconciler({
+      watchPlan: plan,
+      artifactReader: new ObsidianExactSourceArtifactReader(app),
+      handoffs: new Map([["personal", handoff]]),
+    });
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator({
+      watcher,
+      reconciler,
+      assertCurrent: () => undefined,
+    });
+
+    await expect(coordinator.start(new AbortController().signal)).resolves.toEqual({
+      kind: "observation_converged",
+      scheduledCaptureCount: 1,
+    });
+    await expect(handoff.loadRecoveryWork("personal")).resolves.toEqual([]);
+    await expect(queue.load("personal")).resolves.toMatchObject({
+      sourceHighWatermarks: [
+        {
+          sourceId: "source-1",
+          inputRevision: 3,
+          sourceContentHash: createSourceContentHash(currentBytes),
+          pipelineFingerprint: PIPELINE_A,
+        },
+      ],
+      jobs: [
+        {
+          sourceId: "source-1",
+          inputRevision: 3,
+          sourceContentHash: createSourceContentHash(currentBytes),
+          status: "pending",
+        },
+      ],
+    });
+
+    coordinator.close();
+    for (const name of ["create", "modify", "delete", "rename"] as const) {
+      expect(harness.handlers.get(name)?.size).toBe(0);
+    }
   });
 
   it("converges out-of-order rapid modifies through Runtime v3 and Queue v5 authority", async () => {
@@ -1849,7 +2183,7 @@ describe("ObsidianVaultSourceWatcher", () => {
       }
     );
     harness.loadedFiles.clear();
-    watcher.start();
+    watcher.startListening();
     harness.loadedFiles.set(file.path, file);
 
     harness.trigger("modify", file);

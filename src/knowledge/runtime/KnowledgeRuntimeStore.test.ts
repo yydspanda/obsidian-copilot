@@ -4948,6 +4948,44 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await harness.file.read()).toBe(before);
   });
 
+  it("blocks startup release while an allocated observation still needs capture settlement", async () => {
+    const harness = await createHarness();
+    await harness.queue.write("personal", createStartupPausedQueue(1), null);
+    await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "startup-allocated-observation",
+    });
+    const request = await createStartupReleaseRequest(harness);
+    const before = await harness.file.read();
+
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+      reason: "source_observation_pending",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("maps another Bundle's allocated observation to the global recovery blocker", async () => {
+    const harness = await createHarness();
+    await harness.queue.write("personal", createStartupPausedQueue(1), null);
+    await harness.revisions.allocate({
+      bundleId: "other",
+      sourceId: "source-1",
+      captureId: "other-bundle-allocated-observation",
+    });
+    const request = await createStartupReleaseRequest(harness);
+    const before = await harness.file.read();
+
+    await expect(harness.release.release(request)).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+      reason: "other_bundle_apply_recovery_present",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
   it("serializes concurrent observation allocation without duplicate revisions", async () => {
     const harness = await createHarness();
 

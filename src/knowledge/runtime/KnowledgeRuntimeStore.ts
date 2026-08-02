@@ -3714,10 +3714,12 @@ export class KnowledgeRuntimeStore {
       }
 
       for (const bundle of state.inputRevisions) {
-        const hasBoundObservation = bundle.sources.some((source) =>
-          source.observations.some((observation) => observation.status === "bound")
+        const hasPendingObservation = bundle.sources.some((source) =>
+          source.observations.some(
+            (observation) => observation.status === "allocated" || observation.status === "bound"
+          )
         );
-        if (hasBoundObservation) {
+        if (hasPendingObservation) {
           return {
             value: {
               kind: "blocked",

@@ -68,6 +68,38 @@ export type VaultSourceWatcherNotification =
       sourceId: string;
     }
   | {
+      kind: "source_path_invalid";
+      reason: "case_mismatch" | "windows_collision";
+      bundleId: string;
+      sourceId: string;
+    }
+  | {
+      kind: "source_change_unsupported";
+      change: "delete" | "rename";
+      bundleId: string;
+      sourceId: string;
+    };
+
+/** Authoritative, sanitized reason that one watcher generation cannot become ready. */
+export type VaultSourceWatcherStartupBlocker =
+  | {
+      kind: "capture_failed";
+      stage: VaultSourceCaptureStage;
+      bundleId: string;
+      sourceId: string;
+    }
+  | {
+      kind: "source_missing";
+      bundleId: string;
+      sourceId: string;
+    }
+  | {
+      kind: "source_path_invalid";
+      reason: "case_mismatch" | "windows_collision";
+      bundleId: string;
+      sourceId: string;
+    }
+  | {
       kind: "source_change_unsupported";
       change: "delete" | "rename";
       bundleId: string;
@@ -235,6 +267,13 @@ function createBundleSourceKey(
   source: Pick<WatchedKnowledgeSource, "bundleId" | "sourceId">
 ): string {
   return `${source.bundleId.length}:${source.bundleId}${source.sourceId}`;
+}
+
+/** Compares stable identifiers without depending on the host locale. */
+function compareText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 /**
@@ -610,10 +649,12 @@ export class ObsidianVaultSourceWatcher {
   private lifecycleGeneration = 0;
   private watchPlanGeneration = 1;
   private started = false;
+  private crawlActivated = false;
   private closed = false;
   private readonly eventRefs: EventRef[] = [];
   private readonly pendingCaptures = new Set<Promise<void>>();
   private readonly quarantinedSourceKeys = new Set<string>();
+  private readonly startupBlockers = new Map<string, Readonly<VaultSourceWatcherStartupBlocker>>();
   private readonly sourceGenerations = new Map<string, number>();
   private readonly usedCaptureIds = new Set<string>();
 
@@ -670,6 +711,26 @@ export class ObsidianVaultSourceWatcher {
    * Registration is idempotent for one active lifecycle.
    */
   start(): void {
+    if (this.started && this.crawlActivated) {
+      return;
+    }
+    this.startListening();
+    try {
+      this.scan();
+    } catch (error) {
+      this.rollbackStart();
+      throw error;
+    }
+  }
+
+  /**
+   * Registers exact Vault listeners without beginning the initial crawl.
+   *
+   * Production startup uses this split boundary to recover durable allocated
+   * and bound observations after listener ownership is established but before
+   * the explicit full scan. Repeated calls are idempotent for one lifecycle.
+   */
+  startListening(): void {
     this.assertOpen();
     if (this.started) {
       return;
@@ -682,11 +743,8 @@ export class ObsidianVaultSourceWatcher {
       this.eventRefs.push(this.vault.on("modify", this.handleModify));
       this.eventRefs.push(this.vault.on("delete", this.handleDelete));
       this.eventRefs.push(this.vault.on("rename", this.handleRename));
-      this.scan();
     } catch (error) {
-      this.lifecycleGeneration += 1;
-      this.started = false;
-      this.releaseEventRefs();
+      this.rollbackStart();
       throw error;
     }
   }
@@ -711,8 +769,9 @@ export class ObsidianVaultSourceWatcher {
     this.watchPlanGeneration += 1;
     this.watchPlan = plan;
     this.quarantinedSourceKeys.clear();
+    this.startupBlockers.clear();
     this.sourceGenerations.clear();
-    if (this.started) {
+    if (this.started && this.crawlActivated) {
       this.scan();
     }
   }
@@ -727,9 +786,11 @@ export class ObsidianVaultSourceWatcher {
     const lifecycleGeneration = this.lifecycleGeneration;
     const watchPlanGeneration = this.watchPlanGeneration;
     const watchPlan = this.watchPlan;
-    const observedPathKeys = new Set<string>();
+    this.crawlActivated = true;
+    const files = this.vault.getFiles();
+    const filesByPathKey = new Map<string, Map<string, TFile>>();
     let scheduled = 0;
-    for (const file of this.vault.getFiles()) {
+    for (const file of files) {
       if (
         lifecycleGeneration !== this.lifecycleGeneration ||
         watchPlanGeneration !== this.watchPlanGeneration
@@ -738,15 +799,14 @@ export class ObsidianVaultSourceWatcher {
       }
       const parsed = parseVaultPath(file.path);
       if (parsed.ok) {
-        observedPathKeys.add(toWindowsPathKey(parsed.path));
+        const pathKey = toWindowsPathKey(parsed.path);
+        const matchingPaths = filesByPathKey.get(pathKey);
+        if (matchingPaths) {
+          matchingPaths.set(parsed.path, file);
+        } else {
+          filesByPathKey.set(pathKey, new Map([[parsed.path, file]]));
+        }
       }
-      scheduled += this.scheduleFile(file, "initial_scan");
-    }
-    if (
-      lifecycleGeneration !== this.lifecycleGeneration ||
-      watchPlanGeneration !== this.watchPlanGeneration
-    ) {
-      return scheduled;
     }
     for (const source of watchPlan.getSources()) {
       if (
@@ -755,15 +815,86 @@ export class ObsidianVaultSourceWatcher {
       ) {
         return scheduled;
       }
-      if (!observedPathKeys.has(source.sourceKey)) {
+      const matchingPaths = filesByPathKey.get(source.sourceKey);
+      if (!matchingPaths || matchingPaths.size === 0) {
+        this.blockSource(source, {
+          kind: "source_missing",
+          bundleId: source.bundleId,
+          sourceId: source.sourceId,
+        });
         this.emit({
           kind: "source_missing",
           bundleId: source.bundleId,
           sourceId: source.sourceId,
         });
+        continue;
+      }
+      if (matchingPaths.size > 1) {
+        this.blockSource(source, {
+          kind: "source_path_invalid",
+          reason: "windows_collision",
+          bundleId: source.bundleId,
+          sourceId: source.sourceId,
+        });
+        this.emit({
+          kind: "source_path_invalid",
+          reason: "windows_collision",
+          bundleId: source.bundleId,
+          sourceId: source.sourceId,
+        });
+        continue;
+      }
+      if (!matchingPaths.has(source.sourcePath)) {
+        this.blockSource(source, {
+          kind: "source_path_invalid",
+          reason: "case_mismatch",
+          bundleId: source.bundleId,
+          sourceId: source.sourceId,
+        });
+        this.emit({
+          kind: "source_path_invalid",
+          reason: "case_mismatch",
+          bundleId: source.bundleId,
+          sourceId: source.sourceId,
+        });
       }
     }
+    if (
+      lifecycleGeneration !== this.lifecycleGeneration ||
+      watchPlanGeneration !== this.watchPlanGeneration
+    ) {
+      return scheduled;
+    }
+    for (const file of files) {
+      if (
+        lifecycleGeneration !== this.lifecycleGeneration ||
+        watchPlanGeneration !== this.watchPlanGeneration
+      ) {
+        return scheduled;
+      }
+      scheduled += this.scheduleFile(file, "initial_scan");
+    }
     return scheduled;
+  }
+
+  /**
+   * Returns the authoritative blockers accumulated by this exact plan generation.
+   *
+   * Unlike the best-effort notification sink, this snapshot cannot be dropped
+   * by an observer and is the readiness input for production startup.
+   *
+   * @returns Deterministically ordered, content-free blocker snapshot
+   */
+  getStartupBlockers(): readonly Readonly<VaultSourceWatcherStartupBlocker>[] {
+    this.assertOpen();
+    return Object.freeze(
+      [...this.startupBlockers.values()].sort(
+        (left, right) =>
+          compareText(left.bundleId, right.bundleId) ||
+          compareText(left.sourceId, right.sourceId) ||
+          compareText(left.kind, right.kind)
+      )
+    );
   }
 
   /**
@@ -793,6 +924,7 @@ export class ObsidianVaultSourceWatcher {
     this.watchPlanGeneration += 1;
     this.closed = true;
     this.started = false;
+    this.crawlActivated = false;
     this.releaseEventRefs();
   }
 
@@ -835,7 +967,25 @@ export class ObsidianVaultSourceWatcher {
     const lifecycleGeneration = this.lifecycleGeneration;
     const watchPlanGeneration = this.watchPlanGeneration;
     const watchPlan = this.watchPlan;
-    const matching = watchPlan.getSourcesForPathKey(toWindowsPathKey(capturedPath));
+    const matchingByKey = watchPlan.getSourcesForPathKey(toWindowsPathKey(capturedPath));
+    const matching = matchingByKey.filter((source) => source.sourcePath === capturedPath);
+    for (const source of matchingByKey) {
+      if (source.sourcePath === capturedPath) continue;
+      const sourceAuthorityKey = createBundleSourceKey(source);
+      if (this.quarantinedSourceKeys.has(sourceAuthorityKey)) continue;
+      this.blockSource(source, {
+        kind: "source_path_invalid",
+        reason: "case_mismatch",
+        bundleId: source.bundleId,
+        sourceId: source.sourceId,
+      });
+      this.emit({
+        kind: "source_path_invalid",
+        reason: "case_mismatch",
+        bundleId: source.bundleId,
+        sourceId: source.sourceId,
+      });
+    }
     let scheduled = 0;
 
     for (const source of matching) {
@@ -868,6 +1018,12 @@ export class ObsidianVaultSourceWatcher {
         if (!this.isAuthorityCurrent(authority)) {
           continue;
         }
+        this.blockSource(source, {
+          kind: "capture_failed",
+          stage: "prepare",
+          bundleId: source.bundleId,
+          sourceId: source.sourceId,
+        });
         this.emit({
           kind: "capture_failed",
           cause,
@@ -930,6 +1086,12 @@ export class ObsidianVaultSourceWatcher {
       if (!this.isAuthorityCurrent(work)) {
         return;
       }
+      this.blockSource(work.source, {
+        kind: "capture_failed",
+        stage,
+        bundleId: work.source.bundleId,
+        sourceId: work.source.sourceId,
+      });
       this.emit({
         kind: "capture_failed",
         cause: work.cause,
@@ -1061,12 +1223,12 @@ export class ObsidianVaultSourceWatcher {
       return;
     }
     for (const source of affected.values()) {
-      const sourceAuthorityKey = createBundleSourceKey(source);
-      this.sourceGenerations.set(
-        sourceAuthorityKey,
-        (this.sourceGenerations.get(sourceAuthorityKey) ?? 0) + 1
-      );
-      this.quarantinedSourceKeys.add(sourceAuthorityKey);
+      this.blockSource(source, {
+        kind: "source_change_unsupported",
+        change,
+        bundleId: source.bundleId,
+        sourceId: source.sourceId,
+      });
     }
     for (const source of affected.values()) {
       if (
@@ -1100,6 +1262,39 @@ export class ObsidianVaultSourceWatcher {
     );
   }
 
+  /**
+   * Quarantines one source and retains an authoritative in-memory readiness blocker.
+   *
+   * A second reason may be recorded for diagnostics, but source authority is
+   * invalidated only on the first transition into quarantine.
+   *
+   * @param source - Current immutable source authority
+   * @param blocker - Sanitized reason this generation cannot become ready
+   */
+  private blockSource(
+    source: ImmutableWatchedKnowledgeSource,
+    blocker: VaultSourceWatcherStartupBlocker
+  ): void {
+    const sourceAuthorityKey = createBundleSourceKey(source);
+    if (!this.quarantinedSourceKeys.has(sourceAuthorityKey)) {
+      this.sourceGenerations.set(
+        sourceAuthorityKey,
+        (this.sourceGenerations.get(sourceAuthorityKey) ?? 0) + 1
+      );
+      this.quarantinedSourceKeys.add(sourceAuthorityKey);
+    }
+    let detail = "";
+    if ("stage" in blocker) {
+      detail = blocker.stage;
+    } else if ("reason" in blocker) {
+      detail = blocker.reason;
+    } else if ("change" in blocker) {
+      detail = blocker.change;
+    }
+    const blockerKey = `${sourceAuthorityKey.length}:${sourceAuthorityKey}${blocker.kind}:${detail}`;
+    this.startupBlockers.set(blockerKey, Object.freeze({ ...blocker }));
+  }
+
   /** Rejects mutation after permanent lifecycle closure. */
   private assertOpen(): void {
     if (this.closed) {
@@ -1124,6 +1319,17 @@ export class ObsidianVaultSourceWatcher {
         // Cleanup is best effort after authority has already been invalidated.
       }
     }
+  }
+
+  /** Restores the pre-start state after listener registration or initial scan fails. */
+  private rollbackStart(): void {
+    this.lifecycleGeneration += 1;
+    this.started = false;
+    this.crawlActivated = false;
+    this.quarantinedSourceKeys.clear();
+    this.startupBlockers.clear();
+    this.sourceGenerations.clear();
+    this.releaseEventRefs();
   }
 
   /**
