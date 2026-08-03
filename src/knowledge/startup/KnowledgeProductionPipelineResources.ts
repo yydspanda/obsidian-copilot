@@ -1,4 +1,4 @@
-import { DEFAULT_KNOWLEDGE_COMPILER_LIMITS } from "@/knowledge/compiler/KnowledgeCompiler";
+import { DEFAULT_KNOWLEDGE_COMPILER_LIMITS } from "@/knowledge/compiler/CompilerModelPort";
 import { KNOWLEDGE_COMPILER_PROTOCOL_VERSION } from "@/knowledge/compiler/CompilerModelPort";
 import { KNOWLEDGE_COMPILER_PROMPT_CONTRACT_IDENTITY } from "@/knowledge/compiler/KnowledgeCompilerPromptEncoder";
 import { KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";

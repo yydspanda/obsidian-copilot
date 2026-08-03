@@ -398,6 +398,24 @@ export interface KnowledgeCompilerLimits {
   maxValidationDiagnostics: number;
 }
 
+/** Safe default limits shared by production input derivation and the Compiler gate. */
+export const DEFAULT_KNOWLEDGE_COMPILER_LIMITS: Readonly<KnowledgeCompilerLimits> = Object.freeze({
+  maxConcepts: 256,
+  maxEntities: 256,
+  maxClaims: 512,
+  maxRelations: 512,
+  maxCitations: 1024,
+  maxTargets: 128,
+  maxEvidenceItems: 2048,
+  maxContextPages: 256,
+  maxTargetAuthorizations: 256,
+  maxModelContextCharacters: 8_000_000,
+  maxAnalysisCharacters: 1_000_000,
+  maxGeneratedFileCharacters: 2_000_000,
+  maxTotalGeneratedCharacters: 8_000_000,
+  maxValidationDiagnostics: 1024,
+});
+
 /** Constructor dependencies for deterministic two-stage compilation. */
 export interface KnowledgeCompilerDependencies {
   model: CompilerModelPort;

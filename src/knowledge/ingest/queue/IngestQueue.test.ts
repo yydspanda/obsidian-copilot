@@ -663,12 +663,35 @@ describe("IngestQueue persistence and enqueue", () => {
 describe("IngestQueue execution and reruns", () => {
   it("issues an opaque claim for the exact Queue controller and revokes it after execution", async () => {
     let captured: IngestExecutionClaim | undefined;
+    let capturedContext: IngestExecutionContext | undefined;
     const harness = createHarness(async (context) => {
       captured = context.executionClaim;
+      capturedContext = context;
       IngestExecutionClaim.assert(context.executionClaim);
       expect(context.executionClaim.getJob()).toBe(context.job);
       expect(context.executionClaim.getSignal()).toBe(context.signal);
       expect(context.executionClaim.isCurrent()).toBe(true);
+      expect(
+        context.executionClaim.matchesExecutionContext(
+          context.job,
+          context.signal,
+          context.reportStage
+        )
+      ).toBe(true);
+      expect(
+        context.executionClaim.matchesExecutionContext(
+          { ...context.job },
+          context.signal,
+          context.reportStage
+        )
+      ).toBe(false);
+      expect(
+        context.executionClaim.matchesExecutionContext(
+          context.job,
+          context.signal,
+          async () => undefined
+        )
+      ).toBe(false);
       expect(Object.keys(context.executionClaim)).toEqual([]);
       expect(Object.isFrozen(context.executionClaim)).toBe(true);
       expect(() => IngestExecutionClaim.assert({ ...context.executionClaim })).toThrow(TypeError);
@@ -687,6 +710,14 @@ describe("IngestQueue execution and reruns", () => {
 
     expect(captured).toBeDefined();
     expect(captured?.isCurrent()).toBe(false);
+    if (!capturedContext) throw new Error("Expected the issued execution context");
+    expect(
+      captured?.matchesExecutionContext(
+        capturedContext.job,
+        capturedContext.signal,
+        capturedContext.reportStage
+      )
+    ).toBe(false);
   });
 
   it("revokes the execution claim before durable finalization begins", async () => {

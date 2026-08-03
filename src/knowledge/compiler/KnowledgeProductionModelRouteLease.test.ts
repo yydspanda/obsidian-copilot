@@ -1,18 +1,20 @@
 import type {
+  CompilerAnalysisRequest,
+  CompilerCandidateValidationInput,
   CompilerGenerationRequest,
   CompilerTargetRequest,
-  KnowledgeCompileInput,
   KnowledgeCompileResult,
 } from "@/knowledge/compiler/CompilerModelPort";
 import { KnowledgeCompilerInfrastructureError } from "@/knowledge/compiler/KnowledgeCompiler";
 import {
   bindKnowledgePrivateModelRouteToProfile,
   KNOWLEDGE_DECODED_MODEL_OUTPUT_CONTRACT,
-  KnowledgeCompilerModelAdapterError,
   type KnowledgePrivateModelInvoke,
 } from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 import {
   createKnowledgeProductionModelRouteLeaseOwner,
+  KnowledgeProductionCompileAttempt,
+  KnowledgeProductionCompileAttemptBuilder,
   KnowledgeProductionModelRouteLease,
   KnowledgeProductionModelRouteLeaseError,
   KnowledgeProductionModelRouteLeaseOwner,
@@ -38,11 +40,7 @@ import type {
 } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import type { ExactSourceArtifact } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 import type { IngestExecutionContext } from "@/knowledge/ingest/queue/IngestQueue";
-import {
-  createFileContentHash,
-  createQuoteHash,
-  createSourceContentHash,
-} from "@/knowledge/model/fingerprint";
+import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeBundleConfig, SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
@@ -68,7 +66,6 @@ const VALIDATION_SUCCESS = {
 interface AuthorizedLeaseHarnessContext {
   context: IngestExecutionContext;
   preparation: KnowledgeAuthorizedSourcePreparation;
-  reportStage: KnowledgeProductionCompileAttemptDependencies["reportStage"];
   readCurrentStage(): Promise<string | undefined>;
 }
 
@@ -76,6 +73,7 @@ interface CompileDependencyHarness {
   dependencies: KnowledgeProductionCompileAttemptDependencies;
   resolvedSignals: AbortSignal[];
   validatedSignals: AbortSignal[];
+  validationInputs: CompilerCandidateValidationInput[];
 }
 
 interface Deferred<T> {
@@ -175,10 +173,10 @@ function createDeferred<T>(): Deferred<T> {
 /** Executes a callback inside one real Runtime-backed Queue claim and preparation. */
 async function runAuthorizedLeaseAttempt(
   profile: KnowledgeBundlePipelineProfile,
-  handler: (value: AuthorizedLeaseHarnessContext) => Promise<void>
+  handler: (value: AuthorizedLeaseHarnessContext) => Promise<void>,
+  manifest: SourceManifest = createManifest()
 ): Promise<void> {
   const owner = createOwner();
-  const manifest = createManifest();
   const parser: KnowledgeByteParser = {
     getProfile: () => createParserProfile(),
     parse: async () => ({
@@ -226,18 +224,13 @@ async function runAuthorizedLeaseAttempt(
         capabilities.proofPort
       ).bind(context.executionClaim);
       const preparation = await preparationBinder.prepare(plan, authority);
-      const reportStage: KnowledgeProductionCompileAttemptDependencies["reportStage"] = async (
-        stage
-      ) => {
-        await context.reportStage(stage);
-      };
       const readCurrentStage = async (): Promise<string | undefined> => {
         if (!capabilities) throw new Error("Expected initialized Runtime capabilities");
         const snapshot = await capabilities.queue.load(BUNDLE_ID);
         return snapshot.jobs.find((job) => job.id === context.job.id)?.stage;
       };
       try {
-        await handler({ context, preparation, reportStage, readCurrentStage });
+        await handler({ context, preparation, readCurrentStage });
       } catch (error) {
         handlerFailure = error;
         throw error;
@@ -254,47 +247,11 @@ async function runAuthorizedLeaseAttempt(
   expect(result).toMatchObject({ kind: "executed", status: "completed" });
 }
 
-/** Creates a complete Compiler input from the exact authentic preparation. */
-function createCompileInput(
-  preparation: KnowledgeAuthorizedSourcePreparation
-): KnowledgeCompileInput {
-  const foundation = preparation.getPreparation();
-  const artifact = foundation.artifacts[0];
-  if (!artifact || artifact.kind !== "text") {
-    throw new Error("Expected one text artifact in the production lease harness");
-  }
-  return {
-    bundle: foundation.bundle,
-    operation: foundation.operation,
-    source: foundation.source,
-    manifest: foundation.manifest,
-    schema: foundation.schema,
-    artifacts: [...foundation.artifacts],
-    evidence: [
-      {
-        evidenceId: "evidence-primary",
-        locator: {
-          kind: "quote",
-          sourceId: artifact.sourceId,
-          artifactId: artifact.artifactId,
-          artifactContentHash: artifact.artifactContentHash,
-          excerpt: artifact.text,
-          quoteHash: createQuoteHash(artifact.text),
-        },
-      },
-    ],
-    contextPages: [],
-    targetAuthorizations: [],
-    createdAt: 100,
-  };
-}
-
 /** Creates deterministic read-only target and candidate-validation dependencies. */
-function createCompileDependencies(
-  reportStage: KnowledgeProductionCompileAttemptDependencies["reportStage"]
-): CompileDependencyHarness {
+function createCompileDependencies(): CompileDependencyHarness {
   const resolvedSignals: AbortSignal[] = [];
   const validatedSignals: AbortSignal[] = [];
+  const validationInputs: CompilerCandidateValidationInput[] = [];
   const dependencies: KnowledgeProductionCompileAttemptDependencies = {
     targetResolver: {
       resolve: async (targets: readonly CompilerTargetRequest[], signal: AbortSignal) => {
@@ -307,14 +264,26 @@ function createCompileDependencies(
       },
     },
     candidateValidator: {
-      validate: async (_input, signal) => {
+      validate: async (input, signal) => {
         validatedSignals.push(signal);
+        validationInputs.push(input);
         return VALIDATION_SUCCESS;
       },
     },
-    reportStage,
   };
-  return { dependencies, resolvedSignals, validatedSignals };
+  return { dependencies, resolvedSignals, validatedSignals, validationInputs };
+}
+
+/** Builds and consumes one exact Queue-bound production compile attempt. */
+async function compileAuthorizedAttempt(
+  lease: KnowledgeProductionModelRouteLease,
+  preparation: KnowledgeAuthorizedSourcePreparation,
+  context: IngestExecutionContext,
+  dependencies: KnowledgeProductionCompileAttemptDependencies
+): Promise<KnowledgeCompileResult> {
+  const builder = lease.createAttemptBuilder(dependencies);
+  const attempt = await builder.build(preparation, context);
+  return lease.compile(attempt);
 }
 
 /** Creates one first-stage model output with optional new-page work. */
@@ -329,7 +298,7 @@ function createAnalysisWireOutput(includeTarget: boolean): string {
     citations: [
       {
         claimRef: "claim-primary",
-        evidenceId: "evidence-primary",
+        evidenceId: "evidence-0001",
         relation: "supports",
       },
     ],
@@ -391,96 +360,107 @@ describe("KnowledgeProductionModelRouteLease", () => {
     const profile = createPipelineProfile();
     const secretCanary = "sk-production-route-result-canary";
 
-    await runAuthorizedLeaseAttempt(
-      profile,
-      async ({ context, preparation, reportStage, readCurrentStage }) => {
-        const invokedStages: string[] = [];
-        const invokedSignals: AbortSignal[] = [];
-        const { owner, lease } = createLease(profile, async (stage, _request, signal) => {
-          if (secretCanary.length === 0) throw new Error("Expected retained test credential");
-          invokedStages.push(stage);
-          invokedSignals.push(signal);
-          expect(signal.aborted).toBe(false);
-          return createAnalysisWireOutput(false);
-        });
-        const dependencyHarness = createCompileDependencies(reportStage);
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation, readCurrentStage }) => {
+      const invokedStages: string[] = [];
+      const invokedSignals: AbortSignal[] = [];
+      const analysisRequests: CompilerAnalysisRequest[] = [];
+      const { owner, lease } = createLease(profile, async (stage, request, signal) => {
+        if (secretCanary.length === 0) throw new Error("Expected retained test credential");
+        invokedStages.push(stage);
+        invokedSignals.push(signal);
+        expect(signal.aborted).toBe(false);
+        analysisRequests.push(request as CompilerAnalysisRequest);
+        return createAnalysisWireOutput(false);
+      });
+      const dependencyHarness = createCompileDependencies();
 
-        const result = await lease.compile(
-          preparation,
-          createCompileInput(preparation),
-          dependencyHarness.dependencies
-        );
+      const result = await compileAuthorizedAttempt(
+        lease,
+        preparation,
+        context,
+        dependencyHarness.dependencies
+      );
 
-        expect(result).toMatchObject({ kind: "no_changes" });
-        expect(invokedStages).toEqual(["analysis"]);
-        expect(invokedSignals).toHaveLength(1);
-        expect(invokedSignals[0]).toBe(context.signal);
-        expect(dependencyHarness.resolvedSignals).toHaveLength(0);
-        expect(dependencyHarness.validatedSignals).toHaveLength(0);
-        expect(JSON.stringify({ owner, lease, result })).not.toContain(secretCanary);
-        expect(await readCurrentStage()).toBe("validating");
-        owner.close();
-      }
-    );
+      expect(result).toMatchObject({ kind: "no_changes" });
+      expect(invokedStages).toEqual(["analysis"]);
+      expect(invokedSignals).toHaveLength(1);
+      expect(invokedSignals[0]).toBe(context.signal);
+      expect(analysisRequests).toHaveLength(1);
+      expect(analysisRequests[0]).toMatchObject({
+        bundle: { id: BUNDLE_ID },
+        source: { sourceId: SOURCE_ID },
+        contextPages: [],
+        targetAuthorizations: [],
+        evidence: [
+          {
+            evidenceId: "evidence-0001",
+            locator: { kind: "quote", excerpt: SOURCE_TEXT },
+          },
+        ],
+      });
+      expect(dependencyHarness.resolvedSignals).toHaveLength(0);
+      expect(dependencyHarness.validatedSignals).toHaveLength(0);
+      expect(JSON.stringify({ owner, lease, result })).not.toContain(secretCanary);
+      expect(await readCurrentStage()).toBe("validating");
+      owner.close();
+    });
   });
 
   it("runs an authentic two-stage compile and returns a validated proposal", async () => {
     const profile = createPipelineProfile();
 
-    await runAuthorizedLeaseAttempt(
-      profile,
-      async ({ context, preparation, reportStage, readCurrentStage }) => {
-        const invokedStages: string[] = [];
-        const invokedSignals: AbortSignal[] = [];
-        const { owner, lease } = createLease(profile, async (stage, request, signal) => {
-          invokedStages.push(stage);
-          invokedSignals.push(signal);
-          expect(signal.aborted).toBe(false);
-          if (stage === "analysis") return createAnalysisWireOutput(true);
-          return createGenerationWireOutput(request as CompilerGenerationRequest);
-        });
-        const dependencyHarness = createCompileDependencies(reportStage);
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation, readCurrentStage }) => {
+      const invokedStages: string[] = [];
+      const invokedSignals: AbortSignal[] = [];
+      const { owner, lease } = createLease(profile, async (stage, request, signal) => {
+        invokedStages.push(stage);
+        invokedSignals.push(signal);
+        expect(signal.aborted).toBe(false);
+        if (stage === "analysis") return createAnalysisWireOutput(true);
+        return createGenerationWireOutput(request as CompilerGenerationRequest);
+      });
+      const dependencyHarness = createCompileDependencies();
 
-        const result = await lease.compile(
-          preparation,
-          createCompileInput(preparation),
-          dependencyHarness.dependencies
-        );
+      const result = await compileAuthorizedAttempt(
+        lease,
+        preparation,
+        context,
+        dependencyHarness.dependencies
+      );
 
-        expect(result).toMatchObject({
-          kind: "proposed",
-          changeSet: {
-            status: "proposed",
-            changes: [{ operation: "create", path: "Wiki/New Page.md" }],
-          },
-        });
-        expect(invokedStages).toEqual(["analysis", "generation"]);
-        expect(invokedSignals).toHaveLength(2);
-        expect(invokedSignals[0]).toBe(invokedSignals[1]);
-        expect(invokedSignals[0]).toBe(context.signal);
-        expect(dependencyHarness.resolvedSignals).toEqual([context.signal]);
-        expect(dependencyHarness.validatedSignals).toEqual([context.signal]);
-        expect(await readCurrentStage()).toBe("validating");
-        owner.close();
-      }
-    );
+      expect(result).toMatchObject({
+        kind: "proposed",
+        changeSet: {
+          status: "proposed",
+          changes: [{ operation: "create", path: "Wiki/New Page.md" }],
+        },
+      });
+      expect(invokedStages).toEqual(["analysis", "generation"]);
+      expect(invokedSignals).toHaveLength(2);
+      expect(invokedSignals[0]).toBe(invokedSignals[1]);
+      expect(invokedSignals[0]).toBe(context.signal);
+      expect(dependencyHarness.resolvedSignals).toEqual([context.signal]);
+      expect(dependencyHarness.validatedSignals).toEqual([context.signal]);
+      expect(dependencyHarness.validationInputs[0]?.draft.createdAt).toBe(context.job.createdAt);
+      expect(await readCurrentStage()).toBe("validating");
+      owner.close();
+    });
   });
 
   it("rejects Bundle and profile mismatches before invoking either private route", async () => {
     const profile = createPipelineProfile();
 
-    await runAuthorizedLeaseAttempt(profile, async ({ preparation, reportStage }) => {
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
       const invoke: KnowledgePrivateModelInvoke = async () => {
         invokeCalls += 1;
         return createAnalysisWireOutput(false);
       };
       const missingBundle = createLease(profile, invoke, "different-bundle");
-      const dependencies = createCompileDependencies(reportStage).dependencies;
-      const input = createCompileInput(preparation);
+      const dependencies = createCompileDependencies().dependencies;
 
       const bundleFailure = await captureFailure(() =>
-        missingBundle.lease.compile(preparation, input, dependencies)
+        missingBundle.lease.createAttemptBuilder(dependencies).build(preparation, context)
       );
       expect(bundleFailure).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
       expect(invokeCalls).toBe(0);
@@ -488,58 +468,96 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
       const mismatchedProfile = createLease(createPipelineProfile("different-model"), invoke);
       const profileFailure = await captureFailure(() =>
-        mismatchedProfile.lease.compile(preparation, input, dependencies)
+        mismatchedProfile.lease.createAttemptBuilder(dependencies).build(preparation, context)
       );
-      expect(profileFailure).toBeInstanceOf(KnowledgeCompilerModelAdapterError);
-      expect(KnowledgeCompilerModelAdapterError.inspect(profileFailure)).toMatchObject({
-        code: "profile_mismatch",
-      });
+      expect(profileFailure).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
       expect(invokeCalls).toBe(0);
       mismatchedProfile.owner.close();
+
+      const matchingProfile = createLease(profile, invoke);
+      await expect(
+        compileAuthorizedAttempt(matchingProfile.lease, preparation, context, dependencies)
+      ).resolves.toMatchObject({ kind: "no_changes" });
+      expect(invokeCalls).toBe(1);
+      matchingProfile.owner.close();
     });
   });
 
   it("reserves an authentic preparation against sequential reuse", async () => {
     const profile = createPipelineProfile();
 
-    await runAuthorizedLeaseAttempt(profile, async ({ preparation, reportStage }) => {
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
       const { owner, lease } = createLease(profile, async () => {
         invokeCalls += 1;
         return createAnalysisWireOutput(false);
       });
-      const dependencies = createCompileDependencies(reportStage).dependencies;
-      const input = createCompileInput(preparation);
+      const dependencies = createCompileDependencies().dependencies;
+      const builder = lease.createAttemptBuilder(dependencies);
+      const attempt = await builder.build(preparation, context);
 
-      await expect(lease.compile(preparation, input, dependencies)).resolves.toMatchObject({
+      await expect(lease.compile(attempt)).resolves.toMatchObject({
         kind: "no_changes",
       });
-      const reuseFailure = await captureFailure(() =>
-        lease.compile(preparation, input, dependencies)
-      );
+      const reuseFailure = await captureFailure(() => builder.build(preparation, context));
+      const attemptReuseFailure = await captureFailure(() => lease.compile(attempt));
 
       expect(reuseFailure).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
+      expect(attemptReuseFailure).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
       expect(invokeCalls).toBe(1);
       owner.close();
     });
   });
 
-  it("allows exactly one concurrent compile to reserve an authentic preparation", async () => {
+  it("allows exactly one concurrent build to reserve an authentic preparation", async () => {
     const profile = createPipelineProfile();
 
-    await runAuthorizedLeaseAttempt(profile, async ({ preparation, reportStage }) => {
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
       const { owner, lease } = createLease(profile, async () => {
         invokeCalls += 1;
         return createAnalysisWireOutput(false);
       });
-      const dependencies = createCompileDependencies(reportStage).dependencies;
-      const input = createCompileInput(preparation);
+      const dependencies = createCompileDependencies().dependencies;
+      const builder = lease.createAttemptBuilder(dependencies);
 
       const settled = await Promise.allSettled([
-        lease.compile(preparation, input, dependencies),
-        lease.compile(preparation, input, dependencies),
+        builder.build(preparation, context),
+        builder.build(preparation, context),
       ]);
+      const fulfilled = settled.filter(
+        (entry): entry is PromiseFulfilledResult<KnowledgeProductionCompileAttempt> =>
+          entry.status === "fulfilled"
+      );
+      const rejected = settled.filter(
+        (entry): entry is PromiseRejectedResult => entry.status === "rejected"
+      );
+
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
+      await expect(lease.compile(fulfilled[0].value)).resolves.toMatchObject({
+        kind: "no_changes",
+      });
+      expect(invokeCalls).toBe(1);
+      owner.close();
+    });
+  });
+
+  it("allows exactly one concurrent compile to consume an opaque attempt", async () => {
+    const profile = createPipelineProfile();
+
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
+      let invokeCalls = 0;
+      const { owner, lease } = createLease(profile, async () => {
+        invokeCalls += 1;
+        return createAnalysisWireOutput(false);
+      });
+      const attempt = await lease
+        .createAttemptBuilder(createCompileDependencies().dependencies)
+        .build(preparation, context);
+
+      const settled = await Promise.allSettled([lease.compile(attempt), lease.compile(attempt)]);
       const fulfilled = settled.filter(
         (entry): entry is PromiseFulfilledResult<KnowledgeCompileResult> =>
           entry.status === "fulfilled"
@@ -557,10 +575,154 @@ describe("KnowledgeProductionModelRouteLease", () => {
     });
   });
 
+  it("rejects copied jobs, substituted signals, substituted reporters, and raw preparations", async () => {
+    const profile = createPipelineProfile();
+
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
+      let invokeCalls = 0;
+      const { owner, lease } = createLease(profile, async () => {
+        invokeCalls += 1;
+        return createAnalysisWireOutput(false);
+      });
+      let dependencyGetterCalls = 0;
+      const accessorDependencies = {
+        candidateValidator: createCompileDependencies().dependencies.candidateValidator,
+      } as Partial<KnowledgeProductionCompileAttemptDependencies>;
+      Object.defineProperty(accessorDependencies, "targetResolver", {
+        enumerable: true,
+        get: () => {
+          dependencyGetterCalls += 1;
+          throw new Error("private dependency accessor canary");
+        },
+      });
+      expect(() =>
+        lease.createAttemptBuilder(
+          accessorDependencies as KnowledgeProductionCompileAttemptDependencies
+        )
+      ).toThrow(KnowledgeProductionModelRouteLeaseError);
+      expect(dependencyGetterCalls).toBe(0);
+      const builder = lease.createAttemptBuilder(createCompileDependencies().dependencies);
+      expect(() => lease.createAttemptBuilder(createCompileDependencies().dependencies)).toThrow(
+        KnowledgeProductionModelRouteLeaseError
+      );
+      const invalidContexts: IngestExecutionContext[] = [
+        { ...context, job: { ...context.job } },
+        { ...context, signal: new AbortController().signal },
+        {
+          ...context,
+          reportStage: async (stage) => {
+            await context.reportStage(stage);
+          },
+        },
+      ];
+
+      for (const invalidContext of invalidContexts) {
+        const failure = await captureFailure(() => builder.build(preparation, invalidContext));
+        expect(failure).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
+      }
+      const rawFailure = await captureFailure(() =>
+        lease.compile(preparation as unknown as KnowledgeProductionCompileAttempt)
+      );
+      expect(rawFailure).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
+      expect(invokeCalls).toBe(0);
+
+      const attempt = await builder.build(preparation, context);
+      expect(JSON.stringify({ builder, attempt })).toBe('{"builder":{},"attempt":{}}');
+      await expect(lease.compile(attempt)).resolves.toMatchObject({ kind: "no_changes" });
+      expect(invokeCalls).toBe(1);
+      owner.close();
+    });
+  });
+
+  it("rejects build or compile after route revocation without invoking the model", async () => {
+    const profile = createPipelineProfile();
+    let invokeCalls = 0;
+
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
+      const { owner, lease } = createLease(profile, async () => {
+        invokeCalls += 1;
+        return createAnalysisWireOutput(false);
+      });
+      const builder = lease.createAttemptBuilder(createCompileDependencies().dependencies);
+      owner.close();
+
+      const failure = await captureFailure(() => builder.build(preparation, context));
+      expect(failure).toMatchObject({ name: "AbortError" });
+    });
+
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
+      const { owner, lease } = createLease(profile, async () => {
+        invokeCalls += 1;
+        return createAnalysisWireOutput(false);
+      });
+      const attempt = await lease
+        .createAttemptBuilder(createCompileDependencies().dependencies)
+        .build(preparation, context);
+      owner.close();
+
+      const failure = await captureFailure(() => lease.compile(attempt));
+      expect(failure).toMatchObject({ name: "AbortError" });
+    });
+
+    expect(invokeCalls).toBe(0);
+  });
+
+  it("rejects an attempt if its durable Queue stage moves before compile", async () => {
+    const profile = createPipelineProfile();
+
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
+      let invokeCalls = 0;
+      const { owner, lease } = createLease(profile, async () => {
+        invokeCalls += 1;
+        return createAnalysisWireOutput(false);
+      });
+      const attempt = await lease
+        .createAttemptBuilder(createCompileDependencies().dependencies)
+        .build(preparation, context);
+      await context.reportStage("analyzing");
+
+      await captureFailure(() => lease.compile(attempt));
+      expect(invokeCalls).toBe(0);
+      owner.close();
+    });
+  });
+
+  it("binds each opaque attempt to the exact route lease that minted its builder", async () => {
+    const profile = createPipelineProfile();
+
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
+      let primaryCalls = 0;
+      let foreignCalls = 0;
+      const primary = createLease(profile, async () => {
+        primaryCalls += 1;
+        return createAnalysisWireOutput(false);
+      });
+      const foreign = createLease(profile, async () => {
+        foreignCalls += 1;
+        return createAnalysisWireOutput(false);
+      });
+      const attempt = await primary.lease
+        .createAttemptBuilder(createCompileDependencies().dependencies)
+        .build(preparation, context);
+
+      const failure = await captureFailure(() => foreign.lease.compile(attempt));
+      expect(failure).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
+      expect(primaryCalls).toBe(0);
+      expect(foreignCalls).toBe(0);
+      await expect(primary.lease.compile(attempt)).resolves.toMatchObject({
+        kind: "no_changes",
+      });
+      expect(primaryCalls).toBe(1);
+      expect(foreignCalls).toBe(0);
+      primary.owner.close();
+      foreign.owner.close();
+    });
+  });
+
   it("rejects a completed in-flight result after its owner closes instead of publishing it", async () => {
     const profile = createPipelineProfile();
 
-    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation, reportStage }) => {
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       const entered = createDeferred<void>();
       const response = createDeferred<string>();
       const { owner, lease } = createLease(profile, async (_stage, _request, signal) => {
@@ -569,16 +731,13 @@ describe("KnowledgeProductionModelRouteLease", () => {
         return response.promise;
       });
       let published: KnowledgeCompileResult | undefined;
-      const compiling = lease
-        .compile(
-          preparation,
-          createCompileInput(preparation),
-          createCompileDependencies(reportStage).dependencies
-        )
-        .then((result) => {
-          published = result;
-          return result;
-        });
+      const attempt = await lease
+        .createAttemptBuilder(createCompileDependencies().dependencies)
+        .build(preparation, context);
+      const compiling = lease.compile(attempt).then((result) => {
+        published = result;
+        return result;
+      });
       await entered.promise;
       expect(context.signal.aborted).toBe(false);
 
@@ -597,16 +756,17 @@ describe("KnowledgeProductionModelRouteLease", () => {
     const profile = createPipelineProfile();
     const secretCanary = "sk-production-route-error-canary";
 
-    await runAuthorizedLeaseAttempt(profile, async ({ preparation, reportStage }) => {
+    await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       const { owner, lease } = createLease(profile, async () => {
         throw new Error(`private provider rejected ${secretCanary}`);
       });
       let result: KnowledgeCompileResult | undefined;
       const failure = await captureFailure(async () => {
-        result = await lease.compile(
+        result = await compileAuthorizedAttempt(
+          lease,
           preparation,
-          createCompileInput(preparation),
-          createCompileDependencies(reportStage).dependencies
+          context,
+          createCompileDependencies().dependencies
         );
       });
 
@@ -639,6 +799,12 @@ describe("KnowledgeProductionModelRouteLease", () => {
     expect(() => new KnowledgeProductionModelRouteLeaseOwner(Symbol("forged"), bindings)).toThrow(
       KnowledgeProductionModelRouteLeaseError
     );
+    expect(() => new KnowledgeProductionCompileAttempt(Symbol("forged"))).toThrow(
+      KnowledgeProductionModelRouteLeaseError
+    );
+    expect(
+      () => new KnowledgeProductionCompileAttemptBuilder(Symbol("forged"), lease, {} as never)
+    ).toThrow(KnowledgeProductionModelRouteLeaseError);
     expect(() => KnowledgeProductionModelRouteLease.assert({ ...lease })).toThrow(
       KnowledgeProductionModelRouteLeaseError
     );
@@ -653,6 +819,16 @@ describe("KnowledgeProductionModelRouteLease", () => {
     expect(() =>
       KnowledgeProductionModelRouteLeaseOwner.assert(
         Object.create(KnowledgeProductionModelRouteLeaseOwner.prototype)
+      )
+    ).toThrow(KnowledgeProductionModelRouteLeaseError);
+    expect(() =>
+      KnowledgeProductionCompileAttempt.assert(
+        Object.create(KnowledgeProductionCompileAttempt.prototype)
+      )
+    ).toThrow(KnowledgeProductionModelRouteLeaseError);
+    expect(() =>
+      KnowledgeProductionCompileAttemptBuilder.assert(
+        Object.create(KnowledgeProductionCompileAttemptBuilder.prototype)
       )
     ).toThrow(KnowledgeProductionModelRouteLeaseError);
     expect(invokeCalls).toBe(0);

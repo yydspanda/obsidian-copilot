@@ -12,11 +12,20 @@ import {
   type KnowledgeModelStageReporter,
   KnowledgePrivateModelRoute,
 } from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
+import { createKnowledgeProductionCompileInput } from "@/knowledge/compiler/KnowledgeProductionCompileInput";
 import { KnowledgeAuthorizedSourcePreparation } from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
+import {
+  IngestExecutionClaim,
+  type IngestExecutionContext,
+} from "@/knowledge/ingest/queue/IngestQueue";
 import type { KnowledgeIngestWorkStage } from "@/knowledge/model/types";
 
 const MODEL_ROUTE_LEASE_TOKEN = Symbol("KnowledgeProductionModelRouteLease.constructor");
 const MODEL_ROUTE_OWNER_TOKEN = Symbol("KnowledgeProductionModelRouteLeaseOwner.constructor");
+const COMPILE_ATTEMPT_BUILDER_TOKEN = Symbol(
+  "KnowledgeProductionCompileAttemptBuilder.constructor"
+);
+const COMPILE_ATTEMPT_TOKEN = Symbol("KnowledgeProductionCompileAttempt.constructor");
 
 /** One Bundle-scoped private route created from the exact production preflight snapshot. */
 export interface KnowledgeProductionModelRouteBinding {
@@ -24,21 +33,24 @@ export interface KnowledgeProductionModelRouteBinding {
   route: KnowledgePrivateModelRoute;
 }
 
-/** Non-model dependencies captured for one exact production compile attempt. */
+/** Generation-owned non-model ports captured before any Queue attempt exists. */
 export interface KnowledgeProductionCompileAttemptDependencies {
   targetResolver: CompilerTargetResolver;
   candidateValidator: CompilerCandidateValidator;
-  reportStage(stage: KnowledgeIngestWorkStage): Promise<void>;
 }
 
-interface CapturedCompileAttemptDependencies {
+interface CapturedCompileAttemptPorts {
   resolveTargets: CompilerTargetResolver["resolve"];
   validateCandidate: CompilerCandidateValidator["validate"];
-  reportStage: KnowledgeProductionCompileAttemptDependencies["reportStage"];
+}
+
+interface CapturedCompileAttemptDependencies extends CapturedCompileAttemptPorts {
+  reportStage: IngestExecutionContext["reportStage"];
 }
 
 interface KnowledgeProductionModelRouteLeaseState {
   current: boolean;
+  builderIssued: boolean;
   routes: Map<string, KnowledgePrivateModelRoute>;
 }
 
@@ -46,8 +58,26 @@ interface KnowledgeProductionModelRouteLeaseOwnerState {
   lease: KnowledgeProductionModelRouteLease;
 }
 
+interface KnowledgeProductionCompileAttemptBuilderState {
+  lease: KnowledgeProductionModelRouteLease;
+  ports: CapturedCompileAttemptPorts;
+}
+
+interface KnowledgeProductionCompileAttemptState {
+  lease: KnowledgeProductionModelRouteLease;
+  preparation: KnowledgeAuthorizedSourcePreparation;
+  input: KnowledgeCompileInput;
+  dependencies: CapturedCompileAttemptDependencies;
+  consumed: boolean;
+}
+
 const modelRouteLeaseStates = new WeakMap<object, KnowledgeProductionModelRouteLeaseState>();
 const modelRouteOwnerStates = new WeakMap<object, KnowledgeProductionModelRouteLeaseOwnerState>();
+const compileAttemptBuilderStates = new WeakMap<
+  object,
+  KnowledgeProductionCompileAttemptBuilderState
+>();
+const compileAttemptStates = new WeakMap<object, KnowledgeProductionCompileAttemptState>();
 const reservedModelRoutePreparations = new WeakSet<object>();
 
 /** Stable route-generation failure that retains no Bundle, model, request, or credential value. */
@@ -87,6 +117,30 @@ function requireOwnerState(value: unknown): KnowledgeProductionModelRouteLeaseOw
     throw new KnowledgeProductionModelRouteLeaseError();
   }
   const state = modelRouteOwnerStates.get(value);
+  if (!state) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  return state;
+}
+
+/** Returns hidden state only for an authentic compile-attempt builder. */
+function requireAttemptBuilderState(value: unknown): KnowledgeProductionCompileAttemptBuilderState {
+  if (typeof value !== "object" || value === null) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  const state = compileAttemptBuilderStates.get(value);
+  if (!state) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  return state;
+}
+
+/** Returns hidden state only for an authentic opaque compile attempt. */
+function requireAttemptState(value: unknown): KnowledgeProductionCompileAttemptState {
+  if (typeof value !== "object" || value === null) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  const state = compileAttemptStates.get(value);
   if (!state) {
     throw new KnowledgeProductionModelRouteLeaseError();
   }
@@ -192,24 +246,21 @@ function captureDataMethod<T extends (...args: never[]) => unknown>(
   throw new KnowledgeProductionModelRouteLeaseError();
 }
 
-/** Captures attempt dependencies after its caller installs a sanitized failure boundary. */
-function captureAttemptDependenciesUnsafe(
+/** Captures generation-owned ports after its caller installs a sanitized failure boundary. */
+function captureAttemptPortsUnsafe(
   value: KnowledgeProductionCompileAttemptDependencies
-): CapturedCompileAttemptDependencies {
+): CapturedCompileAttemptPorts {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new KnowledgeProductionModelRouteLeaseError();
   }
   const targetResolver = Object.getOwnPropertyDescriptor(value, "targetResolver");
   const candidateValidator = Object.getOwnPropertyDescriptor(value, "candidateValidator");
-  const reportStage = Object.getOwnPropertyDescriptor(value, "reportStage");
   const targetResolverValue: unknown =
     targetResolver && "value" in targetResolver ? targetResolver.value : undefined;
   const candidateValidatorValue: unknown =
     candidateValidator && "value" in candidateValidator ? candidateValidator.value : undefined;
-  const reportStageValue: unknown =
-    reportStage && "value" in reportStage ? reportStage.value : undefined;
   if (
-    Reflect.ownKeys(value).length !== 3 ||
+    Reflect.ownKeys(value).length !== 2 ||
     !targetResolver ||
     !("value" in targetResolver) ||
     !targetResolver.enumerable ||
@@ -219,11 +270,7 @@ function captureAttemptDependenciesUnsafe(
     !("value" in candidateValidator) ||
     !candidateValidator.enumerable ||
     typeof candidateValidatorValue !== "object" ||
-    candidateValidatorValue === null ||
-    !reportStage ||
-    !("value" in reportStage) ||
-    !reportStage.enumerable ||
-    typeof reportStageValue !== "function"
+    candidateValidatorValue === null
   ) {
     throw new KnowledgeProductionModelRouteLeaseError();
   }
@@ -236,20 +283,106 @@ function captureAttemptDependenciesUnsafe(
       candidateValidatorValue,
       "validate"
     ),
+  });
+}
+
+/** Captures exact generation ports without allowing Proxy traps or dependency errors to escape. */
+function captureAttemptPorts(
+  value: KnowledgeProductionCompileAttemptDependencies
+): CapturedCompileAttemptPorts {
+  try {
+    return captureAttemptPortsUnsafe(value);
+  } catch {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+}
+
+interface CapturedExecutionContext {
+  job: ReturnType<IngestExecutionClaim["getJob"]>;
+  claim: IngestExecutionClaim;
+  signal: AbortSignal;
+  reportStage: IngestExecutionContext["reportStage"];
+}
+
+/** Captures an exact Queue context without invoking accessors or trusting copied DTOs. */
+function captureExecutionContextUnsafe(value: IngestExecutionContext): CapturedExecutionContext {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  const expectedKeys = ["executionClaim", "job", "reportStage", "signal"];
+  const actualKeys = Reflect.ownKeys(value);
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key) => typeof key !== "string") ||
+    (actualKeys as string[]).sort().some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  const readData = (key: string): unknown => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    return descriptor.value;
+  };
+  const job = readData("job");
+  const claim = readData("executionClaim");
+  const signal = readData("signal");
+  const reportStage = readData("reportStage");
+  IngestExecutionClaim.assert(claim);
+  if (
+    typeof reportStage !== "function" ||
+    !claim.matchesExecutionContext(job, signal, reportStage) ||
+    !claim.isCurrent()
+  ) {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+  const exactJob = claim.getJob();
+  const exactSignal = claim.getSignal();
+  return Object.freeze({
+    job: exactJob,
+    claim,
+    signal: exactSignal,
     reportStage: async (stage: KnowledgeIngestWorkStage): Promise<void> => {
-      const result: unknown = Reflect.apply(reportStageValue, value, [stage]);
+      const result: unknown = Reflect.apply(reportStage, value, [stage]);
       await result;
     },
   });
 }
 
-/** Captures exact attempt ports without allowing Proxy traps or dependency errors to escape. */
-function captureAttemptDependencies(
-  value: KnowledgeProductionCompileAttemptDependencies
-): CapturedCompileAttemptDependencies {
+/** Captures one Queue context while collapsing Proxy and claim failures. */
+function captureExecutionContext(value: IngestExecutionContext): CapturedExecutionContext {
   try {
-    return captureAttemptDependenciesUnsafe(value);
+    return captureExecutionContextUnsafe(value);
   } catch {
+    throw new KnowledgeProductionModelRouteLeaseError();
+  }
+}
+
+/** Requires the preparation proof to identify the exact Queue processing attempt. */
+function assertPreparationMatchesContext(
+  preparation: KnowledgeAuthorizedSourcePreparation,
+  context: CapturedExecutionContext
+): void {
+  const claim = preparation.getClaim();
+  const job = context.job;
+  if (
+    preparation.getSignal() !== context.signal ||
+    job.status !== "processing" ||
+    job.stage !== "parsing" ||
+    claim.bundleId !== job.bundleId ||
+    claim.jobId !== job.id ||
+    claim.sourceId !== job.sourceId ||
+    claim.sourceContentHash !== job.sourceContentHash ||
+    claim.pipelineFingerprint !== job.pipelineFingerprint ||
+    claim.inputRevision !== job.inputRevision ||
+    claim.attempt !== job.attempt ||
+    claim.startedAt !== job.startedAt
+  ) {
     throw new KnowledgeProductionModelRouteLeaseError();
   }
 }
@@ -328,6 +461,110 @@ function createGuardedCompilerDependencies(
   });
 }
 
+/** Opaque, single-use join of one Queue attempt and its fully derived Compiler input. */
+export class KnowledgeProductionCompileAttempt {
+  private declare readonly productionCompileAttemptBrand: void;
+
+  /** Rejects direct construction without the module-private builder token. */
+  constructor(token: symbol) {
+    if (token !== COMPILE_ATTEMPT_TOKEN) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    Object.freeze(this);
+  }
+
+  /** Authenticates only a module-minted production compile attempt. */
+  static assert(value: unknown): asserts value is KnowledgeProductionCompileAttempt {
+    requireAttemptState(value);
+  }
+}
+
+Object.freeze(KnowledgeProductionCompileAttempt.prototype);
+Object.freeze(KnowledgeProductionCompileAttempt);
+
+/** Generation-bound builder that can mint attempts only from exact Queue contexts. */
+export class KnowledgeProductionCompileAttemptBuilder {
+  /** Rejects direct construction without the owning route lease. */
+  constructor(
+    token: symbol,
+    lease: KnowledgeProductionModelRouteLease,
+    ports: CapturedCompileAttemptPorts
+  ) {
+    if (token !== COMPILE_ATTEMPT_BUILDER_TOKEN) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    requireLeaseState(lease);
+    compileAttemptBuilderStates.set(this, Object.freeze({ lease, ports }));
+    Object.freeze(this);
+  }
+
+  /** Authenticates only a builder issued by one current route generation. */
+  static assert(value: unknown): asserts value is KnowledgeProductionCompileAttemptBuilder {
+    requireAttemptBuilderState(value);
+  }
+
+  /**
+   * Binds preparation, claim, signal, reporter, Queue time, and derived input once.
+   *
+   * @param preparation - Authentic Runtime/workflow source preparation
+   * @param context - Exact Queue-issued execution context
+   * @returns Opaque attempt consumable only by this builder's route lease
+   */
+  async build(
+    preparation: KnowledgeAuthorizedSourcePreparation,
+    context: IngestExecutionContext
+  ): Promise<KnowledgeProductionCompileAttempt> {
+    const builderState = requireAttemptBuilderState(this);
+    const leaseState = requireLeaseState(builderState.lease);
+    assertLeaseCurrent(leaseState);
+    try {
+      KnowledgeAuthorizedSourcePreparation.assert(preparation);
+    } catch {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    const capturedContext = captureExecutionContext(context);
+    assertPreparationMatchesContext(preparation, capturedContext);
+    const foundation = preparation.getPreparation();
+    const route = leaseState.routes.get(foundation.bundle.id);
+    if (!route || !route.matchesProfile(preparation.getProfile())) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    if (reservedModelRoutePreparations.has(preparation)) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    reservedModelRoutePreparations.add(preparation);
+    await preparation.reprove("parsing");
+    assertLeaseCurrent(leaseState);
+    if (capturedContext.signal.aborted) throw createAbortError();
+    if (!capturedContext.claim.isCurrent()) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    assertPreparationMatchesContext(preparation, capturedContext);
+
+    let input: KnowledgeCompileInput;
+    try {
+      input = createKnowledgeProductionCompileInput(foundation, capturedContext.job.createdAt);
+    } catch {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    const attempt = new KnowledgeProductionCompileAttempt(COMPILE_ATTEMPT_TOKEN);
+    compileAttemptStates.set(attempt, {
+      lease: builderState.lease,
+      preparation,
+      input,
+      dependencies: Object.freeze({
+        ...builderState.ports,
+        reportStage: capturedContext.reportStage,
+      }),
+      consumed: false,
+    });
+    return attempt;
+  }
+}
+
+Object.freeze(KnowledgeProductionCompileAttemptBuilder.prototype);
+Object.freeze(KnowledgeProductionCompileAttemptBuilder);
+
 /** Opaque preflight-owned route capability that never exposes routes, settings, or credentials. */
 export class KnowledgeProductionModelRouteLease {
   /** Rejects direct construction without the module-private owner token. */
@@ -338,6 +575,7 @@ export class KnowledgeProductionModelRouteLease {
     const bindings = snapshotRouteBindings(routes);
     modelRouteLeaseStates.set(this, {
       current: true,
+      builderIssued: false,
       routes: new Map(bindings.map(({ bundleId, route }) => [bundleId, route])),
     });
     Object.freeze(this);
@@ -379,25 +617,43 @@ export class KnowledgeProductionModelRouteLease {
   }
 
   /**
-   * Creates and immediately runs one Compiler without exposing its model adapter or private route.
+   * Captures generation-owned target and validation ports into an opaque builder.
    *
-   * @param preparation - Authentic exact Queue/Runtime/source preparation
-   * @param input - Complete deterministic Compiler input derived from that preparation
-   * @param dependencies - Production target, candidate, and Queue-stage ports
-   * @returns Controlled Compiler result for this exact attempt
+   * @param dependencies - Fixed non-model ports for this production generation
+   * @returns Builder that accepts only exact Queue preparation contexts
    */
-  async compile(
-    preparation: KnowledgeAuthorizedSourcePreparation,
-    input: KnowledgeCompileInput,
+  createAttemptBuilder(
     dependencies: KnowledgeProductionCompileAttemptDependencies
-  ): Promise<KnowledgeCompileResult> {
+  ): KnowledgeProductionCompileAttemptBuilder {
     const state = requireLeaseState(this);
     assertLeaseCurrent(state);
-    try {
-      KnowledgeAuthorizedSourcePreparation.assert(preparation);
-    } catch {
+    if (state.builderIssued) {
       throw new KnowledgeProductionModelRouteLeaseError();
     }
+    const ports = captureAttemptPorts(dependencies);
+    assertLeaseCurrent(state);
+    if (state.builderIssued) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    state.builderIssued = true;
+    return new KnowledgeProductionCompileAttemptBuilder(COMPILE_ATTEMPT_BUILDER_TOKEN, this, ports);
+  }
+
+  /**
+   * Consumes one exact opaque attempt without accepting caller-spliceable DTOs or ports.
+   *
+   * @param attempt - One builder-minted, generation-bound compile attempt
+   * @returns Controlled Compiler result for this exact attempt
+   */
+  async compile(attempt: KnowledgeProductionCompileAttempt): Promise<KnowledgeCompileResult> {
+    const state = requireLeaseState(this);
+    assertLeaseCurrent(state);
+    const attemptState = requireAttemptState(attempt);
+    if (attemptState.lease !== this || attemptState.consumed) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    attemptState.consumed = true;
+    const { preparation, input, dependencies } = attemptState;
     const signal = preparation.getSignal();
     if (signal.aborted) throw createAbortError();
     const foundation = preparation.getPreparation();
@@ -405,22 +661,16 @@ export class KnowledgeProductionModelRouteLease {
     if (!route) {
       throw new KnowledgeProductionModelRouteLeaseError();
     }
-    const captured = captureAttemptDependencies(dependencies);
-    assertLeaseCurrent(state);
-    if (reservedModelRoutePreparations.has(preparation)) {
-      throw new KnowledgeProductionModelRouteLeaseError();
-    }
-    reservedModelRoutePreparations.add(preparation);
     await preparation.reprove("parsing");
     assertLeaseCurrent(state);
     if (signal.aborted) throw createAbortError();
     const compiler = new KnowledgeCompiler(
-      createGuardedCompilerDependencies(state, preparation, route, captured)
+      createGuardedCompilerDependencies(state, preparation, route, dependencies)
     );
     const result = await compiler.compile(input, signal);
     assertLeaseCurrent(state);
     if (signal.aborted) throw createAbortError();
-    await reportAttemptStage(state, preparation, captured, "validating");
+    await reportAttemptStage(state, preparation, dependencies, "validating");
     assertLeaseCurrent(state);
     if (signal.aborted) throw createAbortError();
     await preparation.reprove("validating");

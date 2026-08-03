@@ -767,6 +767,61 @@ describe("KnowledgeCompiler minimal generation disclosure", () => {
   });
 });
 
+describe("KnowledgeCompiler untrusted dependency payloads", () => {
+  it("sanitizes target-resolver accessors that throw during structural parsing", async () => {
+    const canary = "private target accessor canary";
+    let getterCalls = 0;
+    const harness = createHarness({
+      resolve: async () => {
+        const observation: Record<string, unknown> = {
+          kind: "missing",
+          windowsPathKey: "wiki/page.md",
+        };
+        Object.defineProperty(observation, "targetId", {
+          enumerable: true,
+          get: () => {
+            getterCalls += 1;
+            throw new Error(canary);
+          },
+        });
+        return [observation];
+      },
+    });
+    const result = requireFailure(
+      await harness.compiler.compile(createCompileInput(), new AbortController().signal)
+    );
+
+    expect(getterCalls).toBe(0);
+    expect(result.stage).toBe("target_resolution");
+    expect(JSON.stringify(result)).not.toContain(canary);
+  });
+
+  it("sanitizes candidate-validator accessors that throw during structural parsing", async () => {
+    const canary = "private validation accessor canary";
+    let getterCalls = 0;
+    const harness = createHarness({
+      validate: async () => {
+        const result: Record<string, unknown> = { diagnostics: [] };
+        Object.defineProperty(result, "validation", {
+          enumerable: true,
+          get: () => {
+            getterCalls += 1;
+            throw new Error(canary);
+          },
+        });
+        return result;
+      },
+    });
+    const result = requireFailure(
+      await harness.compiler.compile(createCompileInput(), new AbortController().signal)
+    );
+
+    expect(getterCalls).toBe(0);
+    expect(result.stage).toBe("candidate_validation");
+    expect(JSON.stringify(result)).not.toContain(canary);
+  });
+});
+
 describe("KnowledgeCompiler post-dependency cancellation", () => {
   const stages: Exclude<KnowledgeCompilerStage, "input">[] = [
     "analysis",

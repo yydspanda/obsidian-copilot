@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  DEFAULT_KNOWLEDGE_COMPILER_LIMITS,
   KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
   type CompilerAnalysis,
   type CompilerAnalysisRequest,
@@ -26,6 +27,8 @@ import {
   type KnowledgeCompilerLimits,
   type KnowledgeCompilerStage,
 } from "@/knowledge/compiler/CompilerModelPort";
+
+export { DEFAULT_KNOWLEDGE_COMPILER_LIMITS } from "@/knowledge/compiler/CompilerModelPort";
 import {
   parseCompilerAnalysisModelOutput,
   type CompilerAnalysisModelOutput,
@@ -72,24 +75,6 @@ import {
   toWindowsPathKey,
 } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
-
-/** Safe defaults that callers may lower or raise through explicit configuration. */
-export const DEFAULT_KNOWLEDGE_COMPILER_LIMITS: KnowledgeCompilerLimits = {
-  maxConcepts: 256,
-  maxEntities: 256,
-  maxClaims: 512,
-  maxRelations: 512,
-  maxCitations: 1024,
-  maxTargets: 128,
-  maxEvidenceItems: 2048,
-  maxContextPages: 256,
-  maxTargetAuthorizations: 256,
-  maxModelContextCharacters: 8_000_000,
-  maxAnalysisCharacters: 1_000_000,
-  maxGeneratedFileCharacters: 2_000_000,
-  maxTotalGeneratedCharacters: 8_000_000,
-  maxValidationDiagnostics: 1024,
-};
 
 const MAX_COMPILER_SCHEMA_DIAGNOSTICS = 256;
 const MODEL_CALL_AUTHORIZATION_TOKEN = Symbol(
@@ -709,6 +694,131 @@ function deepFreeze<T>(value: T, seen = new Set<object>()): T {
     deepFreeze(nested, seen);
   }
   return Object.freeze(value);
+}
+
+const INVALID_DEPENDENCY_SNAPSHOT = Symbol("invalid-compiler-dependency-snapshot");
+const MAX_DEPENDENCY_SNAPSHOT_DEPTH = 16;
+const MAX_DEPENDENCY_SNAPSHOT_NODES = 200_000;
+const MAX_DEPENDENCY_SNAPSHOT_OBJECT_KEYS = 64;
+const MAX_DEPENDENCY_SNAPSHOT_COLLECTION_ITEMS = 100_000;
+const MAX_DEPENDENCY_SNAPSHOT_CHARACTERS = 16_000_000;
+
+interface CompilerDependencySnapshotBudget {
+  nodes: number;
+  characters: number;
+  maxArrayItems: number;
+  maxCharacters: number;
+  seen: Set<object>;
+}
+
+/** Recursively copies only dense arrays and plain enumerable own data records. */
+function snapshotCompilerDependencyValue(
+  value: unknown,
+  budget: CompilerDependencySnapshotBudget,
+  depth: number
+): JsonValue | typeof INVALID_DEPENDENCY_SNAPSHOT {
+  if (value === null || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    budget.characters += value.length;
+    return budget.characters <= budget.maxCharacters ? value : INVALID_DEPENDENCY_SNAPSHOT;
+  }
+  if (typeof value !== "object" || depth > MAX_DEPENDENCY_SNAPSHOT_DEPTH) {
+    return INVALID_DEPENDENCY_SNAPSHOT;
+  }
+  if (budget.seen.has(value) || budget.nodes >= MAX_DEPENDENCY_SNAPSHOT_NODES) {
+    return INVALID_DEPENDENCY_SNAPSHOT;
+  }
+  budget.seen.add(value);
+  budget.nodes += 1;
+
+  if (Array.isArray(value)) {
+    const length = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !length ||
+      !("value" in length) ||
+      !Number.isSafeInteger(length.value) ||
+      length.value < 0 ||
+      length.value > budget.maxArrayItems
+    ) {
+      return INVALID_DEPENDENCY_SNAPSHOT;
+    }
+    const ownKeys = Reflect.ownKeys(value);
+    if (
+      ownKeys.length !== (length.value as number) + 1 ||
+      ownKeys.some((key) => typeof key !== "string")
+    ) {
+      return INVALID_DEPENDENCY_SNAPSHOT;
+    }
+    const snapshot: JsonValue[] = [];
+    for (let index = 0; index < (length.value as number); index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        return INVALID_DEPENDENCY_SNAPSHOT;
+      }
+      const nested = snapshotCompilerDependencyValue(descriptor.value, budget, depth + 1);
+      if (nested === INVALID_DEPENDENCY_SNAPSHOT) return nested;
+      snapshot.push(nested);
+    }
+    Object.freeze(snapshot);
+    return snapshot;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return INVALID_DEPENDENCY_SNAPSHOT;
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (
+    ownKeys.length > MAX_DEPENDENCY_SNAPSHOT_OBJECT_KEYS ||
+    ownKeys.some((key) => typeof key !== "string")
+  ) {
+    return INVALID_DEPENDENCY_SNAPSHOT;
+  }
+  const snapshot = Object.create(null) as Record<string, JsonValue>;
+  for (const key of ownKeys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      return INVALID_DEPENDENCY_SNAPSHOT;
+    }
+    const nested = snapshotCompilerDependencyValue(descriptor.value, budget, depth + 1);
+    if (nested === INVALID_DEPENDENCY_SNAPSHOT) return nested;
+    Object.defineProperty(snapshot, key, {
+      value: nested,
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return Object.freeze(snapshot);
+}
+
+/**
+ * Snapshots an untrusted dependency payload without invoking data accessors.
+ *
+ * Exotic, cyclic, sparse, accessor-backed, or over-budget values collapse to
+ * `undefined`, which the existing strict schema converts to a controlled
+ * non-retryable dependency-output failure.
+ *
+ * @param value - Unknown target-resolver or candidate-validator payload
+ * @param maxArrayItems - Stage-specific maximum dense collection length
+ * @returns Detached data-only snapshot or undefined for any unsafe shape
+ */
+function snapshotCompilerDependencyPayload(value: unknown, maxArrayItems: number): unknown {
+  try {
+    const budget: CompilerDependencySnapshotBudget = {
+      nodes: 0,
+      characters: 0,
+      maxArrayItems: Math.min(maxArrayItems, MAX_DEPENDENCY_SNAPSHOT_COLLECTION_ITEMS),
+      maxCharacters: MAX_DEPENDENCY_SNAPSHOT_CHARACTERS,
+      seen: new Set<object>(),
+    };
+    const snapshot = snapshotCompilerDependencyValue(value, budget, 0);
+    return snapshot === INVALID_DEPENDENCY_SNAPSHOT ? undefined : snapshot;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -2467,7 +2577,13 @@ export class KnowledgeCompiler {
     const rawObservations = await this.invokeDependency("target_resolution", signal, () =>
       this.dependencies.targetResolver.resolve(targetRequests, signal)
     );
-    const parsedObservations = compilerTargetObservationsSchema.safeParse(rawObservations);
+    const observationSnapshot = snapshotCompilerDependencyPayload(
+      rawObservations,
+      this.limits.maxTargets
+    );
+    const parsedObservations = await this.invokeDependency("target_resolution", signal, async () =>
+      compilerTargetObservationsSchema.safeParse(observationSnapshot)
+    );
     if (!parsedObservations.success) {
       return createFailure("target_resolution", mapSchemaIssues(parsedObservations.error));
     }
@@ -2589,7 +2705,13 @@ export class KnowledgeCompiler {
     const rawValidation = await this.invokeDependency("candidate_validation", signal, () =>
       this.dependencies.candidateValidator.validate(validationInput, signal)
     );
-    const parsedValidation = compilerCandidateValidationResultSchema.safeParse(rawValidation);
+    const validationSnapshot = snapshotCompilerDependencyPayload(
+      rawValidation,
+      this.limits.maxValidationDiagnostics + 1
+    );
+    const parsedValidation = await this.invokeDependency("candidate_validation", signal, async () =>
+      compilerCandidateValidationResultSchema.safeParse(validationSnapshot)
+    );
     if (!parsedValidation.success) {
       return createFailure("candidate_validation", mapSchemaIssues(parsedValidation.error));
     }

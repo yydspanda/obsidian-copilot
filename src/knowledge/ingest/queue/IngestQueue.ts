@@ -51,6 +51,7 @@ type ExecutedJobStatus = Extract<RunNextResult, { kind: "executed" }>["status"];
 interface IngestExecutionClaimState {
   job: Readonly<ProcessingIngestJob>;
   signal: AbortSignal;
+  reportStage: IngestExecutionContext["reportStage"];
   storage: QueueStorage;
   isCurrent: () => boolean;
   revoked: boolean;
@@ -75,17 +76,27 @@ function requireIngestExecutionClaimState(value: unknown): IngestExecutionClaimS
  *
  * @param job - Frozen durable processing attempt
  * @param signal - Queue-owned cancellation signal
+ * @param reportStage - Exact reporter closed over the same Queue claim
+ * @param storage - Exact persistence facade that issued the claim
  * @param isCurrent - Synchronous controller ownership check
  * @returns Opaque claim that cannot be reconstructed from the job DTO
  */
 function createIngestExecutionClaim(
   job: Readonly<ProcessingIngestJob>,
   signal: AbortSignal,
+  reportStage: IngestExecutionContext["reportStage"],
   storage: QueueStorage,
   isCurrent: () => boolean
 ): IngestExecutionClaim {
   const claim = new IngestExecutionClaim(EXECUTION_CLAIM_TOKEN);
-  ingestExecutionClaimStates.set(claim, { job, signal, storage, isCurrent, revoked: false });
+  ingestExecutionClaimStates.set(claim, {
+    job,
+    signal,
+    reportStage,
+    storage,
+    isCurrent,
+    revoked: false,
+  });
   return claim;
 }
 
@@ -142,6 +153,28 @@ export class IngestExecutionClaim {
   /** Returns the Queue-owned signal; callers cannot substitute another signal. */
   getSignal(): AbortSignal {
     return requireIngestExecutionClaimState(this).signal;
+  }
+
+  /**
+   * Checks that a proposed executor context is the exact Queue-issued triplet.
+   *
+   * The stage reporter is identity-bound because it closes over this claim and
+   * the Queue's active controller. A copied job DTO or substituted reporter
+   * therefore cannot be joined to an otherwise authentic claim.
+   *
+   * @param job - Candidate exact processing-job object
+   * @param signal - Candidate exact Queue AbortSignal
+   * @param reportStage - Candidate exact Queue stage reporter
+   * @returns Whether all three references belong to this active claim
+   */
+  matchesExecutionContext(job: unknown, signal: unknown, reportStage: unknown): boolean {
+    const state = requireIngestExecutionClaimState(this);
+    return (
+      !state.revoked &&
+      job === state.job &&
+      signal === state.signal &&
+      reportStage === state.reportStage
+    );
   }
 
   /** Reports whether the same local controller still owns this exact attempt. */
@@ -1873,9 +1906,28 @@ export class IngestQueue {
       let result: IngestExecutionResult;
       try {
         try {
+          let issuedExecutionClaim: IngestExecutionClaim | undefined;
+          const reportStage: IngestExecutionContext["reportStage"] = async (stage) => {
+            if (!issuedExecutionClaim) {
+              throw new IngestQueueInfrastructureError(
+                "initialize_execution_claim",
+                new Error("The ingest execution claim was not initialized")
+              );
+            }
+            await this.reportStage(
+              bundleId,
+              executionJob.id,
+              executionJob.attempt,
+              executionJob.startedAt,
+              stage,
+              active.controller.signal,
+              issuedExecutionClaim
+            );
+          };
           executionClaim = createIngestExecutionClaim(
             executionJob,
             active.controller.signal,
+            reportStage,
             this.storage,
             () => {
               const current = this.activeControllers.get(bundleId);
@@ -1887,22 +1939,12 @@ export class IngestQueue {
               );
             }
           );
-          const issuedExecutionClaim = executionClaim;
+          issuedExecutionClaim = executionClaim;
           result = await this.executor.execute({
             job: executionJob,
             executionClaim: issuedExecutionClaim,
             signal: active.controller.signal,
-            reportStage: async (stage) => {
-              await this.reportStage(
-                bundleId,
-                executionJob.id,
-                executionJob.attempt,
-                executionJob.startedAt,
-                stage,
-                active.controller.signal,
-                issuedExecutionClaim
-              );
-            },
+            reportStage,
           });
         } finally {
           revokeIngestExecutionClaim(executionClaim);

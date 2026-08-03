@@ -1277,6 +1277,16 @@ export class KnowledgePrivateModelRoute {
   getDescriptor(): Readonly<KnowledgePrivateModelRouteDescriptor> {
     return requireRouteState(this).descriptor;
   }
+
+  /** Returns whether this exact route was sealed for one secret-free pipeline profile. */
+  matchesProfile(profile: KnowledgeBundlePipelineProfile): boolean {
+    try {
+      assertRouteMatchesProfile(requireRouteState(this), profile);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 Object.freeze(KnowledgePrivateModelRoute.prototype);
