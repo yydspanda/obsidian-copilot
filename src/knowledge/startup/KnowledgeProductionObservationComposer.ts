@@ -20,6 +20,7 @@ import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRep
 import {
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
+  KnowledgeRuntimeIngestExecutionProofPort,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeStore,
@@ -32,6 +33,10 @@ import {
 } from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator";
 import { KnowledgeSourceObservationStartupReconciler } from "@/knowledge/startup/KnowledgeSourceObservationStartupReconciler";
 import { KnowledgeProductionWorkerSession } from "@/knowledge/startup/KnowledgeProductionWorkerSession";
+import {
+  KnowledgeProductionPreparationExecutor,
+  type KnowledgePreparedIngestHandler,
+} from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
 
 /** Exact production resources consumed by one observation-only workflow generation. */
 export interface KnowledgeProductionObservationComposerInput {
@@ -102,6 +107,7 @@ interface KnowledgeProductionObservationComposition {
   handoffs: ReadonlyMap<string, SourceObservationHandoff>;
   queue: IngestQueue;
   heldExecutor: StartupHeldObservationIngestExecutor;
+  proofPort: KnowledgeRuntimeIngestExecutionProofPort;
 }
 
 interface KnowledgeProductionObservationInternalState {
@@ -111,6 +117,7 @@ interface KnowledgeProductionObservationInternalState {
   composition?: KnowledgeProductionObservationComposition;
   compositionFailure?: KnowledgeProductionObservationDiagnosticCode;
   coordinator?: KnowledgeSourceObservationStartupCoordinator;
+  plan?: KnowledgeSourceExecutionPlan;
   lastResult?: KnowledgeProductionObservationResult | KnowledgeProductionObservationReproofResult;
   unsubscribeLease?: () => void;
 }
@@ -205,6 +212,7 @@ function composeObservation(
   const parsers = workflowLease.getParsers();
   const executionOwner = createKnowledgeExecutionOwner();
   const queueStorage = new KnowledgeRuntimeQueueStorage(runtime, executionOwner);
+  const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queueStorage);
   const heldExecutor = new StartupHeldObservationIngestExecutor();
   const queue = new IngestQueue(queueStorage, heldExecutor);
   const enqueueOnly = Object.freeze({
@@ -244,6 +252,7 @@ function composeObservation(
     handoffs,
     queue,
     heldExecutor,
+    proofPort,
   });
   workflowLease.assertCurrent();
   return composition;
@@ -342,6 +351,7 @@ export class KnowledgeProductionObservationComposer {
     try {
       assertCompositionCurrent(state, generation, composition, signal);
       const plan = await composition.loader.load(composition.owners, signal);
+      state.plan = plan;
       assertCompositionCurrent(state, generation, composition, signal);
       phase = "observation";
       const coordinator = createObservationCoordinator(state, generation, composition, plan);
@@ -419,14 +429,14 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
-  /** Binds one explicit executor to the exact released Queue and returns a bounded worker. */
-  createWorkerSession(
-    executor: IngestExecutor,
+  /** Binds an exact claim/read/parser bridge to the released Queue and returns a bounded worker. */
+  createPreparedWorkerSession(
+    handler: KnowledgePreparedIngestHandler,
     isReleased: () => boolean
   ): KnowledgeProductionWorkerSession {
     const state = requireComposerState(this);
     const composition = state.composition;
-    if (!composition || !state.coordinator || !state.lastResult) {
+    if (!composition || !state.coordinator || !state.lastResult || !state.plan) {
       throw createAbortError();
     }
     if (
@@ -438,7 +448,9 @@ export class KnowledgeProductionObservationComposer {
     if (typeof isReleased !== "function") {
       throw createAbortError();
     }
-    composition.heldExecutor.setExecutor(executor);
+    composition.heldExecutor.setExecutor(
+      new KnowledgeProductionPreparationExecutor(state.plan, composition.proofPort, handler)
+    );
     return new KnowledgeProductionWorkerSession({
       queue: composition.queue,
       bundleIds: composition.owners.map(({ config }) => config.id),
@@ -457,6 +469,7 @@ export class KnowledgeProductionObservationComposer {
     state.closed = true;
     state.generation += 1;
     state.composition = undefined;
+    state.plan = undefined;
     const unsubscribe = state.unsubscribeLease;
     state.unsubscribeLease = undefined;
     try {
