@@ -143,6 +143,27 @@ describe("KnowledgeProductionPreflightComposer", () => {
     expect(JSON.stringify(result)).not.toContain(PROVIDER_SECRET);
   });
 
+  it("retains routes only behind a close-incapable exact-Bundle lease", () => {
+    const composer = new KnowledgeProductionPreflightComposer(createInput());
+    const owner = composer.getModelRouteLeaseOwner();
+    const lease = owner.getLease();
+
+    expect(lease.isCurrent()).toBe(true);
+    expect(lease.coversBundleIds(["personal"])).toBe(true);
+    expect(lease.coversBundleIds(["other"])).toBe(false);
+    expect(Reflect.ownKeys(lease)).toEqual([]);
+    expect("close" in lease).toBe(false);
+    expect(JSON.stringify({ lease })).not.toContain(MODEL_SECRET);
+    expect(JSON.stringify({ lease })).not.toContain(PROVIDER_SECRET);
+
+    composer.close();
+
+    expect(lease.isCurrent()).toBe(false);
+    expect(lease.coversBundleIds(["personal"])).toBe(false);
+    expect(() => lease.assertCurrent()).toThrow("The operation was aborted");
+    expect(() => composer.getModelRouteLeaseOwner()).toThrow(TypeError);
+  });
+
   it("uses the exact selected model credential without reading the provider fallback", () => {
     let providerCredentialReads = 0;
     const settings = createSettings([createModel({ apiKey: MODEL_SECRET })]);

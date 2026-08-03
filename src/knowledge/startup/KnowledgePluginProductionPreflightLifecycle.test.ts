@@ -1,8 +1,10 @@
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
-import type {
-  KnowledgeProductionPreflightComposerInput,
-  KnowledgeProductionPreflightResult,
-  KnowledgeProductionPreflightSettingsInput,
+import { KnowledgeProductionModelRouteLease } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
+import {
+  KnowledgeProductionPreflightComposer,
+  type KnowledgeProductionPreflightComposerInput,
+  type KnowledgeProductionPreflightResult,
+  type KnowledgeProductionPreflightSettingsInput,
 } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import { ProjectKnowledgePipelineProfileSource } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
@@ -98,10 +100,27 @@ function createCandidate(
   close: jest.Mock<void, []>;
 } {
   let closed = false;
+  const bundle = createBundle();
+  const routeComposer = new KnowledgeProductionPreflightComposer({
+    owners: [{ projectId: PROJECT_ID, config: bundle }],
+    projects: [
+      {
+        id: PROJECT_ID,
+        projectModelKey: MODEL_KEY,
+        modelConfigs: {},
+      },
+    ],
+    settings: createSettings(),
+    profileOptions: createResources().profileOptions,
+    fetchPort: createFetchPort(),
+  });
+  const routeOwner = routeComposer.getModelRouteLeaseOwner();
   return {
     preflight: jest.fn(() => (closed ? { kind: "diagnostic", code: "closed" } : result)),
+    getModelRouteLeaseOwner: () => routeOwner,
     close: jest.fn(() => {
       closed = true;
+      routeOwner.close();
     }),
   };
 }
@@ -188,6 +207,9 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     expect(Object.isFrozen(result.admission.owners[0]?.config.sourceRoots)).toBe(true);
     expect(result.admission.workflowLease.getOwners()).toBe(result.admission.owners);
     expect(Object.isFrozen(result.admission.workflowLease.getParsers())).toBe(true);
+    expect(result.admission.modelRouteLease.isCurrent()).toBe(true);
+    expect(result.admission.modelRouteLease.coversBundleIds(["personal"])).toBe(true);
+    expect(Reflect.ownKeys(result.admission.modelRouteLease)).toEqual([]);
     expect(preflightInput?.profileSource).toBeInstanceOf(ProjectKnowledgePipelineProfileSource);
     expect(fetchPort).not.toHaveBeenCalled();
     expect(candidate.close).not.toHaveBeenCalled();
@@ -278,6 +300,7 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
 
     expect(events).toEqual(["first:false", "second:false"]);
     expect(candidate.close).toHaveBeenCalledTimes(1);
+    expect(result.admission.modelRouteLease.isCurrent()).toBe(false);
     expect(lease.isCurrent()).toBe(false);
     expect(() => lease.assertCurrent()).toThrow("The operation was aborted");
     expect(() => lease.getOwners()).toThrow("The operation was aborted");
@@ -295,12 +318,16 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     const result = await lifecycle.load(new AbortController().signal);
     if (result.kind !== "configured") throw new Error("Expected configured preflight");
     const lease = result.admission.workflowLease;
+    const modelLease = result.admission.modelRouteLease;
     const owner = lease.getOwners()[0];
     const profile = lease.resolve(cloneOwner(owner), new AbortController().signal);
     const exposed = JSON.stringify({ admission: result.admission, profile });
 
     expect(() => KnowledgePluginProductionWorkflowLease.assert(lease)).not.toThrow();
+    expect(() => KnowledgeProductionModelRouteLease.assert(modelLease)).not.toThrow();
     expect(Reflect.ownKeys(lease)).toEqual([]);
+    expect(Reflect.ownKeys(modelLease)).toEqual([]);
+    expect("close" in modelLease).toBe(false);
     expect(exposed).not.toContain("test-only-model-credential");
     expect(exposed).not.toContain("test-only-provider-credential");
     expect(exposed).not.toContain("apiKey");
@@ -316,6 +343,11 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
         isCurrent: () => true,
       })
     ).toThrow(TypeError);
+    expect(() =>
+      KnowledgeProductionModelRouteLease.assert(
+        Object.create(KnowledgeProductionModelRouteLease.prototype)
+      )
+    ).toThrow();
     expect(() => {
       Reflect.construct(KnowledgePluginProductionWorkflowLease, [
         Symbol("forged"),
@@ -324,6 +356,32 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
         {},
       ]);
     }).toThrow(TypeError);
+  });
+
+  it("rejects a forged model-route owner without invoking it or blocking candidate cleanup", async () => {
+    const candidate = createCandidate();
+    const forgedClose = jest.fn(() => {
+      throw new Error("Untrusted close authority must never run");
+    });
+    const forgedGetLease = jest.fn();
+    const forgedOwner = { getLease: forgedGetLease, close: forgedClose };
+    Object.defineProperty(candidate, "getModelRouteLeaseOwner", {
+      value: () => forgedOwner,
+      enumerable: true,
+      configurable: true,
+    });
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle(
+      createDependencies({ createPreflight: () => candidate })
+    );
+
+    await expect(lifecycle.load(new AbortController().signal)).resolves.toEqual({
+      kind: "invalid",
+      diagnosticCodes: ["production_preflight_route_invalid"],
+    });
+
+    expect(forgedClose).not.toHaveBeenCalled();
+    expect(forgedGetLease).not.toHaveBeenCalled();
+    expect(candidate.close).toHaveBeenCalledTimes(1);
   });
 
   it("closes a candidate constructed during synchronous Settings/Projects invalidation", async () => {
@@ -375,6 +433,7 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
 
     expect(candidate.close).toHaveBeenCalledTimes(1);
     expect(result.admission.workflowLease.isCurrent()).toBe(false);
+    expect(result.admission.modelRouteLease.isCurrent()).toBe(false);
     expect(createPreflight).toHaveBeenCalledTimes(1);
     let failure: unknown;
     try {
@@ -401,7 +460,9 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     expect(first.close).toHaveBeenCalledTimes(1);
     expect(second.close).not.toHaveBeenCalled();
     expect(firstResult.admission.workflowLease.isCurrent()).toBe(false);
+    expect(firstResult.admission.modelRouteLease.isCurrent()).toBe(false);
     expect(secondResult.admission.workflowLease.isCurrent()).toBe(true);
+    expect(secondResult.admission.modelRouteLease.isCurrent()).toBe(true);
     expect(() => lifecycle.assertCurrentAdmission(firstResult.admission)).toThrow();
     expect(() => lifecycle.assertCurrentAdmission(secondResult.admission)).not.toThrow();
   });
@@ -488,6 +549,7 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
 
     expect(candidate.close).toHaveBeenCalledTimes(1);
     expect(result.admission.workflowLease.isCurrent()).toBe(false);
+    expect(result.admission.modelRouteLease.isCurrent()).toBe(false);
     await expect(lifecycle.load(new AbortController().signal)).rejects.toMatchObject({
       name: "AbortError",
     });

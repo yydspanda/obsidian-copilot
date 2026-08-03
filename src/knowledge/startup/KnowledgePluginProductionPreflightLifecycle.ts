@@ -1,5 +1,9 @@
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import {
+  KnowledgeProductionModelRouteLease,
+  KnowledgeProductionModelRouteLeaseOwner,
+} from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
+import {
   KnowledgeProductionPreflightComposer,
   type KnowledgeProductionPreflightComposerInput,
   type KnowledgeProductionPreflightResult,
@@ -36,6 +40,8 @@ export interface KnowledgePluginProductionPreflightResources {
 export interface KnowledgePluginProductionPreflightPort {
   /** Returns one already-sanitized synchronous preflight result. */
   preflight(): KnowledgeProductionPreflightResult;
+  /** Transfers lifecycle close authority for the exact admitted private route generation. */
+  getModelRouteLeaseOwner(): KnowledgeProductionModelRouteLeaseOwner;
   /** Permanently invalidates every capability retained by this preflight generation. */
   close(): void;
 }
@@ -66,6 +72,8 @@ export interface KnowledgePluginProductionPreflightAdmission {
   readonly owners: readonly ConfiguredProjectKnowledgeBundle[];
   /** Unforgeable secret-free capabilities retained for the exact workflow generation. */
   readonly workflowLease: KnowledgePluginProductionWorkflowLease;
+  /** Close-incapable access to exact preflight-created model routes. */
+  readonly modelRouteLease: KnowledgeProductionModelRouteLease;
 }
 
 /** Startup result plus an in-process admission used by the next recovery boundary. */
@@ -144,6 +152,19 @@ function closeWorkflowLease(lease: KnowledgePluginProductionWorkflowLease): void
   state.profileSource = undefined;
   for (const listener of listeners) {
     notifyWorkflowLeaseInvalidation(listener);
+  }
+}
+
+/** Revokes one authentic model-route owner without allowing cleanup failure to stop teardown. */
+function closeModelRouteOwnerSafely(
+  owner: KnowledgeProductionModelRouteLeaseOwner | undefined
+): void {
+  if (!owner) return;
+  try {
+    KnowledgeProductionModelRouteLeaseOwner.assert(owner);
+    owner.close();
+  } catch {
+    // Candidate and workflow cleanup must continue after an invalid or failing owner.
   }
 }
 
@@ -326,9 +347,10 @@ function createWorkflowLease(
 function createAdmission(
   generation: number,
   owners: readonly ConfiguredProjectKnowledgeBundle[],
-  workflowLease: KnowledgePluginProductionWorkflowLease
+  workflowLease: KnowledgePluginProductionWorkflowLease,
+  modelRouteLease: KnowledgeProductionModelRouteLease
 ): KnowledgePluginProductionPreflightAdmission {
-  return Object.freeze({ generation, owners, workflowLease });
+  return Object.freeze({ generation, owners, workflowLease, modelRouteLease });
 }
 
 /** Maps an already-sanitized preflight diagnostic into the startup namespace. */
@@ -477,6 +499,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
     generation: number;
     preflight: KnowledgePluginProductionPreflightPort;
     admission: KnowledgePluginProductionPreflightAdmission;
+    modelRouteOwner: KnowledgeProductionModelRouteLeaseOwner;
   };
 
   /** Creates one plugin-owned, initially fail-closed preflight lifecycle. */
@@ -536,7 +559,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
     );
     let profileSource: ProjectKnowledgePipelineProfileSource;
     let parsers: readonly KnowledgeByteParser[];
-    let admission: KnowledgePluginProductionPreflightAdmission;
+    let owners: readonly ConfiguredProjectKnowledgeBundle[];
     let workflowLease: KnowledgePluginProductionWorkflowLease | undefined;
     try {
       parsers = snapshotParsers(resources.parsers);
@@ -545,9 +568,8 @@ export class KnowledgePluginProductionPreflightLifecycle {
         settings,
         resources.profileOptions
       );
-      const owners = snapshotOwners(result.bundles);
+      owners = snapshotOwners(result.bundles);
       workflowLease = createWorkflowLease(owners, parsers, profileSource);
-      admission = createAdmission(generation, owners, workflowLease);
       this.assertCurrent(generation, signal);
     } catch (error) {
       if (workflowLease) {
@@ -569,7 +591,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
     let candidate: KnowledgePluginProductionPreflightPort;
     try {
       const input: KnowledgeProductionPreflightComposerInput = {
-        owners: admission.owners,
+        owners,
         projects,
         settings,
         profileOptions: resources.profileOptions,
@@ -580,7 +602,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
         ? createPreflight(input)
         : new KnowledgeProductionPreflightComposer(input);
     } catch {
-      closeWorkflowLease(admission.workflowLease);
+      closeWorkflowLease(workflowLease);
       this.assertCurrent(generation, signal);
       return {
         kind: "invalid",
@@ -591,16 +613,15 @@ export class KnowledgePluginProductionPreflightLifecycle {
     try {
       this.assertCurrent(generation, signal);
     } catch (error) {
-      this.closeCandidate(candidate, generation, admission);
+      this.closeCandidate(candidate, generation, workflowLease);
       throw error;
     }
 
-    this.current = { generation, preflight: candidate, admission };
     let preflight: KnowledgeProductionPreflightResult;
     try {
       preflight = candidate.preflight();
     } catch {
-      this.closeCandidate(candidate, generation, admission);
+      this.closeCandidate(candidate, generation, workflowLease);
       this.assertCurrent(generation, signal);
       return {
         kind: "invalid",
@@ -610,17 +631,41 @@ export class KnowledgePluginProductionPreflightLifecycle {
     try {
       this.assertCurrent(generation, signal);
     } catch (error) {
-      this.closeCandidate(candidate, generation, admission);
+      this.closeCandidate(candidate, generation, workflowLease);
       throw error;
     }
     if (preflight.kind === "diagnostic") {
-      this.closeCandidate(candidate, generation, admission);
+      this.closeCandidate(candidate, generation, workflowLease);
       this.assertCurrent(generation, signal);
       return {
         kind: "invalid",
         diagnosticCodes: [toStartupDiagnostic(preflight)],
       };
     }
+
+    let modelRouteOwner: KnowledgeProductionModelRouteLeaseOwner | undefined;
+    let admission: KnowledgePluginProductionPreflightAdmission;
+    try {
+      const ownerCandidate = candidate.getModelRouteLeaseOwner();
+      KnowledgeProductionModelRouteLeaseOwner.assert(ownerCandidate);
+      modelRouteOwner = ownerCandidate;
+      const modelRouteLease = modelRouteOwner.getLease();
+      KnowledgeProductionModelRouteLease.assert(modelRouteLease);
+      if (!modelRouteLease.coversBundleIds(owners.map(({ config }) => config.id))) {
+        throw new TypeError("The production model route generation does not cover every Bundle");
+      }
+      admission = createAdmission(generation, owners, workflowLease, modelRouteLease);
+      this.assertCurrent(generation, signal);
+    } catch {
+      this.closeCandidate(candidate, generation, workflowLease, modelRouteOwner);
+      this.assertCurrent(generation, signal);
+      return {
+        kind: "invalid",
+        diagnosticCodes: ["production_preflight_route_invalid"],
+      };
+    }
+
+    this.current = { generation, preflight: candidate, admission, modelRouteOwner };
 
     return {
       kind: "configured",
@@ -639,7 +684,8 @@ export class KnowledgePluginProductionPreflightLifecycle {
       this.closed ||
       this.current?.generation !== admission.generation ||
       this.current.admission !== admission ||
-      !admission.workflowLease.isCurrent()
+      !admission.workflowLease.isCurrent() ||
+      !admission.modelRouteLease.isCurrent()
     ) {
       throw createAbortError();
     }
@@ -707,17 +753,19 @@ export class KnowledgePluginProductionPreflightLifecycle {
   private closeCandidate(
     candidate: KnowledgePluginProductionPreflightPort,
     generation: number,
-    admission: KnowledgePluginProductionPreflightAdmission
+    workflowLease: KnowledgePluginProductionWorkflowLease,
+    modelRouteOwner?: KnowledgeProductionModelRouteLeaseOwner
   ): void {
     if (this.current?.generation === generation && this.current.preflight === candidate) {
       this.current = undefined;
     }
-    closeWorkflowLease(admission.workflowLease);
+    closeModelRouteOwnerSafely(modelRouteOwner);
     try {
       candidate.close();
     } catch {
       // Authority is already synchronously revoked; cleanup failure stays private.
     }
+    closeWorkflowLease(workflowLease);
   }
 
   /** Closes the current candidate before clearing its lifecycle reference. */
@@ -725,12 +773,13 @@ export class KnowledgePluginProductionPreflightLifecycle {
     const current = this.current;
     this.current = undefined;
     if (!current) return;
-    closeWorkflowLease(current.admission.workflowLease);
+    closeModelRouteOwnerSafely(current.modelRouteOwner);
     try {
       current.preflight.close();
     } catch {
       // Authority is already synchronously revoked; cleanup failure stays private.
     }
+    closeWorkflowLease(current.admission.workflowLease);
   }
 }
 

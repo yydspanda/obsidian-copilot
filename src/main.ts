@@ -119,10 +119,19 @@ function throwIfKnowledgeStartupStopped(signal: AbortSignal, lifecycleClosed: bo
 /** Captures one renderer window's native fetch capability with a stable receiver. */
 function captureKnowledgeRendererFetchPort(): KnowledgeDeepSeekFetchPort | undefined {
   const rendererWindow: Window = activeWindow;
-  if (typeof rendererWindow.fetch !== "function") {
+  const rendererFetchValue: unknown = Reflect.get(rendererWindow, "fetch");
+  if (typeof rendererFetchValue !== "function") {
     return undefined;
   }
-  return async (url, init): Promise<Response> => rendererWindow.fetch(url, init);
+  const rendererFetch = rendererFetchValue as (
+    this: Window,
+    url: string,
+    init: RequestInit
+  ) => Promise<Response>;
+  return async (url, init): Promise<Response> => {
+    const pendingResponse: unknown = Reflect.apply(rendererFetch, rendererWindow, [url, init]);
+    return (await pendingResponse) as Response;
+  };
 }
 
 export default class CopilotPlugin extends Plugin {

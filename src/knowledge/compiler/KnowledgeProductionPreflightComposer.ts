@@ -4,6 +4,11 @@ import {
   KnowledgeDeepSeekTransportError,
   type KnowledgeDeepSeekFetchPort,
 } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
+import {
+  createKnowledgeProductionModelRouteLeaseOwner,
+  type KnowledgeProductionModelRouteBinding,
+  KnowledgeProductionModelRouteLeaseOwner,
+} from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
   ProjectKnowledgePipelineProfileError,
@@ -80,6 +85,7 @@ export type KnowledgeProductionPreflightResult =
 
 interface KnowledgeProductionPreflightComposerState {
   result: KnowledgeProductionPreflightResult;
+  routeOwner?: KnowledgeProductionModelRouteLeaseOwner;
 }
 
 /** Internal static failure used without retaining an input value or cause. */
@@ -343,6 +349,7 @@ function composeGeneration(
     const profileSource = resolveProfileSource(input, baselineProfileSource);
     let bundleCount = 0;
     const bundleIds = new Set<string>();
+    const routeBindings: KnowledgeProductionModelRouteBinding[] = [];
     for (const owner of owners as readonly ConfiguredProjectKnowledgeBundle[]) {
       const profile = resolveProfile(profileSource, owner);
       if (profileSource !== baselineProfileSource) {
@@ -361,16 +368,19 @@ function composeGeneration(
         settings as KnowledgeProductionPreflightSettingsInput,
         profile
       );
-      createKnowledgeDeepSeekPrivateRoute(
+      const route = createKnowledgeDeepSeekPrivateRoute(
         profile,
         credential,
         fetchPort as KnowledgeDeepSeekFetchPort
       );
+      routeBindings.push(Object.freeze({ bundleId: profile.bundleId, route }));
       bundleIds.add(profile.bundleId);
       bundleCount += 1;
     }
+    const routeOwner = createKnowledgeProductionModelRouteLeaseOwner(Object.freeze(routeBindings));
     return Object.freeze({
       result: Object.freeze({ kind: "ready" as const, bundleCount }),
+      routeOwner,
     });
   } catch (error) {
     return createDiagnosticState(classifyPreflightFailure(error));
@@ -396,9 +406,22 @@ export class KnowledgeProductionPreflightComposer {
     return composerStates.get(this)?.result ?? INVALID_RESULT;
   }
 
+  /** Returns lifecycle close authority for the exact routes admitted by this preflight. */
+  getModelRouteLeaseOwner(): KnowledgeProductionModelRouteLeaseOwner {
+    const state = composerStates.get(this);
+    if (state?.result.kind !== "ready" || !state.routeOwner) {
+      throw new TypeError("The production Knowledge model route generation is unavailable");
+    }
+    KnowledgeProductionModelRouteLeaseOwner.assert(state.routeOwner);
+    state.routeOwner.getLease().assertCurrent();
+    return state.routeOwner;
+  }
+
   /** Synchronously and permanently fails this preflight generation closed. */
   close(): void {
-    if (!composerStates.has(this)) return;
+    const state = composerStates.get(this);
+    if (!state || state === CLOSED_STATE) return;
+    state.routeOwner?.close();
     composerStates.set(this, CLOSED_STATE);
   }
 }
