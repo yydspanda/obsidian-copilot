@@ -7,6 +7,7 @@ import {
   type KnowledgeAuthorizedExecutionStage,
   type KnowledgeIngestExecutionProofRequest,
 } from "@/knowledge/ingest/KnowledgeIngestExecutionAuthority";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
   KnowledgeSourceExecutionPlan,
   type KnowledgeSourceBundleAuthoritySnapshot,
@@ -216,6 +217,25 @@ export class KnowledgeAuthorizedSourcePreparation {
   /** Requires an authentic process-local authorized preparation. */
   static assert(value: unknown): asserts value is KnowledgeAuthorizedSourcePreparation {
     requireAuthorizedPreparationState(value);
+  }
+
+  /**
+   * Checks whether this preparation belongs to one exact Queue/Runtime/workflow owner.
+   *
+   * The owner remains opaque: callers receive only an identity comparison and
+   * cannot extract the Runtime, QueueStorage, workflow plan, or proof authority.
+   */
+  static matchesExecutionOwner(
+    value: KnowledgeAuthorizedSourcePreparation,
+    owner: KnowledgeExecutionOwner
+  ): boolean {
+    try {
+      KnowledgeExecutionOwner.assert(owner);
+      const state = requireAuthorizedPreparationState(value);
+      return state.plan.matchesExecutionOwner(owner);
+    } catch {
+      return false;
+    }
   }
 
   /** Returns the exact Queue-owned cancellation signal. */

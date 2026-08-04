@@ -377,7 +377,7 @@ describeWithDeepSeek("Knowledge Compiler DeepSeek production chain", () => {
       const executionOwner = createKnowledgeExecutionOwner();
       const queueStorage = new KnowledgeRuntimeQueueStorage(runtime, executionOwner);
       const manifestStorage = new KnowledgeRuntimeManifestStorage(runtime);
-      const reviewStorage = new KnowledgeRuntimeReviewStorage(runtime);
+      const reviewStorage = new KnowledgeRuntimeReviewStorage(runtime, executionOwner);
       const manifest = createManifest();
       await manifestStorage.write(BUNDLE_ID, manifest, null);
       const reviews = new ChangeSetReviewRepository(reviewStorage, { clock: () => 2_000 });

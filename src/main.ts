@@ -29,8 +29,13 @@ import {
   type KnowledgePluginProductionPreflightAdmission,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import {
+  awaitKnowledgeProductionDrain,
+  retainKnowledgeProductionDrain,
+} from "@/knowledge/startup/KnowledgeProductionDrainRegistry";
 import { KnowledgeProductionRecoveryComposer } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgePluginProductionRecoveryPort } from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
 import type { KnowledgeRuntimeStore } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { initializeKnowledgeRuntimeForCurrentGeneration } from "@/knowledge/startup/KnowledgeRuntimeFoundationInitializer";
@@ -132,6 +137,19 @@ function captureKnowledgeRendererFetchPort(): KnowledgeDeepSeekFetchPort | undef
     const pendingResponse: unknown = Reflect.apply(rendererFetch, rendererWindow, [url, init]);
     return (await pendingResponse) as Response;
   };
+}
+
+/** Captures one exact renderer timer realm for a plugin-owned worker generation. */
+function createKnowledgeWorkerScheduler(win: Window): KnowledgeProductionWorkerScheduler {
+  return Object.freeze({
+    now: () => Date.now(),
+    schedule: (callback: () => void, delayMs: number) => win.setTimeout(callback, delayMs),
+    cancel: (handle: unknown) => {
+      if (typeof handle === "number") {
+        win.clearTimeout(handle);
+      }
+    },
+  });
 }
 
 export default class CopilotPlugin extends Plugin {
@@ -440,9 +458,10 @@ export default class CopilotPlugin extends Plugin {
   /**
    * Creates the plugin-level fail-closed barrier over Runtime, Projects, and Bundle config.
    *
-   * The barrier intentionally has no ready delegate. It composes recovery-only
-   * startup Gates and the enqueue-only observation session, but still ends
-   * unavailable until release, worker, compiler, and query adapters are composed.
+   * The barrier intentionally has no ready Studio delegate. It composes the
+   * recovery-only Gate and, after a fresh observation/release proof, may start
+   * the background Compiler→Review worker. Review/apply/query UI remains
+   * unavailable until those Studio adapters are composed.
    */
   private initializeKnowledgeStartupBarrier(): KnowledgePluginStartupBarrier {
     const barrier = new KnowledgePluginStartupBarrier({
@@ -483,6 +502,8 @@ export default class CopilotPlugin extends Plugin {
     throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
     this.closeKnowledgeProductionRecovery();
     this.closeKnowledgeProductionObservation();
+    await awaitKnowledgeProductionDrain(this.app.vault, signal);
+    throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
     const result = await this.knowledgeProductionPreflightLifecycle.load(signal);
     throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
     if (result.kind !== "configured") {
@@ -560,6 +581,11 @@ export default class CopilotPlugin extends Plugin {
       vault: this.app.vault,
       bundles: admission.owners.map(({ config }) => config),
     });
+    let released = false;
+    let releaseState: "held" | "releasing" | "released" | "closed" = "held";
+    let workerController:
+      | ReturnType<KnowledgeProductionObservationComposer["createCompileReviewWorkerController"]>
+      | undefined;
     try {
       throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
       this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
@@ -571,19 +597,55 @@ export default class CopilotPlugin extends Plugin {
     const port: KnowledgePluginObservationStartupPort = {
       start: (signal) => candidate.start(signal),
       release: async (signal) => {
-        const reproof = await candidate.reprove(signal);
-        if (reproof.kind !== "observation_reproved") {
+        if (releaseState !== "held") {
           throw new DOMException("The operation was aborted", "AbortError");
         }
-        candidate.assertHealthy();
-        const result = await releaseComposer.releaseFresh(() => {
-          throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-          this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
+        releaseState = "releasing";
+        try {
+          const reproof = await candidate.reprove(signal);
+          if (reproof.kind !== "observation_reproved") {
+            throw new DOMException("The operation was aborted", "AbortError");
+          }
           candidate.assertHealthy();
-        });
-        return result;
+          const result = await releaseComposer.releaseFresh(() => {
+            throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
+            this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
+            candidate.assertHealthy();
+          });
+          if (result.kind === "released") {
+            released = true;
+            const scheduler = createKnowledgeWorkerScheduler(this.app.workspace.containerEl.win);
+            workerController = candidate.createCompileReviewWorkerController(
+              admission.modelRouteLease,
+              () => {
+                if (!released || this.knowledgeLifecycleClosed) return false;
+                try {
+                  this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
+                  candidate.assertHealthy();
+                  return true;
+                } catch {
+                  return false;
+                }
+              },
+              scheduler
+            );
+            retainKnowledgeProductionDrain(this.app.vault, workerController.whenSettled());
+            workerController.start();
+            releaseState = "released";
+          } else {
+            releaseState = "closed";
+          }
+          return result;
+        } catch (error) {
+          releaseState = "closed";
+          throw error;
+        }
       },
       close: () => {
+        releaseState = "closed";
+        released = false;
+        workerController?.close();
+        workerController = undefined;
         candidate.close();
         releaseComposer.close();
         if (this.knowledgeProductionObservation === port) {
@@ -615,11 +677,14 @@ export default class CopilotPlugin extends Plugin {
     this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
   }
 
-  /** Synchronously invalidates the full preflight/recovery production generation. */
+  /** Synchronously invalidates and replaces the full production generation. */
   private invalidateKnowledgeProductionGeneration(): void {
     this.closeKnowledgeProductionObservation();
     this.closeKnowledgeProductionRecovery();
     this.knowledgeProductionPreflightLifecycle.invalidate();
+    if (!this.knowledgeLifecycleClosed) {
+      this.knowledgeLayoutCoordinator.attachBarrier(this.initializeKnowledgeStartupBarrier());
+    }
   }
 
   /** Synchronously closes the current recovery-only composer, if any. */

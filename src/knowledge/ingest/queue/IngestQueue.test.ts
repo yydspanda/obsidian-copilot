@@ -6,6 +6,7 @@ import {
   IngestQueueApplyCommitPendingError,
   IngestQueueApplyReceiptRequiredError,
   IngestQueueBundleMismatchError,
+  IngestQueueClosedError,
   IngestQueueIncompatibleVersionError,
   IngestQueueInfrastructureError,
   IngestQueueJobIdConflictError,
@@ -661,6 +662,151 @@ describe("IngestQueue persistence and enqueue", () => {
 });
 
 describe("IngestQueue execution and reruns", () => {
+  it("synchronously aborts active lifecycle work and recovers it behind startup release", async () => {
+    const entered = createDeferred<void>();
+    const outcome = createDeferred<IngestExecutionResult>();
+    let signal: AbortSignal | undefined;
+    const harness = createHarness(async (context) => {
+      signal = context.signal;
+      entered.resolve();
+      return outcome.promise;
+    });
+    await harness.queue.enqueue(createRequest());
+
+    const running = harness.queue.runNext("personal");
+    await entered.promise;
+    harness.queue.close();
+    harness.queue.close();
+
+    expect(signal?.aborted).toBe(true);
+    outcome.reject(new DOMException("aborted", "AbortError"));
+    await expect(running).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-1",
+      status: "pending",
+    });
+    await expect(harness.queue.load("personal")).resolves.toMatchObject({
+      control: { status: "paused", reason: "startup_recovery" },
+      jobs: [{ id: "job-1", status: "pending", stage: "queued", attempt: 1 }],
+    });
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 2 }))).rejects.toBeInstanceOf(
+      IngestQueueClosedError
+    );
+    await expect(harness.queue.runNext("personal")).rejects.toBeInstanceOf(IngestQueueClosedError);
+  });
+
+  it("does not let a closing lifecycle worker recover a newer cross-instance claim", async () => {
+    const storage = new InMemoryQueueStorage();
+    const oldStarted = createDeferred<void>();
+    const oldOutcome = createDeferred<IngestExecutionResult>();
+    const newStarted = createDeferred<void>();
+    const newOutcome = createDeferred<IngestExecutionResult>();
+    const oldExecutor = new TestExecutor(async () => {
+      oldStarted.resolve();
+      return oldOutcome.promise;
+    });
+    const newExecutor = new TestExecutor(async () => {
+      newStarted.resolve();
+      return newOutcome.promise;
+    });
+    let now = 100;
+    let nextId = 1;
+    const options = {
+      clock: () => now,
+      jobIdFactory: () => `job-${nextId++}`,
+      retryPolicy: new ExponentialRetryPolicy(
+        { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100, jitterRatio: 0 },
+        () => 0.5
+      ),
+    };
+    const oldQueue = new IngestQueue(storage, oldExecutor, options);
+    const newQueue = new IngestQueue(storage, newExecutor, options);
+    await oldQueue.enqueue(createRequest());
+    const oldRun = oldQueue.runNext("personal");
+    await oldStarted.promise;
+    oldQueue.close();
+
+    now = 150;
+    await newQueue.recoverOnStartup("personal");
+    const recovered = storage.getSnapshot("personal");
+    storage.seed("personal", {
+      ...recovered,
+      revision: recovered.revision + 1,
+      control: { status: "running" },
+    });
+    now = 200;
+    const newRun = newQueue.runNext("personal");
+    await newStarted.promise;
+
+    oldOutcome.reject(new DOMException("aborted", "AbortError"));
+    await expect(oldRun).resolves.toEqual({ kind: "stale", jobId: "job-1" });
+    expect(storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "running" },
+      jobs: [{ id: "job-1", status: "processing", attempt: 2, startedAt: 200 }],
+    });
+
+    newOutcome.resolve({ kind: "no_changes", changeSetId: "changeset-new-generation" });
+    await expect(newRun).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("requires startedAt as well as attempt before lifecycle recovery mutates a claim", async () => {
+    const entered = createDeferred<void>();
+    const outcome = createDeferred<IngestExecutionResult>();
+    const harness = createHarness(async () => {
+      entered.resolve();
+      return outcome.promise;
+    });
+    await harness.queue.enqueue(createRequest());
+    const running = harness.queue.runNext("personal");
+    await entered.promise;
+    harness.queue.close();
+
+    const claimed = harness.storage.getSnapshot("personal");
+    const processing = claimed.jobs[0];
+    if (processing.status !== "processing") throw new Error("Expected a processing claim");
+    harness.storage.seed("personal", {
+      ...claimed,
+      revision: claimed.revision + 1,
+      jobs: [{ ...processing, updatedAt: 200, startedAt: 200 }],
+    });
+    outcome.reject(new DOMException("aborted", "AbortError"));
+
+    await expect(running).resolves.toEqual({ kind: "stale", jobId: "job-1" });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "running" },
+      jobs: [{ id: "job-1", status: "processing", attempt: 1, startedAt: 200 }],
+    });
+  });
+
+  it("protects applying work from lifecycle abort until commit proof is returned", async () => {
+    const enteredApplying = createDeferred<void>();
+    const outcome = createDeferred<IngestExecutionResult>();
+    let signal: AbortSignal | undefined;
+    const harness = createHarness(async (context) => {
+      signal = context.signal;
+      await context.reportStage("applying");
+      enteredApplying.resolve();
+      return outcome.promise;
+    });
+    await harness.queue.enqueue(createRequest());
+
+    const running = harness.queue.runNext("personal");
+    await enteredApplying.promise;
+    harness.queue.close();
+
+    expect(signal?.aborted).toBe(false);
+    outcome.resolve({
+      kind: "completed",
+      changeSetId: "changeset-committed",
+      commitReceipt: createCommitReceipt(),
+    });
+    await expect(running).resolves.toMatchObject({
+      kind: "commit_ready",
+      jobId: "job-1",
+    });
+    expect(signal?.aborted).toBe(false);
+  });
+
   it("issues an opaque claim for the exact Queue controller and revokes it after execution", async () => {
     let captured: IngestExecutionClaim | undefined;
     let capturedContext: IngestExecutionContext | undefined;
@@ -1347,6 +1493,7 @@ describe("IngestQueue retries and rate limits", () => {
     await expect(harness.queue.runNext("personal")).resolves.toEqual({
       kind: "paused",
       reason: "rate_limit",
+      resumeAt: 600,
     });
 
     rateLimited = false;
@@ -1354,6 +1501,60 @@ describe("IngestQueue retries and rate limits", () => {
     await harness.queue.resume("personal");
     await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
       status: "completed",
+    });
+  });
+
+  it("automatically resumes only when a durable rate-limit deadline is due", async () => {
+    let rateLimited = true;
+    const harness = createHarness(async (context) => {
+      if (rateLimited) {
+        throw new IngestExecutorError(
+          {
+            code: "provider_rate_limit",
+            message: "Provider requested a pause",
+            retryable: true,
+            rateLimited: true,
+            retryAfterMs: 500,
+          },
+          context.signal
+        );
+      }
+      return { kind: "no_changes", changeSetId: "changeset-after-deadline" };
+    });
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+
+    harness.setNow(599);
+    await expect(harness.queue.resumeRateLimitIfDue("personal")).resolves.toMatchObject({
+      control: { status: "paused", reason: "rate_limit", resumeAt: 600 },
+      jobs: [expect.objectContaining({ status: "paused", attempt: 1 })],
+    });
+    await expect(harness.queue.runNext("personal")).resolves.toEqual({
+      kind: "paused",
+      reason: "rate_limit",
+      resumeAt: 600,
+    });
+
+    rateLimited = false;
+    harness.setNow(600);
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "running" },
+      jobs: [expect.objectContaining({ status: "completed", attempt: 2 })],
+    });
+  });
+
+  it("never lets the automatic rate-limit API release a user pause", async () => {
+    const harness = createHarness();
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.pause("personal", "User requested inspection");
+    harness.setNow(10_000);
+
+    await expect(harness.queue.resumeRateLimitIfDue("personal")).resolves.toMatchObject({
+      control: { status: "paused", reason: "user" },
+      jobs: [expect.objectContaining({ status: "pending" })],
     });
   });
 
@@ -2517,6 +2718,61 @@ describe("IngestQueue concurrency and adapter failures", () => {
       jobs: [expect.objectContaining({ status: "pending" })],
     });
     expect(JSON.stringify(snapshot)).not.toContain("unexpected_executor_failure");
+  });
+
+  it("does not let an old infrastructure unwind recover a newer processing claim", async () => {
+    const storage = new InMemoryQueueStorage();
+    const oldStarted = createDeferred<void>();
+    const oldFailure = createDeferred<IngestExecutionResult>();
+    const newStarted = createDeferred<void>();
+    const newCompletion = createDeferred<IngestExecutionResult>();
+    const oldExecutor = new TestExecutor(async () => {
+      oldStarted.resolve();
+      return oldFailure.promise;
+    });
+    const newExecutor = new TestExecutor(async () => {
+      newStarted.resolve();
+      return newCompletion.promise;
+    });
+    let now = 100;
+    let nextId = 1;
+    const options = {
+      clock: () => now,
+      jobIdFactory: () => `job-${nextId++}`,
+      retryPolicy: new ExponentialRetryPolicy(
+        { maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100, jitterRatio: 0 },
+        () => 0.5
+      ),
+    };
+    const oldQueue = new IngestQueue(storage, oldExecutor, options);
+    const newQueue = new IngestQueue(storage, newExecutor, options);
+    await oldQueue.enqueue(createRequest());
+    const oldRun = oldQueue.runNext("personal");
+    await oldStarted.promise;
+
+    now = 150;
+    await newQueue.recoverOnStartup("personal");
+    const recovered = storage.getSnapshot("personal");
+    storage.seed("personal", {
+      ...recovered,
+      revision: recovered.revision + 1,
+      control: { status: "running" },
+    });
+    now = 200;
+    const newRun = newQueue.runNext("personal");
+    await newStarted.promise;
+
+    oldFailure.reject(
+      new IngestQueueInfrastructureError("old_generation_test", new Error("storage unavailable"))
+    );
+    await expect(oldRun).rejects.toBeInstanceOf(IngestQueueInfrastructureError);
+    expect(storage.getSnapshot("personal")).toMatchObject({
+      control: { status: "running" },
+      jobs: [{ id: "job-1", status: "processing", attempt: 2, startedAt: 200 }],
+    });
+
+    newCompletion.resolve({ kind: "no_changes", changeSetId: "changeset-current" });
+    await expect(newRun).resolves.toMatchObject({ status: "completed" });
   });
 
   it("keeps the greatest durable input revision across stale same-source work", async () => {

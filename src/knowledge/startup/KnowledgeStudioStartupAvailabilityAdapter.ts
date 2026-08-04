@@ -23,7 +23,7 @@ export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): s
     case "bundle_unconfigured":
       return "No project has a Knowledge Bundle configuration. Add one to project.md before using Knowledge Studio.";
     case "bundle_invalid":
-      return "A project Knowledge Bundle configuration is invalid or conflicts with another Bundle. Fix project.md and reload the plugin.";
+      return "A project Knowledge Bundle configuration is invalid or conflicts with another Bundle. Fix project.md; startup will retry after Projects refresh.";
     case "recovery_unavailable":
       return "Knowledge startup recovery could not be completed safely. New ingest work remains stopped and no unreviewed knowledge was generated.";
     case "recovery_attention_required":
@@ -32,8 +32,8 @@ export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): s
       return "Knowledge startup is blocked by durable recovery state. New ingest work remains stopped to protect existing notes.";
     case "workflow_adapters_unavailable":
       return state.bundleIds.length === 1
-        ? "The project Knowledge Bundle is valid and startup recovery is clear. Queue release, ingest, watcher, compiler worker, and query adapters remain unavailable until the complete Golden Flow is connected."
-        : "The project Knowledge Bundles are valid and startup recovery is clear. Bundle selection, Queue release, ingest, watcher, compiler workers, and query adapters remain unavailable until the complete Golden Flow is connected.";
+        ? "The project Knowledge Bundle is valid and startup recovery is clear. Background ingest can compile registered sources into durable Review proposals; Knowledge Studio review, apply, and query adapters are not connected yet."
+        : "The project Knowledge Bundles are valid and startup recovery is clear. Background ingest can compile registered sources into durable Review proposals; Bundle selection and Knowledge Studio review, apply, and query adapters are not connected yet.";
   }
 }
 

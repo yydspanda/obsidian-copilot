@@ -84,7 +84,7 @@ copilot-project-knowledge-bundle:
 
 The knowledge startup boundary validates this object strictly after all Projects have loaded. It rejects unknown fields, malformed Vault-relative paths, duplicate Bundle IDs, and case-insensitive Windows overlaps between any configured source, Wiki, and schema boundaries. It does not rewrite an unsafe path. If any project's Bundle is invalid, all knowledge adapters remain unavailable so write ownership cannot become ambiguous.
 
-This field does not change normal Project chat behavior. The current Knowledge Studio milestone still has no live ingest/compiler/query adapters, even when configuration is valid. Reload the plugin after changing this startup-only configuration. See [Personal Knowledge Studio](personal-knowledge.md) for the full availability and safety model.
+This field does not change normal Project chat behavior. With one valid Bundle and a successful recovery/observation release, the plugin can now ingest authorized sources in the background, run the two-stage DeepSeek compiler, and persist a proposal in durable Review. Preflight and the startup Gates are zero-network, but released compilation sends authorized knowledge content to DeepSeek and may incur provider charges. It stops at `awaiting_review`: it does not write Wiki pages or auto-apply a proposal, and the live Studio Review/Activity and query adapters remain unavailable. Changing Settings or Project configuration automatically closes the old generation and starts a fresh validation generation; a plugin reload is not required. See [Personal Knowledge Studio](personal-knowledge.md) for the full availability and safety model.
 
 ---
 

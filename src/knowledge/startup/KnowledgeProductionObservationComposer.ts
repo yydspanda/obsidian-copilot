@@ -1,5 +1,8 @@
 import type { App } from "obsidian";
 
+import { ObsidianKnowledgeCompilerTargetResolver } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
+import { KnowledgeProductionCandidateValidator } from "@/knowledge/compiler/KnowledgeProductionCandidateValidator";
+import { KnowledgeProductionModelRouteLease } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
   KnowledgeSourceWorkflowPlanLoader,
@@ -8,6 +11,7 @@ import {
 import {
   IngestQueue,
   type EnqueueIngestRequest,
+  type EventSink,
   type IngestExecutor,
   type IngestExecutionContext,
 } from "@/knowledge/ingest/queue/IngestQueue";
@@ -17,14 +21,17 @@ import {
 } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
+import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
 import {
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeIngestExecutionProofPort,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeQueueStorage,
+  KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import { KnowledgeProductionCompileReviewHandler } from "@/knowledge/startup/KnowledgeProductionCompileReviewHandler";
 import { KnowledgePluginProductionWorkflowLease } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import {
   KnowledgeSourceObservationStartupCoordinator,
@@ -33,6 +40,10 @@ import {
 } from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator";
 import { KnowledgeSourceObservationStartupReconciler } from "@/knowledge/startup/KnowledgeSourceObservationStartupReconciler";
 import { KnowledgeProductionWorkerSession } from "@/knowledge/startup/KnowledgeProductionWorkerSession";
+import {
+  KnowledgeProductionWorkerController,
+  type KnowledgeProductionWorkerScheduler,
+} from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import {
   KnowledgeProductionPreparationExecutor,
   type KnowledgePreparedIngestHandler,
@@ -98,8 +109,33 @@ class StartupHeldObservationIngestExecutor {
   }
 }
 
+/** Queue event sink that can wake only the controller installed for this generation. */
+class StartupHeldObservationEventSink implements EventSink {
+  private controller?: KnowledgeProductionWorkerController;
+
+  /** Ignores pre-release events and coalesces post-release committed changes. */
+  emit(): void {
+    this.controller?.notifyWorkAvailable();
+  }
+
+  /** Installs exactly one authentic controller after conditional release. */
+  setController(controller: KnowledgeProductionWorkerController): void {
+    if (this.controller || !(controller instanceof KnowledgeProductionWorkerController)) {
+      throw createAbortError();
+    }
+    this.controller = controller;
+  }
+
+  /** Drops future wakeups before the Queue execution generation is closed. */
+  close(): void {
+    this.controller = undefined;
+  }
+}
+
 interface KnowledgeProductionObservationComposition {
   app: App;
+  runtime: KnowledgeRuntimeStore;
+  executionOwner: ReturnType<typeof createKnowledgeExecutionOwner>;
   workflowLease: KnowledgePluginProductionWorkflowLease;
   loader: KnowledgeSourceWorkflowPlanLoader;
   owners: ReturnType<KnowledgePluginProductionWorkflowLease["getOwners"]>;
@@ -107,6 +143,7 @@ interface KnowledgeProductionObservationComposition {
   handoffs: ReadonlyMap<string, SourceObservationHandoff>;
   queue: IngestQueue;
   heldExecutor: StartupHeldObservationIngestExecutor;
+  eventSink: StartupHeldObservationEventSink;
   proofPort: KnowledgeRuntimeIngestExecutionProofPort;
 }
 
@@ -117,6 +154,8 @@ interface KnowledgeProductionObservationInternalState {
   composition?: KnowledgeProductionObservationComposition;
   compositionFailure?: KnowledgeProductionObservationDiagnosticCode;
   coordinator?: KnowledgeSourceObservationStartupCoordinator;
+  worker?: KnowledgeProductionWorkerSession;
+  workerController?: KnowledgeProductionWorkerController;
   plan?: KnowledgeSourceExecutionPlan;
   lastResult?: KnowledgeProductionObservationResult | KnowledgeProductionObservationReproofResult;
   unsubscribeLease?: () => void;
@@ -214,7 +253,8 @@ function composeObservation(
   const queueStorage = new KnowledgeRuntimeQueueStorage(runtime, executionOwner);
   const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queueStorage);
   const heldExecutor = new StartupHeldObservationIngestExecutor();
-  const queue = new IngestQueue(queueStorage, heldExecutor);
+  const eventSink = new StartupHeldObservationEventSink();
+  const queue = new IngestQueue(queueStorage, heldExecutor, { eventSink });
   const enqueueOnly = Object.freeze({
     enqueue: (request: EnqueueIngestRequest) => queue.enqueue(request),
   });
@@ -245,6 +285,8 @@ function composeObservation(
   });
   composition = Object.freeze({
     app: app as App,
+    runtime,
+    executionOwner,
     workflowLease,
     loader,
     owners,
@@ -252,6 +294,7 @@ function composeObservation(
     handoffs,
     queue,
     heldExecutor,
+    eventSink,
     proofPort,
   });
   workflowLease.assertCurrent();
@@ -436,7 +479,7 @@ export class KnowledgeProductionObservationComposer {
   ): KnowledgeProductionWorkerSession {
     const state = requireComposerState(this);
     const composition = state.composition;
-    if (!composition || !state.coordinator || !state.lastResult || !state.plan) {
+    if (!composition || !state.coordinator || !state.lastResult || !state.plan || state.worker) {
       throw createAbortError();
     }
     if (
@@ -451,7 +494,7 @@ export class KnowledgeProductionObservationComposer {
     composition.heldExecutor.setExecutor(
       new KnowledgeProductionPreparationExecutor(state.plan, composition.proofPort, handler)
     );
-    return new KnowledgeProductionWorkerSession({
+    const worker = new KnowledgeProductionWorkerSession({
       queue: composition.queue,
       bundleIds: composition.owners.map(({ config }) => config.id),
       isReleased,
@@ -460,16 +503,107 @@ export class KnowledgeProductionObservationComposer {
         this.assertHealthy();
       },
     });
+    state.worker = worker;
+    return worker;
+  }
+
+  /**
+   * Installs the reviewed production Compiler→Review handler over this exact Runtime owner.
+   *
+   * The Review repository is created internally from the same Runtime and
+   * execution owner as the hidden Queue, so `main.ts` cannot splice storage
+   * from another plugin or workflow generation.
+   */
+  createCompileReviewWorkerSession(
+    routeLease: KnowledgeProductionModelRouteLease,
+    isReleased: () => boolean
+  ): KnowledgeProductionWorkerSession {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (!composition || state.worker) {
+      throw createAbortError();
+    }
+    try {
+      KnowledgeProductionModelRouteLease.assert(routeLease);
+      routeLease.assertCurrent();
+      if (!routeLease.coversBundleIds(composition.owners.map(({ config }) => config.id))) {
+        throw createAbortError();
+      }
+      const reviews = new ChangeSetReviewRepository(
+        new KnowledgeRuntimeReviewStorage(composition.runtime, composition.executionOwner)
+      );
+      const handler = new KnowledgeProductionCompileReviewHandler({
+        routeLease,
+        targetResolver: new ObsidianKnowledgeCompilerTargetResolver(composition.app),
+        candidateValidator: new KnowledgeProductionCandidateValidator(),
+        reviews,
+      });
+      KnowledgeProductionCompileReviewHandler.assertExecutionOwner(
+        handler,
+        composition.executionOwner
+      );
+      return this.createPreparedWorkerSession(handler, isReleased);
+    } catch {
+      throw createAbortError();
+    }
+  }
+
+  /** Creates the event-driven main-owned controller for the exact released generation. */
+  createCompileReviewWorkerController(
+    routeLease: KnowledgeProductionModelRouteLease,
+    isReleased: () => boolean,
+    scheduler: KnowledgeProductionWorkerScheduler
+  ): KnowledgeProductionWorkerController {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (!composition || state.workerController) {
+      throw createAbortError();
+    }
+    try {
+      const worker = this.createCompileReviewWorkerSession(routeLease, isReleased);
+      const controller = new KnowledgeProductionWorkerController({ worker, scheduler });
+      composition.eventSink.setController(controller);
+      state.workerController = controller;
+      return controller;
+    } catch {
+      this.close();
+      throw createAbortError();
+    }
   }
 
   /** Synchronously closes listeners and invalidates all future plan/capture continuations. */
   close(): void {
     const state = composerStates.get(this);
     if (!state || state.closed) return;
+    const composition = state.composition;
+    const worker = state.worker;
+    const workerController = state.workerController;
     state.closed = true;
     state.generation += 1;
     state.composition = undefined;
     state.plan = undefined;
+    state.worker = undefined;
+    state.workerController = undefined;
+    try {
+      composition?.eventSink.close();
+    } catch {
+      // Queue event publication is already detached from the closed generation.
+    }
+    try {
+      workerController?.close();
+    } catch {
+      // Controller authority is already revoked by the generation state.
+    }
+    try {
+      worker?.close();
+    } catch {
+      // The generation is already revoked; worker cleanup cannot revive it.
+    }
+    try {
+      composition?.queue.close();
+    } catch {
+      // Queue close is best-effort after publication authority is revoked.
+    }
     const unsubscribe = state.unsubscribeLease;
     state.unsubscribeLease = undefined;
     try {

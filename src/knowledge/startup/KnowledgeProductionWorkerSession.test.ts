@@ -75,4 +75,26 @@ describe("KnowledgeProductionWorkerSession", () => {
     await expect(first).rejects.toBeInstanceOf(KnowledgeProductionWorkerSessionError);
     await expect(session.runOnce()).rejects.toMatchObject({ code: "stale" });
   });
+
+  it("does not claim a later Bundle after close while an earlier claim is pending", async () => {
+    let resolveFirst!: (result: RunNextResult) => void;
+    const first = new Promise<RunNextResult>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const runNext = jest.fn(async () => first);
+    const session = new KnowledgeProductionWorkerSession({
+      queue: { runNext } as unknown as IngestQueue,
+      bundleIds: ["beta", "alpha"],
+      isReleased: () => true,
+      assertCurrent: () => undefined,
+    });
+
+    const pass = session.runOnce();
+    expect(runNext.mock.calls).toEqual([["alpha"]]);
+    session.close();
+    resolveFirst({ kind: "idle" });
+
+    await expect(pass).rejects.toMatchObject({ code: "stale" });
+    expect(runNext.mock.calls).toEqual([["alpha"]]);
+  });
 });

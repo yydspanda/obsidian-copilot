@@ -279,9 +279,10 @@ function sanitizeBundleIds(bundleIds: unknown): readonly string[] | undefined {
  *
  * Recovery is supplied as an opaque one-shot port only after strict Bundle and
  * zero-network production preflight validation. A separate observation port may
- * be retained after observed-clear recovery, but the barrier never receives a
- * startup release, Queue worker, model, no-journal action, or Wiki generation
- * capability. The published state remains `workflow_adapters_unavailable`.
+ * internally re-prove observation, conditionally release its Queue, and start a
+ * background Compiler→Review worker. The barrier never receives direct Queue,
+ * model, no-journal, or Wiki-write capability, and the published Studio state
+ * remains `workflow_adapters_unavailable` until its UI adapters are connected.
  */
 export class KnowledgePluginStartupBarrier {
   private generation = 0;

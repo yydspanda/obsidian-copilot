@@ -376,7 +376,7 @@ export interface IngestQueueOptions {
 /** Result returned when the queue attempts to execute one eligible job. */
 export type RunNextResult =
   | { kind: "idle" }
-  | { kind: "paused"; reason: IngestQueuePauseReason }
+  | { kind: "paused"; reason: IngestQueuePauseReason; resumeAt?: number }
   | { kind: "waiting"; nextAttemptAt: number }
   | { kind: "busy"; jobId: string }
   | { kind: "stale"; jobId: string }
@@ -653,6 +653,15 @@ export class IngestQueueInfrastructureError extends Error {
   }
 }
 
+/** Reports an execution/enqueue request after the owning workflow generation closed. */
+export class IngestQueueClosedError extends Error {
+  /** Creates one value-free lifecycle closure failure. */
+  constructor() {
+    super("The ingest queue execution generation is closed");
+    this.name = "IngestQueueClosedError";
+  }
+}
+
 interface LoadedQueue {
   snapshot: IngestQueueSnapshot;
   expectedRevision: number | null;
@@ -672,6 +681,7 @@ interface ClaimedJobResult {
   kind: "claimed" | "idle" | "paused" | "waiting" | "busy";
   jobId?: string;
   reason?: IngestQueuePauseReason;
+  resumeAt?: number;
   nextAttemptAt?: number;
 }
 
@@ -697,6 +707,12 @@ interface ActiveController {
   attempt: number;
   startedAt: number;
   controller: AbortController;
+  abortProtected: boolean;
+  lifecycleAbortRequested: boolean;
+}
+
+interface ExactClaimRecoveryValue {
+  kind: "recovered" | "stale";
 }
 
 /**
@@ -1602,6 +1618,7 @@ export class IngestQueue {
   private readonly maxWriteAttempts: number;
   private readonly bundleMutexes = new Map<string, Mutex>();
   private readonly activeControllers = new Map<string, ActiveController>();
+  private executionClosed = false;
 
   /**
    * Creates a queue over injected persistence and execution ports.
@@ -1640,6 +1657,24 @@ export class IngestQueue {
   }
 
   /**
+   * Synchronously closes this execution generation and aborts only safe active work.
+   *
+   * Applying is protected before its first asynchronous boundary and therefore
+   * continues to a commit/recovery point. Every other exact Queue controller is
+   * marked for lifecycle recovery before its signal is aborted.
+   */
+  close(): void {
+    if (this.executionClosed) return;
+    this.executionClosed = true;
+    for (const active of this.activeControllers.values()) {
+      active.lifecycleAbortRequested = true;
+      if (!active.abortProtected) {
+        active.controller.abort();
+      }
+    }
+  }
+
+  /**
    * Loads and validates one Bundle queue without creating storage eagerly.
    *
    * @param bundleId - Stable Bundle identifier
@@ -1662,10 +1697,12 @@ export class IngestQueue {
    * @returns Durable enqueue, update, rerun, or deduplication result
    */
   async enqueue(request: EnqueueIngestRequest): Promise<EnqueueIngestResult> {
+    this.assertExecutionOpen();
     this.assertEnqueueRequest(request);
     const timestamp = this.now();
     const reservedJobId = this.nextJobId();
     const mutation = await this.getBundleMutex(request.bundleId).runExclusive(async () => {
+      this.assertExecutionOpen();
       return this.mutateSourceObservation<EnqueueMutationValue>(request, (current) => {
         const active = current.jobs.find(
           (job) => isActiveJob(job) && job.sourceId === request.sourceId
@@ -1859,11 +1896,17 @@ export class IngestQueue {
    * @returns Queue availability or final durable status of the claimed job
    */
   async runNext(bundleId: string): Promise<RunNextResult> {
+    this.assertExecutionOpen();
     assertIdentifier(bundleId, "bundleId");
+    await this.resumeRateLimitIfDue(bundleId);
     const claim = await this.claimNext(bundleId);
     if (claim.value.kind !== "claimed" || !claim.value.jobId) {
       if (claim.value.kind === "paused" && claim.value.reason) {
-        return { kind: "paused", reason: claim.value.reason };
+        return {
+          kind: "paused",
+          reason: claim.value.reason,
+          ...(claim.value.resumeAt === undefined ? {} : { resumeAt: claim.value.resumeAt }),
+        };
       }
       if (claim.value.kind === "waiting" && claim.value.nextAttemptAt !== undefined) {
         return { kind: "waiting", nextAttemptAt: claim.value.nextAttemptAt };
@@ -1897,6 +1940,8 @@ export class IngestQueue {
         active.controller.signal.aborted ||
         !isSameClaim(beforeExecution, executionJob.attempt, executionJob.startedAt)
       ) {
+        const recovered = await this.recoverLifecycleAbort(bundleId, executionJob, active);
+        if (recovered) return recovered;
         const status = this.toRunStatus(beforeExecution);
         return status === "stale"
           ? { kind: "stale", jobId: executionJob.id }
@@ -1955,6 +2000,8 @@ export class IngestQueue {
         if (error instanceof IngestQueueInfrastructureError) {
           throw error;
         }
+        const recovered = await this.recoverLifecycleAbort(bundleId, executionJob, active);
+        if (recovered) return recovered;
         const finalized = await this.finalizeFailure(
           bundleId,
           executionJob.id,
@@ -1967,6 +2014,11 @@ export class IngestQueue {
           return { kind: "stale", jobId: executionJob.id };
         }
         return { kind: "executed", jobId: executionJob.id, status: finalized };
+      }
+
+      if (result.kind !== "awaiting_review") {
+        const recovered = await this.recoverLifecycleAbort(bundleId, executionJob, active);
+        if (recovered) return recovered;
       }
 
       const finalized = await this.finalizeSuccess(
@@ -1984,7 +2036,7 @@ export class IngestQueue {
       }
       return { kind: "executed", jobId: executionJob.id, status: finalized };
     } catch (error) {
-      await this.recoverAfterInfrastructureFailure(bundleId);
+      await this.recoverAfterInfrastructureFailure(bundleId, executionJob);
       throw error;
     } finally {
       revokeIngestExecutionClaim(executionClaim);
@@ -2002,13 +2054,147 @@ export class IngestQueue {
    * still unavailable, startup recovery will retry this same operation later.
    *
    * @param bundleId - Bundle whose live worker unwound unexpectedly
+   * @param job - Exact durable claim owned by the unwinding worker
    */
-  private async recoverAfterInfrastructureFailure(bundleId: string): Promise<void> {
+  private async recoverAfterInfrastructureFailure(
+    bundleId: string,
+    job: Readonly<ProcessingIngestJob>
+  ): Promise<void> {
     try {
-      await this.recoverOnStartup(bundleId);
+      await this.recoverExactClaimAfterUnwind(bundleId, job, true);
     } catch {
       return;
     }
+  }
+
+  /**
+   * Converges one exact lifecycle-aborted non-applying claim through startup recovery.
+   *
+   * @param bundleId - Bundle owning the active Queue controller
+   * @param job - Immutable processing claim captured before executor invocation
+   * @param active - Exact local controller paired with the claim
+   * @returns Queue-safe recovered result, or undefined when this is not a lifecycle abort
+   */
+  private async recoverLifecycleAbort(
+    bundleId: string,
+    job: Readonly<ProcessingIngestJob>,
+    active: ActiveController
+  ): Promise<RunNextResult | undefined> {
+    if (
+      !active.lifecycleAbortRequested ||
+      !active.controller.signal.aborted ||
+      active.abortProtected
+    ) {
+      return undefined;
+    }
+    const recovery = await this.recoverExactClaimAfterUnwind(bundleId, job, false);
+    if (recovery.value.kind === "stale") {
+      return { kind: "stale", jobId: job.id };
+    }
+    const recoveredJob = requireJob(recovery.snapshot, job.id);
+    const status = this.toRunStatus(recoveredJob);
+    return status === "stale"
+      ? { kind: "stale", jobId: job.id }
+      : { kind: "executed", jobId: job.id, status };
+  }
+
+  /**
+   * Recovers only the exact durable claim captured by one unwinding worker.
+   *
+   * The identity check is repeated inside every storage CAS attempt. A late
+   * worker therefore cannot pause or rewrite a newer claim created while its
+   * executor was still settling. Applying recovery is reserved for ambiguous
+   * infrastructure failures; lifecycle cancellation never crosses that bound.
+   *
+   * @param bundleId - Bundle owning the captured claim
+   * @param claim - Immutable job identity captured at claim time
+   * @param recoverApplying - Whether an exact applying claim may fail into recovery-required
+   * @returns Committed exact recovery, or a stale no-op snapshot
+   */
+  private async recoverExactClaimAfterUnwind(
+    bundleId: string,
+    claim: Readonly<ProcessingIngestJob>,
+    recoverApplying: boolean
+  ): Promise<MutationResult<ExactClaimRecoveryValue>> {
+    const timestamp = this.now();
+    const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
+      return this.mutate<ExactClaimRecoveryValue>(bundleId, (current) => {
+        const job = current.jobs.find((candidate) => candidate.id === claim.id);
+        if (
+          !job ||
+          !isSameClaim(job, claim.attempt, claim.startedAt) ||
+          (job.stage === "applying" && !recoverApplying)
+        ) {
+          return { value: { kind: "stale" } };
+        }
+
+        const recoveredAt = Math.max(timestamp, job.updatedAt);
+        if (job.stage === "applying") {
+          const failed: KnowledgeIngestJob = {
+            id: job.id,
+            bundleId: job.bundleId,
+            sourceId: job.sourceId,
+            sourceContentHash: job.sourceContentHash,
+            pipelineFingerprint: job.pipelineFingerprint,
+            inputRevision: job.inputRevision,
+            attempt: job.attempt,
+            rerunRequested: false,
+            createdAt: job.createdAt,
+            updatedAt: recoveredAt,
+            status: "failed",
+            stage: "applying",
+            failure: {
+              code: "interrupted_apply_requires_recovery",
+              message: "An interrupted apply requires transaction recovery before retry",
+              retryable: false,
+              occurredAt: recoveredAt,
+            },
+          };
+          const next = promoteRerun(replaceJob(current, failed), job.sourceId, recoveredAt);
+          return {
+            next: {
+              ...next,
+              control: {
+                status: "paused",
+                reason: "recovery_required",
+                pausedAt: timestamp,
+                detail: "An interrupted apply must be recovered before queue resume",
+              },
+            },
+            value: { kind: "recovered" },
+          };
+        }
+
+        const pending: KnowledgeIngestJob = {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: job.sourceContentHash,
+          pipelineFingerprint: job.pipelineFingerprint,
+          inputRevision: job.inputRevision,
+          attempt: job.attempt,
+          rerunRequested: job.rerunRequested,
+          createdAt: job.createdAt,
+          updatedAt: recoveredAt,
+          status: "pending",
+          stage: "queued",
+        };
+        return {
+          next: {
+            ...replaceJob(current, pending),
+            control:
+              current.control.status === "paused"
+                ? current.control
+                : { status: "paused", reason: "startup_recovery", pausedAt: timestamp },
+          },
+          value: { kind: "recovered" },
+        };
+      });
+    });
+    if (mutation.value.kind === "recovered") {
+      this.emit(mutation.snapshot, "recover", claim.id);
+    }
+    return mutation;
   }
 
   /**
@@ -2136,6 +2322,63 @@ export class IngestQueue {
               if (job.status !== "paused") {
                 return job;
               }
+              return {
+                id: job.id,
+                bundleId: job.bundleId,
+                sourceId: job.sourceId,
+                sourceContentHash: job.sourceContentHash,
+                pipelineFingerprint: job.pipelineFingerprint,
+                inputRevision: job.inputRevision,
+                attempt: job.attempt,
+                rerunRequested: job.rerunRequested,
+                createdAt: job.createdAt,
+                updatedAt: Math.max(timestamp, job.updatedAt),
+                status: "pending",
+                stage: "queued",
+              };
+            }),
+          },
+          value: true,
+        };
+      });
+    });
+    if (mutation.value) {
+      this.emit(mutation.snapshot, "resume");
+    }
+    return mutation.snapshot;
+  }
+
+  /**
+   * Resumes only an expired automatic provider rate-limit gate.
+   *
+   * User, startup-recovery, apply-recovery, and commit-acknowledgement pauses
+   * are never released here. The due check and paused-job requeue share one
+   * storage CAS mutation so another Queue instance cannot broaden the release.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @returns Current snapshot, whether changed or not
+   */
+  async resumeRateLimitIfDue(bundleId: string): Promise<IngestQueueSnapshot> {
+    this.assertExecutionOpen();
+    assertIdentifier(bundleId, "bundleId");
+    const timestamp = this.now();
+    const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
+      this.assertExecutionOpen();
+      return this.mutate<boolean>(bundleId, (current) => {
+        if (
+          current.control.status !== "paused" ||
+          current.control.reason !== "rate_limit" ||
+          current.control.resumeAt === undefined ||
+          current.control.resumeAt > timestamp
+        ) {
+          return { value: false };
+        }
+        return {
+          next: {
+            ...current,
+            control: { status: "running" },
+            jobs: current.jobs.map((job): KnowledgeIngestJob => {
+              if (job.status !== "paused") return job;
               return {
                 id: job.id,
                 bundleId: job.bundleId,
@@ -2959,6 +3202,7 @@ export class IngestQueue {
   private async claimNext(bundleId: string): Promise<MutationResult<ClaimedJobResult>> {
     const timestamp = this.now();
     return this.getBundleMutex(bundleId).runExclusive(async () => {
+      this.assertExecutionOpen();
       const localExecution = this.activeControllers.get(bundleId);
       if (localExecution) {
         return {
@@ -2972,6 +3216,9 @@ export class IngestQueue {
             value: {
               kind: "paused" as const,
               reason: current.control.reason,
+              ...(current.control.resumeAt === undefined
+                ? {}
+                : { resumeAt: current.control.resumeAt }),
             },
           };
         }
@@ -3042,7 +3289,14 @@ export class IngestQueue {
           attempt: claimed.attempt,
           startedAt: claimed.startedAt,
           controller: new AbortController(),
+          abortProtected: false,
+          lifecycleAbortRequested: false,
         });
+        const active = this.activeControllers.get(bundleId);
+        if (this.executionClosed && active) {
+          active.lifecycleAbortRequested = true;
+          active.controller.abort();
+        }
       }
       return mutation;
     });
@@ -3066,6 +3320,17 @@ export class IngestQueue {
     signal: AbortSignal,
     executionClaim: IngestExecutionClaim
   ): Promise<void> {
+    const active = this.activeControllers.get(bundleId);
+    if (
+      stage === "applying" &&
+      active?.jobId === jobId &&
+      active.attempt === attempt &&
+      active.startedAt === startedAt &&
+      !active.lifecycleAbortRequested &&
+      !signal.aborted
+    ) {
+      active.abortProtected = true;
+    }
     if (signal.aborted || !executionClaim.isCurrent()) {
       throw new DOMException("Ingest execution was aborted", "AbortError");
     }
@@ -3626,6 +3891,13 @@ export class IngestQueue {
       return "stale";
     }
     return job.status;
+  }
+
+  /** Throws before a closed workflow generation can enqueue or claim more work. */
+  private assertExecutionOpen(): void {
+    if (this.executionClosed) {
+      throw new IngestQueueClosedError();
+    }
   }
 
   /**

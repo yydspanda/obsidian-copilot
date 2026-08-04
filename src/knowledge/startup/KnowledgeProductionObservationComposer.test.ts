@@ -12,7 +12,11 @@ jest.mock("obsidian", () => {
   return { TFile, TFolder };
 });
 
-import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
+import {
+  KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
+  type KnowledgeDeepSeekFetchPort,
+  type KnowledgeDeepSeekHttpResponse,
+} from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import type { KnowledgeProductionPreflightSettingsInput } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import { parseIngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
@@ -27,6 +31,7 @@ import {
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 import { App, EventRef, TAbstractFile, TFile, Vault } from "obsidian";
 
@@ -40,6 +45,29 @@ let captureSequence = 0;
 
 type VaultEventName = "create" | "modify" | "delete" | "rename";
 type VaultEventHandler = (file: TAbstractFile, oldPath?: string) => void;
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+/** Creates one externally settled Promise for lifecycle race assertions. */
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+/** Creates a timer port whose callbacks remain inert unless a retry is actually scheduled. */
+function createWorkerScheduler(): KnowledgeProductionWorkerScheduler {
+  return {
+    now: () => Date.now(),
+    schedule: () => 1,
+    cancel: () => undefined,
+  };
+}
 
 /** Creates one strict Bundle used by the real production loader. */
 function createBundle(): KnowledgeBundleConfig {
@@ -84,6 +112,54 @@ function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   );
 }
 
+/** Creates one strict DeepSeek response whose analysis produces no write targets. */
+function createNoChangesResponse(): KnowledgeDeepSeekHttpResponse {
+  const content = JSON.stringify({
+    version: 1,
+    summary: "No durable Wiki change is required.",
+    concepts: [],
+    entities: [],
+    claims: [],
+    relations: [],
+    citations: [],
+    targets: [],
+  });
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({
+      id: "completion-observation-controller",
+      object: "chat.completion",
+      model: MODEL_NAME,
+      choices: [
+        {
+          index: 0,
+          finish_reason: "stop",
+          message: { role: "assistant", content },
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+    })
+  );
+  return {
+    status: 200,
+    redirected: false,
+    url: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
+    headers: {
+      get: (name) => {
+        const normalized = name.toLocaleLowerCase("en-US");
+        if (normalized === "content-type") return "application/json; charset=utf-8";
+        if (normalized === "content-length") return String(bytes.byteLength);
+        return null;
+      },
+    },
+    body: new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+  };
+}
+
 /** Creates a mutable fake TFile despite Obsidian's opaque public constructor. */
 function createFile(path: string): TFile {
   const FileConstructor = TFile as unknown as new (path: string) => TFile;
@@ -105,11 +181,21 @@ class ProductionVaultHarness {
     if (!bytes) throw new Error("missing fake bytes");
     return bytes.slice(0);
   });
+  readonly read = jest.fn(async (path: string): Promise<string> => {
+    const bytes = this.files.get(path);
+    if (!bytes) throw new Error("missing fake text");
+    return new TextDecoder().decode(bytes);
+  });
+  readonly stat = jest.fn(async (path: string) => {
+    const bytes = this.files.get(path);
+    return bytes ? { type: "file" as const, ctime: 1, mtime: 1, size: bytes.byteLength } : null;
+  });
   private nextRef = 0;
 
   readonly vault = {
-    adapter: { readBinary: this.readBinary },
+    adapter: { readBinary: this.readBinary, read: this.read, stat: this.stat },
     getFiles: jest.fn(() => [...this.loadedFiles.values()]),
+    getAllLoadedFiles: jest.fn(() => [...this.loadedFiles.values()]),
     getAbstractFileByPath: jest.fn((path: string) => this.loadedFiles.get(path) ?? null),
     on: jest.fn((name: VaultEventName, handler: VaultEventHandler) => {
       const ref = { id: ++this.nextRef } as unknown as EventRef;
@@ -350,5 +436,135 @@ describe("KnowledgeProductionObservationComposer", () => {
     expect(fetchPort).not.toHaveBeenCalled();
     composer.close();
     lifecycle.close();
+  });
+
+  it("aborts the exact Queue signal when a live production model generation closes", async () => {
+    const fetchStarted = createDeferred<AbortSignal>();
+    const fetchAborted = createDeferred<void>();
+    const fetchPort = jest.fn<
+      ReturnType<KnowledgeDeepSeekFetchPort>,
+      Parameters<KnowledgeDeepSeekFetchPort>
+    >(async (_url, init) => {
+      const signal = init.signal;
+      if (!(signal instanceof AbortSignal)) {
+        throw new Error("Expected the exact Queue AbortSignal");
+      }
+      fetchStarted.resolve(signal);
+      return await new Promise<Response>((_resolve, reject) => {
+        const rejectAborted = () => {
+          fetchAborted.resolve();
+          reject(new DOMException("aborted", "AbortError"));
+        };
+        if (signal.aborted) {
+          rejectAborted();
+          return;
+        }
+        signal.addEventListener("abort", rejectAborted, { once: true });
+      });
+    });
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+    await expect(composer.start(new AbortController().signal)).resolves.toEqual({
+      kind: "observation_converged",
+      scheduledCaptureCount: 1,
+    });
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler()
+    );
+
+    worker.start();
+    const queueSignal = await fetchStarted.promise;
+    expect(queueSignal.aborted).toBe(false);
+
+    composer.close();
+
+    expect(queueSignal.aborted).toBe(true);
+    await fetchAborted.promise;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+      if (
+        parsed.ok &&
+        parsed.value.control.status === "paused" &&
+        parsed.value.control.reason === "startup_recovery" &&
+        parsed.value.jobs[0]?.status === "pending"
+      ) {
+        lifecycle.close();
+        expect(fetchPort).toHaveBeenCalledTimes(1);
+        return;
+      }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+    lifecycle.close();
+    throw new Error("Expected lifecycle-aborted Queue recovery");
+  });
+
+  it("wakes an idle production controller from the real post-commit Queue event sink", async () => {
+    const firstFetch = createDeferred<void>();
+    const secondFetch = createDeferred<void>();
+    const fetchPort = jest.fn<
+      ReturnType<KnowledgeDeepSeekFetchPort>,
+      Parameters<KnowledgeDeepSeekFetchPort>
+    >(async () => {
+      if (fetchPort.mock.calls.length === 1) firstFetch.resolve();
+      if (fetchPort.mock.calls.length === 2) secondFetch.resolve();
+      return createNoChangesResponse();
+    });
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    const source = vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+    await composer.start(new AbortController().signal);
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler()
+    );
+
+    worker.start();
+    await firstFetch.promise;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+      if (parsed.ok && parsed.value.jobs[0]?.status === "completed") break;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+    expect(fetchPort).toHaveBeenCalledTimes(1);
+
+    vault.updateFile(source, encodeText("# Source two\n"));
+    vault.trigger("modify", source);
+    await secondFetch.promise;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+      if (
+        parsed.ok &&
+        parsed.value.jobs.some((job) => job.inputRevision === 2 && job.status === "completed")
+      ) {
+        composer.close();
+        await worker.whenSettled();
+        lifecycle.close();
+        expect(fetchPort).toHaveBeenCalledTimes(2);
+        return;
+      }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+    composer.close();
+    await worker.whenSettled();
+    lifecycle.close();
+    throw new Error("Expected the Queue event sink to wake the idle worker");
   });
 });

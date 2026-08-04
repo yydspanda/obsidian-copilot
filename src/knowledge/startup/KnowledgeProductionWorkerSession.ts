@@ -38,6 +38,14 @@ interface WorkerState {
 
 const workerStates = new WeakMap<object, WorkerState>();
 
+/** Re-proves that an awaited worker pass still belongs to the current live generation. */
+function assertWorkerCurrent(state: WorkerState): void {
+  if (state.closed) {
+    throw new KnowledgeProductionWorkerSessionError("stale");
+  }
+  state.assertCurrent();
+}
+
 /** Validates a bounded deterministic Bundle identifier list without invoking accessors. */
 function snapshotBundleIds(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 10_000) {
@@ -93,12 +101,15 @@ export class KnowledgeProductionWorkerSession {
     try {
       const results: Array<Readonly<{ bundleId: string; result: RunNextResult }>> = [];
       for (const bundleId of state.bundleIds) {
-        state.assertCurrent();
+        assertWorkerCurrent(state);
         if (!state.isReleased()) {
           throw new KnowledgeProductionWorkerSessionError("not_released");
         }
         const result = await state.queue.runNext(bundleId);
-        state.assertCurrent();
+        assertWorkerCurrent(state);
+        if (!state.isReleased()) {
+          throw new KnowledgeProductionWorkerSessionError("not_released");
+        }
         results.push(Object.freeze({ bundleId, result }));
       }
       return Object.freeze({ kind: "pass", results: Object.freeze(results) });

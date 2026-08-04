@@ -15,7 +15,10 @@ import {
   KnowledgeProductionModelRouteLease,
 } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
-import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import {
+  createKnowledgeExecutionOwner,
+  type KnowledgeExecutionOwner,
+} from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
   KnowledgeSourceWorkflowPlanLoader,
   type KnowledgeExactArtifactReaderPort,
@@ -36,12 +39,11 @@ import type { SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
+import type { ChangeSetReviewSnapshot } from "@/knowledge/review/ReviewStorage";
 import {
-  ReviewStorageRevisionConflictError,
-  type ChangeSetReviewSnapshot,
-  type ReviewStorage,
-} from "@/knowledge/review/ReviewStorage";
-import { KnowledgeRuntimeReviewStorage } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+  KnowledgeRuntimeReviewStorage,
+  KnowledgeRuntimeStore,
+} from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import {
   KnowledgeProductionCompileReviewHandler,
   KnowledgeProductionCompileReviewHandlerError,
@@ -49,6 +51,7 @@ import {
 import { KnowledgeProductionPreparationExecutor } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
 import {
   createKnowledgeExecutionTestHarness,
+  KnowledgeExecutionMemoryRuntimeFile,
   type KnowledgeExecutionTestHarness,
 } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 
@@ -71,9 +74,11 @@ interface AttemptOptions {
   classifyFailure?: KnowledgePrivateModelFailureClassifier;
   targetResolver?: CompilerTargetResolver;
   candidateValidator?: CompilerCandidateValidator;
-  createReviewStorage?(runtimeStorage: ReviewStorage): ReviewStorage;
+  reviewExecutionOwner?: KnowledgeExecutionOwner;
+  prepareReviewRuntime?(runtime: KnowledgeRuntimeStore): void;
   prepareReviews?(reviews: ChangeSetReviewRepository): Promise<void>;
   closeRouteBeforeRun?: boolean;
+  closeQueueAfterReviewWrite?: boolean;
 }
 
 interface AttemptResult {
@@ -81,36 +86,6 @@ interface AttemptResult {
   queueSnapshot: IngestQueueSnapshot;
   reviewSnapshot: ChangeSetReviewSnapshot;
   runtimeContent: string;
-}
-
-/** Clones JSON-compatible Review state for adapter isolation. */
-function cloneJson<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-/** Minimal atomic Review storage used by constructor-only tests. */
-class MemoryReviewStorage implements ReviewStorage {
-  private readonly values = new Map<string, ChangeSetReviewSnapshot>();
-
-  /** Reads one detached Review snapshot. */
-  async read(bundleId: string): Promise<unknown> {
-    const value = this.values.get(bundleId);
-    return value ? cloneJson(value) : null;
-  }
-
-  /** Compares and replaces one complete Review snapshot. */
-  async write(
-    bundleId: string,
-    snapshot: ChangeSetReviewSnapshot,
-    expectedRevision: number | null
-  ): Promise<void> {
-    const current = this.values.get(bundleId);
-    const actualRevision = current?.revision ?? null;
-    if (actualRevision !== expectedRevision) {
-      throw new ReviewStorageRevisionConflictError(bundleId, expectedRevision, actualRevision);
-    }
-    this.values.set(bundleId, cloneJson(snapshot));
-  }
 }
 
 /** Creates the single project-owned Bundle used by authentic preparation tests. */
@@ -304,7 +279,11 @@ function createUnsupportedAnalysisWireOutput(): string {
 
 /** Creates one real repository for constructor validation without Runtime execution. */
 function createStandaloneReviews(): ChangeSetReviewRepository {
-  return new ChangeSetReviewRepository(new MemoryReviewStorage(), { clock: () => 110 });
+  const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+  const executionOwner = createKnowledgeExecutionOwner();
+  return new ChangeSetReviewRepository(new KnowledgeRuntimeReviewStorage(runtime, executionOwner), {
+    clock: () => 110,
+  });
 }
 
 /** Creates one private route lease and its lifecycle close owner. */
@@ -341,11 +320,19 @@ async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
       return await preparationExecutor.execute(context);
     },
   });
-  const runtimeReviewStorage = new KnowledgeRuntimeReviewStorage(capabilities.runtime);
-  const reviews = new ChangeSetReviewRepository(
-    options.createReviewStorage?.(runtimeReviewStorage) ?? runtimeReviewStorage,
-    { clock: () => 110 }
+  const runtimeReviewStorage = new KnowledgeRuntimeReviewStorage(
+    capabilities.runtime,
+    options.reviewExecutionOwner ?? capabilities.executionOwner
   );
+  options.prepareReviewRuntime?.(capabilities.runtime);
+  if (options.closeQueueAfterReviewWrite) {
+    const writeReview = capabilities.runtime.writeReview;
+    jest.spyOn(capabilities.runtime, "writeReview").mockImplementation(async (...args) => {
+      await writeReview.call(capabilities.runtime, ...args);
+      capabilities.queue.close();
+    });
+  }
+  const reviews = new ChangeSetReviewRepository(runtimeReviewStorage, { clock: () => 110 });
   await options.prepareReviews?.(reviews);
   const route = createRouteLease(profile, options.invoke, options.classifyFailure);
   try {
@@ -381,6 +368,30 @@ function requireOnlyJob(snapshot: IngestQueueSnapshot) {
 }
 
 describe("KnowledgeProductionCompileReviewHandler", () => {
+  it("rejects a Review owner from another workflow before invoking the model", async () => {
+    const invoke = jest.fn(async () => createAnalysisWireOutput(false));
+    const attempt = await runAttempt({
+      invoke,
+      reviewExecutionOwner: createKnowledgeExecutionOwner(),
+    });
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+      status: "failed",
+      failure: { code: "unexpected_executor_failure", retryable: false },
+    });
+    expect(attempt.reviewSnapshot.records).toEqual([]);
+  });
+
+  it("does not let one execution owner bind Review storage to two Runtime instances", () => {
+    const owner = createKnowledgeExecutionOwner();
+    const runtimeA = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+    const runtimeB = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+
+    expect(() => new KnowledgeRuntimeReviewStorage(runtimeA, owner)).not.toThrow();
+    expect(() => new KnowledgeRuntimeReviewStorage(runtimeB, owner)).toThrow();
+  });
+
   it("persists an exact proposal before returning its pending Review receipt", async () => {
     const invokedStages: string[] = [];
     const attempt = await runAttempt({
@@ -428,6 +439,32 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         proposalDigest: record?.proposalDigest,
         reviewRecordRevision: 0,
       }),
+    ]);
+  });
+
+  it("finishes the Queue hand-off when lifecycle closure follows the durable Review write", async () => {
+    const attempt = await runAttempt({
+      invoke: async (stage, request) =>
+        stage === "analysis"
+          ? createAnalysisWireOutput(true)
+          : createGenerationWireOutput(request as CompilerGenerationRequest),
+      closeQueueAfterReviewWrite: true,
+    });
+
+    expect(attempt.queueResult).toMatchObject({
+      kind: "executed",
+      status: "awaiting_review",
+      jobId: "job-compile-review",
+    });
+    expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+      status: "awaiting_review",
+      stage: "review",
+    });
+    expect(attempt.queueSnapshot.pendingReviews).toEqual([
+      expect.objectContaining({ kind: "durable", jobId: "job-compile-review" }),
+    ]);
+    expect(attempt.reviewSnapshot.records).toEqual([
+      expect.objectContaining({ outcome: "pending" }),
     ]);
   });
 
@@ -494,12 +531,9 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         stage === "analysis"
           ? createAnalysisWireOutput(true)
           : createGenerationWireOutput(request as CompilerGenerationRequest),
-      createReviewStorage: (runtimeStorage) => ({
-        read: (bundleId) => runtimeStorage.read(bundleId),
-        write: async () => {
-          throw new Error(secretCanary);
-        },
-      }),
+      prepareReviewRuntime: (runtime) => {
+        jest.spyOn(runtime, "writeReview").mockRejectedValue(new Error(secretCanary));
+      },
     });
     const job = requireOnlyJob(attempt.queueSnapshot);
 
@@ -521,24 +555,21 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         stage === "analysis"
           ? createAnalysisWireOutput(true)
           : createGenerationWireOutput(request as CompilerGenerationRequest),
-      createReviewStorage: (runtimeStorage) => {
+      prepareReviewRuntime: (runtime) => {
         let readCount = 0;
-        return {
-          read: async (bundleId) => {
-            readCount += 1;
-            return readCount === 1
-              ? {
-                  version: 2,
-                  bundleId: BUNDLE_ID,
-                  revision: 0,
-                  records: [],
-                  unexpected: secretCanary,
-                }
-              : runtimeStorage.read(bundleId);
-          },
-          write: (bundleId, snapshot, expectedRevision) =>
-            runtimeStorage.write(bundleId, snapshot, expectedRevision),
-        };
+        const readReview = runtime.readReview;
+        jest.spyOn(runtime, "readReview").mockImplementation(async (bundleId) => {
+          readCount += 1;
+          return readCount === 1
+            ? {
+                version: 2,
+                bundleId: BUNDLE_ID,
+                revision: 0,
+                records: [],
+                unexpected: secretCanary,
+              }
+            : (readReview.call(runtime, bundleId) as Promise<unknown>);
+        });
       },
     });
     const job = requireOnlyJob(attempt.queueSnapshot);
@@ -563,12 +594,9 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         stage === "analysis"
           ? createAnalysisWireOutput(true)
           : createGenerationWireOutput(request as CompilerGenerationRequest),
-      createReviewStorage: (runtimeStorage) => ({
-        read: (bundleId) => runtimeStorage.read(bundleId),
-        write: async () => {
-          throw forgedAbort;
-        },
-      }),
+      prepareReviewRuntime: (runtime) => {
+        jest.spyOn(runtime, "writeReview").mockRejectedValue(forgedAbort);
+      },
     });
     const job = requireOnlyJob(attempt.queueSnapshot);
 
@@ -722,13 +750,15 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
     ) as ChangeSetReviewRepository;
     const overriddenReviews = createStandaloneReviews();
     let overriddenSaveCalls = 0;
-    Object.defineProperty(overriddenReviews, "saveProposal", {
-      configurable: true,
-      value: async () => {
-        overriddenSaveCalls += 1;
-        throw new Error("overridden Review method must not run");
-      },
-    });
+    expect(() =>
+      Object.defineProperty(overriddenReviews, "saveProposal", {
+        configurable: true,
+        value: async () => {
+          overriddenSaveCalls += 1;
+          throw new Error("overridden Review method must not run");
+        },
+      })
+    ).toThrow();
 
     expect(
       () =>
@@ -746,15 +776,6 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
           targetResolver: createTargetResolver(),
           candidateValidator: createCandidateValidator(),
           reviews: forgedReviews,
-        })
-    ).toThrow(KnowledgeProductionCompileReviewHandlerError);
-    expect(
-      () =>
-        new KnowledgeProductionCompileReviewHandler({
-          routeLease: route.lease,
-          targetResolver: createTargetResolver(),
-          candidateValidator: createCandidateValidator(),
-          reviews: overriddenReviews,
         })
     ).toThrow(KnowledgeProductionCompileReviewHandlerError);
     expect(overriddenSaveCalls).toBe(0);

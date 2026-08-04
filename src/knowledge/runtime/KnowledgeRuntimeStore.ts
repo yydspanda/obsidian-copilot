@@ -5478,14 +5478,61 @@ export class KnowledgeRuntimeQueueStorage implements QueueStorage {
 Object.freeze(KnowledgeRuntimeQueueStorage.prototype);
 Object.freeze(KnowledgeRuntimeQueueStorage);
 
+/** Hidden Runtime and optional execution-owner authority retained by one Review facade. */
+interface KnowledgeRuntimeReviewStorageState {
+  runtime: KnowledgeRuntimeStore;
+  executionOwner?: KnowledgeExecutionOwner;
+}
+
+const runtimeReviewStorageStates = new WeakMap<object, KnowledgeRuntimeReviewStorageState>();
+
+/** Returns hidden state only for an authentic Runtime ReviewStorage facade. */
+function requireRuntimeReviewStorageState(value: unknown): KnowledgeRuntimeReviewStorageState {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Object.getPrototypeOf(value) !== KnowledgeRuntimeReviewStorage.prototype
+  ) {
+    throw new TypeError("The Runtime Review storage is invalid");
+  }
+  const state = runtimeReviewStorageStates.get(value);
+  if (!state) throw new TypeError("The Runtime Review storage is invalid");
+  return state;
+}
+
 /** ReviewStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
-  /** Creates a review facade over the shared runtime store. */
-  constructor(private readonly runtime: KnowledgeRuntimeStore) {}
+  /**
+   * Creates a Review facade, optionally branded for one exact Queue/workflow lifecycle.
+   *
+   * Recovery-only consumers do not need an execution owner. Production compile
+   * handlers must supply the same opaque owner already bound to their Queue.
+   */
+  constructor(runtime: KnowledgeRuntimeStore, executionOwner?: KnowledgeExecutionOwner) {
+    if (!(runtime instanceof KnowledgeRuntimeStore)) {
+      throw new TypeError("The Runtime Review storage dependency is invalid");
+    }
+    if (executionOwner !== undefined) {
+      KnowledgeExecutionOwner.assert(executionOwner);
+      KnowledgeExecutionOwner.bindRuntime(executionOwner, runtime);
+    }
+    runtimeReviewStorageStates.set(this, Object.freeze({ runtime, executionOwner }));
+    Object.freeze(this);
+  }
+
+  /** Requires an authentic facade carrying an explicit production execution owner. */
+  static getExecutionOwner(value: unknown): KnowledgeExecutionOwner {
+    const owner = requireRuntimeReviewStorageState(value).executionOwner;
+    if (!owner) {
+      throw new TypeError("The Runtime Review storage execution owner is unavailable");
+    }
+    KnowledgeExecutionOwner.assert(owner);
+    return owner;
+  }
 
   /** Reads one detached review snapshot. */
   read(bundleId: string): Promise<unknown> {
-    return this.runtime.readReview(bundleId);
+    return requireRuntimeReviewStorageState(this).runtime.readReview(bundleId);
   }
 
   /** Atomically compares and replaces one review snapshot. */
@@ -5494,9 +5541,16 @@ export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
     snapshot: ChangeSetReviewSnapshot,
     expectedRevision: number | null
   ): Promise<void> {
-    return this.runtime.writeReview(bundleId, snapshot, expectedRevision);
+    return requireRuntimeReviewStorageState(this).runtime.writeReview(
+      bundleId,
+      snapshot,
+      expectedRevision
+    );
   }
 }
+
+Object.freeze(KnowledgeRuntimeReviewStorage.prototype);
+Object.freeze(KnowledgeRuntimeReviewStorage);
 
 /** SourceManifestStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {

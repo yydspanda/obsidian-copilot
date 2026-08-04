@@ -38,7 +38,8 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
       bundleId: "research",
       availability: "adapter_unavailable",
     });
-    expect(snapshot.notice).toContain("complete Golden Flow");
+    expect(snapshot.notice).toContain("Background ingest");
+    expect(snapshot.notice).toContain("durable Review proposals");
   });
 
   it("clears selection for zero or several Bundles instead of inventing an identity", () => {

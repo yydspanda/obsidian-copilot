@@ -440,6 +440,7 @@ export class ChangeSetReviewRepository {
     if (!Number.isSafeInteger(this.maxWriteAttempts) || this.maxWriteAttempts < 1) {
       throw new TypeError("maxWriteAttempts must be a positive safe integer");
     }
+    Object.freeze(this);
   }
 
   /**

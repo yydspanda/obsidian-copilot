@@ -10,7 +10,8 @@ import {
   KnowledgeProductionCompileAttemptBuilder,
   KnowledgeProductionModelRouteLease,
 } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
-import type { KnowledgeAuthorizedSourcePreparation } from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
+import { KnowledgeAuthorizedSourcePreparation } from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import { createKnowledgeCompilerIngestExecutorError } from "@/knowledge/ingest/KnowledgeCompilerIngestFailure";
 import {
   IngestExecutorError,
@@ -32,6 +33,7 @@ import type {
   ChangeSetReviewJobClaim,
   ChangeSetReviewRecord,
 } from "@/knowledge/review/ReviewStorage";
+import { KnowledgeRuntimeReviewStorage } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import type { KnowledgePreparedIngestHandler } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
 import { sha256 } from "@/utils/hash";
 
@@ -55,6 +57,7 @@ interface CapturedHandlerContext {
 interface HandlerState {
   routeLease: KnowledgeProductionModelRouteLease;
   builder: KnowledgeProductionCompileAttemptBuilder;
+  executionOwner: KnowledgeExecutionOwner;
   saveProposal: ChangeSetReviewRepository["saveProposal"];
 }
 
@@ -174,7 +177,7 @@ function snapshotInput(
 }
 
 /** Rejects prototype-only repository forgeries before the route builder is consumed. */
-function assertReviewRepository(value: unknown): asserts value is ChangeSetReviewRepository {
+function getReviewExecutionOwner(value: unknown): KnowledgeExecutionOwner {
   try {
     if (
       !(value instanceof ChangeSetReviewRepository) ||
@@ -201,6 +204,7 @@ function assertReviewRepository(value: unknown): asserts value is ChangeSetRevie
     ) {
       throw new KnowledgeProductionCompileReviewHandlerError();
     }
+    return KnowledgeRuntimeReviewStorage.getExecutionOwner(storage.value);
   } catch {
     throw new KnowledgeProductionCompileReviewHandlerError();
   }
@@ -339,10 +343,14 @@ async function persistProposal(
       manifestCommitPlanDigest: result.manifestCommitPlanDigest,
       jobClaim,
     });
-    state.routeLease.assertCurrent();
   } catch (error) {
     projectDependencyFailure(error, context.signal);
   }
+
+  // A successful Review write is the hand-off commit boundary. Lifecycle
+  // invalidation may already have aborted the Queue signal while the durable
+  // write was in flight, but this exact receipt must still reach Queue
+  // finalization so startup recovery never sees an orphaned proposal.
 
   if (
     record.outcome !== "pending" ||
@@ -375,10 +383,9 @@ async function persistProposal(
 /**
  * Compiles one authentic production preparation and durably hands proposals to Review.
  *
- * The caller must supply a Review repository backed by the same Runtime envelope
- * as the Queue. `ChangeSetReviewRepository` currently exposes no process-local
- * Runtime brand, so that shared ownership remains a production composition
- * invariant and every persisted job identity is rechecked at this boundary.
+ * The Review repository must carry the exact opaque execution owner already
+ * bound to the Queue Runtime and workflow plan. The owner is checked again on
+ * every authentic preparation before any target read or model call can begin.
  */
 export class KnowledgeProductionCompileReviewHandler implements KnowledgePreparedIngestHandler {
   /** Captures all generation-owned ports and consumes the route's single builder slot once. */
@@ -387,7 +394,7 @@ export class KnowledgeProductionCompileReviewHandler implements KnowledgePrepare
       const captured = snapshotInput(input);
       KnowledgeProductionModelRouteLease.assert(captured.routeLease);
       captured.routeLease.assertCurrent();
-      assertReviewRepository(captured.reviews);
+      const executionOwner = getReviewExecutionOwner(captured.reviews);
       const saveProposal = captureSaveProposal(captured.reviews);
       const builder = captured.routeLease.createAttemptBuilder(
         Object.freeze({
@@ -399,12 +406,24 @@ export class KnowledgeProductionCompileReviewHandler implements KnowledgePrepare
       handlerStates.set(this, {
         routeLease: captured.routeLease,
         builder,
+        executionOwner,
         saveProposal,
       });
     } catch {
       throw new KnowledgeProductionCompileReviewHandlerError();
     }
     Object.freeze(this);
+  }
+
+  /** Requires this handler to carry one exact production composition owner. */
+  static assertExecutionOwner(
+    value: KnowledgeProductionCompileReviewHandler,
+    expected: KnowledgeExecutionOwner
+  ): void {
+    KnowledgeExecutionOwner.assert(expected);
+    if (requireHandlerState(value).executionOwner !== expected) {
+      throw new KnowledgeProductionCompileReviewHandlerError();
+    }
   }
 
   /**
@@ -420,6 +439,11 @@ export class KnowledgeProductionCompileReviewHandler implements KnowledgePrepare
   ): Promise<IngestExecutionResult> {
     const state = requireHandlerState(this);
     const capturedContext = captureContext(context);
+    if (
+      !KnowledgeAuthorizedSourcePreparation.matchesExecutionOwner(preparation, state.executionOwner)
+    ) {
+      throw new KnowledgeProductionCompileReviewHandlerError();
+    }
     let result;
     try {
       const attempt = await state.builder.build(preparation, context);
