@@ -1,12 +1,11 @@
 import {
   AgentDefaultModelSetting,
+  backendDisplayOrder,
   backendNeedsSelfHostWarning,
   InstallBadge,
-  listBackendDescriptors,
   McpServersPanel,
   useBackendInstallState,
   type BackendDescriptor,
-  type BackendId,
 } from "@/agentMode";
 import { Button } from "@/components/ui/button";
 import { SettingItem } from "@/components/ui/setting-item";
@@ -23,12 +22,6 @@ import { Platform } from "obsidian";
 import React from "react";
 import { ChatModelEnableList } from "./ChatModelEnableList";
 import { ConfiguredModelEnableList } from "./ConfiguredModelEnableList";
-
-/**
- * Explicit ordering for backend sub-tabs. Keeps Opencode → Claude → Codex
- * regardless of what `listBackendDescriptors()` returns.
- */
-const BACKEND_ORDER: BackendId[] = ["opencode", "claude", "codex"];
 
 /** Synthetic sub-tab id for the (non-backend) Quick Chat model curation. */
 const QUICK_CHAT_TAB_ID = "quickchat";
@@ -53,7 +46,7 @@ function getScrollableParent(el: HTMLElement): HTMLElement | null {
 export const AgentSettings: React.FC = () => {
   const settings = useSettingsValue();
   const plugin = usePlugin();
-  const [selectedTab, setSelectedTab] = React.useState<string>(BACKEND_ORDER[0]);
+  const [selectedTab, setSelectedTab] = React.useState<string>(() => backendDisplayOrder()[0].id);
   const tabStripRef = React.useRef<HTMLDivElement>(null);
   const pendingAnchorTop = React.useRef<number | null>(null);
 
@@ -90,11 +83,8 @@ export const AgentSettings: React.FC = () => {
 
   // Every registered backend shows here — Self-Host Mode marks cloud agents
   // (warning banner in their panel) rather than hiding them. Cloud agents sort
-  // last because `BACKEND_ORDER` lists the self-hostable opencode first.
-  const allDescriptors = listBackendDescriptors();
-  const orderedDescriptors = BACKEND_ORDER.map((id) =>
-    allDescriptors.find((d) => d.id === id)
-  ).filter((d): d is BackendDescriptor => d !== undefined);
+  // last because `backendDisplayOrder()` lists the self-hostable opencode first.
+  const orderedDescriptors = backendDisplayOrder();
 
   const tabs: TabItemType[] = [
     ...orderedDescriptors.map((d) => ({
