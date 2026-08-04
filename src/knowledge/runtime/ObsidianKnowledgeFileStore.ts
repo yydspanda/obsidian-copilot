@@ -10,13 +10,11 @@ import type {
 import type { TransactionFileState } from "@/knowledge/changeset/TransactionStorage";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
-
-/** Minimum native file-handle surface needed by the exclusive-create edge. */
-interface SyncableFileHandle {
-  writeFile(data: string, options: { encoding: "utf8" }): Promise<void>;
-  sync(): Promise<void>;
-  close(): Promise<void>;
-}
+import {
+  loadObsidianNodeRuntimeModules,
+  type ObsidianNodeFileHandle,
+  type ObsidianNodeRuntimeLoader,
+} from "@/knowledge/runtime/ObsidianNodeRuntime";
 
 /** Explicit mutation capabilities of the first Windows Vault file adapter. */
 export const WINDOWS_KNOWLEDGE_FILE_MUTATION_CAPABILITIES: Readonly<KnowledgeFileMutationCapabilities> =
@@ -96,7 +94,7 @@ function hasNodeErrorCode(error: unknown, code: string): boolean {
 }
 
 /** Closes a native file handle without masking an earlier failure. */
-async function closeQuietly(handle: SyncableFileHandle | undefined): Promise<void> {
+async function closeQuietly(handle: ObsidianNodeFileHandle | undefined): Promise<void> {
   if (!handle) return;
   try {
     await handle.close();
@@ -140,29 +138,29 @@ function observationMatchesState(
  */
 export class WindowsExclusiveKnowledgeFileCreator implements ExclusiveKnowledgeFileCreator {
   private readonly adapter: FileSystemAdapter;
+  private readonly loadNodeRuntime: ObsidianNodeRuntimeLoader;
 
-  /** Creates a native creator over one desktop filesystem adapter. */
-  constructor(adapter: DataAdapter) {
+  /**
+   * Creates a native creator over one desktop filesystem adapter.
+   *
+   * @param adapter - Current Vault data adapter
+   * @param loadNodeRuntime - Lazy desktop-native module loader
+   */
+  constructor(
+    adapter: DataAdapter,
+    loadNodeRuntime: ObsidianNodeRuntimeLoader = loadObsidianNodeRuntimeModules
+  ) {
     if (!(adapter instanceof FileSystemAdapter)) {
       throw new KnowledgeFileAdapterPayloadError();
     }
     this.adapter = adapter;
+    this.loadNodeRuntime = loadNodeRuntime;
   }
 
   /** Publishes one fully written UTF-8 file without replacing an existing target. */
   async create(path: string, content: string): Promise<ExclusiveKnowledgeFileCreateResult> {
     const exactPath = requireVaultPath(path);
-    const [{ promises: fs }, pathModule, { randomUUID }] = await Promise.all([
-      // Desktop-only native edge: exclusive creation and fsync have no Vault equivalent.
-      // eslint-disable-next-line import/no-nodejs-modules
-      import("node:fs"),
-      // Desktop-only native edge: canonical containment checks require platform paths.
-      // eslint-disable-next-line import/no-nodejs-modules
-      import("node:path"),
-      // Desktop-only native edge: temporary publication paths must be collision resistant.
-      // eslint-disable-next-line import/no-nodejs-modules
-      import("node:crypto"),
-    ]);
+    const { fs, path: pathModule, randomUUID } = this.loadNodeRuntime();
     const vaultRoot = await fs.realpath(this.adapter.getBasePath());
     const absolutePath = this.adapter.getFullPath(exactPath);
     const parentPath = pathModule.dirname(absolutePath);
@@ -186,7 +184,7 @@ export class WindowsExclusiveKnowledgeFileCreator implements ExclusiveKnowledgeF
       realParent,
       `.${pathModule.basename(absolutePath)}.${randomUUID()}.tmp`
     );
-    let handle: SyncableFileHandle | undefined;
+    let handle: ObsidianNodeFileHandle | undefined;
     let result: ExclusiveKnowledgeFileCreateResult = "created";
     try {
       handle = await fs.open(temporaryPath, "wx", 0o600);

@@ -2,13 +2,11 @@ import type { DataAdapter } from "obsidian";
 import { FileSystemAdapter, normalizePath } from "obsidian";
 
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
-
-/** Minimum native file-handle surface needed by the exclusive-create edge. */
-interface SyncableFileHandle {
-  writeFile(data: string, options: { encoding: "utf8" }): Promise<void>;
-  sync(): Promise<void>;
-  close(): Promise<void>;
-}
+import {
+  loadObsidianNodeRuntimeModules,
+  type ObsidianNodeFileHandle,
+  type ObsidianNodeRuntimeLoader,
+} from "@/knowledge/runtime/ObsidianNodeRuntime";
 
 /** Reports a runtime path or adapter that cannot satisfy Windows desktop requirements. */
 export class ObsidianAtomicRuntimeFileUnsupportedError extends Error {
@@ -63,7 +61,7 @@ function requireExactRuntimePath(path: string): string {
  *
  * @param handle - Exclusive file handle, when creation reached that point
  */
-async function closeQuietly(handle: SyncableFileHandle | undefined): Promise<void> {
+async function closeQuietly(handle: ObsidianNodeFileHandle | undefined): Promise<void> {
   if (!handle) return;
   try {
     await handle.close();
@@ -81,25 +79,32 @@ async function closeQuietly(handle: SyncableFileHandle | undefined): Promise<voi
  * boundary over the permanently existing file. Its real Windows behavior and
  * crash characteristics remain an explicit product acceptance gate.
  *
- * Node modules are dynamically imported only when initialization runs, so the
- * surrounding non-desktop plugin does not evaluate a top-level Node require.
+ * Node modules are lazily required only when initialization runs, so the
+ * surrounding non-desktop plugin does not evaluate a top-level Node import.
  */
 export class ObsidianAtomicRuntimeFile implements AtomicRuntimeFile {
   private readonly path: string;
   private readonly adapter: FileSystemAdapter;
+  private readonly loadNodeRuntime: ObsidianNodeRuntimeLoader;
 
   /**
    * Creates a Windows runtime file over an explicit Vault adapter and path.
    *
    * @param adapter - Current Vault data adapter
    * @param path - Vault-relative private runtime file path
+   * @param loadNodeRuntime - Lazy desktop-native module loader
    */
-  constructor(adapter: DataAdapter, path: string) {
+  constructor(
+    adapter: DataAdapter,
+    path: string,
+    loadNodeRuntime: ObsidianNodeRuntimeLoader = loadObsidianNodeRuntimeModules
+  ) {
     if (!(adapter instanceof FileSystemAdapter)) {
       throw new ObsidianAtomicRuntimeFileUnsupportedError();
     }
     this.adapter = adapter;
     this.path = requireExactRuntimePath(path);
+    this.loadNodeRuntime = loadNodeRuntime;
   }
 
   /** Publishes one completely written runtime file without replacing an existing one. */
@@ -107,17 +112,7 @@ export class ObsidianAtomicRuntimeFile implements AtomicRuntimeFile {
     if (typeof initialContent !== "string" || initialContent.length === 0) {
       throw new TypeError("initialContent must be non-empty plaintext");
     }
-    const [{ promises: fs }, pathModule, { randomUUID }] = await Promise.all([
-      // Desktop-only native edge: exclusive creation and fsync have no Vault equivalent.
-      // eslint-disable-next-line import/no-nodejs-modules
-      import("node:fs"),
-      // Desktop-only native edge: canonical containment checks require platform paths.
-      // eslint-disable-next-line import/no-nodejs-modules
-      import("node:path"),
-      // Desktop-only native edge: temporary publication paths must be collision resistant.
-      // eslint-disable-next-line import/no-nodejs-modules
-      import("node:crypto"),
-    ]);
+    const { fs, path: pathModule, randomUUID } = this.loadNodeRuntime();
     const vaultRoot = await fs.realpath(this.adapter.getBasePath());
     const absolutePath = pathModule.resolve(vaultRoot, ...this.path.split("/"));
     const relativePath = pathModule.relative(vaultRoot, absolutePath);
@@ -150,7 +145,7 @@ export class ObsidianAtomicRuntimeFile implements AtomicRuntimeFile {
       realParent,
       `.${pathModule.basename(absolutePath)}.${randomUUID()}.tmp`
     );
-    let handle: SyncableFileHandle | undefined;
+    let handle: ObsidianNodeFileHandle | undefined;
     try {
       handle = await fs.open(temporaryPath, "wx", 0o600);
       await handle.writeFile(initialContent, { encoding: "utf8" });

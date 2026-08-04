@@ -25,6 +25,7 @@ jest.mock("obsidian", () => {
 });
 
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -40,8 +41,14 @@ import {
   WindowsExclusiveKnowledgeFileCreator,
   type ExclusiveKnowledgeFileCreator,
 } from "@/knowledge/runtime/ObsidianKnowledgeFileStore";
+import type { ObsidianNodeRuntimeModules } from "@/knowledge/runtime/ObsidianNodeRuntime";
 
 const temporaryDirectories: string[] = [];
+
+/** Loads the native Node modules used by the filesystem-backed test edge. */
+function loadTestNodeRuntime(): ObsidianNodeRuntimeModules {
+  return { fs, path, randomUUID };
+}
 
 /** Creates one loaded fake TFile despite the public constructor being opaque. */
 function createTestFile(targetPath: string): TFile {
@@ -360,7 +367,7 @@ describe("ObsidianKnowledgeFileStore", () => {
 describe("WindowsExclusiveKnowledgeFileCreator", () => {
   it("allows exactly one concurrent create without overwriting the winner", async () => {
     const adapter = await createNativeAdapter();
-    const creator = new WindowsExclusiveKnowledgeFileCreator(adapter);
+    const creator = new WindowsExclusiveKnowledgeFileCreator(adapter, loadTestNodeRuntime);
     await fs.mkdir((adapter as never as { getFullPath(path: string): string }).getFullPath("Wiki"));
 
     const results = await Promise.all([
@@ -378,7 +385,7 @@ describe("WindowsExclusiveKnowledgeFileCreator", () => {
 
   it("rejects a missing parent and a symlink escape", async () => {
     const adapter = await createNativeAdapter();
-    const creator = new WindowsExclusiveKnowledgeFileCreator(adapter);
+    const creator = new WindowsExclusiveKnowledgeFileCreator(adapter, loadTestNodeRuntime);
     await expect(creator.create("Missing/Page.md", "content")).rejects.toBeInstanceOf(
       KnowledgeFileParentUnavailableError
     );

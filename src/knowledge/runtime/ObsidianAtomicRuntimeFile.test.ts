@@ -55,6 +55,7 @@ jest.mock("obsidian", () => {
 });
 
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -64,6 +65,7 @@ import {
   ObsidianAtomicRuntimeFile,
   ObsidianAtomicRuntimeFileUnsupportedError,
 } from "@/knowledge/runtime/ObsidianAtomicRuntimeFile";
+import type { ObsidianNodeRuntimeModules } from "@/knowledge/runtime/ObsidianNodeRuntime";
 
 type TestFileSystemAdapter = FileSystemAdapter & {
   getFullPath(normalizedPath: string): string;
@@ -71,6 +73,11 @@ type TestFileSystemAdapter = FileSystemAdapter & {
 
 const temporaryDirectories: string[] = [];
 const RUNTIME_PATH = "Config/plugins/copilot/runtime.json";
+
+/** Loads the native Node modules used by the filesystem-backed test edge. */
+function loadTestNodeRuntime(): ObsidianNodeRuntimeModules {
+  return { fs, path, randomUUID };
+}
 
 /** Creates one fake FileSystemAdapter rooted in a fresh temporary Vault. */
 async function createAdapter(createRuntimeParent = true): Promise<TestFileSystemAdapter> {
@@ -97,7 +104,7 @@ afterEach(async () => {
 describe("ObsidianAtomicRuntimeFile", () => {
   it("initializes once without overwriting an existing runtime file", async () => {
     const adapter = await createAdapter();
-    const file = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH);
+    const file = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH, loadTestNodeRuntime);
 
     await file.initialize('{"version":1}');
     await file.initialize('{"version":2}');
@@ -107,8 +114,8 @@ describe("ObsidianAtomicRuntimeFile", () => {
 
   it("allows exactly one concurrent exclusive initializer to create bytes", async () => {
     const adapter = await createAdapter();
-    const first = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH);
-    const second = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH);
+    const first = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH, loadTestNodeRuntime);
+    const second = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH, loadTestNodeRuntime);
 
     await Promise.all([first.initialize("first"), second.initialize("second")]);
 
@@ -117,7 +124,7 @@ describe("ObsidianAtomicRuntimeFile", () => {
 
   it("delegates every later mutation to the adapter atomic process primitive", async () => {
     const adapter = await createAdapter();
-    const file = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH);
+    const file = new ObsidianAtomicRuntimeFile(adapter, RUNTIME_PATH, loadTestNodeRuntime);
     await file.initialize("one");
 
     await expect(file.process((current) => `${current}-two`)).resolves.toBe("one-two");
@@ -152,7 +159,11 @@ describe("ObsidianAtomicRuntimeFile", () => {
 
   it("rejects a missing parent and a parent symlink that escapes the Vault", async () => {
     const missingParentAdapter = await createAdapter(false);
-    const missingParentFile = new ObsidianAtomicRuntimeFile(missingParentAdapter, RUNTIME_PATH);
+    const missingParentFile = new ObsidianAtomicRuntimeFile(
+      missingParentAdapter,
+      RUNTIME_PATH,
+      loadTestNodeRuntime
+    );
     await expect(missingParentFile.initialize("content")).rejects.toBeInstanceOf(
       ObsidianAtomicRuntimeFileUnsupportedError
     );
@@ -162,7 +173,11 @@ describe("ObsidianAtomicRuntimeFile", () => {
     temporaryDirectories.push(outside);
     await fs.mkdir(path.join(outside, "plugins", "copilot"), { recursive: true });
     await fs.symlink(outside, escapingAdapter.getFullPath("Config"), "dir");
-    const escapingFile = new ObsidianAtomicRuntimeFile(escapingAdapter, RUNTIME_PATH);
+    const escapingFile = new ObsidianAtomicRuntimeFile(
+      escapingAdapter,
+      RUNTIME_PATH,
+      loadTestNodeRuntime
+    );
 
     await expect(escapingFile.initialize("outside content")).rejects.toBeInstanceOf(
       ObsidianAtomicRuntimeFileUnsupportedError
