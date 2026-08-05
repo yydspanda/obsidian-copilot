@@ -7,6 +7,11 @@ import type {
 import { createUnavailableKnowledgeStudioSnapshot } from "@/knowledge/ui/KnowledgeStudioController";
 import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
 import type { KnowledgeReviewCommand } from "@/knowledge/review/ReviewDecision";
+import type {
+  KnowledgeGroundedRetrievalResult,
+  KnowledgeStudioQueryPort,
+  KnowledgeStudioQueryRequest,
+} from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 
 /** Promise whose settlement is controlled by one test. */
 interface Deferred<T> {
@@ -27,8 +32,25 @@ interface RecordedCommandCall {
   kind: "pause" | "resume" | "cancel" | "retry" | "review";
   bundleId: string;
   targetId?: string;
+  expectedQueueRevision?: number;
   signal: AbortSignal;
 }
+
+/** One read-only Query or opaque citation call received by a delegate. */
+type RecordedQueryCall =
+  | {
+      kind: "query";
+      bundleId: string;
+      request: Readonly<KnowledgeStudioQueryRequest>;
+      signal: AbortSignal;
+    }
+  | {
+      kind: "citation";
+      bundleId: string;
+      queryId: string;
+      citationRef: string;
+      signal: AbortSignal;
+    };
 
 /** Optional behavior injected into the recording Studio port. */
 interface RecordingPortHandlers {
@@ -38,6 +60,10 @@ interface RecordingPortHandlers {
     call: RecordedCommandCall,
     command: KnowledgeReviewCommand
   ) => Promise<KnowledgeStudioReviewSubmissionResult>;
+  query?: (
+    call: Extract<RecordedQueryCall, { kind: "query" }>
+  ) => Promise<KnowledgeGroundedRetrievalResult>;
+  citation?: (call: Extract<RecordedQueryCall, { kind: "citation" }>) => Promise<void>;
 }
 
 /** Creates a manually controlled promise. */
@@ -91,10 +117,26 @@ function createReviewCommand(): KnowledgeReviewCommand {
   };
 }
 
+/** Creates one empty but valid grounded Query result for delegation tests. */
+function createQueryResult(queryId = "query-1"): KnowledgeGroundedRetrievalResult {
+  return {
+    mode: "grounded_retrieval",
+    bundleId: "personal",
+    queryId,
+    runtimeRevision: 1,
+    manifestRevision: 1,
+    hits: [],
+  };
+}
+
 /** Read/command delegate that records operations, signals, and hint bindings. */
-class RecordingKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort {
+class RecordingKnowledgeStudioPort
+  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeStudioQueryPort
+{
   readonly loadCalls: { bundleId: string; signal: AbortSignal }[] = [];
   readonly commandCalls: RecordedCommandCall[] = [];
+  readonly queryCalls: RecordedQueryCall[] = [];
+  readonly revokeCalls: Array<{ bundleId: string; queryId?: string }> = [];
   readonly hintSubscriptions: RecordedHintSubscription[] = [];
   unsubscribeCount = 0;
 
@@ -132,23 +174,53 @@ class RecordingKnowledgeStudioPort implements KnowledgeStudioReadPort, Knowledge
   }
 
   /** Records and executes one Bundle pause. */
-  async pauseBundle(bundleId: string, signal: AbortSignal): Promise<void> {
-    return this.runVoidCommand({ kind: "pause", bundleId, signal });
+  async pauseBundle(
+    bundleId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    return this.runVoidCommand({ kind: "pause", bundleId, expectedQueueRevision, signal });
   }
 
   /** Records and executes one Bundle resume. */
-  async resumeBundle(bundleId: string, signal: AbortSignal): Promise<void> {
-    return this.runVoidCommand({ kind: "resume", bundleId, signal });
+  async resumeBundle(
+    bundleId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    return this.runVoidCommand({ kind: "resume", bundleId, expectedQueueRevision, signal });
   }
 
   /** Records and executes one job cancellation. */
-  async cancelJob(bundleId: string, jobId: string, signal: AbortSignal): Promise<void> {
-    return this.runVoidCommand({ kind: "cancel", bundleId, targetId: jobId, signal });
+  async cancelJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    return this.runVoidCommand({
+      kind: "cancel",
+      bundleId,
+      targetId: jobId,
+      expectedQueueRevision,
+      signal,
+    });
   }
 
   /** Records and executes one job retry. */
-  async retryJob(bundleId: string, jobId: string, signal: AbortSignal): Promise<void> {
-    return this.runVoidCommand({ kind: "retry", bundleId, targetId: jobId, signal });
+  async retryJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    return this.runVoidCommand({
+      kind: "retry",
+      bundleId,
+      targetId: jobId,
+      expectedQueueRevision,
+      signal,
+    });
   }
 
   /** Records and executes one review submission. */
@@ -159,7 +231,40 @@ class RecordingKnowledgeStudioPort implements KnowledgeStudioReadPort, Knowledge
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     const call: RecordedCommandCall = { kind: "review", bundleId, signal };
     this.commandCalls.push(call);
-    return this.handlers.review?.(call, command) ?? Promise.resolve({ kind: "apply_started" });
+    return this.handlers.review?.(call, command) ?? Promise.resolve({ kind: "applied" });
+  }
+
+  /** Records and executes one retrieval-only Query. */
+  async query(
+    bundleId: string,
+    request: Readonly<KnowledgeStudioQueryRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeGroundedRetrievalResult> {
+    const call = { kind: "query" as const, bundleId, request, signal };
+    this.queryCalls.push(call);
+    return this.handlers.query?.(call) ?? Promise.resolve(createQueryResult());
+  }
+
+  /** Records and executes one opaque citation jump. */
+  async openCitation(
+    bundleId: string,
+    queryId: string,
+    citationRef: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const call = { kind: "citation" as const, bundleId, queryId, citationRef, signal };
+    this.queryCalls.push(call);
+    return this.handlers.citation?.(call) ?? Promise.resolve();
+  }
+
+  /** Records synchronous exact or Bundle-wide Query revocation. */
+  revokeCurrent(bundleId: string, queryId?: string): void {
+    this.revokeCalls.push({ bundleId, ...(queryId === undefined ? {} : { queryId }) });
+  }
+
+  /** Satisfies the complete Query contract; delegate lifetime remains externally owned. */
+  close(): void {
+    // The production composer, not the stable wrapper, owns delegate closure.
   }
 
   /**
@@ -205,7 +310,7 @@ describe("DelegatingKnowledgeStudioPort", () => {
       availability: "adapter_unavailable",
       notice: "Adapters are still starting.",
     });
-    await expect(port.pauseBundle("personal", signal)).rejects.toMatchObject({
+    await expect(port.pauseBundle("personal", 0, signal)).rejects.toMatchObject({
       name: "KnowledgeStudioAdapterUnavailableError",
     });
 
@@ -217,12 +322,12 @@ describe("DelegatingKnowledgeStudioPort", () => {
       availability: "ready",
       revisionToken: "ready-1",
     });
-    await port.pauseBundle("personal", signal);
-    await port.resumeBundle("personal", signal);
-    await port.cancelJob("personal", "job-1", signal);
-    await port.retryJob("personal", "job-2", signal);
+    await port.pauseBundle("personal", 7, signal);
+    await port.resumeBundle("personal", 8, signal);
+    await port.cancelJob("personal", "job-1", 9, signal);
+    await port.retryJob("personal", "job-2", 10, signal);
     await expect(port.submitReview("personal", createReviewCommand(), signal)).resolves.toEqual({
-      kind: "apply_started",
+      kind: "applied",
     });
 
     expect(delegate.commandCalls.map(({ kind, targetId }) => ({ kind, targetId }))).toEqual([
@@ -248,6 +353,137 @@ describe("DelegatingKnowledgeStudioPort", () => {
     expect(delegate.loadCalls).toHaveLength(2);
   });
 
+  it("routes scoped Query and opaque citation jumps through only the current generation", async () => {
+    const oldQuery = createDeferred<KnowledgeGroundedRetrievalResult>();
+    const oldDelegate = new RecordingKnowledgeStudioPort("old", {
+      query: async () => oldQuery.promise,
+    });
+    const replacement = new RecordingKnowledgeStudioPort("new", {
+      query: async () => createQueryResult("query-new"),
+    });
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(oldDelegate);
+
+    const stale = port.query("personal", { query: "old generation" }, new AbortController().signal);
+    await flushAsync();
+    port.replaceDelegate(replacement);
+
+    expect(oldDelegate.queryCalls).toHaveLength(1);
+    expect(oldDelegate.queryCalls[0].signal.aborted).toBe(true);
+    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
+
+    const result = await port.query(
+      "personal",
+      { query: "current generation" },
+      new AbortController().signal
+    );
+    await port.openCitation(
+      "personal",
+      result.queryId,
+      "citation-current",
+      new AbortController().signal
+    );
+    port.revokeCurrent("personal", result.queryId);
+
+    expect(result.queryId).toBe("query-new");
+    expect(replacement.queryCalls).toHaveLength(2);
+    expect(replacement.revokeCalls).toEqual([{ bundleId: "personal", queryId: "query-new" }]);
+    expect(replacement.queryCalls).toMatchObject([
+      { kind: "query", bundleId: "personal", request: { query: "current generation" } },
+      {
+        kind: "citation",
+        bundleId: "personal",
+        queryId: "query-new",
+        citationRef: "citation-current",
+      },
+    ]);
+
+    oldQuery.resolve(createQueryResult("late-old"));
+    await flushAsync();
+  });
+
+  it("routes synchronous Query revocation only to the current delegate generation", () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const oldDelegate = new RecordingKnowledgeStudioPort("old");
+    const replacement = new RecordingKnowledgeStudioPort("new");
+
+    expect(() => port.revokeCurrent("personal", "query-before-install")).not.toThrow();
+
+    port.replaceDelegate(oldDelegate);
+    port.revokeCurrent("personal", "query-exact");
+    expect(oldDelegate.revokeCalls).toEqual([{ bundleId: "personal", queryId: "query-exact" }]);
+
+    port.revokeCurrent("personal");
+    expect(oldDelegate.revokeCalls).toEqual([
+      { bundleId: "personal", queryId: "query-exact" },
+      { bundleId: "personal" },
+    ]);
+
+    port.replaceDelegate(replacement);
+    port.revokeCurrent("work", "query-replacement");
+    port.revokeCurrent("work");
+
+    expect(oldDelegate.revokeCalls).toEqual([
+      { bundleId: "personal", queryId: "query-exact" },
+      { bundleId: "personal" },
+    ]);
+    expect(replacement.revokeCalls).toEqual([
+      { bundleId: "work", queryId: "query-replacement" },
+      { bundleId: "work" },
+    ]);
+
+    port.close();
+    expect(() => port.revokeCurrent("work", "query-after-close")).not.toThrow();
+    expect(replacement.revokeCalls).toHaveLength(2);
+  });
+
+  it("fail-closes when a delegate implements Query revocation asynchronously", () => {
+    const delegate = new RecordingKnowledgeStudioPort("invalid");
+    Object.defineProperty(delegate, "revokeCurrent", {
+      value: jest.fn(() => Promise.resolve()),
+    });
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(delegate);
+
+    expect(() => port.revokeCurrent("personal", "query-async")).toThrow(
+      "Knowledge Studio runtime adapters are not configured yet"
+    );
+  });
+
+  it("does not dispatch queued work after synchronous generation replacement", async () => {
+    const oldDelegate = new RecordingKnowledgeStudioPort("old");
+    const replacement = new RecordingKnowledgeStudioPort("new");
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(oldDelegate);
+
+    const stale = port.query(
+      "personal",
+      { query: "must not dispatch" },
+      new AbortController().signal
+    );
+    port.replaceDelegate(replacement);
+
+    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
+    expect(oldDelegate.queryCalls).toHaveLength(0);
+    expect(replacement.queryCalls).toHaveLength(0);
+  });
+
+  it("keeps Query fail-closed before installation and after permanent closure", async () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const signal = new AbortController().signal;
+
+    await expect(port.query("personal", { query: "blocked" }, signal)).rejects.toMatchObject({
+      name: "KnowledgeStudioAdapterUnavailableError",
+    });
+
+    port.replaceDelegate(new RecordingKnowledgeStudioPort("ready"));
+    port.close();
+
+    await expect(port.openCitation("personal", "query", "citation", signal)).rejects.toMatchObject({
+      name: "KnowledgeStudioAdapterUnavailableError",
+    });
+  });
+
   it("aborts in-flight old work and rejects late load and command results after replacement", async () => {
     const load = createDeferred<KnowledgeStudioSnapshot>();
     const command = createDeferred<void>();
@@ -260,7 +496,7 @@ describe("DelegatingKnowledgeStudioPort", () => {
     port.replaceDelegate(oldDelegate);
 
     const oldLoad = port.load("personal", new AbortController().signal);
-    const oldPause = port.pauseBundle("personal", new AbortController().signal);
+    const oldPause = port.pauseBundle("personal", 1, new AbortController().signal);
     await flushAsync();
     expect(oldDelegate.loadCalls).toHaveLength(1);
     expect(oldDelegate.commandCalls).toHaveLength(1);
@@ -368,7 +604,7 @@ describe("DelegatingKnowledgeStudioPort", () => {
     });
 
     const pendingLoad = port.load("personal", new AbortController().signal);
-    const pendingPause = port.pauseBundle("personal", new AbortController().signal);
+    const pendingPause = port.pauseBundle("personal", 1, new AbortController().signal);
     await flushAsync();
     port.dispose();
 
@@ -383,9 +619,9 @@ describe("DelegatingKnowledgeStudioPort", () => {
       availability: "adapter_unavailable",
       notice: "Studio runtime is unavailable.",
     });
-    await expect(port.pauseBundle("personal", new AbortController().signal)).rejects.toMatchObject({
-      name: "KnowledgeStudioAdapterUnavailableError",
-    });
+    await expect(
+      port.pauseBundle("personal", 1, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
     expect(port.subscribe("personal", () => undefined)).toBeInstanceOf(Function);
     expect(() => port.replaceDelegate(replacement)).toThrow(
       "Knowledge Studio runtime adapters are not configured yet"

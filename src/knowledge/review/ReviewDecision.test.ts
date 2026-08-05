@@ -8,6 +8,7 @@ import {
   KnowledgeReviewDecisionError,
   KnowledgeReviewDecisionService,
   KnowledgeReviewInfrastructureError,
+  snapshotKnowledgeReviewCommand,
   type KnowledgeReviewCandidateValidationInput,
   type KnowledgeReviewCandidateValidator,
   type KnowledgeReviewCommand,
@@ -191,7 +192,7 @@ describe("createKnowledgeReviewPlan", () => {
     ];
     const proposal = createProposal(changes);
     const plan = createKnowledgeReviewPlan(proposal, [
-      { changeId: "change-create", kind: "file", content: "occupied" },
+      { changeId: "change-create", kind: "occupied" },
       { changeId: "update-stale", kind: "file", content: "changed elsewhere" },
       { changeId: "update-missing", kind: "missing" },
       { changeId: "update-directory", kind: "directory" },
@@ -235,6 +236,93 @@ describe("createKnowledgeReviewPlan", () => {
         expect.arrayContaining(["review_observation_duplicate", "review_observation_unknown"])
       );
     }
+  });
+});
+
+describe("snapshotKnowledgeReviewCommand", () => {
+  it("captures detached deeply frozen exact and block decisions", () => {
+    const proposal = createProposal([createUpdate(), createCreate()]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const acceptedBlockIds = plan.files[0].blocks
+      .filter((block) => block.kind === "change")
+      .map((block) => block.blockId);
+    const command = createCommand(plan, [
+      { changeId: "change-create", decision: "accept_exact" },
+      {
+        changeId: "change-update",
+        decision: "accept_blocks",
+        acceptedBlockIds,
+      },
+    ]);
+
+    const captured = snapshotKnowledgeReviewCommand(command);
+
+    expect(captured).toEqual(command);
+    expect(captured).not.toBe(command);
+    expect(captured.decisions).not.toBe(command.decisions);
+    expect(Object.isFrozen(captured)).toBe(true);
+    expect(Object.isFrozen(captured.decisions)).toBe(true);
+    expect(captured.decisions.every((decision) => Object.isFrozen(decision))).toBe(true);
+    const blockDecision = captured.decisions[1];
+    expect(blockDecision.decision).toBe("accept_blocks");
+    if (blockDecision.decision === "accept_blocks") {
+      expect(blockDecision.acceptedBlockIds).not.toBe(acceptedBlockIds);
+      expect(Object.isFrozen(blockDecision.acceptedBlockIds)).toBe(true);
+    }
+  });
+
+  it("rejects accessor fields and records with extra keys", () => {
+    const proposal = createProposal([createUpdate()]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const accessorCommand = createCommand(plan, [
+      { changeId: "change-update", decision: "accept_exact" },
+    ]);
+    Object.defineProperty(accessorCommand, "changeSetId", {
+      enumerable: true,
+      get: () => proposal.id,
+    });
+    const extraCommand = {
+      ...createCommand(plan, [{ changeId: "change-update", decision: "accept_exact" }]),
+      path: "Wiki/private.md",
+    };
+    const extraDecisionCommand = createCommand(plan, [
+      {
+        changeId: "change-update",
+        decision: "accept_exact",
+        path: "Wiki/private.md",
+      } as KnowledgeReviewFileDecision,
+    ]);
+
+    for (const command of [accessorCommand, extraCommand, extraDecisionCommand]) {
+      expect(() => snapshotKnowledgeReviewCommand(command)).toThrow(KnowledgeReviewDecisionError);
+    }
+  });
+
+  it("rejects sparse decision and block-id arrays", () => {
+    const proposal = createProposal([createUpdate()]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const sparseDecisions = new Array<KnowledgeReviewFileDecision>(2);
+    sparseDecisions[1] = { changeId: "change-update", decision: "accept_exact" };
+    const sparseBlockIds = new Array<string>(2);
+    sparseBlockIds[1] = plan.files[0].blocks.find((block) => block.kind === "change")!.blockId;
+
+    expect(() =>
+      snapshotKnowledgeReviewCommand({
+        ...createCommand(plan, [{ changeId: "change-update", decision: "accept_exact" }]),
+        decisions: sparseDecisions,
+      })
+    ).toThrow(KnowledgeReviewDecisionError);
+    expect(() =>
+      snapshotKnowledgeReviewCommand(
+        createCommand(plan, [
+          {
+            changeId: "change-update",
+            decision: "accept_blocks",
+            acceptedBlockIds: sparseBlockIds,
+          },
+        ])
+      )
+    ).toThrow(KnowledgeReviewDecisionError);
   });
 });
 
@@ -337,7 +425,7 @@ describe("compileKnowledgeReviewSelection", () => {
           { changeId: "change-update", decision: "reject" },
           { changeId: "change-delete", decision: "reject" },
         ]),
-        expectedSnapshotToken: "stale",
+        expectedSnapshotToken: "0".repeat(64),
       },
       createCommand(plan, [
         {
@@ -374,6 +462,29 @@ describe("compileKnowledgeReviewSelection", () => {
 });
 
 describe("KnowledgeReviewDecisionService", () => {
+  it("does not invoke command accessors", async () => {
+    const proposal = createProposal([createUpdate()]);
+    const observations = createObservations(proposal);
+    const plan = createKnowledgeReviewPlan(proposal, observations);
+    const validator = new FakeReviewValidator(validCandidate);
+    const service = new KnowledgeReviewDecisionService(validator);
+    const command = createCommand(plan, [{ changeId: "change-update", decision: "accept_exact" }]);
+    let accessorCalls = 0;
+    Object.defineProperty(command.decisions[0], "changeId", {
+      enumerable: true,
+      get: () => {
+        accessorCalls += 1;
+        throw new Error("must not invoke command accessors");
+      },
+    });
+
+    await expect(
+      service.decide(proposal, observations, command, new AbortController().signal)
+    ).rejects.toBeInstanceOf(KnowledgeReviewDecisionError);
+    expect(accessorCalls).toBe(0);
+    expect(validator.calls).toBe(0);
+  });
+
   it("revalidates and returns an exact accepted digest", async () => {
     const proposal = createProposal([createUpdate()]);
     const observations = createObservations(proposal);

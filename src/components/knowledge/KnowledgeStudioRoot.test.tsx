@@ -7,14 +7,17 @@ import type {
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
 import type {
+  KnowledgeStudioCommandCapabilities,
   KnowledgeStudioController,
   KnowledgeStudioState,
 } from "@/knowledge/ui/KnowledgeStudioController";
+import type { KnowledgeRecoveryModel } from "@/knowledge/ui/recoveryModel";
 
 jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
   /** Test seam that exposes Activity callback wiring without testing its rendering again. */
   KnowledgeActivityPanel: (props: {
     model: { bundleId: string };
+    commandCapabilities: Readonly<KnowledgeStudioCommandCapabilities>;
     onPauseBundle: () => void;
     onResumeBundle: () => void;
     onCancelJob: (jobId: string) => void;
@@ -23,16 +26,32 @@ jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
   }) => (
     <div data-testid="activity-panel">
       <span>Activity model {props.model.bundleId}</span>
-      <button type="button" onClick={props.onPauseBundle}>
+      <button
+        disabled={!props.commandCapabilities.pauseBundle}
+        type="button"
+        onClick={props.onPauseBundle}
+      >
         Activity pause
       </button>
-      <button type="button" onClick={props.onResumeBundle}>
+      <button
+        disabled={!props.commandCapabilities.resumeBundle}
+        type="button"
+        onClick={props.onResumeBundle}
+      >
         Activity resume
       </button>
-      <button type="button" onClick={() => props.onCancelJob("job-review")}>
+      <button
+        disabled={!props.commandCapabilities.cancelJob}
+        type="button"
+        onClick={() => props.onCancelJob("job-review")}
+      >
         Activity cancel
       </button>
-      <button type="button" onClick={() => props.onRetryJob("job-review")}>
+      <button
+        disabled={!props.commandCapabilities.retryJob}
+        type="button"
+        onClick={() => props.onRetryJob("job-review")}
+      >
         Activity retry
       </button>
       <button type="button" onClick={() => props.onReviewJob("job-review")}>
@@ -47,16 +66,21 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
   KnowledgeReviewPanel: (props: {
     plan: KnowledgeReviewPlan;
     busy: boolean;
+    acceptCommandsEnabled: boolean;
+    rejectCommandsEnabled: boolean;
     onBack?: () => void;
     onSubmit: (command: KnowledgeReviewCommand) => void | Promise<void>;
   }) => (
     <div data-testid="review-panel">
       <span>Review plan {props.plan.changeSetId}</span>
       <span>Review busy {String(props.busy)}</span>
+      <span>Review accept {String(props.acceptCommandsEnabled)}</span>
+      <span>Review reject {String(props.rejectCommandsEnabled)}</span>
       <button type="button" onClick={props.onBack}>
         Review back
       </button>
       <button
+        disabled={!props.rejectCommandsEnabled}
         type="button"
         onClick={() =>
           props.onSubmit({
@@ -68,6 +92,53 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
         }
       >
         Review submit
+      </button>
+    </div>
+  ),
+}));
+
+jest.mock("@/components/knowledge/KnowledgeRecoveryPanel", () => ({
+  /** Test seam that exposes the recovery model, pending identity, and command bindings. */
+  KnowledgeRecoveryPanel: (props: {
+    model: Readonly<KnowledgeRecoveryModel>;
+    pendingRecoveryId?: string;
+    onContinue: (recoveryId: string) => void;
+    onAbandon: (recoveryId: string) => void;
+    onRefresh: () => void;
+  }) => {
+    const recoveryId = props.model.items[0]?.id ?? "missing-recovery";
+    return (
+      <div data-testid="recovery-panel">
+        <span>Recovery count {props.model.items.length}</span>
+        <span>Recovery pending {props.pendingRecoveryId ?? "none"}</span>
+        <button type="button" onClick={() => props.onContinue(recoveryId)}>
+          Recovery continue
+        </button>
+        <button type="button" onClick={() => props.onAbandon(recoveryId)}>
+          Recovery abandon
+        </button>
+        <button type="button" onClick={props.onRefresh}>
+          Recovery refresh
+        </button>
+      </div>
+    );
+  },
+}));
+
+jest.mock("@/components/knowledge/KnowledgeQueryPanel", () => ({
+  /** Test seam that exposes Query and opaque citation callback wiring. */
+  KnowledgeQueryPanel: (props: {
+    state: { status: string };
+    onQuery: (query: string) => void;
+    onOpenCitation: (citationRef: string) => void;
+  }) => (
+    <div data-testid="query-panel">
+      <span>Query status {props.state.status}</span>
+      <button type="button" onClick={() => props.onQuery("grounded topic")}>
+        Query submit
+      </button>
+      <button type="button" onClick={() => props.onOpenCitation("citation-ref-1")}>
+        Query citation
       </button>
     </div>
   ),
@@ -89,6 +160,44 @@ const EMPTY_STATUS_COUNTS = {
   cancelled: 0,
   completed: 0,
 } as const;
+
+const ENABLED_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioCommandCapabilities> = {
+  pauseBundle: true,
+  resumeBundle: true,
+  cancelJob: true,
+  retryJob: true,
+  reviewReject: true,
+  reviewAccept: true,
+  recoveryContinue: true,
+  recoveryAbandon: true,
+};
+
+const DISABLED_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioCommandCapabilities> = {
+  pauseBundle: false,
+  resumeBundle: false,
+  cancelJob: false,
+  retryJob: false,
+  reviewReject: false,
+  reviewAccept: false,
+  recoveryContinue: false,
+  recoveryAbandon: false,
+};
+
+/** Creates one exact decision-required recovery projection for Root wiring tests. */
+function createRecoveryModel(): Readonly<KnowledgeRecoveryModel> {
+  return {
+    bundleId: "personal",
+    runtimeRevision: 7,
+    items: [
+      {
+        id: "recovery-1",
+        status: "decision_required",
+        changeSetId: "changeset-recovery",
+        actions: { canContinue: true, canAbandon: true },
+      },
+    ],
+  };
+}
 
 /** Creates one compact review plan for composition tests. */
 function createReviewPlan(changeSetId: string): KnowledgeReviewPlan {
@@ -126,7 +235,13 @@ function createReviewPlan(changeSetId: string): KnowledgeReviewPlan {
 
 /** Creates one ready controller state with optional reviews. */
 function createReadyState(
-  reviews: readonly KnowledgeReviewPlan[] = [createReviewPlan("changeset-1")]
+  reviews: readonly KnowledgeReviewPlan[] = [createReviewPlan("changeset-1")],
+  commandCapabilities: Readonly<KnowledgeStudioCommandCapabilities> = ENABLED_COMMAND_CAPABILITIES,
+  recovery: Readonly<KnowledgeRecoveryModel> = {
+    bundleId: "personal",
+    runtimeRevision: 1,
+    items: [],
+  }
 ): KnowledgeStudioState {
   return {
     status: "ready",
@@ -138,6 +253,7 @@ function createReadyState(
       bundleId: "personal",
       revisionToken: "revision-1",
       availability: "ready",
+      commandCapabilities,
       activity: {
         bundleId: "personal",
         revision: 1,
@@ -167,6 +283,7 @@ function createReadyState(
         },
       },
       reviews,
+      recovery,
     },
   };
 }
@@ -249,6 +366,26 @@ class TestKnowledgeStudioController {
     this.calls.push(`submit:${command.changeSetId}`);
     this.submitted = command;
   }
+
+  /** Records an explicit recovery continuation without optimistic state. */
+  async continueRecovery(recoveryId: string): Promise<void> {
+    this.calls.push(`continue:${recoveryId}`);
+  }
+
+  /** Records an explicit no-journal abandonment without optimistic state. */
+  async abandonRecovery(recoveryId: string): Promise<void> {
+    this.calls.push(`abandon:${recoveryId}`);
+  }
+
+  /** Records one retrieval-only Query request without synthesizing UI state. */
+  async runQuery(query: string): Promise<void> {
+    this.calls.push(`query:${query}`);
+  }
+
+  /** Records one opaque citation reference without receiving its source path. */
+  async openQueryCitation(citationRef: string): Promise<void> {
+    this.calls.push(`citation:${citationRef}`);
+  }
 }
 
 /** Converts the focused fake to the concrete controller boundary expected by React. */
@@ -289,6 +426,7 @@ describe("KnowledgeStudioRoot", () => {
 
     expect(screen.getByTestId("activity-panel")).toBeTruthy();
     expect(screen.queryByText("Loading durable knowledge state…")).toBeNull();
+    expect(screen.queryByRole("tab", { name: /Recovery/ })).toBeNull();
   });
 
   it("renders load failures and delegates retry without fabricating state", () => {
@@ -315,6 +453,7 @@ describe("KnowledgeStudioRoot", () => {
       snapshot: {
         ...state.snapshot!,
         availability: "adapter_unavailable",
+        commandCapabilities: DISABLED_COMMAND_CAPABILITIES,
         notice: "Runtime adapters are not connected. No files can be changed.",
       },
     });
@@ -345,6 +484,64 @@ describe("KnowledgeStudioRoot", () => {
     expect(screen.getByText("Review plan changeset-1")).toBeTruthy();
   });
 
+  it("keeps live Activity and Review navigation available while read-only commands stay disabled", () => {
+    const controller = new TestKnowledgeStudioController(
+      createReadyState([createReviewPlan("changeset-1")], DISABLED_COMMAND_CAPABILITIES)
+    );
+    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+
+    expect(screen.getByTestId("activity-panel")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Activity pause" }).hasAttribute("disabled")).toBe(
+      true
+    );
+    expect(screen.getByRole("button", { name: "Activity resume" }).hasAttribute("disabled")).toBe(
+      true
+    );
+    expect(screen.getByRole("button", { name: "Activity cancel" }).hasAttribute("disabled")).toBe(
+      true
+    );
+    expect(screen.getByRole("button", { name: "Activity retry" }).hasAttribute("disabled")).toBe(
+      true
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity pause" }));
+    fireEvent.click(screen.getByRole("button", { name: "Activity review" }));
+
+    expect(controller.calls).toEqual(["review:changeset-1"]);
+    expect(screen.getByText("Review plan changeset-1")).toBeTruthy();
+    expect(screen.getByText("Review accept false")).toBeTruthy();
+    expect(screen.getByText("Review reject false")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review submit" }).hasAttribute("disabled")).toBe(
+      true
+    );
+  });
+
+  it("reveals Query only for a query-capable snapshot and delegates opaque controls", () => {
+    const hiddenController = new TestKnowledgeStudioController(createReadyState([]));
+    const hidden = render(<KnowledgeStudioRoot controller={asController(hiddenController)} />);
+    expect(screen.queryByRole("tab", { name: "Query" })).toBeNull();
+    hidden.unmount();
+
+    const ready = createReadyState([]);
+    const controller = new TestKnowledgeStudioController({
+      ...ready,
+      snapshot: { ...ready.snapshot!, queryAvailable: true },
+      query: { status: "idle" },
+    });
+    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Query" }));
+    expect(screen.getByTestId("query-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Query submit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Query citation" }));
+
+    expect(controller.calls).toEqual([
+      "tab:query",
+      "query:grounded topic",
+      "citation:citation-ref-1",
+    ]);
+  });
+
   it("renders a Review empty state when no current proposal exists", () => {
     const controller = new TestKnowledgeStudioController(createReadyState([]));
     render(<KnowledgeStudioRoot controller={asController(controller)} />);
@@ -368,6 +565,7 @@ describe("KnowledgeStudioRoot", () => {
 
     expect(screen.getByText("Review plan changeset-2")).toBeTruthy();
     expect(screen.getByText("Review busy true")).toBeTruthy();
+    expect(screen.getByText("Review accept true")).toBeTruthy();
     expect(screen.getByText("Submitting the review decision…")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Review submit" }));
@@ -378,6 +576,46 @@ describe("KnowledgeStudioRoot", () => {
       expectedSnapshotToken: "snapshot-changeset-2",
       decisions: [],
     });
+  });
+
+  it("reveals Recovery only for durable rows and delegates its exact actions", () => {
+    const controller = new TestKnowledgeStudioController(
+      createReadyState([], ENABLED_COMMAND_CAPABILITIES, createRecoveryModel())
+    );
+    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+
+    const recoveryTab = screen.getByRole("tab", { name: /Recovery/ });
+    expect(recoveryTab.textContent).toContain("Recovery");
+    expect(recoveryTab.textContent).toContain("1");
+    expect(screen.queryByTestId("recovery-panel")).toBeNull();
+
+    fireEvent.click(recoveryTab);
+    expect(controller.calls).toEqual(["tab:recovery"]);
+    expect(screen.getByTestId("recovery-panel")).toBeTruthy();
+    expect(screen.getByText("Recovery count 1")).toBeTruthy();
+    expect(screen.getByText("Recovery pending none")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Recovery continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Recovery abandon" }));
+    fireEvent.click(screen.getByRole("button", { name: "Recovery refresh" }));
+    expect(controller.calls).toEqual([
+      "tab:recovery",
+      "continue:recovery-1",
+      "abandon:recovery-1",
+      "refresh",
+    ]);
+  });
+
+  it("passes the exact pending recovery identity and renders its progress label", () => {
+    const controller = new TestKnowledgeStudioController({
+      ...createReadyState([], ENABLED_COMMAND_CAPABILITIES, createRecoveryModel()),
+      activeTab: "recovery",
+      pendingAction: { kind: "continue_recovery", targetId: "recovery-1" },
+    });
+    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+
+    expect(screen.getByText("Recovery pending recovery-1")).toBeTruthy();
+    expect(screen.getByText("Continuing the selected recovery…")).toBeTruthy();
   });
 
   it("renders blocked feedback and deterministic diagnostics from controller state", () => {

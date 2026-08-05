@@ -82,6 +82,7 @@ describe("KnowledgePluginProductionRecoveryPort", () => {
 
       await expect(port.start(new AbortController().signal)).resolves.toEqual({
         kind: status,
+        recoveryBundleId: "personal",
         attentionKinds: ["accepted_not_started", "no_journal_decision_required"],
       });
     }

@@ -43,6 +43,7 @@ export function toKnowledgePluginRecoveryStartupResult(
   if (state.status === "attention_required" || state.status === "blocked") {
     return {
       kind: state.status,
+      recoveryBundleId: state.stoppedBundleId,
       attentionKinds: Array.from(
         new Set(state.bundleResults.flatMap(({ attentionKinds }) => attentionKinds))
       ),

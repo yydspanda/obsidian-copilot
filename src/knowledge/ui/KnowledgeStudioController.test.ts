@@ -1,6 +1,7 @@
 import type {
   KnowledgeStudioCommandPort,
   KnowledgeStudioReadPort,
+  KnowledgeStudioRecoverySubmissionResult,
   KnowledgeStudioReviewSubmissionResult,
   KnowledgeStudioSnapshot,
 } from "@/knowledge/ui/KnowledgeStudioController";
@@ -10,15 +11,36 @@ import {
   createUnavailableKnowledgeStudioSnapshot,
 } from "@/knowledge/ui/KnowledgeStudioController";
 import type {
+  KnowledgeGroundedRetrievalResult,
+  KnowledgeStudioQueryPort,
+  KnowledgeStudioQueryRequest,
+} from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
+import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
+import type { KnowledgeRecoveryItem } from "@/knowledge/ui/recoveryModel";
 
 /** Promise whose completion is controlled explicitly by one test. */
 interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
   reject(reason: unknown): void;
+}
+
+/** One recorded read-only Query call. */
+interface RecordedQueryCall {
+  bundleId: string;
+  request: Readonly<KnowledgeStudioQueryRequest>;
+  signal: AbortSignal;
+}
+
+/** One recorded opaque citation-navigation call. */
+interface RecordedCitationCall {
+  bundleId: string;
+  queryId: string;
+  citationRef: string;
+  signal: AbortSignal;
 }
 
 /** Creates a manually controlled promise. */
@@ -82,8 +104,17 @@ function createSnapshot(
     ...base,
     revisionToken,
     availability: "ready",
+    commandCapabilities: {
+      pauseBundle: true,
+      resumeBundle: true,
+      cancelJob: true,
+      retryJob: true,
+      reviewReject: true,
+      reviewAccept: true,
+    },
     activity: {
       ...base.activity,
+      revision: 7,
       controls: { state: "running", canPause: true, canResume: false },
     },
     reviews,
@@ -91,10 +122,86 @@ function createSnapshot(
   };
 }
 
+/** Creates the two actionable recovery rows used by controller command tests. */
+function createRecoveryItems(): readonly KnowledgeRecoveryItem[] {
+  return [
+    {
+      id: "recovery-continue",
+      status: "accepted_not_started",
+      changeSetId: "changeset-continue",
+      actions: { canContinue: true, canAbandon: false },
+    },
+    {
+      id: "recovery-decision",
+      status: "decision_required",
+      changeSetId: "changeset-decision",
+      actions: { canContinue: true, canAbandon: true },
+    },
+  ];
+}
+
+/** Creates a ready snapshot with explicit recovery capabilities and rows. */
+function createRecoverySnapshot(
+  revisionToken = "recovery-revision",
+  runtimeRevision = 41,
+  items: readonly KnowledgeRecoveryItem[] = createRecoveryItems()
+): KnowledgeStudioSnapshot {
+  const base = createSnapshot(revisionToken, []);
+  return {
+    ...base,
+    commandCapabilities: {
+      ...base.commandCapabilities,
+      recoveryContinue: true,
+      recoveryAbandon: true,
+    },
+    recovery: {
+      bundleId: base.bundleId,
+      runtimeRevision,
+      items,
+    },
+  };
+}
+
+/** Creates one exact grounded-retrieval result for controller lifecycle tests. */
+function createQueryResult(queryId = "knowledge-query-1"): KnowledgeGroundedRetrievalResult {
+  return {
+    mode: "grounded_retrieval",
+    bundleId: "personal",
+    queryId,
+    runtimeRevision: 7,
+    manifestRevision: 3,
+    hits: [
+      {
+        pageEvidenceId: "wiki-evidence-1",
+        pagePath: "Wiki/Page.md",
+        pageContentHash: "f".repeat(64),
+        chunkId: "wiki-evidence-1:0",
+        chunkIndex: 0,
+        heading: "Page",
+        headingPath: ["Page"],
+        snippet: "Grounded knowledge excerpt.",
+        startOffset: 0,
+        endOffset: 27,
+        score: 1,
+        citations: [
+          {
+            citationRef: "knowledge-citation-1",
+            sourceId: "source-1",
+            sourcePath: "Sources/Page.md",
+            relation: "supports",
+            location: { kind: "markdown_lines", startLine: 2, endLine: 3 },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 type LoadHandler = (bundleId: string, signal: AbortSignal) => Promise<KnowledgeStudioSnapshot>;
 type VoidCommandHandler = (
   bundleId: string,
   targetId: string,
+  expectedQueueRevision: number,
   signal: AbortSignal
 ) => Promise<void>;
 type ReviewCommandHandler = (
@@ -102,17 +209,48 @@ type ReviewCommandHandler = (
   command: KnowledgeReviewCommand,
   signal: AbortSignal
 ) => Promise<KnowledgeStudioReviewSubmissionResult>;
+type RecoveryCommandHandler = (
+  action: "continue" | "abandon",
+  bundleId: string,
+  recoveryId: string,
+  expectedRuntimeRevision: number,
+  signal: AbortSignal
+) => Promise<KnowledgeStudioRecoverySubmissionResult>;
 
 /** Scriptable read/command port that records every boundary call. */
 class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort {
   readonly loadCalls: { bundleId: string; signal: AbortSignal }[] = [];
-  readonly pauseCalls: { bundleId: string; signal: AbortSignal }[] = [];
-  readonly resumeCalls: { bundleId: string; signal: AbortSignal }[] = [];
-  readonly cancelCalls: { bundleId: string; targetId: string; signal: AbortSignal }[] = [];
-  readonly retryCalls: { bundleId: string; targetId: string; signal: AbortSignal }[] = [];
+  readonly pauseCalls: { bundleId: string; expectedQueueRevision: number; signal: AbortSignal }[] =
+    [];
+  readonly resumeCalls: { bundleId: string; expectedQueueRevision: number; signal: AbortSignal }[] =
+    [];
+  readonly cancelCalls: {
+    bundleId: string;
+    targetId: string;
+    expectedQueueRevision: number;
+    signal: AbortSignal;
+  }[] = [];
+  readonly retryCalls: {
+    bundleId: string;
+    targetId: string;
+    expectedQueueRevision: number;
+    signal: AbortSignal;
+  }[] = [];
   readonly reviewCalls: {
     bundleId: string;
     command: KnowledgeReviewCommand;
+    signal: AbortSignal;
+  }[] = [];
+  readonly continueRecoveryCalls: {
+    bundleId: string;
+    recoveryId: string;
+    expectedRuntimeRevision: number;
+    signal: AbortSignal;
+  }[] = [];
+  readonly abandonRecoveryCalls: {
+    bundleId: string;
+    recoveryId: string;
+    expectedRuntimeRevision: number;
     signal: AbortSignal;
   }[] = [];
   hint?: () => void;
@@ -123,7 +261,10 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     private readonly loadHandler: LoadHandler,
     private readonly voidCommandHandler: VoidCommandHandler = async () => undefined,
     private readonly reviewCommandHandler: ReviewCommandHandler = async () => ({
-      kind: "apply_started",
+      kind: "applied",
+    }),
+    private readonly recoveryCommandHandler: RecoveryCommandHandler = async () => ({
+      kind: "completed",
     })
   ) {}
 
@@ -142,27 +283,45 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
   }
 
   /** Records and delegates a Bundle pause. */
-  async pauseBundle(bundleId: string, signal: AbortSignal): Promise<void> {
-    this.pauseCalls.push({ bundleId, signal });
-    return this.voidCommandHandler(bundleId, "pause", signal);
+  async pauseBundle(
+    bundleId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    this.pauseCalls.push({ bundleId, expectedQueueRevision, signal });
+    return this.voidCommandHandler(bundleId, "pause", expectedQueueRevision, signal);
   }
 
   /** Records and delegates a Bundle resume. */
-  async resumeBundle(bundleId: string, signal: AbortSignal): Promise<void> {
-    this.resumeCalls.push({ bundleId, signal });
-    return this.voidCommandHandler(bundleId, "resume", signal);
+  async resumeBundle(
+    bundleId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    this.resumeCalls.push({ bundleId, expectedQueueRevision, signal });
+    return this.voidCommandHandler(bundleId, "resume", expectedQueueRevision, signal);
   }
 
   /** Records and delegates one job cancellation. */
-  async cancelJob(bundleId: string, jobId: string, signal: AbortSignal): Promise<void> {
-    this.cancelCalls.push({ bundleId, targetId: jobId, signal });
-    return this.voidCommandHandler(bundleId, jobId, signal);
+  async cancelJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    this.cancelCalls.push({ bundleId, targetId: jobId, expectedQueueRevision, signal });
+    return this.voidCommandHandler(bundleId, jobId, expectedQueueRevision, signal);
   }
 
   /** Records and delegates one job retry. */
-  async retryJob(bundleId: string, jobId: string, signal: AbortSignal): Promise<void> {
-    this.retryCalls.push({ bundleId, targetId: jobId, signal });
-    return this.voidCommandHandler(bundleId, jobId, signal);
+  async retryJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    this.retryCalls.push({ bundleId, targetId: jobId, expectedQueueRevision, signal });
+    return this.voidCommandHandler(bundleId, jobId, expectedQueueRevision, signal);
   }
 
   /** Records and delegates an opaque review command. */
@@ -173,6 +332,100 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     this.reviewCalls.push({ bundleId, command, signal });
     return this.reviewCommandHandler(bundleId, command, signal);
+  }
+
+  /** Records and delegates one exact recovery continuation. */
+  async continueRecovery(
+    bundleId: string,
+    recoveryId: string,
+    expectedRuntimeRevision: number,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioRecoverySubmissionResult> {
+    this.continueRecoveryCalls.push({
+      bundleId,
+      recoveryId,
+      expectedRuntimeRevision,
+      signal,
+    });
+    return this.recoveryCommandHandler(
+      "continue",
+      bundleId,
+      recoveryId,
+      expectedRuntimeRevision,
+      signal
+    );
+  }
+
+  /** Records and delegates one exact no-journal abandonment. */
+  async abandonRecovery(
+    bundleId: string,
+    recoveryId: string,
+    expectedRuntimeRevision: number,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioRecoverySubmissionResult> {
+    this.abandonRecoveryCalls.push({
+      bundleId,
+      recoveryId,
+      expectedRuntimeRevision,
+      signal,
+    });
+    return this.recoveryCommandHandler(
+      "abandon",
+      bundleId,
+      recoveryId,
+      expectedRuntimeRevision,
+      signal
+    );
+  }
+}
+
+/** Scriptable scoped-Query port that records opaque boundary calls and cancellation. */
+class FakeKnowledgeStudioQueryPort implements KnowledgeStudioQueryPort {
+  readonly queryCalls: RecordedQueryCall[] = [];
+  readonly citationCalls: RecordedCitationCall[] = [];
+  readonly revokeCalls: Array<{ bundleId: string; queryId?: string }> = [];
+  closed = false;
+
+  /** Creates a fake around optional asynchronous handlers. */
+  constructor(
+    private readonly queryHandler: (
+      call: RecordedQueryCall
+    ) => Promise<KnowledgeGroundedRetrievalResult> = async () => createQueryResult(),
+    private readonly citationHandler: (call: RecordedCitationCall) => Promise<void> = async () =>
+      undefined
+  ) {}
+
+  /** Records one retrieval-only Query request. */
+  async query(
+    bundleId: string,
+    request: Readonly<KnowledgeStudioQueryRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeGroundedRetrievalResult> {
+    const call = { bundleId, request, signal };
+    this.queryCalls.push(call);
+    return this.queryHandler(call);
+  }
+
+  /** Records one opaque citation jump. */
+  async openCitation(
+    bundleId: string,
+    queryId: string,
+    citationRef: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const call = { bundleId, queryId, citationRef, signal };
+    this.citationCalls.push(call);
+    return this.citationHandler(call);
+  }
+
+  /** Records synchronous revocation of one Bundle's current Query capability. */
+  revokeCurrent(bundleId: string, queryId?: string): void {
+    this.revokeCalls.push({ bundleId, ...(queryId === undefined ? {} : { queryId }) });
+  }
+
+  /** Records lifecycle closure without performing external work. */
+  close(): void {
+    this.closed = true;
   }
 }
 
@@ -197,9 +450,9 @@ describe("KnowledgeStudioController", () => {
       reviews: [],
     });
     expect(snapshot.activity.items).toEqual([]);
-    await expect(port.pauseBundle("personal", new AbortController().signal)).rejects.toMatchObject({
-      name: "KnowledgeStudioAdapterUnavailableError",
-    });
+    await expect(
+      port.pauseBundle("personal", 0, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
   });
 
   it("keeps every command disabled when the runtime foundation reports a safe notice", async () => {
@@ -232,6 +485,197 @@ describe("KnowledgeStudioController", () => {
     await flushAsync();
     expect(controller.getState().snapshot?.revisionToken).toBe("revision-2");
     expect(port.loadCalls).toHaveLength(2);
+  });
+
+  it("runs scoped Query only when the durable snapshot enables it and opens opaque citations", async () => {
+    const snapshot = { ...createSnapshot(), queryAvailable: true };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort();
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.runQuery("grounded topic");
+
+    expect(queryPort.queryCalls).toHaveLength(1);
+    expect(queryPort.queryCalls[0]).toMatchObject({
+      bundleId: "personal",
+      request: { query: "grounded topic" },
+    });
+    expect(controller.getState()).toMatchObject({
+      activeTab: "query",
+      query: {
+        status: "ready",
+        result: { queryId: "knowledge-query-1", hits: [{ pagePath: "Wiki/Page.md" }] },
+      },
+    });
+
+    await controller.openQueryCitation("knowledge-citation-1");
+
+    expect(queryPort.citationCalls).toHaveLength(1);
+    expect(queryPort.citationCalls[0]).toMatchObject({
+      bundleId: "personal",
+      queryId: "knowledge-query-1",
+      citationRef: "knowledge-citation-1",
+    });
+    expect(controller.getState().query).toMatchObject({
+      status: "ready",
+      openingCitationRef: undefined,
+      error: undefined,
+    });
+  });
+
+  it("keeps Query fail-closed when the current snapshot did not publish the adapter", async () => {
+    const port = new FakeKnowledgeStudioPort(async () => createSnapshot());
+    const queryPort = new FakeKnowledgeStudioQueryPort();
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.runQuery("must not escape to the Vault");
+    await controller.openQueryCitation("unissued-reference");
+
+    expect(queryPort.queryCalls).toHaveLength(0);
+    expect(queryPort.citationCalls).toHaveLength(0);
+    expect(controller.getState().query).toMatchObject({ status: "error" });
+  });
+
+  it("aborts and revokes ephemeral Query state on a durable reload hint", async () => {
+    const query = createDeferred<KnowledgeGroundedRetrievalResult>();
+    const snapshots = [
+      { ...createSnapshot("before"), queryAvailable: true },
+      { ...createSnapshot("after"), queryAvailable: true },
+    ];
+    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
+    const queryPort = new FakeKnowledgeStudioQueryPort(async () => query.promise);
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+
+    const pending = controller.runQuery("changing topic");
+    await flushAsync();
+    const querySignal = queryPort.queryCalls[0].signal;
+    port.hint?.();
+
+    expect(querySignal.aborted).toBe(true);
+    expect(queryPort.revokeCalls).toEqual([{ bundleId: "personal" }]);
+    expect(controller.getState().query).toEqual({ status: "idle" });
+    query.resolve(createQueryResult("late-query"));
+    await pending;
+    await flushAsync();
+
+    expect(controller.getState()).toMatchObject({
+      snapshot: { revisionToken: "after" },
+      query: { status: "idle" },
+    });
+  });
+
+  it("revokes a ready Query and its UI citation authority on explicit refresh", async () => {
+    const snapshots = [
+      { ...createSnapshot("before"), queryAvailable: true },
+      { ...createSnapshot("after"), queryAvailable: true },
+    ];
+    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
+    const queryPort = new FakeKnowledgeStudioQueryPort();
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+    await controller.runQuery("grounded topic");
+    expect(controller.getState().query?.status).toBe("ready");
+
+    await controller.refresh();
+    await controller.openQueryCitation("knowledge-citation-1");
+
+    expect(queryPort.revokeCalls).toEqual([{ bundleId: "personal", queryId: "knowledge-query-1" }]);
+    expect(controller.getState()).toMatchObject({
+      snapshot: { revisionToken: "after" },
+      query: { status: "error" },
+    });
+    expect(queryPort.citationCalls).toHaveLength(0);
+  });
+
+  it("revokes a ready Query capability when the Bundle session stops", async () => {
+    const snapshot = { ...createSnapshot(), queryAvailable: true };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort();
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+    await controller.runQuery("grounded topic");
+
+    controller.stop();
+
+    expect(queryPort.revokeCalls).toEqual([{ bundleId: "personal", queryId: "knowledge-query-1" }]);
+    expect(controller.getState()).toEqual({
+      status: "idle",
+      activeTab: "activity",
+      refreshing: false,
+    });
+  });
+
+  it("aborts an in-flight Query before an explicit authoritative refresh", async () => {
+    const pendingQuery = createDeferred<KnowledgeGroundedRetrievalResult>();
+    const snapshot = { ...createSnapshot(), queryAvailable: true };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort(async () => pendingQuery.promise);
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+    const pending = controller.runQuery("pending topic");
+    await flushAsync();
+
+    await controller.refresh();
+
+    expect(queryPort.queryCalls[0].signal.aborted).toBe(true);
+    expect(queryPort.revokeCalls).toEqual([]);
+    expect(controller.getState().query).toEqual({ status: "idle" });
+    pendingQuery.resolve(createQueryResult("late-query"));
+    await pending;
+    expect(controller.getState().query).toEqual({ status: "idle" });
+  });
+
+  it("refuses tabs that the current snapshot cannot render", async () => {
+    const port = new FakeKnowledgeStudioPort(async () => createSnapshot());
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    controller.selectTab("query");
+    controller.selectTab("recovery");
+
+    expect(controller.getState().activeTab).toBe("activity");
+    controller.selectTab("review");
+    expect(controller.getState().activeTab).toBe("review");
+  });
+
+  it("sanitizes Query and citation-navigation failures without retaining adapter causes", async () => {
+    const snapshot = { ...createSnapshot(), queryAvailable: true };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort(
+      async () => Promise.reject(new Error("private query and path")),
+      async () => Promise.reject(new Error("private navigation failure"))
+    );
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.runQuery("private question");
+    expect(JSON.stringify(controller.getState().query)).not.toContain("private query and path");
+
+    const successfulQueryPort = new FakeKnowledgeStudioQueryPort(
+      async () => createQueryResult(),
+      async () => Promise.reject(new Error("private navigation failure"))
+    );
+    const secondController = new KnowledgeStudioController(port, port, successfulQueryPort);
+    secondController.start("personal");
+    await flushAsync();
+    await secondController.runQuery("grounded topic");
+    await secondController.openQueryCitation("knowledge-citation-1");
+
+    expect(JSON.stringify(secondController.getState().query)).not.toContain(
+      "private navigation failure"
+    );
+    expect(secondController.getState().query).toMatchObject({ status: "error" });
   });
 
   it("ignores an older load that resolves after a newer refresh", async () => {
@@ -272,6 +716,7 @@ describe("KnowledgeStudioController", () => {
       snapshot: { revisionToken: "before" },
     });
     expect(port.retryCalls).toHaveLength(0);
+    expect(port.pauseCalls[0]).toMatchObject({ expectedQueueRevision: 7 });
 
     pause.resolve();
     await action;
@@ -280,6 +725,48 @@ describe("KnowledgeStudioController", () => {
       status: "ready",
       snapshot: { revisionToken: "after" },
       feedback: { kind: "success" },
+    });
+  });
+
+  it("blocks new Query work and Bundle-wide revokes stale authority during a pending action", async () => {
+    const pause = createDeferred<void>();
+    const snapshots = [
+      { ...createSnapshot("before"), queryAvailable: true },
+      { ...createSnapshot("after"), queryAvailable: true },
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift()!,
+      async (_bundleId, targetId) => {
+        if (targetId === "pause") return pause.promise;
+      }
+    );
+    const queryPort = new FakeKnowledgeStudioQueryPort();
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+    await controller.runQuery("ready topic");
+
+    const action = controller.pauseBundle();
+    await controller.runQuery("must remain blocked");
+    port.hint?.();
+
+    expect(queryPort.queryCalls).toHaveLength(1);
+    expect(queryPort.revokeCalls).toEqual([
+      { bundleId: "personal", queryId: "knowledge-query-1" },
+      { bundleId: "personal" },
+    ]);
+    expect(controller.getState()).toMatchObject({
+      pendingAction: { kind: "pause" },
+      query: { status: "idle" },
+      snapshot: { revisionToken: "before" },
+    });
+
+    pause.resolve();
+    await action;
+    expect(port.loadCalls).toHaveLength(2);
+    expect(controller.getState()).toMatchObject({
+      pendingAction: undefined,
+      snapshot: { revisionToken: "after" },
     });
   });
 
@@ -314,6 +801,218 @@ describe("KnowledgeStudioController", () => {
       kind: "blocked",
       diagnostics: [{ code: "links_invalid" }],
     });
+  });
+
+  it("allows literal rejection while keeping acceptance behind its separate capability", async () => {
+    const review = createReviewPlan();
+    const rejectCommand: KnowledgeReviewCommand = {
+      changeSetId: review.changeSetId,
+      proposalDigest: review.proposalDigest,
+      expectedSnapshotToken: review.snapshotToken,
+      decisions: [{ changeId: "change-1", decision: "reject" }],
+    };
+    const rejectOnly = {
+      ...createSnapshot("reject-only", [review]),
+      commandCapabilities: {
+        pauseBundle: true,
+        resumeBundle: true,
+        cancelJob: true,
+        retryJob: true,
+        reviewReject: true,
+        reviewAccept: false,
+      },
+    };
+    const port = new FakeKnowledgeStudioPort(
+      async () => rejectOnly,
+      undefined,
+      async () => ({
+        kind: "rejected",
+      })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.submitReview(createReviewCommand());
+    expect(port.reviewCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toMatchObject({ kind: "blocked" });
+
+    await controller.submitReview(rejectCommand);
+    expect(port.reviewCalls).toHaveLength(1);
+    expect(controller.getState().feedback).toMatchObject({ kind: "success" });
+  });
+
+  it("opens Recovery automatically when the first durable snapshot needs attention", async () => {
+    const port = new FakeKnowledgeStudioPort(async () => createRecoverySnapshot());
+    const controller = new KnowledgeStudioController(port, port);
+
+    controller.start("personal");
+    await flushAsync();
+
+    expect(controller.getState()).toMatchObject({
+      status: "ready",
+      activeTab: "recovery",
+      snapshot: { recovery: { runtimeRevision: 41 } },
+    });
+  });
+
+  it("delegates exact recovery ids with the runtime revision of each rendered snapshot", async () => {
+    const snapshots = [
+      createRecoverySnapshot("before", 41),
+      createRecoverySnapshot("between", 42),
+      createRecoverySnapshot("after", 43, []),
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift()!,
+      undefined,
+      undefined,
+      async (action) => (action === "continue" ? { kind: "stale" } : { kind: "blocked" })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.continueRecovery("recovery-continue");
+    await controller.abandonRecovery("recovery-decision");
+
+    expect(port.continueRecoveryCalls).toHaveLength(1);
+    expect(port.continueRecoveryCalls[0]).toMatchObject({
+      bundleId: "personal",
+      recoveryId: "recovery-continue",
+      expectedRuntimeRevision: 41,
+    });
+    expect(port.continueRecoveryCalls[0]?.signal.aborted).toBe(false);
+    expect(port.abandonRecoveryCalls).toHaveLength(1);
+    expect(port.abandonRecoveryCalls[0]).toMatchObject({
+      bundleId: "personal",
+      recoveryId: "recovery-decision",
+      expectedRuntimeRevision: 42,
+    });
+    expect(port.abandonRecoveryCalls[0]?.signal.aborted).toBe(false);
+    expect(port.loadCalls).toHaveLength(3);
+    expect(controller.getState()).toMatchObject({
+      activeTab: "activity",
+      snapshot: { revisionToken: "after" },
+      feedback: {
+        kind: "blocked",
+        message: "The recovery action is not safe from the current durable state.",
+      },
+    });
+  });
+
+  it("never forwards recovery commands for disabled, stale, or read-only rows", async () => {
+    const restricted = createRecoverySnapshot("restricted", 51, [
+      ...createRecoveryItems(),
+      {
+        id: "recovery-read-only",
+        status: "transaction_active",
+        transactionId: "transaction-active",
+        phase: "applying",
+        actions: { canContinue: false, canAbandon: false },
+      },
+    ]);
+    const snapshot: KnowledgeStudioSnapshot = {
+      ...restricted,
+      commandCapabilities: {
+        ...restricted.commandCapabilities,
+        recoveryContinue: false,
+        recoveryAbandon: true,
+      },
+    };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.continueRecovery("recovery-continue");
+    await controller.abandonRecovery("recovery-stale");
+    await controller.abandonRecovery("recovery-read-only");
+
+    expect(port.continueRecoveryCalls).toHaveLength(0);
+    expect(port.abandonRecoveryCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toMatchObject({ kind: "blocked" });
+  });
+
+  it.each<{
+    result: KnowledgeStudioRecoverySubmissionResult;
+    feedbackKind: "success" | "blocked";
+    message: string;
+    shouldReload: boolean;
+  }>([
+    {
+      result: { kind: "completed" },
+      feedbackKind: "success",
+      message: "Recovery completed. Knowledge startup is being checked again.",
+      shouldReload: false,
+    },
+    {
+      result: { kind: "stale" },
+      feedbackKind: "blocked",
+      message: "Recovery state changed before the action. Review the refreshed snapshot.",
+      shouldReload: true,
+    },
+    {
+      result: { kind: "recovery_required" },
+      feedbackKind: "blocked",
+      message:
+        "The apply could not be fully finalized and still needs recovery. Startup remains paused; no rollback was assumed.",
+      shouldReload: false,
+    },
+    {
+      result: { kind: "blocked" },
+      feedbackKind: "blocked",
+      message: "The recovery action is not safe from the current durable state.",
+      shouldReload: true,
+    },
+  ])(
+    "maps $result.kind recovery feedback with its durable reload policy",
+    async ({ result, feedbackKind, message, shouldReload }) => {
+      const after = createRecoverySnapshot("after-result", 62, []);
+      const snapshots = [createRecoverySnapshot("before-result", 61), after];
+      const port = new FakeKnowledgeStudioPort(
+        async () => snapshots.shift() ?? after,
+        undefined,
+        undefined,
+        async () => result
+      );
+      const controller = new KnowledgeStudioController(port, port);
+      controller.start("personal");
+      await flushAsync();
+
+      await controller.continueRecovery("recovery-continue");
+
+      expect(port.continueRecoveryCalls).toHaveLength(1);
+      expect(port.loadCalls).toHaveLength(shouldReload ? 2 : 1);
+      expect(controller.getState()).toMatchObject({
+        snapshot: {
+          revisionToken: shouldReload ? "after-result" : "before-result",
+        },
+        feedback: { kind: feedbackKind, message },
+      });
+    }
+  );
+
+  it("never forwards a disabled Activity command even when called outside React", async () => {
+    const disabled = {
+      ...createSnapshot("disabled"),
+      commandCapabilities: {
+        pauseBundle: false,
+        resumeBundle: false,
+        cancelJob: false,
+        retryJob: false,
+        reviewReject: false,
+        reviewAccept: false,
+      },
+    };
+    const port = new FakeKnowledgeStudioPort(async () => disabled);
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.pauseBundle();
+
+    expect(port.pauseCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toMatchObject({ kind: "blocked" });
   });
 
   it("rejects a stale local review without calling the command port", async () => {

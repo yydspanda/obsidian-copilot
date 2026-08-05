@@ -12,10 +12,12 @@ import type {
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
 
-/** Props for the read-only multi-file knowledge review surface. */
+/** Props for the capability-separated multi-file knowledge review surface. */
 export interface KnowledgeReviewPanelProps {
   plan: Readonly<KnowledgeReviewPlan>;
   busy: boolean;
+  acceptCommandsEnabled: boolean;
+  rejectCommandsEnabled: boolean;
   onSubmit: (command: KnowledgeReviewCommand) => void | Promise<void>;
   onBack?: () => void;
 }
@@ -161,6 +163,8 @@ function createBlockDecisionBase(
 function KnowledgeReviewSnapshotPanel({
   plan,
   busy,
+  acceptCommandsEnabled,
+  rejectCommandsEnabled,
   onSubmit,
   onBack,
 }: KnowledgeReviewPanelProps): JSX.Element {
@@ -168,7 +172,12 @@ function KnowledgeReviewSnapshotPanel({
   const [submitting, setSubmitting] = useState(false);
 
   const complete = useMemo(() => isReviewComplete(plan, decisions), [decisions, plan]);
-  const disabled = busy || submitting;
+  const wholeProposalRejected = useMemo(
+    () => complete && plan.files.every((file) => decisions[file.changeId]?.kind === "reject"),
+    [complete, decisions, plan]
+  );
+  const commandEnabled = wholeProposalRejected ? rejectCommandsEnabled : acceptCommandsEnabled;
+  const actionBusy = busy || submitting;
 
   /** Applies one exact file-level decision. */
   const decideFile = (changeId: string, decision: LocalFileDecision): void => {
@@ -212,7 +221,7 @@ function KnowledgeReviewSnapshotPanel({
 
   /** Emits one complete opaque command while suppressing duplicate submissions. */
   const submitReview = (): void => {
-    if (disabled || !complete) return;
+    if (actionBusy || !complete || !commandEnabled) return;
     const command = buildReviewCommand(plan, decisions);
     setSubmitting(true);
     try {
@@ -252,7 +261,7 @@ function KnowledgeReviewSnapshotPanel({
             type="button"
             variant="secondary"
             size="sm"
-            disabled={disabled}
+            disabled={actionBusy || !acceptCommandsEnabled}
             onClick={acceptAll}
           >
             Accept all
@@ -261,7 +270,7 @@ function KnowledgeReviewSnapshotPanel({
             type="button"
             variant="secondary"
             size="sm"
-            disabled={disabled}
+            disabled={actionBusy || !rejectCommandsEnabled}
             onClick={rejectAll}
           >
             Reject all
@@ -301,7 +310,7 @@ function KnowledgeReviewSnapshotPanel({
                       type="button"
                       variant="success"
                       size="sm"
-                      disabled={disabled || rejectOnly}
+                      disabled={actionBusy || !acceptCommandsEnabled || rejectOnly}
                       aria-label={`Accept file ${file.path}`}
                       aria-pressed={fileDecision?.kind === "accept_exact"}
                       onClick={() => decideFile(file.changeId, { kind: "accept_exact" })}
@@ -312,7 +321,7 @@ function KnowledgeReviewSnapshotPanel({
                       type="button"
                       variant="destructive"
                       size="sm"
-                      disabled={disabled}
+                      disabled={actionBusy || !rejectCommandsEnabled}
                       aria-label={`Reject file ${file.path}`}
                       aria-pressed={fileDecision?.kind === "reject"}
                       onClick={() => decideFile(file.changeId, { kind: "reject" })}
@@ -351,7 +360,7 @@ function KnowledgeReviewSnapshotPanel({
                               type="button"
                               variant="success"
                               size="sm"
-                              disabled={disabled}
+                              disabled={actionBusy || !acceptCommandsEnabled}
                               aria-label={`Accept block ${changedIndex + 1} in ${file.path}`}
                               aria-pressed={visibleDecision === "accept"}
                               onClick={() => decideBlock(file, block.blockId, "accept")}
@@ -362,7 +371,7 @@ function KnowledgeReviewSnapshotPanel({
                               type="button"
                               variant="destructive"
                               size="sm"
-                              disabled={disabled}
+                              disabled={actionBusy || !acceptCommandsEnabled}
                               aria-label={`Reject block ${changedIndex + 1} in ${file.path}`}
                               aria-pressed={visibleDecision === "reject"}
                               onClick={() => decideBlock(file, block.blockId, "reject")}
@@ -388,8 +397,18 @@ function KnowledgeReviewSnapshotPanel({
           {!complete ? (
             <span className="tw-text-xs tw-text-muted">Decide every file and changed block.</span>
           ) : null}
-          <Button type="button" disabled={disabled || !complete} onClick={submitReview}>
-            {disabled ? "Submitting…" : "Submit review"}
+          <Button
+            type="button"
+            disabled={actionBusy || !complete || !commandEnabled}
+            onClick={submitReview}
+          >
+            {!acceptCommandsEnabled && !rejectCommandsEnabled
+              ? "Review actions unavailable"
+              : actionBusy
+                ? "Submitting…"
+                : complete && !commandEnabled
+                  ? "Acceptance unavailable"
+                  : "Submit review"}
           </Button>
         </div>
       </footer>

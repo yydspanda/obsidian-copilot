@@ -1,12 +1,14 @@
 import { Mutex } from "async-mutex";
 
 import type { TransactionCommitReceipt } from "@/knowledge/changeset/ChangeSetTransaction";
+import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import type {
+  JsonValue,
   KnowledgeDiagnostic,
   KnowledgeFailure,
   KnowledgeIngestJob,
+  KnowledgeIngestWorkStage,
 } from "@/knowledge/model/types";
-import type { KnowledgeIngestWorkStage } from "@/knowledge/model/types";
 import {
   ExponentialRetryPolicy,
   type RetryDecision,
@@ -364,6 +366,35 @@ export interface EventSink {
   emit(event: IngestQueueEvent): void | Promise<void>;
 }
 
+/** Exact user-authored Activity command bound to one observed Queue revision. */
+export type IngestQueueActivityCommand =
+  | {
+      kind: "pause_bundle";
+      bundleId: string;
+      expectedQueueRevision: number;
+      detail?: string;
+    }
+  | { kind: "resume_bundle"; bundleId: string; expectedQueueRevision: number }
+  | {
+      kind: "cancel_job";
+      bundleId: string;
+      jobId: string;
+      expectedQueueRevision: number;
+    }
+  | {
+      kind: "retry_job";
+      bundleId: string;
+      jobId: string;
+      expectedQueueRevision: number;
+    };
+
+/** Durable outcome of one exact Activity command. */
+export interface IngestQueueActivityCommandResult {
+  kind: "committed" | "unchanged";
+  command: IngestQueueActivityCommand["kind"];
+  snapshot: IngestQueueSnapshot;
+}
+
 /** Queue construction dependencies with deterministic test seams. */
 export interface IngestQueueOptions {
   clock?: () => number;
@@ -662,6 +693,28 @@ export class IngestQueueClosedError extends Error {
   }
 }
 
+/** Reports an Activity command issued from a stale durable Queue projection. */
+export class IngestQueueActivityCommandStaleError extends Error {
+  /**
+   * Creates an exact Queue revision conflict without retaining command content.
+   *
+   * @param bundleId - Bundle whose Queue changed
+   * @param expectedQueueRevision - Revision observed by Knowledge Studio
+   * @param actualQueueRevision - Revision observed at the command boundary
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly expectedQueueRevision: number,
+    public readonly actualQueueRevision: number
+  ) {
+    super(
+      `Activity command for Bundle queue '${bundleId}' expected revision ` +
+        `${expectedQueueRevision}, but observed ${actualQueueRevision}`
+    );
+    this.name = "IngestQueueActivityCommandStaleError";
+  }
+}
+
 interface LoadedQueue {
   snapshot: IngestQueueSnapshot;
   expectedRevision: number | null;
@@ -690,10 +743,16 @@ interface EnqueueMutationValue {
   jobId: string;
 }
 
-interface PauseMutationValue {
+interface ActivityMutationValue {
   changed: boolean;
   pausedJobId?: string;
 }
+
+type ActivityMutationCommand =
+  | { kind: "pause_bundle"; bundleId: string; detail?: string }
+  | { kind: "resume_bundle"; bundleId: string }
+  | { kind: "cancel_job"; bundleId: string; jobId: string }
+  | { kind: "retry_job"; bundleId: string; jobId: string };
 
 interface FailureMutationValue {
   changed: boolean;
@@ -1093,6 +1152,81 @@ function assertIdentifier(value: unknown, field: string): asserts value is strin
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must contain non-whitespace text`);
   }
+}
+
+/**
+ * Requires one exact, non-negative Queue revision without numeric coercion.
+ *
+ * @param value - Revision supplied by an Activity projection
+ * @param field - Field name used by the thrown error
+ */
+function assertQueueRevision(value: unknown, field: string): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new TypeError(`${field} must be a non-negative safe integer`);
+  }
+}
+
+/**
+ * Detaches and validates one Activity command before it reaches Queue state.
+ *
+ * @param value - Command supplied by the Studio orchestration boundary
+ * @returns Frozen command containing only the supported authority fields
+ */
+function snapshotActivityCommand(value: unknown): Readonly<IngestQueueActivityCommand> {
+  const command = snapshotDataRecord(value);
+  if (!command) {
+    throw new TypeError("Activity command must be a plain data record");
+  }
+  assertIdentifier(command.bundleId, "bundleId");
+  assertQueueRevision(command.expectedQueueRevision, "expectedQueueRevision");
+  switch (command.kind) {
+    case "pause_bundle": {
+      if (command.detail !== undefined && typeof command.detail !== "string") {
+        throw new TypeError("detail must be text when supplied");
+      }
+      return Object.freeze({
+        kind: command.kind,
+        bundleId: command.bundleId,
+        expectedQueueRevision: command.expectedQueueRevision,
+        ...(command.detail === undefined ? {} : { detail: command.detail }),
+      });
+    }
+    case "resume_bundle":
+      return Object.freeze({
+        kind: command.kind,
+        bundleId: command.bundleId,
+        expectedQueueRevision: command.expectedQueueRevision,
+      });
+    case "cancel_job":
+    case "retry_job":
+      assertIdentifier(command.jobId, "jobId");
+      return Object.freeze({
+        kind: command.kind,
+        bundleId: command.bundleId,
+        jobId: command.jobId,
+        expectedQueueRevision: command.expectedQueueRevision,
+      });
+    default:
+      throw new TypeError("Activity command kind is unsupported");
+  }
+}
+
+/**
+ * Compares complete validated Queue snapshots independently of key insertion order.
+ *
+ * The revision participates in this proof. A later snapshot that merely appears
+ * to contain the requested effect is not sufficient to acknowledge an ambiguous
+ * write as this exact command.
+ *
+ * @param left - First strict Queue snapshot
+ * @param right - Second strict Queue snapshot
+ * @returns Whether both are the same complete durable candidate
+ */
+function sameQueueSnapshot(left: IngestQueueSnapshot, right: IngestQueueSnapshot): boolean {
+  return (
+    canonicalizeJson(left as unknown as JsonValue) ===
+    canonicalizeJson(right as unknown as JsonValue)
+  );
 }
 
 /**
@@ -2198,6 +2332,67 @@ export class IngestQueue {
   }
 
   /**
+   * Executes one Studio Activity command against the exact observed Queue revision.
+   *
+   * This path never rebases a stale user command. If storage reports failure
+   * after committing, the complete predicted candidate is reread before the
+   * same local abort or worker-wakeup side effect is performed.
+   *
+   * @param command - Content-free Activity intent and exact Queue authority
+   * @returns Confirmed committed or durable no-op Queue state
+   */
+  async executeActivityCommand(
+    command: IngestQueueActivityCommand
+  ): Promise<IngestQueueActivityCommandResult> {
+    this.assertExecutionOpen();
+    const request = snapshotActivityCommand(command);
+    const timestamp = this.now();
+    const mutation = await this.getBundleMutex(request.bundleId).runExclusive(async () => {
+      this.assertExecutionOpen();
+      const confirmed = await this.mutateExactActivity(
+        request.bundleId,
+        request.expectedQueueRevision,
+        (current) => this.projectActivityMutation(current, request, timestamp)
+      );
+      if (confirmed.value.changed) {
+        switch (request.kind) {
+          case "pause_bundle": {
+            if (confirmed.value.pausedJobId) {
+              const active = this.activeControllers.get(request.bundleId);
+              if (active?.jobId === confirmed.value.pausedJobId) {
+                active.controller.abort();
+              }
+            }
+            this.emit(confirmed.snapshot, "pause", confirmed.value.pausedJobId);
+            break;
+          }
+          case "resume_bundle":
+            this.emit(confirmed.snapshot, "resume");
+            break;
+          case "cancel_job": {
+            const active = this.activeControllers.get(request.bundleId);
+            if (active?.jobId === request.jobId) {
+              active.controller.abort();
+            }
+            this.emit(confirmed.snapshot, "cancel", request.jobId);
+            break;
+          }
+          case "retry_job":
+            this.emit(confirmed.snapshot, "retry", request.jobId);
+            break;
+        }
+      }
+      return confirmed;
+    });
+
+    return {
+      kind: mutation.value.changed ? "committed" : "unchanged",
+      command: request.kind,
+      snapshot: mutation.snapshot,
+    };
+  }
+
+  /**
    * Pauses new claims and cooperatively stops non-applying active work.
    *
    * Applying is an explicit no-abort boundary: the execution gate is paused,
@@ -2211,63 +2406,17 @@ export class IngestQueue {
   async pause(bundleId: string, detail?: string): Promise<IngestQueueSnapshot> {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
-      return this.mutate<PauseMutationValue>(bundleId, (current) => {
-        if (
-          current.control.status === "paused" &&
-          ["startup_recovery", "recovery_required", "commit_pending_ack"].includes(
-            current.control.reason
-          )
-        ) {
-          return { value: { changed: false } };
-        }
-        const processing = current.jobs.find((job) => job.status === "processing");
-        const sameControl =
-          current.control.status === "paused" &&
-          current.control.reason === "user" &&
-          current.control.detail === detail;
-        let next = current;
-        if (processing && processing.stage !== "applying") {
-          const pausedAt = Math.max(timestamp, processing.updatedAt);
-          const paused: KnowledgeIngestJob = {
-            id: processing.id,
-            bundleId: processing.bundleId,
-            sourceId: processing.sourceId,
-            sourceContentHash: processing.sourceContentHash,
-            pipelineFingerprint: processing.pipelineFingerprint,
-            inputRevision: processing.inputRevision,
-            attempt: processing.attempt,
-            rerunRequested: processing.rerunRequested,
-            createdAt: processing.createdAt,
-            updatedAt: pausedAt,
-            status: "paused",
-            stage: processing.stage,
-            pausedAt,
-            ...(detail === undefined ? {} : { reason: detail }),
-          };
-          next = replaceJob(next, paused);
-        }
-        if (!sameControl) {
-          next = {
-            ...next,
-            control: {
-              status: "paused",
-              reason: "user",
-              pausedAt: timestamp,
-              ...(detail === undefined ? {} : { detail }),
-            },
-          };
-        }
-        const pausedJobId = processing?.stage === "applying" ? undefined : processing?.id;
-        return next === current
-          ? { value: { changed: false } }
-          : {
-              next,
-              value: {
-                changed: true,
-                ...(pausedJobId === undefined ? {} : { pausedJobId }),
-              },
-            };
-      });
+      return this.mutate<ActivityMutationValue>(bundleId, (current) =>
+        this.projectActivityMutation(
+          current,
+          {
+            kind: "pause_bundle",
+            bundleId,
+            ...(detail === undefined ? {} : { detail }),
+          },
+          timestamp
+        )
+      );
     });
 
     if (mutation.value.pausedJobId) {
@@ -2291,58 +2440,11 @@ export class IngestQueue {
   async resume(bundleId: string): Promise<IngestQueueSnapshot> {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
-      return this.mutate(bundleId, (current) => {
-        if (
-          current.control.status === "paused" &&
-          current.control.reason === "commit_pending_ack"
-        ) {
-          throw new IngestQueueApplyCommitPendingError(bundleId);
-        }
-        if (current.control.status === "paused" && current.control.reason === "startup_recovery") {
-          throw new IngestQueueStartupReleaseRequiredError(bundleId);
-        }
-        const hasApplyRecoveryFailure = current.jobs.some(
-          (job) => job.status === "failed" && job.stage === "applying"
-        );
-        if (
-          hasApplyRecoveryFailure ||
-          (current.control.status === "paused" && current.control.reason === "recovery_required")
-        ) {
-          throw new IngestQueueRecoveryRequiredError(bundleId);
-        }
-        const hasPausedJobs = current.jobs.some((job) => job.status === "paused");
-        if (current.control.status === "running" && !hasPausedJobs) {
-          return { value: false };
-        }
-        return {
-          next: {
-            ...current,
-            control: { status: "running" },
-            jobs: current.jobs.map((job): KnowledgeIngestJob => {
-              if (job.status !== "paused") {
-                return job;
-              }
-              return {
-                id: job.id,
-                bundleId: job.bundleId,
-                sourceId: job.sourceId,
-                sourceContentHash: job.sourceContentHash,
-                pipelineFingerprint: job.pipelineFingerprint,
-                inputRevision: job.inputRevision,
-                attempt: job.attempt,
-                rerunRequested: job.rerunRequested,
-                createdAt: job.createdAt,
-                updatedAt: Math.max(timestamp, job.updatedAt),
-                status: "pending",
-                stage: "queued",
-              };
-            }),
-          },
-          value: true,
-        };
-      });
+      return this.mutate<ActivityMutationValue>(bundleId, (current) =>
+        this.projectActivityMutation(current, { kind: "resume_bundle", bundleId }, timestamp)
+      );
     });
-    if (mutation.value) {
+    if (mutation.value.changed) {
       this.emit(mutation.snapshot, "resume");
     }
     return mutation.snapshot;
@@ -2424,51 +2526,12 @@ export class IngestQueue {
     assertIdentifier(jobId, "jobId");
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
-      return this.mutate(bundleId, (current) => {
-        const job = requireJob(current, jobId);
-        if (job.status === "cancelled") {
-          return { value: false };
-        }
-        if (["completed", "failed"].includes(job.status)) {
-          throw new IngestQueueTransitionError(job.id, jobState(job), "cancel");
-        }
-        if (job.status === "awaiting_review") {
-          throw new IngestQueueTransitionError(
-            job.id,
-            jobState(job),
-            "cancel review without an exact durable rejection"
-          );
-        }
-        if (job.status === "processing" && job.stage === "applying") {
-          throw new IngestQueueTransitionError(job.id, jobState(job), "cancel during apply");
-        }
-        const cancelledAt = Math.max(timestamp, job.updatedAt);
-        const cancelled: KnowledgeIngestJob = {
-          id: job.id,
-          bundleId: job.bundleId,
-          sourceId: job.sourceId,
-          sourceContentHash: job.sourceContentHash,
-          pipelineFingerprint: job.pipelineFingerprint,
-          inputRevision: job.inputRevision,
-          attempt: job.attempt,
-          rerunRequested: false,
-          createdAt: job.createdAt,
-          updatedAt: cancelledAt,
-          status: "cancelled",
-          stage: "cancelled",
-          cancelledAt,
-        };
-        return {
-          next: {
-            ...replaceJob(current, cancelled),
-            reruns: current.reruns.filter((rerun) => rerun.sourceId !== job.sourceId),
-          },
-          value: true,
-        };
-      });
+      return this.mutate<ActivityMutationValue>(bundleId, (current) =>
+        this.projectActivityMutation(current, { kind: "cancel_job", bundleId, jobId }, timestamp)
+      );
     });
 
-    if (mutation.value) {
+    if (mutation.value.changed) {
       const active = this.activeControllers.get(bundleId);
       if (active?.jobId === jobId) {
         active.controller.abort();
@@ -2489,36 +2552,13 @@ export class IngestQueue {
     assertIdentifier(jobId, "jobId");
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
-      return this.mutate(bundleId, (current) => {
-        const job = requireJob(current, jobId);
-        if (job.status !== "failed" || !job.failure.retryable || job.stage === "applying") {
-          throw new IngestQueueTransitionError(job.id, jobState(job), "retry");
-        }
-        const activeForSource = current.jobs.some(
-          (candidate) =>
-            candidate.id !== job.id && candidate.sourceId === job.sourceId && isActiveJob(candidate)
-        );
-        if (activeForSource) {
-          throw new IngestQueueTransitionError(job.id, jobState(job), "retry beside active source");
-        }
-        const pending: KnowledgeIngestJob = {
-          id: job.id,
-          bundleId: job.bundleId,
-          sourceId: job.sourceId,
-          sourceContentHash: job.sourceContentHash,
-          pipelineFingerprint: job.pipelineFingerprint,
-          inputRevision: job.inputRevision,
-          attempt: 0,
-          rerunRequested: false,
-          createdAt: job.createdAt,
-          updatedAt: Math.max(timestamp, job.updatedAt),
-          status: "pending",
-          stage: "queued",
-        };
-        return { next: replaceJob(current, pending), value: true };
-      });
+      return this.mutate<ActivityMutationValue>(bundleId, (current) =>
+        this.projectActivityMutation(current, { kind: "retry_job", bundleId, jobId }, timestamp)
+      );
     });
-    this.emit(mutation.snapshot, "retry", jobId);
+    if (mutation.value.changed) {
+      this.emit(mutation.snapshot, "retry", jobId);
+    }
     return requireJob(mutation.snapshot, jobId);
   }
 
@@ -4045,6 +4085,273 @@ export class IngestQueue {
         ? undefined
         : { kind: "source_observation", observationToken: request.observationToken };
     return this.mutate(request.bundleId, transform, authority);
+  }
+
+  /**
+   * Projects one exact Activity intent without reading external state.
+   *
+   * @param current - Exact Queue revision authorized by the caller
+   * @param command - Detached Activity command
+   * @param timestamp - Command timestamp captured before the mutation
+   * @returns Immutable Queue proposal and local side-effect metadata
+   */
+  private projectActivityMutation(
+    current: IngestQueueSnapshot,
+    command: Readonly<ActivityMutationCommand>,
+    timestamp: number
+  ): QueueMutation<ActivityMutationValue> {
+    switch (command.kind) {
+      case "pause_bundle": {
+        if (
+          current.control.status === "paused" &&
+          ["startup_recovery", "recovery_required", "commit_pending_ack"].includes(
+            current.control.reason
+          )
+        ) {
+          return { value: { changed: false } };
+        }
+        const processing = current.jobs.find((job) => job.status === "processing");
+        const sameControl =
+          current.control.status === "paused" &&
+          current.control.reason === "user" &&
+          current.control.detail === command.detail;
+        let next = current;
+        if (processing && processing.stage !== "applying") {
+          const pausedAt = Math.max(timestamp, processing.updatedAt);
+          const paused: KnowledgeIngestJob = {
+            id: processing.id,
+            bundleId: processing.bundleId,
+            sourceId: processing.sourceId,
+            sourceContentHash: processing.sourceContentHash,
+            pipelineFingerprint: processing.pipelineFingerprint,
+            inputRevision: processing.inputRevision,
+            attempt: processing.attempt,
+            rerunRequested: processing.rerunRequested,
+            createdAt: processing.createdAt,
+            updatedAt: pausedAt,
+            status: "paused",
+            stage: processing.stage,
+            pausedAt,
+            ...(command.detail === undefined ? {} : { reason: command.detail }),
+          };
+          next = replaceJob(next, paused);
+        }
+        if (!sameControl) {
+          next = {
+            ...next,
+            control: {
+              status: "paused",
+              reason: "user",
+              pausedAt: timestamp,
+              ...(command.detail === undefined ? {} : { detail: command.detail }),
+            },
+          };
+        }
+        const pausedJobId = processing?.stage === "applying" ? undefined : processing?.id;
+        return next === current
+          ? { value: { changed: false } }
+          : {
+              next,
+              value: {
+                changed: true,
+                ...(pausedJobId === undefined ? {} : { pausedJobId }),
+              },
+            };
+      }
+      case "resume_bundle": {
+        if (
+          current.control.status === "paused" &&
+          current.control.reason === "commit_pending_ack"
+        ) {
+          throw new IngestQueueApplyCommitPendingError(command.bundleId);
+        }
+        if (current.control.status === "paused" && current.control.reason === "startup_recovery") {
+          throw new IngestQueueStartupReleaseRequiredError(command.bundleId);
+        }
+        const hasApplyRecoveryFailure = current.jobs.some(
+          (job) => job.status === "failed" && job.stage === "applying"
+        );
+        if (
+          hasApplyRecoveryFailure ||
+          (current.control.status === "paused" && current.control.reason === "recovery_required")
+        ) {
+          throw new IngestQueueRecoveryRequiredError(command.bundleId);
+        }
+        const hasPausedJobs = current.jobs.some((job) => job.status === "paused");
+        if (current.control.status === "running" && !hasPausedJobs) {
+          return { value: { changed: false } };
+        }
+        return {
+          next: {
+            ...current,
+            control: { status: "running" },
+            jobs: current.jobs.map((job): KnowledgeIngestJob => {
+              if (job.status !== "paused") {
+                return job;
+              }
+              return {
+                id: job.id,
+                bundleId: job.bundleId,
+                sourceId: job.sourceId,
+                sourceContentHash: job.sourceContentHash,
+                pipelineFingerprint: job.pipelineFingerprint,
+                inputRevision: job.inputRevision,
+                attempt: job.attempt,
+                rerunRequested: job.rerunRequested,
+                createdAt: job.createdAt,
+                updatedAt: Math.max(timestamp, job.updatedAt),
+                status: "pending",
+                stage: "queued",
+              };
+            }),
+          },
+          value: { changed: true },
+        };
+      }
+      case "cancel_job": {
+        const job = requireJob(current, command.jobId);
+        if (job.status === "cancelled") {
+          return { value: { changed: false } };
+        }
+        if (["completed", "failed"].includes(job.status)) {
+          throw new IngestQueueTransitionError(job.id, jobState(job), "cancel");
+        }
+        if (job.status === "awaiting_review") {
+          throw new IngestQueueTransitionError(
+            job.id,
+            jobState(job),
+            "cancel review without an exact durable rejection"
+          );
+        }
+        if (job.status === "processing" && job.stage === "applying") {
+          throw new IngestQueueTransitionError(job.id, jobState(job), "cancel during apply");
+        }
+        const cancelledAt = Math.max(timestamp, job.updatedAt);
+        const cancelled: KnowledgeIngestJob = {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: job.sourceContentHash,
+          pipelineFingerprint: job.pipelineFingerprint,
+          inputRevision: job.inputRevision,
+          attempt: job.attempt,
+          rerunRequested: false,
+          createdAt: job.createdAt,
+          updatedAt: cancelledAt,
+          status: "cancelled",
+          stage: "cancelled",
+          cancelledAt,
+        };
+        return {
+          next: {
+            ...replaceJob(current, cancelled),
+            reruns: current.reruns.filter((rerun) => rerun.sourceId !== job.sourceId),
+          },
+          value: { changed: true },
+        };
+      }
+      case "retry_job": {
+        const job = requireJob(current, command.jobId);
+        if (job.status !== "failed" || !job.failure.retryable || job.stage === "applying") {
+          throw new IngestQueueTransitionError(job.id, jobState(job), "retry");
+        }
+        const activeForSource = current.jobs.some(
+          (candidate) =>
+            candidate.id !== job.id && candidate.sourceId === job.sourceId && isActiveJob(candidate)
+        );
+        if (activeForSource) {
+          throw new IngestQueueTransitionError(job.id, jobState(job), "retry beside active source");
+        }
+        const pending: KnowledgeIngestJob = {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: job.sourceContentHash,
+          pipelineFingerprint: job.pipelineFingerprint,
+          inputRevision: job.inputRevision,
+          attempt: 0,
+          rerunRequested: false,
+          createdAt: job.createdAt,
+          updatedAt: Math.max(timestamp, job.updatedAt),
+          status: "pending",
+          stage: "queued",
+        };
+        return {
+          next: replaceJob(current, pending),
+          value: { changed: true },
+        };
+      }
+    }
+  }
+
+  /**
+   * Applies one Activity mutation exactly once without CAS replay.
+   *
+   * A failed write is acknowledged only when a durable reread equals the full
+   * predicted candidate. This captures a real atomic-file commit-then-throw
+   * while refusing to infer success from a later merely compatible state.
+   *
+   * @param bundleId - Bundle authorized by the command
+   * @param expectedQueueRevision - Exact revision observed by the caller
+   * @param transform - Deterministic Activity transform
+   * @returns Confirmed current or newly committed Queue and mutation metadata
+   */
+  private async mutateExactActivity(
+    bundleId: string,
+    expectedQueueRevision: number,
+    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<ActivityMutationValue>
+  ): Promise<MutationResult<ActivityMutationValue>> {
+    const loaded = await this.loadForMutation(bundleId);
+    if (loaded.snapshot.revision !== expectedQueueRevision) {
+      throw new IngestQueueActivityCommandStaleError(
+        bundleId,
+        expectedQueueRevision,
+        loaded.snapshot.revision
+      );
+    }
+    const proposal = transform(loaded.snapshot);
+    if (!proposal.next) {
+      return {
+        snapshot: this.cloneValidatedSnapshot(bundleId, loaded.snapshot),
+        value: proposal.value,
+      };
+    }
+    if (loaded.snapshot.revision >= Number.MAX_SAFE_INTEGER) {
+      throw new IngestQueueRevisionOverflowError(bundleId, loaded.snapshot.revision);
+    }
+    const candidate = this.cloneValidatedSnapshot(bundleId, {
+      ...proposal.next,
+      version: INGEST_QUEUE_VERSION,
+      bundleId,
+      revision: loaded.snapshot.revision + 1,
+    });
+    try {
+      await this.storage.write(bundleId, candidate, loaded.expectedRevision);
+    } catch (error) {
+      let observed: LoadedQueue;
+      try {
+        observed = await this.loadForMutation(bundleId);
+      } catch {
+        throw error;
+      }
+      if (!sameQueueSnapshot(observed.snapshot, candidate)) {
+        if (
+          error instanceof IngestQueueRevisionConflictError ||
+          observed.snapshot.revision !== expectedQueueRevision
+        ) {
+          throw new IngestQueueActivityCommandStaleError(
+            bundleId,
+            expectedQueueRevision,
+            observed.snapshot.revision
+          );
+        }
+        throw error;
+      }
+    }
+    return {
+      snapshot: this.cloneValidatedSnapshot(bundleId, candidate),
+      value: proposal.value,
+    };
   }
 
   /**

@@ -25,20 +25,30 @@ export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): s
     case "bundle_invalid":
       return "A project Knowledge Bundle configuration is invalid or conflicts with another Bundle. Fix project.md; startup will retry after Projects refresh.";
     case "recovery_unavailable":
-      return "Knowledge startup recovery could not be completed safely. New ingest work remains stopped and no unreviewed knowledge was generated.";
+      return "Knowledge startup recovery could not be completed safely. New ingest, model calls, and Wiki writes remain stopped.";
     case "recovery_attention_required":
-      return "Knowledge startup found durable work that needs an explicit recovery decision. New ingest work remains stopped.";
+      return "Knowledge startup found durable work that needs an explicit recovery decision. Open Recovery to continue eligible work or abandon an eligible no-journal apply; new ingest work remains stopped.";
     case "recovery_blocked":
-      return "Knowledge startup is blocked by durable recovery state. New ingest work remains stopped to protect existing notes.";
+      return "Knowledge startup is blocked by durable recovery state. Open Recovery to inspect and recheck it; unsafe actions remain disabled to protect existing notes.";
     case "workflow_adapters_unavailable":
       return state.bundleIds.length === 1
-        ? "The project Knowledge Bundle is valid and startup recovery is clear. Background ingest can compile registered sources into durable Review proposals; Knowledge Studio review, apply, and query adapters are not connected yet."
-        : "The project Knowledge Bundles are valid and startup recovery is clear. Background ingest can compile registered sources into durable Review proposals; Bundle selection and Knowledge Studio review, apply, and query adapters are not connected yet.";
+        ? "The project Knowledge Bundle is valid and startup recovery is clear, but the live workflow adapter is unavailable. Activity, Review, Apply, and Query remain disabled."
+        : "The project Knowledge Bundles are valid and startup recovery is clear, but the live workflow adapter and Bundle selection are unavailable. Activity, Review, Apply, and Query remain disabled.";
+    case "workflow_read_ready":
+      return state.bundleIds.length === 1
+        ? "Live durable Activity and Review are connected. Whole-proposal rejection and explicit reviewed create/update apply are available; delete acceptance and Query remain disabled."
+        : "Live durable Activity and Review are available, but Bundle selection is not connected yet.";
   }
 }
 
 /** Selects one exact configured Bundle for an unavailable recovery/workflow state. */
 function selectUnavailableBundleId(state: KnowledgePluginStartupState): string | undefined {
+  if (
+    (state.status === "recovery_attention_required" || state.status === "recovery_blocked") &&
+    state.bundleIds.includes(state.recoveryBundleId)
+  ) {
+    return state.recoveryBundleId;
+  }
   if (
     (state.status === "recovery_unavailable" ||
       state.status === "recovery_attention_required" ||
@@ -77,5 +87,34 @@ export class KnowledgeStudioStartupAvailabilityAdapter
     const notice = getKnowledgeStartupNotice(state);
     this.port.replaceDelegate(new UnavailableKnowledgeStudioPort(notice));
     this.sessions.replaceSelection(selectUnavailableBundleId(state), notice);
+  }
+
+  /** Publishes one exact Studio-ready Bundle after its live delegate was staged. */
+  setReadReady(
+    state: Extract<KnowledgePluginStartupState, { status: "workflow_read_ready" }>
+  ): void {
+    const notice = getKnowledgeStartupNotice(state);
+    if (state.bundleIds.length !== 1) {
+      this.port.replaceDelegate(new UnavailableKnowledgeStudioPort(notice));
+      this.sessions.replaceSelection(undefined, notice);
+      return;
+    }
+    this.sessions.replaceSelection(state.bundleIds[0], notice);
+  }
+
+  /** Publishes one staged recovery-only delegate for the exact stopped Bundle. */
+  setRecoveryReady(
+    state: Extract<
+      KnowledgePluginStartupState,
+      { status: "recovery_attention_required" | "recovery_blocked" }
+    >
+  ): void {
+    const notice = getKnowledgeStartupNotice(state);
+    if (!state.bundleIds.includes(state.recoveryBundleId)) {
+      this.port.replaceDelegate(new UnavailableKnowledgeStudioPort(notice));
+      this.sessions.replaceSelection(undefined, notice);
+      return;
+    }
+    this.sessions.replaceSelection(state.recoveryBundleId, notice);
   }
 }

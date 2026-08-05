@@ -8,7 +8,8 @@ export type KnowledgePluginStartupStatus =
   | "recovery_unavailable"
   | "recovery_attention_required"
   | "recovery_blocked"
-  | "workflow_adapters_unavailable";
+  | "workflow_adapters_unavailable"
+  | "workflow_read_ready";
 
 interface KnowledgePluginStartupStateBase {
   /** Latest-wins generation that published this observation. */
@@ -35,10 +36,15 @@ export type KnowledgePluginStartupState =
   | (KnowledgePluginStartupStateBase & {
       status: "recovery_attention_required" | "recovery_blocked";
       bundleIds: readonly string[];
+      recoveryBundleId: string;
       attentionKinds: readonly string[];
     })
   | (KnowledgePluginStartupStateBase & {
       status: "workflow_adapters_unavailable";
+      bundleIds: readonly string[];
+    })
+  | (KnowledgePluginStartupStateBase & {
+      status: "workflow_read_ready";
       bundleIds: readonly string[];
     });
 
@@ -70,6 +76,7 @@ export type KnowledgePluginRecoveryStartupResult =
   | { kind: "observed_clear" }
   | {
       kind: "attention_required" | "blocked";
+      recoveryBundleId?: string;
       attentionKinds: readonly string[];
     }
   | { kind: "unavailable"; diagnosticCode: string };
@@ -113,14 +120,22 @@ export interface KnowledgePluginBundleConfigPort {
 }
 
 /**
- * One-way Studio delegate boundary used by this barrier.
- *
- * No ready operation is intentionally present: production workflow adapters
- * must be introduced through a separate, explicit wiring change.
+ * Studio availability boundary used by the startup barrier.
  */
 export interface KnowledgeStudioStartupAvailabilityPort {
   /** Installs an unavailable delegate/notice for the supplied safe startup state. */
   setUnavailable(state: KnowledgePluginStartupState): void;
+  /** Publishes exact Bundle selection after a released read adapter is staged. */
+  setReadReady(
+    state: Extract<KnowledgePluginStartupState, { status: "workflow_read_ready" }>
+  ): void;
+  /** Publishes the exact stopped Bundle after its recovery-only delegate was staged. */
+  setRecoveryReady?(
+    state: Extract<
+      KnowledgePluginStartupState,
+      { status: "recovery_attention_required" | "recovery_blocked" }
+    >
+  ): void;
 }
 
 /** Dependencies of the pure plugin startup-ordering barrier. */
@@ -173,7 +188,8 @@ function freezeStartupState<T extends KnowledgePluginStartupState>(state: T): T 
     state.status === "recovery_unavailable" ||
     state.status === "recovery_attention_required" ||
     state.status === "recovery_blocked" ||
-    state.status === "workflow_adapters_unavailable"
+    state.status === "workflow_adapters_unavailable" ||
+    state.status === "workflow_read_ready"
   ) {
     Object.freeze(state.bundleIds);
   }
@@ -281,14 +297,17 @@ function sanitizeBundleIds(bundleIds: unknown): readonly string[] | undefined {
  * zero-network production preflight validation. A separate observation port may
  * internally re-prove observation, conditionally release its Queue, and start a
  * background Compiler→Review worker. The barrier never receives direct Queue,
- * model, no-journal, or Wiki-write capability, and the published Studio state
- * remains `workflow_adapters_unavailable` until its UI adapters are connected.
+ * model, no-journal, or Wiki-write capability. A successful release may publish
+ * read-ready only after the production observation port stages its live adapter.
  */
 export class KnowledgePluginStartupBarrier {
   private generation = 0;
   private activeRun?: { generation: number; controller: AbortController };
   private activeRecovery?: KnowledgePluginRecoveryStartupPort;
-  private activeObservation?: KnowledgePluginObservationStartupPort;
+  private activeObservation?: {
+    generation: number;
+    port: KnowledgePluginObservationStartupPort;
+  };
   private state: KnowledgePluginStartupState;
   private readonly listeners = new Set<KnowledgePluginStartupStateListener>();
 
@@ -545,12 +564,12 @@ export class KnowledgePluginStartupBarrier {
     result: Extract<KnowledgePluginBundleConfigLoadResult, { kind: "configured" }>
   ): void {
     const observation = this.readObservationPort(result);
-    if (observation && observation !== this.activeObservation) {
+    if (observation && observation !== this.activeObservation?.port) {
       this.closeObservationSafely(observation);
     }
   }
 
-  /** Runs and closes one recovery generation before publishing its sanitized result. */
+  /** Runs recovery and retains only an exact attention session for the recovery UI. */
   private async runRecovery(
     generation: number,
     signal: AbortSignal,
@@ -563,45 +582,46 @@ export class KnowledgePluginStartupBarrier {
     try {
       result = await recovery.start(signal);
     } catch {
+      this.closeRecoverySession(recovery);
       this.closeObservationSafely(observation);
       if (this.isCurrent(generation, signal)) {
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_FAILED);
       }
       return;
-    } finally {
-      if (this.activeRecovery === recovery) {
-        this.activeRecovery = undefined;
-        this.closeRecoverySafely(recovery);
-      }
     }
 
     if (!this.isCurrent(generation, signal)) {
+      this.closeRecoverySession(recovery);
       this.closeObservationSafely(observation);
       return;
     }
     if (typeof result !== "object" || result === null || typeof result.kind !== "string") {
+      this.closeRecoverySession(recovery);
       this.closeObservationSafely(observation);
       this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
       return;
     }
     if (result.kind === "observed_clear") {
-      if (
-        observation &&
-        !(await this.startObservation(generation, signal, bundleIds, observation))
-      ) {
-        return;
-      }
+      this.closeRecoverySession(recovery);
+      const observationResult = observation
+        ? await this.startObservation(generation, signal, bundleIds, observation)
+        : "observed";
+      if (observationResult === false) return;
       this.publish(
         generation,
         freezeStartupState({
           generation,
-          status: "workflow_adapters_unavailable",
+          status:
+            observationResult === "released"
+              ? "workflow_read_ready"
+              : "workflow_adapters_unavailable",
           bundleIds,
         })
       );
       return;
     }
     if (result.kind === "unavailable") {
+      this.closeRecoverySession(recovery);
       this.closeObservationSafely(observation);
       const diagnosticCode = sanitizeRecoveryDiagnosticCode(result.diagnosticCode);
       this.publishRecoveryUnavailable(generation, bundleIds, diagnosticCode);
@@ -609,12 +629,20 @@ export class KnowledgePluginStartupBarrier {
     }
     if (result.kind === "attention_required" || result.kind === "blocked") {
       this.closeObservationSafely(observation);
-      if (!Array.isArray(result.attentionKinds)) {
+      const recoveryBundleId =
+        result.recoveryBundleId ?? (bundleIds.length === 1 ? bundleIds[0] : undefined);
+      if (
+        !Array.isArray(result.attentionKinds) ||
+        typeof recoveryBundleId !== "string" ||
+        !bundleIds.includes(recoveryBundleId)
+      ) {
+        this.closeRecoverySession(recovery);
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
         return;
       }
       const attentionKinds = sanitizeAttentionKinds(result.attentionKinds);
       if (!attentionKinds) {
+        this.closeRecoverySession(recovery);
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
         return;
       }
@@ -627,11 +655,13 @@ export class KnowledgePluginStartupBarrier {
               ? "recovery_attention_required"
               : "recovery_blocked",
           bundleIds,
+          recoveryBundleId,
           attentionKinds,
         })
       );
       return;
     }
+    this.closeRecoverySession(recovery);
     this.closeObservationSafely(observation);
     this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
   }
@@ -642,24 +672,25 @@ export class KnowledgePluginStartupBarrier {
     signal: AbortSignal,
     bundleIds: readonly string[],
     observation: KnowledgePluginObservationStartupPort
-  ): Promise<boolean> {
-    this.activeObservation = observation;
+  ): Promise<"observed" | "released" | false> {
+    const session = { generation, port: observation };
+    this.activeObservation = session;
     let result: KnowledgePluginObservationStartupResult;
     try {
       result = await observation.start(signal);
     } catch {
-      this.closeActiveObservation();
+      this.closeObservationSession(session);
       if (this.isCurrent(generation, signal)) {
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_FAILED);
       }
       return false;
     }
     if (!this.isCurrent(generation, signal)) {
-      this.closeActiveObservation();
+      this.closeObservationSession(session);
       return false;
     }
     if (!isObservationConverged(result)) {
-      this.closeActiveObservation();
+      this.closeObservationSession(session);
       this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
       return false;
     }
@@ -668,17 +699,28 @@ export class KnowledgePluginStartupBarrier {
       try {
         releaseResult = await observation.release(signal);
       } catch {
-        this.closeActiveObservation();
+        this.closeObservationSession(session);
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_FAILED);
         return false;
       }
       if (releaseResult.kind !== "released") {
-        this.closeActiveObservation();
+        this.closeObservationSession(session);
         this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
         return false;
       }
+      const releasedBundleIds = sanitizeBundleIds(releaseResult.bundleIds);
+      if (
+        !releasedBundleIds ||
+        releasedBundleIds.length !== bundleIds.length ||
+        releasedBundleIds.some((bundleId, index) => bundleId !== bundleIds[index])
+      ) {
+        this.closeObservationSession(session);
+        this.publishRecoveryUnavailable(generation, bundleIds, RECOVERY_RESULT_INVALID);
+        return false;
+      }
+      return "released";
     }
-    return true;
+    return "observed";
   }
 
   /** Publishes one fixed-code recovery failure without reclassifying Bundle configuration. */
@@ -707,13 +749,34 @@ export class KnowledgePluginStartupBarrier {
     }
   }
 
+  /** Closes one exact retained recovery session without disturbing a replacement. */
+  private closeRecoverySession(recovery: KnowledgePluginRecoveryStartupPort): void {
+    if (this.activeRecovery !== recovery) return;
+    this.activeRecovery = undefined;
+    this.closeRecoverySafely(recovery);
+  }
+
   /** Closes the current long-lived observation capability during replacement/cancellation. */
   private closeActiveObservation(): void {
-    const observation = this.activeObservation;
+    const session = this.activeObservation;
     this.activeObservation = undefined;
-    if (observation) {
-      this.closeObservationSafely(observation);
+    if (session) {
+      this.closeObservationSafely(session.port);
     }
+  }
+
+  /**
+   * Closes an observation only while the exact generation session still owns it.
+   *
+   * @param session - Observation session captured before an awaited continuation
+   */
+  private closeObservationSession(session: {
+    generation: number;
+    port: KnowledgePluginObservationStartupPort;
+  }): void {
+    if (this.activeObservation !== session) return;
+    this.activeObservation = undefined;
+    this.closeObservationSafely(session.port);
   }
 
   /** Isolates observation cleanup so generation invalidation remains authoritative. */
@@ -747,7 +810,20 @@ export class KnowledgePluginStartupBarrier {
     if (generation !== this.generation) {
       return;
     }
-    this.dependencies.studio.setUnavailable(state);
+    if (state.status === "workflow_read_ready") {
+      this.dependencies.studio.setReadReady(state);
+    } else if (
+      state.status === "recovery_attention_required" ||
+      state.status === "recovery_blocked"
+    ) {
+      if (this.dependencies.studio.setRecoveryReady) {
+        this.dependencies.studio.setRecoveryReady(state);
+      } else {
+        this.dependencies.studio.setUnavailable(state);
+      }
+    } else {
+      this.dependencies.studio.setUnavailable(state);
+    }
     this.state = state;
     for (const listener of this.listeners) {
       try {

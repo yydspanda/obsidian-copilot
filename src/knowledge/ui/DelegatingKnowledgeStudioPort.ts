@@ -1,7 +1,13 @@
 import type { KnowledgeReviewCommand } from "@/knowledge/review/ReviewDecision";
 import type {
+  KnowledgeGroundedRetrievalResult,
+  KnowledgeStudioQueryPort,
+  KnowledgeStudioQueryRequest,
+} from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
+import type {
   KnowledgeStudioCommandPort,
   KnowledgeStudioReadPort,
+  KnowledgeStudioRecoverySubmissionResult,
   KnowledgeStudioReviewSubmissionResult,
   KnowledgeStudioSnapshot,
 } from "@/knowledge/ui/KnowledgeStudioController";
@@ -11,9 +17,11 @@ import {
 } from "@/knowledge/ui/KnowledgeStudioController";
 
 type KnowledgeStudioPort = KnowledgeStudioReadPort & KnowledgeStudioCommandPort;
+type QueryCapableKnowledgeStudioPort = KnowledgeStudioPort &
+  Partial<Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">>;
 
 interface DelegateGeneration {
-  delegate: KnowledgeStudioPort;
+  delegate: QueryCapableKnowledgeStudioPort;
   abortController: AbortController;
 }
 
@@ -74,7 +82,7 @@ function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
  * every read goes to the implementation active for that exact generation.
  */
 export class DelegatingKnowledgeStudioPort
-  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort
+  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeStudioQueryPort
 {
   private readonly unavailableDelegate: KnowledgeStudioPort;
   private generation: DelegateGeneration;
@@ -99,7 +107,7 @@ export class DelegatingKnowledgeStudioPort
    *
    * @param delegate - Complete read/command implementation for the next generation
    */
-  replaceDelegate(delegate: KnowledgeStudioPort): void {
+  replaceDelegate(delegate: QueryCapableKnowledgeStudioPort): void {
     if (this.disposed) {
       throw new KnowledgeStudioAdapterUnavailableError();
     }
@@ -202,30 +210,48 @@ export class DelegatingKnowledgeStudioPort
   }
 
   /** Routes a Bundle pause through the current delegate generation. */
-  async pauseBundle(bundleId: string, signal: AbortSignal): Promise<void> {
+  async pauseBundle(
+    bundleId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
-      delegate.pauseBundle(bundleId, delegatedSignal)
+      delegate.pauseBundle(bundleId, expectedQueueRevision, delegatedSignal)
     );
   }
 
   /** Routes a Bundle resume through the current delegate generation. */
-  async resumeBundle(bundleId: string, signal: AbortSignal): Promise<void> {
+  async resumeBundle(
+    bundleId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
-      delegate.resumeBundle(bundleId, delegatedSignal)
+      delegate.resumeBundle(bundleId, expectedQueueRevision, delegatedSignal)
     );
   }
 
   /** Routes one queue-job cancellation through the current delegate generation. */
-  async cancelJob(bundleId: string, jobId: string, signal: AbortSignal): Promise<void> {
+  async cancelJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
-      delegate.cancelJob(bundleId, jobId, delegatedSignal)
+      delegate.cancelJob(bundleId, jobId, expectedQueueRevision, delegatedSignal)
     );
   }
 
   /** Routes one failed-job retry through the current delegate generation. */
-  async retryJob(bundleId: string, jobId: string, signal: AbortSignal): Promise<void> {
+  async retryJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
-      delegate.retryJob(bundleId, jobId, delegatedSignal)
+      delegate.retryJob(bundleId, jobId, expectedQueueRevision, delegatedSignal)
     );
   }
 
@@ -240,6 +266,77 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
+  /** Routes an opaque recovery continuation through the current delegate generation. */
+  async continueRecovery(
+    bundleId: string,
+    recoveryId: string,
+    expectedRuntimeRevision: number,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioRecoverySubmissionResult> {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      delegate.continueRecovery
+        ? delegate.continueRecovery(bundleId, recoveryId, expectedRuntimeRevision, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
+  /** Routes an opaque no-journal abandonment through the current delegate generation. */
+  async abandonRecovery(
+    bundleId: string,
+    recoveryId: string,
+    expectedRuntimeRevision: number,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioRecoverySubmissionResult> {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      delegate.abandonRecovery
+        ? delegate.abandonRecovery(bundleId, recoveryId, expectedRuntimeRevision, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
+  /** Routes one scoped applied-Wiki query through the current delegate generation. */
+  async query(
+    bundleId: string,
+    request: Readonly<KnowledgeStudioQueryRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeGroundedRetrievalResult> {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.query === "function"
+        ? delegate.query(bundleId, request, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
+  /** Routes one opaque citation jump through the current delegate generation. */
+  async openCitation(
+    bundleId: string,
+    queryId: string,
+    citationRef: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.openCitation === "function"
+        ? delegate.openCitation(bundleId, queryId, citationRef, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
+  /** Synchronously revokes exact or Bundle-wide Query authority on the active delegate. */
+  revokeCurrent(bundleId: string, queryId?: string): void {
+    if (this.disposed) return;
+    const generation = this.generation;
+    const revokeCurrent = generation.delegate.revokeCurrent;
+    if (typeof revokeCurrent !== "function") return;
+    const result = Reflect.apply(revokeCurrent, generation.delegate, [bundleId, queryId]);
+    if (result !== undefined) throw new KnowledgeStudioAdapterUnavailableError();
+    if (generation !== this.generation) throw createAbortError();
+  }
+
+  /** Permanently closes the stable Query boundary together with the Studio port. */
+  close(): void {
+    this.dispose();
+  }
+
   /**
    * Executes against one captured generation and rejects any late result.
    *
@@ -249,7 +346,7 @@ export class DelegatingKnowledgeStudioPort
    */
   private async runWithCurrentDelegate<T>(
     callerSignal: AbortSignal,
-    operation: (delegate: KnowledgeStudioPort, signal: AbortSignal) => Promise<T>
+    operation: (delegate: QueryCapableKnowledgeStudioPort, signal: AbortSignal) => Promise<T>
   ): Promise<T> {
     const generation = this.generation;
     const linked = linkAbortSignals([callerSignal, generation.abortController.signal]);
@@ -265,7 +362,12 @@ export class DelegatingKnowledgeStudioPort
         linked.signal.addEventListener("abort", rejectAsAborted, { once: true });
         removeAbortListener = () => linked.signal.removeEventListener("abort", rejectAsAborted);
       });
-      const delegated = Promise.resolve().then(() => operation(generation.delegate, linked.signal));
+      const delegated = Promise.resolve().then(() => {
+        if (linked.signal.aborted || generation !== this.generation) {
+          throw createAbortError();
+        }
+        return operation(generation.delegate, linked.signal);
+      });
       const result = await Promise.race([delegated, aborted]);
 
       if (linked.signal.aborted || generation !== this.generation) {
@@ -289,7 +391,7 @@ export class DelegatingKnowledgeStudioPort
    * @param delegate - Delegate owned by the new generation
    * @returns Generation record
    */
-  private createGeneration(delegate: KnowledgeStudioPort): DelegateGeneration {
+  private createGeneration(delegate: QueryCapableKnowledgeStudioPort): DelegateGeneration {
     return { delegate, abortController: new AbortController() };
   }
 

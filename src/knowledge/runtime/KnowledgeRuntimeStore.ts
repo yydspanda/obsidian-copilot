@@ -82,11 +82,14 @@ import {
   parseSourceManifest,
 } from "@/knowledge/model/schemas";
 import type {
+  ClaimCitation,
+  GeneratedPageOwnership,
   JsonValue,
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   KnowledgeDiagnostic,
   KnowledgeIngestJob,
+  SourceCustody,
   SourceCompileSnapshot,
   SourceManifest,
   SourceManifestEntry,
@@ -123,6 +126,12 @@ import {
   type ChangeSetReviewSnapshot,
   type ReviewStorage,
 } from "@/knowledge/review/ReviewStorage";
+import {
+  parseKnowledgeLiteralRejectCommand,
+  projectKnowledgeReviewRejection,
+  type KnowledgeLiteralRejectCommand,
+  type KnowledgeReviewRejectTransitionReceipt,
+} from "@/knowledge/review/ReviewRejectTransition";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import { sha256 } from "@/utils/hash";
 
@@ -246,6 +255,56 @@ export interface KnowledgeRuntimeStoreSnapshot {
   activeTransaction: object | null;
   inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
+}
+
+/** Detached Queue and Review state read from one atomic Runtime envelope. */
+export interface KnowledgeRuntimeStudioBundleSnapshot {
+  bundleId: string;
+  runtimeRevision: number;
+  queue: IngestQueueSnapshot;
+  review: ChangeSetReviewSnapshot;
+}
+
+/** Immutable accepted-source evidence attached to one applied Wiki page. */
+export interface KnowledgeRuntimeAppliedSourceProvenance {
+  readonly sourceId: string;
+  readonly sourcePath: string;
+  readonly custody: SourceCustody;
+  readonly sourceContentHash: string;
+  readonly pipelineFingerprint: string;
+  readonly inputRevision: number;
+  readonly changeSetId: string;
+  readonly changeSetDigest: string;
+  readonly acceptedAt: number;
+  readonly citations: readonly Readonly<ClaimCitation>[];
+}
+
+/** Immutable current Manifest page with all exact accepted source provenance. */
+export interface KnowledgeRuntimeAppliedPageProvenance {
+  readonly path: string;
+  readonly windowsPathKey: string;
+  readonly ownership: GeneratedPageOwnership;
+  readonly contentHash: string;
+  readonly sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[];
+}
+
+/**
+ * Detached, read-only applied Wiki provenance from one atomic Runtime envelope.
+ *
+ * This projection is evidence for retrieval only and is never a Queue, Review,
+ * transaction, Manifest, or file-mutation authority.
+ */
+export interface KnowledgeRuntimeAppliedProvenanceSnapshot {
+  readonly bundleId: string;
+  readonly runtimeRevision: number;
+  readonly manifestRevision: number;
+  readonly pages: readonly Readonly<KnowledgeRuntimeAppliedPageProvenance>[];
+}
+
+/** Exact durable receipt returned by the atomic Runtime Reject boundary. */
+export interface KnowledgeRuntimeReviewRejectReceipt
+  extends KnowledgeReviewRejectTransitionReceipt {
+  runtimeRevision: number;
 }
 
 /** Scalar allocator state used by runtime versions 1 and 2. */
@@ -1754,6 +1813,263 @@ function ledgerMatchesAcceptedRecord(
 }
 
 /**
+ * Finds the latest retained apply ledger for one exact Bundle/source identity.
+ *
+ * @param records - Complete append-only apply ledger
+ * @param bundleId - Bundle containing the source
+ * @param sourceId - Stable source identifier
+ * @returns Latest source ledger by Manifest revision, or undefined
+ */
+function findLatestSourceApplyLedger(
+  records: readonly KnowledgeApplyCommitLedgerRecord[],
+  bundleId: string,
+  sourceId: string
+): KnowledgeApplyCommitLedgerRecord | undefined {
+  let latest: KnowledgeApplyCommitLedgerRecord | undefined;
+  for (const record of records) {
+    if (record.bundleId !== bundleId || record.sourceId !== sourceId) continue;
+    if (!latest || record.manifestAfterRevision > latest.manifestAfterRevision) {
+      latest = record;
+    }
+  }
+  return latest;
+}
+
+/**
+ * Proves that one latest ledger is the exact current source success projection.
+ *
+ * @param ledger - Candidate latest source apply ledger
+ * @param bundleId - Bundle containing the Manifest entry
+ * @param entry - Current strict Manifest source entry
+ * @returns Whether Manifest success and reserved extension match the ledger
+ */
+function ledgerMatchesCurrentManifestEntry(
+  ledger: KnowledgeApplyCommitLedgerRecord,
+  bundleId: string,
+  entry: SourceManifestEntry
+): boolean {
+  const success = entry.lastSuccessful;
+  const extension = runtimeSourceCommitExtensionSchema.safeParse(
+    entry.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]
+  );
+  return (
+    success !== undefined &&
+    extension.success &&
+    ledger.bundleId === bundleId &&
+    ledger.sourceId === entry.sourceId &&
+    ledger.sourceContentHash === success.sourceContentHash &&
+    ledger.pipelineFingerprint === success.pipelineFingerprint &&
+    ledger.changeSetId === success.changeSetId &&
+    ledger.recordedAt === success.completedAt &&
+    ledger.transactionId === extension.data.transactionId &&
+    ledger.inputRevision === extension.data.inputRevision &&
+    ledger.manifestIntentDigest === extension.data.manifestIntentDigest
+  );
+}
+
+/** Creates one deeply immutable detached citation projection. */
+function freezeAppliedClaimCitation(citation: ClaimCitation): Readonly<ClaimCitation> {
+  return Object.freeze({
+    ...citation,
+    locator: Object.freeze({ ...citation.locator }),
+  });
+}
+
+/** Creates one deeply immutable detached accepted-source projection. */
+function freezeAppliedSourceProvenance(
+  source: KnowledgeRuntimeAppliedSourceProvenance
+): Readonly<KnowledgeRuntimeAppliedSourceProvenance> {
+  const citations = source.citations.map(freezeAppliedClaimCitation);
+  return Object.freeze({
+    ...source,
+    citations: Object.freeze(citations),
+  });
+}
+
+/** Creates one deeply immutable detached applied-page projection. */
+function freezeAppliedPageProvenance(
+  page: KnowledgeRuntimeAppliedPageProvenance
+): Readonly<KnowledgeRuntimeAppliedPageProvenance> {
+  return Object.freeze({
+    ...page,
+    sources: Object.freeze([...page.sources]),
+  });
+}
+
+/** Creates one deeply immutable detached Runtime provenance snapshot. */
+function freezeAppliedProvenanceSnapshot(
+  snapshot: KnowledgeRuntimeAppliedProvenanceSnapshot
+): KnowledgeRuntimeAppliedProvenanceSnapshot {
+  return Object.freeze({
+    ...snapshot,
+    pages: Object.freeze([...snapshot.pages]),
+  });
+}
+
+/**
+ * Resolves one current source to exactly one latest ledger and accepted Review.
+ *
+ * @param state - Complete strict Runtime snapshot
+ * @param manifest - Current strict Bundle Manifest
+ * @param review - Current strict Review snapshot, or undefined when absent
+ * @param entry - Current Manifest source entry
+ * @returns Accepted source commit evidence, or undefined when proof is incomplete
+ */
+function projectAppliedSourceCommitEvidence(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  review: ChangeSetReviewSnapshot | undefined,
+  entry: SourceManifestEntry
+): AppliedSourceCommitEvidence | undefined {
+  if (!entry.lastSuccessful || !review) return undefined;
+  const ledger = findLatestSourceApplyLedger(state.applyCommits, manifest.bundleId, entry.sourceId);
+  if (!ledger || !ledgerMatchesCurrentManifestEntry(ledger, manifest.bundleId, entry)) {
+    return undefined;
+  }
+  const accepted = review.records.filter(
+    (record): record is AcceptedChangeSetReviewRecord =>
+      record.outcome === "accepted" &&
+      ledgerMatchesAcceptedRecord(ledger, manifest.bundleId, record)
+  );
+  if (accepted.length !== 1) return undefined;
+  const record = accepted[0];
+  const citations = record.acceptedChangeSet.citations
+    .filter((citation) => citation.locator.sourceId === entry.sourceId)
+    .map((citation) => cloneJson(citation));
+  if (citations.length === 0) return undefined;
+  return {
+    record,
+    provenance: freezeAppliedSourceProvenance({
+      sourceId: entry.sourceId,
+      sourcePath: entry.sourcePath,
+      custody: entry.custody,
+      sourceContentHash: ledger.sourceContentHash,
+      pipelineFingerprint: ledger.pipelineFingerprint,
+      inputRevision: ledger.inputRevision,
+      changeSetId: ledger.changeSetId,
+      changeSetDigest: ledger.changeSetDigest,
+      acceptedAt: record.acceptedAt,
+      citations,
+    }),
+  };
+}
+
+/** Exact accepted commit retained internally while projecting current pages. */
+interface AppliedSourceCommitEvidence {
+  record: AcceptedChangeSetReviewRecord;
+  provenance: Readonly<KnowledgeRuntimeAppliedSourceProvenance>;
+}
+
+/**
+ * Proves that an accepted commit wrote this exact current page version.
+ *
+ * Retained Manifest pages that were not changed by the latest source commit are
+ * intentionally excluded because that Review's citations cannot ground them.
+ *
+ * @param evidence - Exact latest ledger-backed accepted Review
+ * @param sourceId - Manifest source claiming the current page
+ * @param page - Current content-addressed Manifest page
+ * @returns Whether one exact accepted create/update produced this page version
+ */
+function acceptedCommitWroteCurrentPage(
+  evidence: AppliedSourceCommitEvidence,
+  sourceId: string,
+  page: Pick<KnowledgeRuntimeAppliedPageProvenance, "path" | "contentHash">
+): boolean {
+  const windowsPathKey = toWindowsPathKey(page.path);
+  const matches = evidence.record.acceptedChangeSet.changes.filter(
+    (change) =>
+      (change.operation === "create" || change.operation === "update") &&
+      toWindowsPathKey(change.path) === windowsPathKey &&
+      change.afterHash === page.contentHash &&
+      change.sourceRefs.includes(sourceId)
+  );
+  return matches.length === 1;
+}
+
+/** Mutable grouping used only while de-duplicating current Manifest pages. */
+interface AppliedPageAccumulator {
+  path: string;
+  windowsPathKey: string;
+  ownership: GeneratedPageOwnership;
+  contentHash: string;
+  sourceIds: Set<string>;
+}
+
+/**
+ * Projects current pages with at least one exact accepted current-version writer.
+ *
+ * Shared pages conservatively retain only writers whose own committed change
+ * proves the current after-hash; historical co-owners are not projected.
+ *
+ * @param state - Complete strict Runtime snapshot
+ * @param manifest - Current strict Bundle Manifest
+ * @param review - Current strict Review snapshot, or undefined when absent
+ * @returns Stable frozen current-page projection
+ */
+function projectAppliedManifestPages(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  review: ChangeSetReviewSnapshot | undefined
+): readonly Readonly<KnowledgeRuntimeAppliedPageProvenance>[] {
+  const sourceEvidence = new Map<string, AppliedSourceCommitEvidence>();
+  const pages = new Map<string, AppliedPageAccumulator>();
+  for (const entry of manifest.entries) {
+    const evidence = projectAppliedSourceCommitEvidence(state, manifest, review, entry);
+    if (evidence) sourceEvidence.set(entry.sourceId, evidence);
+    for (const page of entry.lastSuccessful?.generatedPages ?? []) {
+      if (page.contentHash === undefined) throw new KnowledgeRuntimeStoreCorruptError();
+      const windowsPathKey = toWindowsPathKey(page.path);
+      const existing = pages.get(windowsPathKey);
+      if (!existing) {
+        pages.set(windowsPathKey, {
+          path: page.path,
+          windowsPathKey,
+          ownership: page.ownership,
+          contentHash: page.contentHash,
+          sourceIds: new Set([entry.sourceId]),
+        });
+        continue;
+      }
+      if (
+        existing.path !== page.path ||
+        existing.ownership !== page.ownership ||
+        existing.contentHash !== page.contentHash ||
+        existing.sourceIds.has(entry.sourceId)
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      existing.sourceIds.add(entry.sourceId);
+    }
+  }
+
+  const projectedPages: Readonly<KnowledgeRuntimeAppliedPageProvenance>[] = [];
+  for (const page of pages.values()) {
+    const sourceIds = [...page.sourceIds].sort(compareIdentifiers);
+    const sources = sourceIds.flatMap((sourceId) => {
+      const evidence = sourceEvidence.get(sourceId);
+      return evidence && acceptedCommitWroteCurrentPage(evidence, sourceId, page)
+        ? [evidence.provenance]
+        : [];
+    });
+    if (sources.length === 0) continue;
+    projectedPages.push(
+      freezeAppliedPageProvenance({
+        path: page.path,
+        windowsPathKey: page.windowsPathKey,
+        ownership: page.ownership,
+        contentHash: page.contentHash,
+        sources,
+      })
+    );
+  }
+  projectedPages.sort((left, right) =>
+    compareIdentifiers(left.windowsPathKey, right.windowsPathKey)
+  );
+  return Object.freeze(projectedPages);
+}
+
+/**
  * Compares an active journal's immutable accepted material with one Review record.
  *
  * @param journal - Strict global active transaction journal
@@ -3248,6 +3564,37 @@ function replaceBundleSlot(
   ).sort((left, right) => compareIdentifiers(left.bundleId, right.bundleId));
 }
 
+/**
+ * Finds Bundle ids whose Studio-visible Runtime slots changed in one commit.
+ *
+ * @param current - Atomic envelope before the transform
+ * @param next - Atomic envelope proposed by the transform
+ * @returns Stable Bundle ids requiring an authoritative Studio reload
+ */
+function findStudioChangedBundleIds(
+  current: KnowledgeRuntimeStoreSnapshot,
+  next: KnowledgeRuntimeStoreSnapshot
+): string[] {
+  const bundleIds = new Set<string>();
+  for (const collection of ["queues", "reviews"] as const) {
+    for (const slot of current[collection]) bundleIds.add(slot.bundleId);
+    for (const slot of next[collection]) bundleIds.add(slot.bundleId);
+  }
+  return [...bundleIds]
+    .filter(
+      (bundleId) =>
+        !exactJsonValuesEqual(
+          findBundleSlot(current, "queues", bundleId),
+          findBundleSlot(next, "queues", bundleId)
+        ) ||
+        !exactJsonValuesEqual(
+          findBundleSlot(current, "reviews", bundleId),
+          findBundleSlot(next, "reviews", bundleId)
+        )
+    )
+    .sort(compareIdentifiers);
+}
+
 /** Replaces one source journal while retaining deterministic Bundle/source ordering. */
 function replaceInputRevisionSource(
   bundles: readonly KnowledgeRuntimeInputRevisionBundle[],
@@ -3333,6 +3680,7 @@ function nextStoreRevision(state: KnowledgeRuntimeStoreSnapshot): number {
 export class KnowledgeRuntimeStore {
   private readonly clock: () => number;
   private readonly opaqueIdFactory: () => string;
+  private readonly studioListeners = new Map<string, Set<() => void>>();
 
   /** Creates a runtime store over an atomic plaintext-file implementation. */
   constructor(
@@ -3421,6 +3769,127 @@ export class KnowledgeRuntimeStore {
   /** Reads one detached review snapshot or null. */
   async readReview(bundleId: string): Promise<unknown> {
     return this.readBundleSlot("reviews", bundleId);
+  }
+
+  /**
+   * Reads strict Queue and Review state from exactly one Runtime envelope.
+   *
+   * Missing subsystem slots are represented by detached revision-zero snapshots;
+   * this method never creates storage or combines results from separate reads.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @returns One atomic Studio projection with its outer Runtime revision
+   */
+  async readStudioBundle(bundleId: string): Promise<KnowledgeRuntimeStudioBundleSnapshot> {
+    assertIdentifier(bundleId, "bundleId");
+    const state = await this.readState();
+    const queueRaw = findBundleSlot(state, "queues", bundleId);
+    const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+    return {
+      bundleId,
+      runtimeRevision: state.revision,
+      queue:
+        queueRaw === null
+          ? createEmptyRuntimeQueueSnapshot(bundleId)
+          : this.requireQueueSnapshot(bundleId, queueRaw),
+      review:
+        reviewRaw === null
+          ? createEmptyRuntimeReviewSnapshot(bundleId)
+          : this.requireReviewSnapshot(bundleId, reviewRaw),
+    };
+  }
+
+  /**
+   * Reads current applied Wiki provenance from exactly one Runtime envelope.
+   *
+   * Only current Manifest page versions written by an exact latest-ledger-backed
+   * accepted Review are projected. The frozen detached result is retrieval
+   * evidence only and grants no durable or file-mutation authority.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @returns Immutable current applied provenance and Runtime revision
+   */
+  async readAppliedProvenance(
+    bundleId: string
+  ): Promise<KnowledgeRuntimeAppliedProvenanceSnapshot> {
+    assertIdentifier(bundleId, "bundleId");
+    const state = await this.readState();
+    const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+    if (manifestRaw === null) {
+      return freezeAppliedProvenanceSnapshot({
+        bundleId,
+        runtimeRevision: state.revision,
+        manifestRevision: 0,
+        pages: [],
+      });
+    }
+    const manifest = this.requireManifest(bundleId, manifestRaw);
+    const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+    const review = reviewRaw === null ? undefined : this.requireReviewSnapshot(bundleId, reviewRaw);
+    return freezeAppliedProvenanceSnapshot({
+      bundleId,
+      runtimeRevision: state.revision,
+      manifestRevision: manifest.revision,
+      pages: projectAppliedManifestPages(state, manifest, review),
+    });
+  }
+
+  /**
+   * Atomically rejects one exact pending Review and cancels its Queue attempt.
+   *
+   * The command is captured once before durable access and may express only
+   * literal per-change rejection. A transport failure is considered successful
+   * only when one exact terminal Queue+Review projection can be re-read.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param command - Untrusted whole-proposal Reject command
+   * @returns Exact terminal identity and committed subsystem revisions
+   */
+  async rejectReviewAtomically(
+    bundleId: string,
+    command: unknown
+  ): Promise<KnowledgeRuntimeReviewRejectReceipt> {
+    assertIdentifier(bundleId, "bundleId");
+    const captured = parseKnowledgeLiteralRejectCommand(command);
+    const decidedAt = this.now();
+    try {
+      return await this.commitReviewRejection(bundleId, captured, decidedAt);
+    } catch (error) {
+      const confirmed = await this.confirmReviewRejection(bundleId, captured, decidedAt);
+      if (confirmed) {
+        this.emitStudioHints([bundleId]);
+        return confirmed;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Subscribes to value-free hints after Queue or Review commits for one Bundle.
+   *
+   * Events are non-authoritative. Callers must reload through
+   * {@link readStudioBundle}; listener failure cannot affect durable state.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param listener - Best-effort reload hint callback
+   * @returns Idempotent unsubscribe callback
+   */
+  subscribeStudioBundle(bundleId: string, listener: () => void): () => void {
+    assertIdentifier(bundleId, "bundleId");
+    if (typeof listener !== "function") {
+      throw new TypeError("listener must be a function");
+    }
+    const listeners = this.studioListeners.get(bundleId) ?? new Set<() => void>();
+    listeners.add(listener);
+    this.studioListeners.set(bundleId, listeners);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const current = this.studioListeners.get(bundleId);
+      current?.delete(listener);
+      if (current?.size === 0) this.studioListeners.delete(bundleId);
+    };
   }
 
   /** Atomically compares and replaces one complete review snapshot. */
@@ -3633,6 +4102,11 @@ export class KnowledgeRuntimeStore {
         queueRaw === null
           ? createEmptyRuntimeQueueSnapshot(request.bundleId)
           : this.requireQueueSnapshot(request.bundleId, queueRaw);
+      const preservedPauseReason =
+        queue.control.status === "paused" &&
+        (queue.control.reason === "user" || queue.control.reason === "rate_limit")
+          ? queue.control.reason
+          : undefined;
       if (queue.revision !== request.expectedQueueRevision) {
         return {
           value: {
@@ -3703,7 +4177,7 @@ export class KnowledgeRuntimeStore {
           },
         };
       }
-      if (queue.jobs.some((job) => job.status === "paused")) {
+      if (queue.jobs.some((job) => job.status === "paused") && preservedPauseReason === undefined) {
         return {
           value: {
             kind: "blocked",
@@ -3760,6 +4234,22 @@ export class KnowledgeRuntimeStore {
             };
           }
         }
+      }
+
+      if (preservedPauseReason !== undefined) {
+        return {
+          value: {
+            kind: "unchanged",
+            bundleId: request.bundleId,
+            reason:
+              preservedPauseReason === "user"
+                ? "user_pause_preserved"
+                : "rate_limit_pause_preserved",
+            runtimeRevision: state.revision,
+            reviewRevision: review.revision,
+            queueSnapshot: queue,
+          },
+        };
       }
 
       if (queueRaw === null) {
@@ -5109,6 +5599,71 @@ export class KnowledgeRuntimeStore {
     return parseRuntimeText(await this.file.read());
   }
 
+  /** Commits one Queue+Review Reject projection inside one Runtime transform. */
+  private async commitReviewRejection(
+    bundleId: string,
+    command: KnowledgeLiteralRejectCommand,
+    decidedAt: number
+  ): Promise<KnowledgeRuntimeReviewRejectReceipt> {
+    return this.updateState((state) => {
+      const queueRaw = findBundleSlot(state, "queues", bundleId);
+      const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+      const projection = projectKnowledgeReviewRejection({
+        bundleId,
+        queue:
+          queueRaw === null
+            ? createEmptyRuntimeQueueSnapshot(bundleId)
+            : this.requireQueueSnapshot(bundleId, queueRaw),
+        review:
+          reviewRaw === null
+            ? createEmptyRuntimeReviewSnapshot(bundleId)
+            : this.requireReviewSnapshot(bundleId, reviewRaw),
+        command,
+        decidedAt,
+      });
+      if (projection.kind === "already_rejected") {
+        return {
+          value: { ...projection.receipt, runtimeRevision: state.revision },
+        };
+      }
+      const runtimeRevision = nextStoreRevision(state);
+      return {
+        next: {
+          ...state,
+          revision: runtimeRevision,
+          queues: replaceBundleSlot(state.queues, bundleId, projection.queue),
+          reviews: replaceBundleSlot(state.reviews, bundleId, projection.review),
+        },
+        value: { ...projection.receipt, runtimeRevision },
+      };
+    });
+  }
+
+  /** Re-reads and proves one exact terminal Reject after an uncertain write result. */
+  private async confirmReviewRejection(
+    bundleId: string,
+    command: KnowledgeLiteralRejectCommand,
+    decidedAt: number
+  ): Promise<KnowledgeRuntimeReviewRejectReceipt | undefined> {
+    try {
+      const state = await this.readState();
+      const queueRaw = findBundleSlot(state, "queues", bundleId);
+      const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+      if (queueRaw === null || reviewRaw === null) return undefined;
+      const projection = projectKnowledgeReviewRejection({
+        bundleId,
+        queue: this.requireQueueSnapshot(bundleId, queueRaw),
+        review: this.requireReviewSnapshot(bundleId, reviewRaw),
+        command,
+        decidedAt,
+      });
+      if (projection.kind !== "already_rejected") return undefined;
+      return { ...projection.receipt, runtimeRevision: state.revision };
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Runs one synchronous state transform through the atomic file boundary. */
   private async updateState<T>(
     transform: (state: KnowledgeRuntimeStoreSnapshot) => RuntimeMutation<T>
@@ -5116,6 +5671,7 @@ export class KnowledgeRuntimeStore {
     let callbackCalled = false;
     let expectedText: string | undefined;
     let result: T | undefined;
+    let changedBundleIds: string[] = [];
     const committedText = await this.file.process((currentText) => {
       if (callbackCalled) {
         throw new KnowledgeRuntimeAtomicWriteError();
@@ -5130,6 +5686,7 @@ export class KnowledgeRuntimeStore {
       }
       const next = parseKnowledgeRuntimeStoreSnapshot(mutation.next);
       this.assertUnfinishedTransactionFileAccessAuthority(next);
+      changedBundleIds = findStudioChangedBundleIds(current, next);
       expectedText = JSON.stringify(next);
       return expectedText;
     });
@@ -5137,7 +5694,23 @@ export class KnowledgeRuntimeStore {
       throw new KnowledgeRuntimeAtomicWriteError();
     }
     parseRuntimeText(committedText);
+    this.emitStudioHints(changedBundleIds);
     return result as T;
+  }
+
+  /** Publishes isolated post-commit reload hints without carrying durable data. */
+  private emitStudioHints(bundleIds: readonly string[]): void {
+    for (const bundleId of bundleIds) {
+      const listeners = this.studioListeners.get(bundleId);
+      if (!listeners) continue;
+      for (const listener of [...listeners]) {
+        try {
+          listener();
+        } catch {
+          // Studio hints are best-effort and never participate in Runtime commit success.
+        }
+      }
+    }
   }
 
   /**
@@ -5551,6 +6124,46 @@ export class KnowledgeRuntimeReviewStorage implements ReviewStorage {
 
 Object.freeze(KnowledgeRuntimeReviewStorage.prototype);
 Object.freeze(KnowledgeRuntimeReviewStorage);
+
+/** Hidden Runtime authority retained by one narrow atomic Reject facade. */
+const runtimeReviewRejectPortStates = new WeakMap<object, KnowledgeRuntimeStore>();
+
+/** Returns hidden state only for an authentic Runtime atomic Reject facade. */
+function requireRuntimeReviewRejectPortState(value: unknown): KnowledgeRuntimeStore {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Object.getPrototypeOf(value) !== KnowledgeRuntimeReviewRejectPort.prototype
+  ) {
+    throw new TypeError("The Runtime Review Reject port is invalid");
+  }
+  const runtime = runtimeReviewRejectPortStates.get(value);
+  if (!runtime) throw new TypeError("The Runtime Review Reject port is invalid");
+  return runtime;
+}
+
+/** Narrow Queue+Review mutation facade exposing only atomic literal rejection. */
+export class KnowledgeRuntimeReviewRejectPort {
+  /** Creates one Reject-only facade over the shared Runtime store. */
+  constructor(runtime: KnowledgeRuntimeStore) {
+    if (!(runtime instanceof KnowledgeRuntimeStore)) {
+      throw new TypeError("The Runtime Review Reject dependency is invalid");
+    }
+    runtimeReviewRejectPortStates.set(this, runtime);
+    Object.freeze(this);
+  }
+
+  /** Atomically rejects one exact pending Review or replays its exact final state. */
+  rejectReviewAtomically(
+    bundleId: string,
+    command: unknown
+  ): Promise<KnowledgeRuntimeReviewRejectReceipt> {
+    return requireRuntimeReviewRejectPortState(this).rejectReviewAtomically(bundleId, command);
+  }
+}
+
+Object.freeze(KnowledgeRuntimeReviewRejectPort.prototype);
+Object.freeze(KnowledgeRuntimeReviewRejectPort);
 
 /** SourceManifestStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {

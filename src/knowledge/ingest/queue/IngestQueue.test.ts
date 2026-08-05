@@ -2,6 +2,7 @@ import {
   IngestExecutorError,
   IngestExecutionClaim,
   IngestQueue,
+  IngestQueueActivityCommandStaleError,
   IngestQueueApplyCommitConflictError,
   IngestQueueApplyCommitPendingError,
   IngestQueueApplyReceiptRequiredError,
@@ -51,6 +52,7 @@ const HASH_D = "d".repeat(64);
 interface PlannedWriteFailure {
   error: Error;
   beforeThrow?: () => void;
+  commitBeforeThrow?: boolean;
 }
 
 interface Deferred<T> {
@@ -220,6 +222,15 @@ class InMemoryQueueStorage implements QueueStorage {
   }
 
   /**
+   * Plans a transport failure after the exact candidate has passed CAS and committed.
+   *
+   * @param error - Error reported after durable persistence
+   */
+  planCommittedWriteFailure(error: Error): void {
+    this.failures.push({ error, commitBeforeThrow: true });
+  }
+
+  /**
    * Reads detached unknown JSON.
    *
    * @param bundleId - Storage key
@@ -246,7 +257,7 @@ class InMemoryQueueStorage implements QueueStorage {
   ): Promise<void> {
     this.writeAttempts += 1;
     const failure = this.failures.shift();
-    if (failure) {
+    if (failure && !failure.commitBeforeThrow) {
       failure.beforeThrow?.();
       throw failure.error;
     }
@@ -273,6 +284,9 @@ class InMemoryQueueStorage implements QueueStorage {
     }
     this.values.set(bundleId, cloneJson(snapshot));
     this.successfulWrites += 1;
+    if (failure) {
+      throw failure.error;
+    }
   }
 }
 
@@ -2892,5 +2906,258 @@ describe("IngestQueue concurrency and adapter failures", () => {
       attempt: 2,
       changeSetId: "changeset-new-attempt",
     });
+  });
+});
+
+describe("IngestQueue exact Activity commands", () => {
+  it("rejects an already-stale projection before writing or emitting", async () => {
+    const harness = createHarness();
+    await harness.queue.enqueue(createRequest());
+    const current = harness.storage.getSnapshot("personal");
+    const writesBefore = harness.storage.writeAttempts;
+
+    await expect(
+      harness.queue.executeActivityCommand({
+        kind: "pause_bundle",
+        bundleId: "personal",
+        expectedQueueRevision: current.revision - 1,
+      })
+    ).rejects.toMatchObject({
+      name: "IngestQueueActivityCommandStaleError",
+      expectedQueueRevision: current.revision - 1,
+      actualQueueRevision: current.revision,
+    });
+
+    expect(harness.storage.writeAttempts).toBe(writesBefore);
+    expect(harness.sink.events.filter(({ cause }) => cause === "pause")).toHaveLength(0);
+  });
+
+  it("does not rebase an exact command after a competing CAS write", async () => {
+    const harness = createHarness();
+    await harness.queue.enqueue(createRequest());
+    const current = harness.storage.getSnapshot("personal");
+    const concurrent: IngestQueueSnapshot = {
+      ...current,
+      revision: current.revision + 1,
+      control: {
+        status: "paused",
+        reason: "rate_limit",
+        pausedAt: 105,
+        resumeAt: 205,
+      },
+    };
+    const writesBefore = harness.storage.writeAttempts;
+    harness.storage.planWriteFailure(
+      new IngestQueueRevisionConflictError("personal", current.revision, concurrent.revision),
+      () => harness.storage.seed("personal", concurrent)
+    );
+
+    await expect(
+      harness.queue.executeActivityCommand({
+        kind: "pause_bundle",
+        bundleId: "personal",
+        expectedQueueRevision: current.revision,
+      })
+    ).rejects.toBeInstanceOf(IngestQueueActivityCommandStaleError);
+
+    expect(harness.storage.writeAttempts).toBe(writesBefore + 1);
+    expect(harness.storage.getSnapshot("personal")).toEqual(concurrent);
+    expect(harness.sink.events.filter(({ cause }) => cause === "pause")).toHaveLength(0);
+  });
+
+  it("reproves a committed pause after transport failure and still aborts exact active work", async () => {
+    const started = createDeferred<AbortSignal>();
+    const harness = createHarness(async (context) => {
+      await context.reportStage("generating");
+      started.resolve(context.signal);
+      return new Promise<IngestExecutionResult>((_resolve, reject) => {
+        context.signal.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+    await harness.queue.enqueue(createRequest());
+    const running = harness.queue.runNext("personal");
+    const signal = await started.promise;
+    const current = harness.storage.getSnapshot("personal");
+    harness.storage.planCommittedWriteFailure(new Error("transport failed after commit"));
+
+    const result = await harness.queue.executeActivityCommand({
+      kind: "pause_bundle",
+      bundleId: "personal",
+      expectedQueueRevision: current.revision,
+      detail: "Pause exact work",
+    });
+
+    expect(result).toMatchObject({
+      kind: "committed",
+      command: "pause_bundle",
+      snapshot: {
+        revision: current.revision + 1,
+        control: { status: "paused", reason: "user" },
+        jobs: [expect.objectContaining({ status: "paused", stage: "generating" })],
+      },
+    });
+    expect(signal.aborted).toBe(true);
+    await expect(running).resolves.toMatchObject({ status: "paused" });
+    expect(harness.storage.getSnapshot("personal").revision).toBe(current.revision + 1);
+    expect(harness.sink.events.filter(({ cause }) => cause === "pause")).toHaveLength(1);
+  });
+
+  it("reproves a committed cancel after transport failure and still aborts exact active work", async () => {
+    const started = createDeferred<AbortSignal>();
+    const harness = createHarness(async (context) => {
+      started.resolve(context.signal);
+      return new Promise<IngestExecutionResult>((_resolve, reject) => {
+        context.signal.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+    await harness.queue.enqueue(createRequest());
+    const running = harness.queue.runNext("personal");
+    const signal = await started.promise;
+    const current = harness.storage.getSnapshot("personal");
+    harness.storage.planCommittedWriteFailure(new Error("transport failed after commit"));
+
+    const result = await harness.queue.executeActivityCommand({
+      kind: "cancel_job",
+      bundleId: "personal",
+      jobId: "job-1",
+      expectedQueueRevision: current.revision,
+    });
+
+    expect(result).toMatchObject({
+      kind: "committed",
+      command: "cancel_job",
+      snapshot: {
+        revision: current.revision + 1,
+        jobs: [expect.objectContaining({ status: "cancelled" })],
+      },
+    });
+    expect(signal.aborted).toBe(true);
+    await expect(running).resolves.toMatchObject({ status: "cancelled" });
+    expect(harness.storage.getSnapshot("personal").revision).toBe(current.revision + 1);
+    expect(harness.sink.events.filter(({ cause }) => cause === "cancel")).toHaveLength(1);
+  });
+
+  it("reproves a committed resume after transport failure and emits the worker wake event", async () => {
+    const harness = createHarness();
+    const paused: KnowledgeIngestJob = {
+      ...createPendingJob(),
+      attempt: 1,
+      status: "paused",
+      stage: "generating",
+      pausedAt: 110,
+      updatedAt: 110,
+    };
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        control: { status: "paused", reason: "user", pausedAt: 110 },
+        jobs: [paused],
+      })
+    );
+    harness.setNow(120);
+    harness.storage.planCommittedWriteFailure(new Error("transport failed after commit"));
+
+    const result = await harness.queue.executeActivityCommand({
+      kind: "resume_bundle",
+      bundleId: "personal",
+      expectedQueueRevision: 4,
+    });
+
+    expect(result).toMatchObject({
+      kind: "committed",
+      command: "resume_bundle",
+      snapshot: {
+        revision: 5,
+        control: { status: "running" },
+        jobs: [expect.objectContaining({ status: "pending", stage: "queued" })],
+      },
+    });
+    expect(harness.storage.getSnapshot("personal").revision).toBe(5);
+    expect(harness.sink.events.filter(({ cause }) => cause === "resume")).toEqual([
+      expect.objectContaining({ bundleId: "personal", revision: 5 }),
+    ]);
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("reproves a committed retry after transport failure and emits the worker wake event", async () => {
+    const harness = createHarness(async (context) => {
+      throw new IngestExecutorError(
+        {
+          code: "temporary",
+          message: "Temporary failure",
+          retryable: true,
+          rateLimited: false,
+        },
+        context.signal
+      );
+    }, 1);
+    await harness.queue.enqueue(createRequest());
+    await harness.queue.runNext("personal");
+    const current = harness.storage.getSnapshot("personal");
+    harness.setNow(200);
+    harness.storage.planCommittedWriteFailure(new Error("transport failed after commit"));
+
+    const result = await harness.queue.executeActivityCommand({
+      kind: "retry_job",
+      bundleId: "personal",
+      jobId: "job-1",
+      expectedQueueRevision: current.revision,
+    });
+
+    expect(result).toMatchObject({
+      kind: "committed",
+      command: "retry_job",
+      snapshot: {
+        revision: current.revision + 1,
+        jobs: [expect.objectContaining({ status: "pending", stage: "queued", attempt: 0 })],
+      },
+    });
+    expect(harness.storage.getSnapshot("personal").revision).toBe(current.revision + 1);
+    expect(harness.sink.events.filter(({ cause }) => cause === "retry")).toEqual([
+      expect.objectContaining({ bundleId: "personal", revision: current.revision + 1 }),
+    ]);
+    harness.executor.handler = async () => ({
+      kind: "no_changes",
+      changeSetId: "changeset-retried",
+    });
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("does not infer a pre-commit transport failure or perform local side effects", async () => {
+    const started = createDeferred<AbortSignal>();
+    const completion = createDeferred<IngestExecutionResult>();
+    const harness = createHarness(async (context) => {
+      started.resolve(context.signal);
+      return completion.promise;
+    });
+    await harness.queue.enqueue(createRequest());
+    const running = harness.queue.runNext("personal");
+    const signal = await started.promise;
+    const current = harness.storage.getSnapshot("personal");
+    const failure = new Error("transport failed before commit");
+    harness.storage.planWriteFailure(failure);
+
+    await expect(
+      harness.queue.executeActivityCommand({
+        kind: "pause_bundle",
+        bundleId: "personal",
+        expectedQueueRevision: current.revision,
+      })
+    ).rejects.toBe(failure);
+
+    expect(signal.aborted).toBe(false);
+    expect(harness.storage.getSnapshot("personal")).toEqual(current);
+    expect(harness.sink.events.filter(({ cause }) => cause === "pause")).toHaveLength(0);
+    completion.resolve({ kind: "no_changes", changeSetId: "changeset-unpaused" });
+    await expect(running).resolves.toMatchObject({ status: "completed" });
   });
 });

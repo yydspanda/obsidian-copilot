@@ -23,10 +23,17 @@ import type {
   KnowledgeActivityModel,
   KnowledgeActivityStatus,
 } from "@/knowledge/ui/activityModel";
+import type { KnowledgeStudioCommandCapabilities } from "@/knowledge/ui/KnowledgeStudioController";
 
 /** Callback-only boundary for the Activity panel. */
 export interface KnowledgeActivityPanelProps {
   model: Readonly<KnowledgeActivityModel>;
+  commandCapabilities: Readonly<
+    Pick<
+      KnowledgeStudioCommandCapabilities,
+      "pauseBundle" | "resumeBundle" | "cancelJob" | "retryJob"
+    >
+  >;
   onPauseBundle: () => void;
   onResumeBundle: () => void;
   onCancelJob: (jobId: string) => void;
@@ -236,9 +243,13 @@ function ActivityTime({ timestamp, label }: { timestamp: number; label: string }
  */
 function BundleControls({
   model,
+  commandCapabilities,
   onPauseBundle,
   onResumeBundle,
-}: Pick<KnowledgeActivityPanelProps, "model" | "onPauseBundle" | "onResumeBundle">) {
+}: Pick<
+  KnowledgeActivityPanelProps,
+  "model" | "commandCapabilities" | "onPauseBundle" | "onResumeBundle"
+>) {
   const controls = model.controls;
   const presentation = BUNDLE_PRESENTATION[controls.state];
   const StatusIcon = presentation.icon;
@@ -261,13 +272,23 @@ function BundleControls({
           </div>
           <div className="tw-flex tw-items-center tw-gap-2">
             {controls.canPause && (
-              <Button size="sm" variant="ghost" onClick={onPauseBundle}>
+              <Button
+                disabled={!commandCapabilities.pauseBundle}
+                size="sm"
+                variant="ghost"
+                onClick={onPauseBundle}
+              >
                 <Pause aria-hidden="true" className="tw-size-3" />
                 Pause bundle
               </Button>
             )}
             {controls.canResume && (
-              <Button size="sm" variant="ghost" onClick={onResumeBundle}>
+              <Button
+                disabled={!commandCapabilities.resumeBundle}
+                size="sm"
+                variant="ghost"
+                onClick={onResumeBundle}
+              >
                 <Play aria-hidden="true" className="tw-size-3" />
                 Resume bundle
               </Button>
@@ -352,11 +373,13 @@ function FailureDetails({ item }: { item: Readonly<KnowledgeActivityItem> }) {
  */
 function ActivityItem({
   item,
+  commandCapabilities,
   onCancelJob,
   onRetryJob,
   onReviewJob,
 }: {
   item: Readonly<KnowledgeActivityItem>;
+  commandCapabilities: KnowledgeActivityPanelProps["commandCapabilities"];
   onCancelJob: KnowledgeActivityPanelProps["onCancelJob"];
   onRetryJob: KnowledgeActivityPanelProps["onRetryJob"];
   onReviewJob: KnowledgeActivityPanelProps["onReviewJob"];
@@ -401,6 +424,7 @@ function ActivityItem({
               {item.actions.canRetry && (
                 <Button
                   aria-label={`Retry ${item.sourceId}`}
+                  disabled={!commandCapabilities.retryJob}
                   size="sm"
                   variant="ghost"
                   onClick={() => onRetryJob(item.id)}
@@ -413,6 +437,7 @@ function ActivityItem({
                 <Button
                   aria-label={`Cancel ${item.sourceId}`}
                   className="tw-text-error hover:tw-text-on-accent"
+                  disabled={!commandCapabilities.cancelJob}
                   size="sm"
                   variant="ghost"
                   onClick={() => onCancelJob(item.id)}
@@ -453,6 +478,7 @@ function ActivityItem({
  */
 export function KnowledgeActivityPanel({
   model,
+  commandCapabilities,
   onPauseBundle,
   onResumeBundle,
   onCancelJob,
@@ -473,7 +499,12 @@ export function KnowledgeActivityPanel({
         </p>
       </div>
 
-      <BundleControls model={model} onPauseBundle={onPauseBundle} onResumeBundle={onResumeBundle} />
+      <BundleControls
+        commandCapabilities={commandCapabilities}
+        model={model}
+        onPauseBundle={onPauseBundle}
+        onResumeBundle={onResumeBundle}
+      />
       <ActivityCounts model={model} />
 
       {!hasVisibleJobs && (
@@ -498,6 +529,7 @@ export function KnowledgeActivityPanel({
           {model.items.map((item) => (
             <ActivityItem
               key={item.id}
+              commandCapabilities={commandCapabilities}
               item={item}
               onCancelJob={onCancelJob}
               onRetryJob={onRetryJob}

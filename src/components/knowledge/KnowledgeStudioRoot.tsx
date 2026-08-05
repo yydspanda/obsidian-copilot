@@ -6,11 +6,14 @@ import {
   Inbox,
   Loader2,
   RefreshCw,
+  Search,
   ShieldAlert,
 } from "lucide-react";
 
 import { KnowledgeActivityPanel } from "@/components/knowledge/KnowledgeActivityPanel";
+import { KnowledgeRecoveryPanel } from "@/components/knowledge/KnowledgeRecoveryPanel";
 import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
+import { KnowledgeQueryPanel } from "@/components/knowledge/KnowledgeQueryPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
@@ -35,8 +38,10 @@ interface TabDefinition {
 }
 
 const STUDIO_TABS: readonly TabDefinition[] = [
+  { id: "query", label: "Query", icon: Search },
   { id: "activity", label: "Activity", icon: Activity },
   { id: "review", label: "Review", icon: Inbox },
+  { id: "recovery", label: "Recovery", icon: ShieldAlert },
 ];
 
 const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"], string>> = {
@@ -45,6 +50,8 @@ const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"
   cancel: "Cancelling the selected job…",
   retry: "Queuing the selected job for retry…",
   submit_review: "Submitting the review decision…",
+  continue_recovery: "Continuing the selected recovery…",
+  abandon_recovery: "Abandoning the selected no-journal apply…",
 };
 
 /**
@@ -305,6 +312,8 @@ function ReviewWorkspace({
       {selectedReview ? (
         <KnowledgeReviewPanel
           busy={state.pendingAction !== undefined}
+          acceptCommandsEnabled={state.snapshot?.commandCapabilities.reviewAccept === true}
+          rejectCommandsEnabled={state.snapshot?.commandCapabilities.reviewReject === true}
           plan={selectedReview}
           onBack={() => controller.selectTab("activity")}
           onSubmit={(command) => controller.submitReview(command)}
@@ -349,10 +358,14 @@ function openJobReview(controller: KnowledgeStudioController, jobId: string): vo
 export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): React.ReactElement {
   const state = useKnowledgeStudioState(controller);
   const activityTabId = React.useId();
+  const queryTabId = React.useId();
   const reviewTabId = React.useId();
+  const recoveryTabId = React.useId();
   const tabIds: Readonly<Record<KnowledgeStudioTab, string>> = {
+    query: queryTabId,
     activity: activityTabId,
     review: reviewTabId,
+    recovery: recoveryTabId,
   };
 
   if (state.status === "unavailable") {
@@ -433,7 +446,11 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
           </p>
         </div>
         <div aria-label="Knowledge Studio sections" className="tw-flex tw-gap-1" role="tablist">
-          {STUDIO_TABS.map((tab) => {
+          {STUDIO_TABS.filter(
+            (tab) =>
+              (tab.id !== "query" || snapshot.queryAvailable === true) &&
+              (tab.id !== "recovery" || snapshot.recovery.items.length > 0)
+          ).map((tab) => {
             const selected = state.activeTab === tab.id;
             const TabIcon = tab.icon;
             return (
@@ -454,6 +471,11 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
                     {snapshot.reviews.length}
                   </Badge>
                 ) : null}
+                {tab.id === "recovery" && snapshot.recovery.items.length > 0 ? (
+                  <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
+                    {snapshot.recovery.items.length}
+                  </Badge>
+                ) : null}
               </Button>
             );
           })}
@@ -472,7 +494,13 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
         id={`${tabIds[state.activeTab]}-panel`}
         role="tabpanel"
       >
-        {state.activeTab === "activity" ? (
+        {state.activeTab === "query" ? (
+          <KnowledgeQueryPanel
+            state={state.query ?? { status: "idle" }}
+            onOpenCitation={(citationRef) => controller.openQueryCitation(citationRef)}
+            onQuery={(query) => controller.runQuery(query)}
+          />
+        ) : state.activeTab === "activity" ? (
           snapshot.availability === "adapter_unavailable" ? (
             <div
               className="tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-6 tw-text-center"
@@ -488,6 +516,7 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
             </div>
           ) : (
             <KnowledgeActivityPanel
+              commandCapabilities={snapshot.commandCapabilities}
               model={snapshot.activity}
               onCancelJob={(jobId) => void controller.cancelJob(jobId)}
               onPauseBundle={() => void controller.pauseBundle()}
@@ -496,8 +525,21 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
               onReviewJob={(jobId) => openJobReview(controller, jobId)}
             />
           )
-        ) : (
+        ) : state.activeTab === "review" ? (
           <ReviewWorkspace controller={controller} state={state} />
+        ) : (
+          <KnowledgeRecoveryPanel
+            model={snapshot.recovery}
+            onAbandon={(recoveryId) => void controller.abandonRecovery(recoveryId)}
+            onContinue={(recoveryId) => void controller.continueRecovery(recoveryId)}
+            onRefresh={() => void controller.refresh()}
+            pendingRecoveryId={
+              state.pendingAction?.kind === "continue_recovery" ||
+              state.pendingAction?.kind === "abandon_recovery"
+                ? state.pendingAction.targetId
+                : undefined
+            }
+          />
         )}
       </section>
     </main>

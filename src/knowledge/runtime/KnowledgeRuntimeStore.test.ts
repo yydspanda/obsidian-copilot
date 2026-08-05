@@ -37,7 +37,7 @@ import {
 } from "@/knowledge/manifest/ManifestCommitIntent";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { SourceManifestRevisionConflictError } from "@/knowledge/manifest/SourceManifestStorage";
-import { createFileContentHash } from "@/knowledge/model/fingerprint";
+import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
 import type {
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
@@ -50,6 +50,11 @@ import {
   ReviewStorageRevisionConflictError,
   type ChangeSetReviewSnapshot,
 } from "@/knowledge/review/ReviewStorage";
+import {
+  KnowledgeLiteralRejectCommandError,
+  KnowledgeReviewRejectConflictError,
+  type KnowledgeLiteralRejectCommand,
+} from "@/knowledge/review/ReviewRejectTransition";
 import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
@@ -73,6 +78,7 @@ import {
   KnowledgeRuntimeQueueObservationAuthorityError,
   KnowledgeRuntimeQueueRecoveryGateProtectedError,
   KnowledgeRuntimeQueueStorage,
+  KnowledgeRuntimeReviewRejectPort,
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStartupReleasePort,
   KnowledgeRuntimeStore,
@@ -86,6 +92,7 @@ import {
   SourceInputRevisionOverflowError,
   createEmptyKnowledgeRuntimeStoreSnapshot,
   type KnowledgeApplyCommitLedgerRecord,
+  type KnowledgeRuntimeStudioBundleSnapshot,
   type KnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 
@@ -104,6 +111,7 @@ function createCaptureRequest(bundleId = "personal", sourceId = "source-1") {
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
   private tail: Promise<void> = Promise.resolve();
+  private readCallCount = 0;
   private misreportNextWrite = false;
   private repeatNextTransform = false;
   private skipNextTransform = false;
@@ -118,10 +126,16 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
 
   /** Reads the exact current memory file. */
   async read(): Promise<string> {
+    this.readCallCount += 1;
     if (this.content === undefined) {
       throw new Error("Memory runtime file is not initialized");
     }
     return this.content;
+  }
+
+  /** Returns how many complete plaintext reads crossed this atomic boundary. */
+  getReadCallCount(): number {
+    return this.readCallCount;
   }
 
   /** Serializes and commits one synchronous plaintext transform. */
@@ -358,8 +372,31 @@ function createBundle(): KnowledgeBundleConfig {
   };
 }
 
+/** Creates one valid source citation for applied-provenance tests. */
+function createSourceCitation(sourceId = "source-1"): KnowledgeChangeSet["citations"][number] {
+  const excerpt = `Grounded evidence for ${sourceId}`;
+  return {
+    citationId: `citation-${sourceId}`,
+    claimId: `claim-${sourceId}`,
+    relation: "supports",
+    locator: {
+      kind: "markdown_lines",
+      sourceId,
+      artifactId: `artifact-${sourceId}`,
+      artifactContentHash: HASH_A,
+      excerpt,
+      quoteHash: createQuoteHash(excerpt),
+      startLine: 1,
+      endLine: 1,
+    },
+  };
+}
+
 /** Creates one accepted create-only ChangeSet for transaction storage tests. */
-function createAcceptedChangeSet(transactionId = "transaction-1"): KnowledgeChangeSet {
+function createAcceptedChangeSet(
+  transactionId = "transaction-1",
+  citations: KnowledgeChangeSet["citations"] = []
+): KnowledgeChangeSet {
   const content = `# ${transactionId}\n`;
   return {
     id: `changeset-${transactionId}`,
@@ -378,7 +415,7 @@ function createAcceptedChangeSet(transactionId = "transaction-1"): KnowledgeChan
         afterHash: createFileContentHash(content),
       },
     ],
-    citations: [],
+    citations,
     validation: { okfValid: true, citationsValid: true, linksValid: true },
     status: "accepted",
     createdAt: 100,
@@ -386,8 +423,11 @@ function createAcceptedChangeSet(transactionId = "transaction-1"): KnowledgeChan
 }
 
 /** Creates a valid prepared journal at revision zero. */
-function createPreparedJournal(transactionId = "transaction-1"): ChangeSetTransactionJournal {
-  const changeSet = createAcceptedChangeSet(transactionId);
+function createPreparedJournal(
+  transactionId = "transaction-1",
+  citations: KnowledgeChangeSet["citations"] = []
+): ChangeSetTransactionJournal {
+  const changeSet = createAcceptedChangeSet(transactionId, citations);
   const change = changeSet.changes[0];
   if (change.operation !== "create") {
     throw new Error("Expected a create fixture");
@@ -523,12 +563,13 @@ function createManifestCommitPlanFixture(
 function createCommittedApplyProof(
   manifest: SourceManifest,
   transactionId = "transaction-apply",
-  inputRevision = 1
+  inputRevision = 1,
+  citations: KnowledgeChangeSet["citations"] = []
 ): {
   journal: ChangeSetTransactionJournal & { phase: "committed" };
   receipt: TransactionCommitReceipt;
 } {
-  const prepared = createPreparedJournal(transactionId);
+  const prepared = createPreparedJournal(transactionId, citations);
   const change = prepared.changeSet.changes[0];
   if (change.operation !== "create") {
     throw new Error("Expected a create fixture");
@@ -710,6 +751,93 @@ function createHistoricalLedgerRecord(
   };
 }
 
+/** Creates two exact historical co-owners of one content-addressed shared page. */
+function createSharedPageManifest(): SourceManifest {
+  const beforeHash = createFileContentHash("# Shared before\n");
+  return {
+    version: 1,
+    bundleId: "personal",
+    revision: 3,
+    entries: [
+      {
+        sourceId: "source-1",
+        sourceKey: "sources/source-1.md",
+        sourcePath: "Sources/Source-1.md",
+        custody: "user_managed",
+        lastSuccessful: {
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          generatedPages: [
+            { path: "Wiki/Shared.md", ownership: "shared", contentHash: beforeHash },
+          ],
+          changeSetId: "changeset-primary-old",
+          completedAt: 100,
+        },
+        extensions: {
+          [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: {
+            version: 1,
+            inputRevision: 1,
+            transactionId: "transaction-primary-old",
+            manifestIntentDigest: HASH_A,
+          },
+        },
+      },
+      {
+        sourceId: "source-2",
+        sourceKey: "sources/source-2.md",
+        sourcePath: "Sources/Source-2.md",
+        custody: "managed_copy",
+        lastSuccessful: {
+          sourceContentHash: HASH_B,
+          pipelineFingerprint: HASH_A,
+          generatedPages: [
+            { path: "Wiki/Shared.md", ownership: "shared", contentHash: beforeHash },
+          ],
+          changeSetId: "changeset-coowner-old",
+          completedAt: 110,
+        },
+        extensions: {
+          [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: {
+            version: 1,
+            inputRevision: 1,
+            transactionId: "transaction-coowner-old",
+            manifestIntentDigest: HASH_A,
+          },
+        },
+      },
+    ],
+  };
+}
+
+/** Creates exact historical ledger entries required by the shared-page fixture. */
+function createSharedPageHistoricalLedgers(): KnowledgeApplyCommitLedgerRecord[] {
+  return [
+    createHistoricalLedgerRecord(
+      "transaction-primary-old",
+      "source-1",
+      1,
+      "changeset-primary-old",
+      100,
+      1,
+      HASH_B,
+      HASH_A,
+      HASH_B
+    ),
+    createHistoricalLedgerRecord(
+      "transaction-coowner-old",
+      "source-2",
+      1,
+      "changeset-coowner-old",
+      110,
+      2,
+      HASH_C,
+      HASH_B,
+      HASH_A,
+      HASH_B
+    ),
+  ].sort((left, right) => left.transactionId.localeCompare(right.transactionId));
+}
+
 /** Creates a two-source shared-page update with an exact final primary projection. */
 function createSharedUpdateProof(manifest: SourceManifest): {
   journal: ChangeSetTransactionJournal & { phase: "committed" };
@@ -734,7 +862,7 @@ function createSharedUpdateProof(manifest: SourceManifest): {
         afterHash: createFileContentHash(afterContent),
       },
     ],
-    citations: [],
+    citations: [createSourceCitation("source-1")],
     validation: { okfValid: true, citationsValid: true, linksValid: true },
     status: "accepted",
     createdAt: 200,
@@ -1092,6 +1220,126 @@ async function createHarness(): Promise<{
   };
 }
 
+/** Creates one exact pending Review and Queue pair for atomic Reject tests. */
+async function createReviewRejectHarness(): Promise<{
+  file: MemoryAtomicRuntimeFile;
+  runtime: KnowledgeRuntimeStore;
+  port: KnowledgeRuntimeReviewRejectPort;
+  command: KnowledgeLiteralRejectCommand;
+  initialState: KnowledgeRuntimeStoreSnapshot;
+}> {
+  const file = new MemoryAtomicRuntimeFile();
+  const runtime = new KnowledgeRuntimeStore(file, { clock: () => 130 });
+  await runtime.initialize();
+  const manifest = createRegisteredManifest();
+  const proposal: KnowledgeChangeSet = {
+    ...createAcceptedChangeSet("runtime-review-reject"),
+    status: "proposed",
+  };
+  const proposalDigest = createChangeSetTransactionDigest(proposal);
+  const manifestCommitPlan = createManifestCommitPlanFixture(manifest, proposal, 1);
+  const sourceHighWatermark = {
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision: 1,
+    observedAt: 100,
+  };
+  const queue: IngestQueueSnapshot = {
+    ...createQueueSnapshot(3),
+    jobs: [
+      {
+        id: "job-runtime-review-reject",
+        bundleId: "personal",
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 1,
+        attempt: 1,
+        rerunRequested: false,
+        createdAt: 100,
+        updatedAt: 120,
+        status: "awaiting_review",
+        stage: "review",
+        changeSetId: proposal.id,
+      },
+    ],
+    sourceHighWatermarks: [sourceHighWatermark],
+    pendingReviews: [
+      {
+        kind: "durable",
+        jobId: "job-runtime-review-reject",
+        changeSetId: proposal.id,
+        proposalDigest,
+        reviewRecordRevision: 0,
+        recordedAt: 110,
+      },
+    ],
+  };
+  const review: ChangeSetReviewSnapshot = {
+    version: 2,
+    bundleId: "personal",
+    revision: 2,
+    records: [
+      {
+        changeSetId: proposal.id,
+        proposal,
+        proposalDigest,
+        manifestCommitPlan,
+        manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
+        jobClaim: {
+          jobId: "job-runtime-review-reject",
+          sourceId: "source-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 1,
+          attempt: 1,
+        },
+        recordedAt: 110,
+        outcome: "pending",
+        recordRevision: 0,
+      },
+    ],
+  };
+  const initialState: KnowledgeRuntimeStoreSnapshot = {
+    ...createEmptyKnowledgeRuntimeStoreSnapshot(),
+    revision: 9,
+    queues: [{ bundleId: "personal", value: queue }],
+    reviews: [{ bundleId: "personal", value: review }],
+    manifests: [{ bundleId: "personal", value: manifest }],
+    inputRevisions: [
+      {
+        bundleId: "personal",
+        sources: [
+          {
+            sourceId: "source-1",
+            inputRevision: 1,
+            managedAfterRevision: 1,
+            legacyCheckpoint: sourceHighWatermark,
+            observations: [],
+          },
+        ],
+      },
+    ],
+  };
+  file.replaceContent(JSON.stringify(initialState));
+  return {
+    file,
+    runtime,
+    port: new KnowledgeRuntimeReviewRejectPort(runtime),
+    command: {
+      changeSetId: proposal.id,
+      proposalDigest,
+      expectedSnapshotToken: HASH_C,
+      decisions: proposal.changes.map((change) => ({
+        changeId: change.id,
+        decision: "reject" as const,
+      })),
+    },
+    initialState,
+  };
+}
+
 /** Reads the current exact optimistic token for one startup release attempt. */
 async function createStartupReleaseRequest(
   harness: { file: MemoryAtomicRuntimeFile },
@@ -1337,6 +1585,315 @@ describe("KnowledgeRuntimeStore", () => {
     await harness.runtime.initialize();
 
     await expect(harness.queue.read("personal")).resolves.toEqual(createQueueSnapshot(1));
+  });
+
+  it("returns detached revision-zero Studio state when Queue and Review slots are absent", async () => {
+    const harness = await createHarness();
+
+    const first = await harness.runtime.readStudioBundle("personal");
+
+    expect(first).toEqual({
+      bundleId: "personal",
+      runtimeRevision: 0,
+      queue: createQueueSnapshot(0),
+      review: createReviewSnapshot(0),
+    });
+
+    first.queue.control = { status: "paused", reason: "user", pausedAt: 1 };
+    first.review.records.push({} as never);
+
+    await expect(harness.runtime.readStudioBundle("personal")).resolves.toEqual({
+      bundleId: "personal",
+      runtimeRevision: 0,
+      queue: createQueueSnapshot(0),
+      review: createReviewSnapshot(0),
+    });
+  });
+
+  it("reads detached Queue and Review snapshots from one exact Runtime envelope", async () => {
+    const harness = await createHarness();
+    await harness.queue.write("personal", createQueueSnapshot(1), null);
+    await harness.review.write("personal", createReviewSnapshot(1), null);
+    const readsBeforeStudioLoad = harness.file.getReadCallCount();
+
+    const first = await harness.runtime.readStudioBundle("personal");
+
+    expect(harness.file.getReadCallCount()).toBe(readsBeforeStudioLoad + 1);
+    expect(first).toEqual({
+      bundleId: "personal",
+      runtimeRevision: 2,
+      queue: createQueueSnapshot(1),
+      review: createReviewSnapshot(1),
+    });
+
+    first.queue.revision = 99;
+    first.review.revision = 99;
+    const second = await harness.runtime.readStudioBundle("personal");
+
+    expect(second).toEqual({
+      bundleId: "personal",
+      runtimeRevision: 2,
+      queue: createQueueSnapshot(1),
+      review: createReviewSnapshot(1),
+    });
+    expect(second.queue).not.toBe(first.queue);
+    expect(second.review).not.toBe(first.review);
+  });
+
+  it("publishes post-commit Studio hints only to the changed Bundle", async () => {
+    const harness = await createHarness();
+    const personalReads: Promise<KnowledgeRuntimeStudioBundleSnapshot>[] = [];
+    let workHints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      personalReads.push(harness.runtime.readStudioBundle("personal"));
+    });
+    harness.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
+
+    await harness.queue.write("personal", createQueueSnapshot(1), null);
+    await harness.review.write("personal", createReviewSnapshot(1), null);
+
+    await expect(Promise.all(personalReads)).resolves.toEqual([
+      expect.objectContaining({ runtimeRevision: 1, queue: createQueueSnapshot(1) }),
+      expect.objectContaining({ runtimeRevision: 2, review: createReviewSnapshot(1) }),
+    ]);
+    expect(personalReads).toHaveLength(2);
+    expect(workHints).toBe(0);
+
+    await harness.review.write("work", createReviewSnapshot(1, "work"), null);
+    expect(workHints).toBe(1);
+    expect(personalReads).toHaveLength(2);
+  });
+
+  it("stops Studio hints after idempotent unsubscribe", async () => {
+    const harness = await createHarness();
+    let hints = 0;
+    const unsubscribe = harness.runtime.subscribeStudioBundle("personal", () => {
+      hints += 1;
+    });
+
+    unsubscribe();
+    unsubscribe();
+    await harness.queue.write("personal", createQueueSnapshot(1), null);
+    await harness.review.write("personal", createReviewSnapshot(1), null);
+
+    expect(hints).toBe(0);
+  });
+
+  it("isolates throwing Studio listeners from durable writes and sibling hints", async () => {
+    const harness = await createHarness();
+    let siblingHints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      throw new Error("Studio view closed during notification");
+    });
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      siblingHints += 1;
+    });
+
+    await expect(
+      harness.queue.write("personal", createQueueSnapshot(1), null)
+    ).resolves.toBeUndefined();
+    await expect(harness.queue.read("personal")).resolves.toEqual(createQueueSnapshot(1));
+    expect(siblingHints).toBe(1);
+  });
+
+  it("returns one frozen revision-zero applied projection from one Runtime read", async () => {
+    const harness = await createHarness();
+    const readsBefore = harness.file.getReadCallCount();
+
+    const projection = await harness.runtime.readAppliedProvenance("personal");
+
+    expect(harness.file.getReadCallCount()).toBe(readsBefore + 1);
+    expect(projection).toEqual({
+      bundleId: "personal",
+      runtimeRevision: 0,
+      manifestRevision: 0,
+      pages: [],
+    });
+    expect(Object.isFrozen(projection)).toBe(true);
+    expect(Object.isFrozen(projection.pages)).toBe(true);
+  });
+
+  it("projects one exact current committed accepted page as detached frozen provenance", async () => {
+    const manifest = createRegisteredManifest();
+    const citation = createSourceCitation();
+    const proof = createCommittedApplyProof(manifest, "transaction-applied-provenance", 1, [
+      citation,
+    ]);
+    const harness = await createApplyHarness(manifest, proof);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const readsBefore = harness.file.getReadCallCount();
+
+    const projection = await harness.runtime.readAppliedProvenance("personal");
+
+    expect(harness.file.getReadCallCount()).toBe(readsBefore + 1);
+    expect(projection).toEqual({
+      bundleId: "personal",
+      runtimeRevision: 11,
+      manifestRevision: 2,
+      pages: [
+        {
+          path: "Wiki/transaction-applied-provenance.md",
+          windowsPathKey: "wiki/transaction-applied-provenance.md",
+          ownership: "generated",
+          contentHash: createFileContentHash("# transaction-applied-provenance\n"),
+          sources: [
+            {
+              sourceId: "source-1",
+              sourcePath: "Sources/Source-1.md",
+              custody: "user_managed",
+              sourceContentHash: HASH_A,
+              pipelineFingerprint: HASH_B,
+              inputRevision: 1,
+              changeSetId: "changeset-transaction-applied-provenance",
+              changeSetDigest: proof.journal.changeSetDigest,
+              acceptedAt: 140,
+              citations: [citation],
+            },
+          ],
+        },
+      ],
+    });
+    const page = projection.pages[0];
+    const source = page.sources[0];
+    const projectedCitation = source.citations[0];
+    expect(Object.isFrozen(projection)).toBe(true);
+    expect(Object.isFrozen(projection.pages)).toBe(true);
+    expect(Object.isFrozen(page)).toBe(true);
+    expect(Object.isFrozen(page.sources)).toBe(true);
+    expect(Object.isFrozen(source)).toBe(true);
+    expect(Object.isFrozen(source.citations)).toBe(true);
+    expect(Object.isFrozen(projectedCitation)).toBe(true);
+    expect(Object.isFrozen(projectedCitation.locator)).toBe(true);
+    expect(projectedCitation).not.toBe(citation);
+    expect(projectedCitation.locator).not.toBe(citation.locator);
+  });
+
+  it("excludes accepted work until its exact Manifest success and ledger commit exist", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest, "transaction-uncommitted", 1, [
+      createSourceCitation(),
+    ]);
+    const harness = await createApplyHarness(manifest, proof);
+
+    await expect(harness.runtime.readAppliedProvenance("personal")).resolves.toMatchObject({
+      manifestRevision: 1,
+      pages: [],
+    });
+  });
+
+  it("excludes a committed page whose accepted record has no exact source citation", async () => {
+    const manifest = createRegisteredManifest();
+    const harness = await createApplyHarness(manifest);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+
+    await expect(harness.runtime.readAppliedProvenance("personal")).resolves.toMatchObject({
+      manifestRevision: 2,
+      pages: [],
+    });
+  });
+
+  it.each(["pending", "rejected"] as const)(
+    "excludes a current ledger-backed page when its Review outcome is %s",
+    async (outcome) => {
+      const manifest = createRegisteredManifest();
+      const proof = createCommittedApplyProof(manifest, `transaction-${outcome}-projection`, 1, [
+        createSourceCitation(),
+      ]);
+      const harness = await createApplyHarness(manifest, proof);
+      await harness.port.recordCommitted(harness.journal, harness.receipt);
+      const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+      const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+      const accepted = review.records[0];
+      if (accepted.outcome !== "accepted") throw new Error("Expected accepted Review fixture");
+      const base = {
+        changeSetId: accepted.changeSetId,
+        proposal: accepted.proposal,
+        proposalDigest: accepted.proposalDigest,
+        manifestCommitPlan: accepted.manifestCommitPlan,
+        manifestCommitPlanDigest: accepted.manifestCommitPlanDigest,
+        jobClaim: accepted.jobClaim,
+        recordedAt: accepted.recordedAt,
+      };
+      review.revision += 1;
+      review.records = [
+        outcome === "pending"
+          ? { ...base, outcome: "pending", recordRevision: 0 }
+          : {
+              ...base,
+              outcome: "rejected",
+              recordRevision: 1,
+              rejectedAt: accepted.acceptedAt,
+            },
+      ];
+      state.activeTransaction = null;
+      state.queues = [];
+      state.inputRevisions = [];
+      harness.file.replaceContent(JSON.stringify(state));
+
+      await expect(harness.runtime.readAppliedProvenance("personal")).resolves.toMatchObject({
+        manifestRevision: 2,
+        pages: [],
+      });
+    }
+  );
+
+  it("excludes a retained unchanged page from a later exact source commit", async () => {
+    const firstManifest = createRegisteredManifest();
+    const firstProof = createCommittedApplyProof(firstManifest, "transaction-retained-first", 1, [
+      createSourceCitation(),
+    ]);
+    const first = await createApplyHarness(firstManifest, firstProof);
+    await first.port.recordCommitted(first.journal, first.receipt);
+    const firstState = JSON.parse(await first.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const committedManifest = firstState.manifests[0].value as SourceManifest;
+    const secondProof = createCommittedApplyProof(
+      committedManifest,
+      "transaction-retained-second",
+      2,
+      [createSourceCitation()]
+    );
+    const second = await createApplyHarness(committedManifest, secondProof);
+    const secondState = JSON.parse(await second.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const firstReview = firstState.reviews[0].value as ChangeSetReviewSnapshot;
+    const secondReview = secondState.reviews[0].value as ChangeSetReviewSnapshot;
+    secondReview.revision = 2;
+    secondReview.records = [...firstReview.records, ...secondReview.records];
+    secondState.applyCommits = firstState.applyCommits;
+    second.file.replaceContent(JSON.stringify(secondState));
+
+    await second.port.recordCommitted(second.journal, second.receipt);
+    const projection = await second.runtime.readAppliedProvenance("personal");
+
+    expect(projection.pages.map((page) => page.path)).toEqual([
+      "Wiki/transaction-retained-second.md",
+    ]);
+    expect(projection.pages[0].sources[0].changeSetId).toBe(
+      "changeset-transaction-retained-second"
+    );
+  });
+
+  it("de-duplicates a shared page and retains only its exact current-version writer", async () => {
+    const manifest = createSharedPageManifest();
+    const proof = createSharedUpdateProof(manifest);
+    const harness = await createApplyHarness(manifest, proof);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    state.applyCommits = createSharedPageHistoricalLedgers();
+    harness.file.replaceContent(JSON.stringify(state));
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+
+    const projection = await harness.runtime.readAppliedProvenance("personal");
+
+    expect(projection.pages).toHaveLength(1);
+    expect(projection.pages[0]).toMatchObject({
+      path: "Wiki/Shared.md",
+      windowsPathKey: "wiki/shared.md",
+      ownership: "shared",
+      contentHash: createFileContentHash("# Shared after\n"),
+      sources: [{ sourceId: "source-1", changeSetId: "changeset-shared-update" }],
+    });
+    expect(projection.pages[0].sources).toHaveLength(1);
   });
 
   it("atomically migrates one idle runtime-v1 envelope and preserves durable subsystem state", async () => {
@@ -1765,7 +2322,7 @@ describe("KnowledgeRuntimeStore", () => {
   );
 
   it.each(["user", "rate_limit"] as const)(
-    "never overwrites a %s pause during startup release",
+    "preserves a safe %s pause while admitting the live generation",
     async (reason) => {
       const harness = await createHarness();
       const paused: IngestQueueSnapshot = {
@@ -1777,9 +2334,81 @@ describe("KnowledgeRuntimeStore", () => {
       const before = await harness.file.read();
 
       await expect(harness.release.release(request)).resolves.toEqual({
-        kind: "blocked",
+        kind: "unchanged",
         bundleId: "personal",
-        reason: "queue_pause_not_releasable",
+        reason: reason === "user" ? "user_pause_preserved" : "rate_limit_pause_preserved",
+        runtimeRevision: request.expectedRuntimeRevision,
+        reviewRevision: request.expectedReviewRevision,
+        queueSnapshot: paused,
+      });
+      expect(await harness.file.read()).toBe(before);
+    }
+  );
+
+  it.each([
+    { reason: "user", stage: "generating" },
+    { reason: "rate_limit", stage: "parsing" },
+  ] as const)(
+    "preserves a safe $reason pause with one non-applying paused job",
+    async ({ reason, stage }) => {
+      const harness = await createHarness();
+      await harness.queue.write("personal", createQueueSnapshot(1), null);
+      const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+      const sourceHighWatermark = {
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 1,
+        observedAt: 90,
+      };
+      const paused: IngestQueueSnapshot = {
+        ...createQueueSnapshot(1),
+        control: { status: "paused", reason, pausedAt: 100 },
+        jobs: [
+          {
+            id: "job-paused",
+            bundleId: "personal",
+            sourceId: "source-1",
+            sourceContentHash: HASH_A,
+            pipelineFingerprint: HASH_B,
+            inputRevision: 1,
+            attempt: 1,
+            rerunRequested: false,
+            createdAt: 90,
+            updatedAt: 100,
+            status: "paused",
+            stage,
+            pausedAt: 100,
+          },
+        ],
+        sourceHighWatermarks: [sourceHighWatermark],
+      };
+      state.queues[0].value = paused;
+      state.inputRevisions = [
+        {
+          bundleId: "personal",
+          sources: [
+            {
+              sourceId: "source-1",
+              inputRevision: 1,
+              managedAfterRevision: 1,
+              legacyCheckpoint: sourceHighWatermark,
+              observations: [],
+            },
+          ],
+        },
+      ];
+      harness.file.replaceContent(JSON.stringify(state));
+      const request = await createStartupReleaseRequest(harness);
+      const before = await harness.file.read();
+
+      await expect(harness.release.release(request)).resolves.toEqual({
+        kind: "unchanged",
+        bundleId: "personal",
+        reason: reason === "user" ? "user_pause_preserved" : "rate_limit_pause_preserved",
+        runtimeRevision: request.expectedRuntimeRevision,
+        reviewRevision: request.expectedReviewRevision,
+        queueSnapshot: paused,
       });
       expect(await harness.file.read()).toBe(before);
     }
@@ -5488,5 +6117,181 @@ describe("KnowledgeRuntimeStore", () => {
       repeated.queue.write("personal", createQueueSnapshot(1), null)
     ).rejects.toBeInstanceOf(KnowledgeRuntimeAtomicWriteError);
     await expect(repeated.queue.read("personal")).resolves.toBeNull();
+  });
+
+  it("atomically projects literal Reject across Review and Queue only", async () => {
+    const harness = await createReviewRejectHarness();
+    let hints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      hints += 1;
+    });
+
+    const receipt = await harness.port.rejectReviewAtomically("personal", harness.command);
+    const after = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = after.queues[0].value as IngestQueueSnapshot;
+    const review = after.reviews[0].value as ChangeSetReviewSnapshot;
+
+    expect(receipt).toMatchObject({
+      outcome: "rejected",
+      bundleId: "personal",
+      changeSetId: harness.command.changeSetId,
+      proposalDigest: harness.command.proposalDigest,
+      recordRevision: 1,
+      rejectedAt: 130,
+      cancelledAt: 130,
+      queueRevision: 4,
+      reviewRevision: 3,
+      runtimeRevision: 10,
+    });
+    expect(review).toMatchObject({
+      revision: 3,
+      records: [
+        {
+          outcome: "rejected",
+          recordRevision: 1,
+          rejectedAt: 130,
+        },
+      ],
+    });
+    expect(queue).toMatchObject({
+      revision: 4,
+      pendingReviews: [],
+      jobs: [
+        {
+          id: "job-runtime-review-reject",
+          status: "cancelled",
+          stage: "cancelled",
+          cancelledAt: 130,
+        },
+      ],
+      reviewRejections: [
+        {
+          jobId: "job-runtime-review-reject",
+          changeSetId: harness.command.changeSetId,
+          proposalDigest: harness.command.proposalDigest,
+          reviewRecordRevision: 1,
+          decisionAt: 130,
+          rejectedAt: 130,
+        },
+      ],
+    });
+    expect(after.manifests).toEqual(harness.initialState.manifests);
+    expect(after.activeTransaction).toEqual(harness.initialState.activeTransaction);
+    expect(after.inputRevisions).toEqual(harness.initialState.inputRevisions);
+    expect(after.applyCommits).toEqual(harness.initialState.applyCommits);
+    expect(hints).toBe(1);
+  });
+
+  it("replays one exact final Reject as a byte-preserving no-op", async () => {
+    const harness = await createReviewRejectHarness();
+    const first = await harness.port.rejectReviewAtomically("personal", harness.command);
+    const afterFirst = await harness.file.read();
+
+    const replay = await harness.port.rejectReviewAtomically("personal", harness.command);
+
+    expect(replay).toEqual(first);
+    expect(await harness.file.read()).toBe(afterFirst);
+  });
+
+  it("confirms an exact committed Reject after the atomic transport throws", async () => {
+    const harness = await createReviewRejectHarness();
+    let hints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      hints += 1;
+    });
+    harness.file.throwAfterCommitOnNextWrite();
+
+    await expect(
+      harness.port.rejectReviewAtomically("personal", harness.command)
+    ).resolves.toMatchObject({
+      outcome: "rejected",
+      runtimeRevision: 10,
+      queueRevision: 4,
+      reviewRevision: 3,
+    });
+
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    expect(queue.reviewRejections).toHaveLength(1);
+    expect(state.revision).toBe(10);
+    expect(hints).toBe(1);
+  });
+
+  it("does not invent success when the atomic transform never ran", async () => {
+    const harness = await createReviewRejectHarness();
+    const before = await harness.file.read();
+    harness.file.skipTransformOnNextWrite();
+
+    await expect(
+      harness.port.rejectReviewAtomically("personal", harness.command)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeAtomicWriteError);
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("rejects mixed acceptance and durable-anchor drift without changing bytes", async () => {
+    const mixed = await createReviewRejectHarness();
+    const mixedBefore = await mixed.file.read();
+    const mixedCommand = {
+      ...mixed.command,
+      decisions: mixed.command.decisions.map((decision) => ({
+        ...decision,
+        decision: "accept_exact" as const,
+      })),
+    };
+
+    await expect(
+      mixed.port.rejectReviewAtomically("personal", mixedCommand)
+    ).rejects.toBeInstanceOf(KnowledgeLiteralRejectCommandError);
+    expect(await mixed.file.read()).toBe(mixedBefore);
+
+    const drifted = await createReviewRejectHarness();
+    const driftedState = JSON.parse(await drifted.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const driftedQueue = driftedState.queues[0].value as IngestQueueSnapshot;
+    const anchor = driftedQueue.pendingReviews[0];
+    if (anchor.kind !== "durable") throw new Error("Expected a durable pending Review");
+    anchor.proposalDigest = HASH_C;
+    drifted.file.replaceContent(JSON.stringify(driftedState));
+    const driftedBefore = await drifted.file.read();
+
+    await expect(
+      drifted.port.rejectReviewAtomically("personal", drifted.command)
+    ).rejects.toBeInstanceOf(KnowledgeReviewRejectConflictError);
+    expect(await drifted.file.read()).toBe(driftedBefore);
+  });
+
+  it("serializes concurrent identical Rejects into one transition and one tombstone", async () => {
+    const harness = await createReviewRejectHarness();
+    let hints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      hints += 1;
+    });
+
+    const receipts = await Promise.all([
+      harness.port.rejectReviewAtomically("personal", harness.command),
+      harness.port.rejectReviewAtomically("personal", harness.command),
+    ]);
+
+    expect(receipts[0]).toEqual(receipts[1]);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    expect(state.revision).toBe(10);
+    expect(queue.reviewRejections).toHaveLength(1);
+    expect(hints).toBe(1);
+  });
+
+  it("exposes no Queue, Review, apply, or Runtime handles from the Reject-only port", async () => {
+    const harness = await createReviewRejectHarness();
+
+    expect(Object.keys(harness.port)).toEqual([]);
+    expect(Object.isFrozen(harness.port)).toBe(true);
+    expect("read" in harness.port).toBe(false);
+    expect("writeQueue" in harness.port).toBe(false);
+    expect("writeReview" in harness.port).toBe(false);
+    expect("beginReviewApply" in harness.port).toBe(false);
+    expect("runtime" in harness.port).toBe(false);
+    expect(Object.getOwnPropertyNames(Object.getPrototypeOf(harness.port)).sort()).toEqual([
+      "constructor",
+      "rejectReviewAtomically",
+    ]);
   });
 });

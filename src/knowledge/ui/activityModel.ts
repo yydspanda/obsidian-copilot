@@ -213,6 +213,59 @@ function hasActiveSourcePeer(snapshot: IngestQueueSnapshot, job: KnowledgeIngest
 }
 
 /**
+ * Reports whether retrying a terminal job would reactivate stale source input.
+ *
+ * Queue validation permits an older active job only when the latest observation
+ * describes the same content and pipeline. A newer divergent observation is
+ * represented by a rerun while its predecessor is active; once that predecessor
+ * is terminal, retrying it would clear its rerun flag and create an invalid active
+ * job. A semantically valid snapshot with a retained rerun necessarily also has
+ * an active same-source peer, which is rejected separately.
+ *
+ * @param snapshot - Trusted durable queue snapshot
+ * @param job - Terminal job being considered for retry
+ * @returns Whether a newer divergent source observation makes the retry stale
+ */
+function hasNewerDivergentSourceObservation(
+  snapshot: IngestQueueSnapshot,
+  job: KnowledgeIngestJob
+): boolean {
+  const highWatermark = snapshot.sourceHighWatermarks.find(
+    (candidate) => candidate.sourceId === job.sourceId
+  );
+  return (
+    highWatermark !== undefined &&
+    highWatermark.inputRevision > job.inputRevision &&
+    (highWatermark.sourceContentHash !== job.sourceContentHash ||
+      highWatermark.pipelineFingerprint !== job.pipelineFingerprint)
+  );
+}
+
+/**
+ * Determines whether the exact queue retry transition can produce a valid candidate.
+ *
+ * This pure predicate mirrors the retry command's job-state and source-ownership
+ * gates, then applies the source high-watermark invariant enforced when the
+ * resulting pending job is persisted.
+ *
+ * @param snapshot - Trusted durable queue snapshot
+ * @param job - Durable job to inspect
+ * @returns Whether Retry may be exposed without guaranteeing a rejected write
+ */
+export function isIngestQueueJobRetryEligible(
+  snapshot: IngestQueueSnapshot,
+  job: KnowledgeIngestJob
+): boolean {
+  return (
+    job.status === "failed" &&
+    job.failure.retryable &&
+    job.stage !== "applying" &&
+    !hasActiveSourcePeer(snapshot, job) &&
+    !hasNewerDivergentSourceObservation(snapshot, job)
+  );
+}
+
+/**
  * Determines whether review acceptance can enter the queue's apply claim.
  *
  * @param snapshot - Trusted durable queue snapshot
@@ -257,14 +310,9 @@ function deriveJobActions(
     job.status === "pending" ||
     job.status === "paused" ||
     (job.status === "processing" && job.stage !== "applying");
-  const canRetry =
-    job.status === "failed" &&
-    job.failure.retryable &&
-    job.stage !== "applying" &&
-    !hasActiveSourcePeer(snapshot, job);
   return Object.freeze({
     canCancel,
-    canRetry,
+    canRetry: isIngestQueueJobRetryEligible(snapshot, job),
     canReview:
       job.status === "awaiting_review" &&
       hasDurablePendingReview(snapshot, job) &&
@@ -387,7 +435,9 @@ function deriveBundleControls(
     recovery_required: "recovery_required",
     commit_pending_ack: "finalizing",
   };
-  const hardBlocked = ["recovery_required", "commit_pending_ack"].includes(snapshot.control.reason);
+  const hardBlocked = ["startup_recovery", "recovery_required", "commit_pending_ack"].includes(
+    snapshot.control.reason
+  );
   return Object.freeze({
     state: stateByReason[snapshot.control.reason],
     canPause: false,

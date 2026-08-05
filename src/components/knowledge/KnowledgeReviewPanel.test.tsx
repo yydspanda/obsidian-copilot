@@ -101,9 +101,11 @@ describe("KnowledgeReviewPanel", () => {
 
     render(
       <KnowledgeReviewPanel
-        plan={createReviewPlan([update, deletion])}
+        acceptCommandsEnabled={true}
         busy={false}
         onSubmit={onSubmit}
+        plan={createReviewPlan([update, deletion])}
+        rejectCommandsEnabled={true}
       />
     );
 
@@ -138,7 +140,13 @@ describe("KnowledgeReviewPanel", () => {
     });
 
     render(
-      <KnowledgeReviewPanel plan={createReviewPlan([file])} busy={false} onSubmit={onSubmit} />
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([file])}
+        rejectCommandsEnabled={true}
+      />
     );
 
     const submit = getButton("Submit review");
@@ -173,7 +181,13 @@ describe("KnowledgeReviewPanel", () => {
     ];
 
     render(
-      <KnowledgeReviewPanel plan={createReviewPlan(files)} busy={false} onSubmit={onSubmit} />
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan(files)}
+        rejectCommandsEnabled={true}
+      />
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Reject all" }));
@@ -185,6 +199,35 @@ describe("KnowledgeReviewPanel", () => {
     ]);
   });
 
+  it("enables only whole-file rejection when acceptance and Wiki apply are unavailable", () => {
+    const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={false}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(getButton("Accept all").disabled).toBe(true);
+    expect(getButton("Accept file Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Accept block 1 in Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Reject block 1 in Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Reject file Knowledge/First.md").disabled).toBe(false);
+
+    fireEvent.click(getButton("Reject file Knowledge/First.md"));
+    fireEvent.click(getButton("Submit review"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      changeSetId: "changeset-1",
+      proposalDigest: "proposal-digest-1",
+      expectedSnapshotToken: "snapshot-1",
+      decisions: [{ changeId: "change-1", decision: "reject" }],
+    });
+  });
+
   it("clears local decisions when the content-addressed snapshot changes", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     const file = createReviewFile({
@@ -194,7 +237,13 @@ describe("KnowledgeReviewPanel", () => {
       ],
     });
     const { rerender } = render(
-      <KnowledgeReviewPanel plan={createReviewPlan([file])} busy={false} onSubmit={onSubmit} />
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([file])}
+        rejectCommandsEnabled={true}
+      />
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Accept file Knowledge/First.md" }));
@@ -202,9 +251,11 @@ describe("KnowledgeReviewPanel", () => {
 
     rerender(
       <KnowledgeReviewPanel
-        plan={createReviewPlan([file], "snapshot-2")}
+        acceptCommandsEnabled={true}
         busy={false}
         onSubmit={onSubmit}
+        plan={createReviewPlan([file], "snapshot-2")}
+        rejectCommandsEnabled={true}
       />
     );
 
@@ -218,9 +269,11 @@ describe("KnowledgeReviewPanel", () => {
 
     render(
       <KnowledgeReviewPanel
-        plan={createReviewPlan([createReviewFile()])}
+        acceptCommandsEnabled={true}
         busy={false}
         onSubmit={onSubmit}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
       />
     );
 
@@ -231,5 +284,30 @@ describe("KnowledgeReviewPanel", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(getButton("Submitting…").disabled).toBe(true);
+  });
+
+  it("renders the exact diff while disabling every review decision in read-only mode", () => {
+    const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={false}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={false}
+      />
+    );
+
+    expect(screen.getByText("Knowledge/First.md")).toBeTruthy();
+    expect(screen.getByText("before", { exact: false })).toBeTruthy();
+    expect(getButton("Accept all").disabled).toBe(true);
+    expect(getButton("Reject all").disabled).toBe(true);
+    expect(getButton("Accept file Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Reject file Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Review actions unavailable").disabled).toBe(true);
+
+    fireEvent.click(getButton("Accept all"));
+    fireEvent.click(getButton("Review actions unavailable"));
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

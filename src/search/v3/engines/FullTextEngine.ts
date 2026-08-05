@@ -5,6 +5,7 @@ import { App, TFile, getAllTags } from "obsidian";
 import { ChunkManager, getSharedChunkManager } from "../chunks";
 import { NoteIdRank } from "../interfaces";
 import { MemoryManager } from "../utils/MemoryManager";
+import { tokenizeMixed } from "../utils/tokenizeMixed";
 
 /**
  * Full-text search engine using ephemeral MiniSearch index built per-query.
@@ -71,67 +72,7 @@ export class FullTextEngine {
    * @returns Array of tokens
    */
   private tokenizeMixed(str: string): string[] {
-    if (!str) {
-      return [];
-    }
-
-    const tokens = new Set<string>();
-    const lowered = str.toLowerCase();
-    let asciiSource = lowered;
-
-    // Extract tags (keep hash and generate hierarchy-aware tokens)
-    let tagMatches: RegExpMatchArray | null = null;
-    try {
-      tagMatches = lowered.match(/#[\p{L}\p{N}_/-]+/gu);
-    } catch {
-      tagMatches = lowered.match(/#[a-z0-9_/-]+/g);
-    }
-
-    if (tagMatches) {
-      for (const tag of tagMatches) {
-        tokens.add(tag);
-
-        const tagBody = tag.slice(1);
-        if (!tagBody) {
-          continue;
-        }
-
-        tokens.add(tagBody);
-
-        const segments = tagBody.split("/").filter((segment) => segment.length > 0);
-        if (segments.length > 0) {
-          let prefix = "";
-          for (const segment of segments) {
-            prefix = prefix ? `${prefix}/${segment}` : segment;
-            tokens.add(prefix);
-            tokens.add(`#${prefix}`);
-            tokens.add(segment);
-          }
-        }
-        const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        asciiSource = asciiSource.replace(new RegExp(escapedTag, "gu"), " ");
-      }
-    }
-
-    // ASCII words (including alphanumeric and underscores)
-    const asciiWords = asciiSource.match(/[a-z0-9_]+/g) || [];
-    asciiWords.forEach((word) => tokens.add(word));
-
-    // CJK pattern for Chinese, Japanese, Korean characters
-    const cjkPattern = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+/g;
-    const cjkMatches = str.match(cjkPattern) || [];
-
-    // Generate bigrams for CJK text
-    for (const match of cjkMatches) {
-      if (match.length === 1) {
-        tokens.add(match);
-      }
-      for (let i = 0; i < match.length - 1; i++) {
-        tokens.add(match.slice(i, i + 2));
-      }
-    }
-
-    return Array.from(tokens);
+    return tokenizeMixed(str);
   }
 
   /**

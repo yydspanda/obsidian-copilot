@@ -75,6 +75,12 @@ function createHarness(overrides: Partial<KnowledgePluginStartupBarrierDependenc
       setUnavailable: jest.fn((state) => {
         studioStates.push(state);
       }),
+      setReadReady: jest.fn((state) => {
+        studioStates.push(state);
+      }),
+      setRecoveryReady: jest.fn((state) => {
+        studioStates.push(state);
+      }),
     },
     ...overrides,
   };
@@ -111,6 +117,9 @@ describe("KnowledgePluginStartupBarrier", () => {
       },
       studio: {
         setUnavailable: (state) => {
+          events.push(`studio:${state.status}:${state.generation}`);
+        },
+        setReadReady: (state) => {
           events.push(`studio:${state.status}:${state.generation}`);
         },
       },
@@ -160,6 +169,7 @@ describe("KnowledgePluginStartupBarrier", () => {
       },
       studio: {
         setUnavailable: (state) => events.push(`studio:${state.status}`),
+        setReadReady: (state) => events.push(`studio:${state.status}`),
       },
     });
 
@@ -206,6 +216,7 @@ describe("KnowledgePluginStartupBarrier", () => {
       },
       studio: {
         setUnavailable: (state) => events.push(`studio:${state.status}`),
+        setReadReady: (state) => events.push(`studio:${state.status}`),
       },
     });
 
@@ -238,7 +249,7 @@ describe("KnowledgePluginStartupBarrier", () => {
       }
     );
     const port = { ...observation, release };
-    const { barrier } = createHarness({
+    const { barrier, dependencies, studioStates } = createHarness({
       bundleConfig: {
         load: async () => ({
           kind: "configured",
@@ -253,8 +264,46 @@ describe("KnowledgePluginStartupBarrier", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["release"]);
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "workflow_read_ready",
+      bundleIds: ["personal"],
+    });
+    expect(Object.isFrozen(barrier.getState())).toBe(true);
+    expect(studioStates.at(-1)).toEqual(barrier.getState());
+    expect(dependencies.studio.setReadReady).toHaveBeenCalledWith(barrier.getState());
     expect(observation.close).not.toHaveBeenCalled();
     barrier.cancel();
+  });
+
+  it("fails closed when a released observation does not identify the exact configured Bundles", async () => {
+    const recovery = createRecovery();
+    const observation = createObservation();
+    const release = jest.fn<Promise<KnowledgePluginObservationReleaseResult>, [AbortSignal]>(
+      async () => ({ kind: "released", bundleIds: ["other"] })
+    );
+    const port = { ...observation, release };
+    const { barrier, dependencies } = createHarness({
+      bundleConfig: {
+        load: async () => ({
+          kind: "configured",
+          bundleIds: ["personal"],
+          recovery,
+          observation: port,
+        }),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "recovery_unavailable",
+      bundleIds: ["personal"],
+      diagnosticCodes: ["recovery_result_invalid"],
+    });
+    expect(dependencies.studio.setReadReady).not.toHaveBeenCalled();
+    expect(observation.close).toHaveBeenCalledTimes(1);
   });
 
   it("closes observation when clear recovery is followed by a malformed result", async () => {
@@ -294,6 +343,7 @@ describe("KnowledgePluginStartupBarrier", () => {
         generation: 1,
         status: "recovery_attention_required",
         bundleIds: ["personal"],
+        recoveryBundleId: "personal",
         attentionKinds: ["accepted_not_started", "no_journal_decision_required"],
       },
     },
@@ -306,6 +356,7 @@ describe("KnowledgePluginStartupBarrier", () => {
         generation: 1,
         status: "recovery_blocked",
         bundleIds: ["personal"],
+        recoveryBundleId: "personal",
         attentionKinds: ["queue_recovery_required"],
       },
     },
@@ -325,7 +376,7 @@ describe("KnowledgePluginStartupBarrier", () => {
     "publishes sanitized recovery state for $recoveryResult.kind",
     async ({ recoveryResult, expected }) => {
       const recovery = createRecovery(async () => recoveryResult);
-      const { barrier } = createHarness({
+      const { barrier, dependencies } = createHarness({
         bundleConfig: {
           load: async () => ({ kind: "configured", bundleIds: ["personal"], recovery }),
         },
@@ -336,6 +387,13 @@ describe("KnowledgePluginStartupBarrier", () => {
       expect(barrier.getState()).toEqual(expected);
       expect(Object.isFrozen(barrier.getState())).toBe(true);
       expect(JSON.stringify(barrier.getState())).not.toContain("private");
+      const retained =
+        recoveryResult.kind === "attention_required" || recoveryResult.kind === "blocked";
+      expect(recovery.close).toHaveBeenCalledTimes(retained ? 0 : 1);
+      if (retained) {
+        expect(dependencies.studio.setRecoveryReady).toHaveBeenCalledWith(expected);
+      }
+      barrier.cancel();
       expect(recovery.close).toHaveBeenCalledTimes(1);
     }
   );
@@ -564,6 +622,64 @@ describe("KnowledgePluginStartupBarrier", () => {
     ).toBe(false);
   });
 
+  it("does not let a stale observation completion close the current generation", async () => {
+    const firstStarted = createDeferred<void>();
+    const firstResult = createDeferred<KnowledgePluginObservationStartupResult>();
+    const secondStarted = createDeferred<void>();
+    const secondResult = createDeferred<KnowledgePluginObservationStartupResult>();
+    const firstObservation = createObservation(async () => {
+      firstStarted.resolve(undefined);
+      return firstResult.promise;
+    });
+    const secondObservation = createObservation(async () => {
+      secondStarted.resolve(undefined);
+      return secondResult.promise;
+    });
+    const firstRecovery = createRecovery();
+    const secondRecovery = createRecovery();
+    let loadCall = 0;
+    const { barrier } = createHarness({
+      bundleConfig: {
+        load: jest.fn(async () => {
+          loadCall += 1;
+          return {
+            kind: "configured" as const,
+            bundleIds: ["personal"],
+            recovery: loadCall === 1 ? firstRecovery : secondRecovery,
+            observation: loadCall === 1 ? firstObservation : secondObservation,
+          };
+        }),
+      },
+    });
+
+    const staleRun = barrier.startAfterLayout();
+    await firstStarted.promise;
+    const currentRun = barrier.startAfterLayout();
+    await secondStarted.promise;
+
+    expect(firstObservation.close).toHaveBeenCalledTimes(1);
+    expect(secondObservation.close).not.toHaveBeenCalled();
+
+    firstResult.resolve({ kind: "observation_converged", scheduledCaptureCount: 1 });
+    await staleRun;
+
+    expect(firstObservation.close).toHaveBeenCalledTimes(1);
+    expect(secondObservation.close).not.toHaveBeenCalled();
+
+    secondResult.resolve({ kind: "observation_converged", scheduledCaptureCount: 1 });
+    await currentRun;
+
+    expect(barrier.getState()).toEqual({
+      generation: 2,
+      status: "workflow_adapters_unavailable",
+      bundleIds: ["personal"],
+    });
+    expect(secondObservation.close).not.toHaveBeenCalled();
+
+    barrier.cancel();
+    expect(secondObservation.close).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels an active await without permitting a later stale publication", async () => {
     const projectsReady = createDeferred<void>();
     let signal: AbortSignal | undefined;
@@ -604,6 +720,9 @@ describe("KnowledgePluginStartupBarrier", () => {
         setUnavailable: (state) => {
           order.push(`studio:${state.status}`);
         },
+        setReadReady: (state) => {
+          order.push(`studio:${state.status}`);
+        },
       },
       bundleConfig: { load: jest.fn(async () => ({ kind: "unconfigured" as const })) },
     });
@@ -623,7 +742,7 @@ describe("KnowledgePluginStartupBarrier", () => {
     ]);
   });
 
-  it("offers no ready publication path across every terminal outcome", async () => {
+  it("does not publish read-ready without an exact released observation", async () => {
     const terminalStates: KnowledgePluginStartupState[] = [];
     const scenarios: Partial<KnowledgePluginStartupBarrierDependencies>[] = [
       { runtime: { isAvailable: () => false } },
@@ -647,7 +766,7 @@ describe("KnowledgePluginStartupBarrier", () => {
       const { barrier, studioStates } = createHarness(overrides);
       await barrier.startAfterLayout();
       terminalStates.push(barrier.getState());
-      expect(studioStates.every((state) => state.status !== ("ready" as never))).toBe(true);
+      expect(studioStates.every((state) => state.status !== "workflow_read_ready")).toBe(true);
     }
 
     expect(terminalStates.map((state) => state.status)).toEqual([

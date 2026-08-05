@@ -32,6 +32,7 @@ import {
 import { IngestQueue } from "@/knowledge/ingest/queue/IngestQueue";
 import {
   INGEST_QUEUE_VERSION,
+  type IngestQueuePauseReason,
   type IngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import {
@@ -435,6 +436,7 @@ async function createAuthorizedRecoveryHarness(): Promise<{
 
 /** Creates one initialized Runtime and a recovery composer over strict Bundle values. */
 async function createHarness(bundles: KnowledgeBundleConfig[] = [createBundle()]): Promise<{
+  file: MemoryAtomicRuntimeFile;
   runtime: KnowledgeRuntimeStore;
   composer: KnowledgeProductionRecoveryComposer;
   vault: ReturnType<typeof createVault>;
@@ -444,10 +446,146 @@ async function createHarness(bundles: KnowledgeBundleConfig[] = [createBundle()]
   await runtime.initialize();
   const vault = createVault();
   return {
+    file,
     runtime,
     composer: new KnowledgeProductionRecoveryComposer({ runtime, vault: vault.vault, bundles }),
     vault,
   };
+}
+
+/** Creates one source-bearing Queue safely paused before an applying boundary. */
+function createPausedQueue(
+  bundleId: string,
+  reason: Extract<IngestQueuePauseReason, "user" | "rate_limit" | "startup_recovery">
+): IngestQueueSnapshot {
+  const sourceId = "source-paused-at-startup";
+  const createdAt = 100;
+  const pausedAt = 110;
+  return {
+    version: INGEST_QUEUE_VERSION,
+    bundleId,
+    revision: 1,
+    control: {
+      status: "paused",
+      reason,
+      pausedAt,
+      ...(reason === "rate_limit" ? { resumeAt: pausedAt + 1_000 } : {}),
+    },
+    jobs: [
+      {
+        id: "job-paused-at-startup",
+        bundleId,
+        sourceId,
+        sourceContentHash: RECOVERY_SOURCE_HASH,
+        pipelineFingerprint: RECOVERY_PIPELINE_FINGERPRINT,
+        inputRevision: 1,
+        attempt: 1,
+        rerunRequested: false,
+        createdAt,
+        updatedAt: pausedAt,
+        status: "paused",
+        stage: "generating",
+        pausedAt,
+      },
+    ],
+    reruns: [],
+    sourceHighWatermarks: [
+      {
+        sourceId,
+        sourceContentHash: RECOVERY_SOURCE_HASH,
+        pipelineFingerprint: RECOVERY_PIPELINE_FINGERPRINT,
+        inputRevision: 1,
+        observedAt: createdAt,
+      },
+    ],
+    pendingReviews: [],
+    reviewRejections: [],
+    applyAbandonments: [],
+  };
+}
+
+/** Creates one exact interrupted-apply Queue behind its sticky recovery gate. */
+function createRecoveryRequiredQueue(bundleId: string): IngestQueueSnapshot {
+  const sourceId = "source-interrupted-apply";
+  const createdAt = 100;
+  const startedAt = 105;
+  const failedAt = 110;
+  return {
+    version: INGEST_QUEUE_VERSION,
+    bundleId,
+    revision: 1,
+    control: { status: "paused", reason: "recovery_required", pausedAt: failedAt },
+    jobs: [
+      {
+        id: "job-interrupted-apply",
+        bundleId,
+        sourceId,
+        sourceContentHash: RECOVERY_SOURCE_HASH,
+        pipelineFingerprint: RECOVERY_PIPELINE_FINGERPRINT,
+        inputRevision: 1,
+        attempt: 1,
+        rerunRequested: false,
+        createdAt,
+        updatedAt: failedAt,
+        status: "failed",
+        stage: "applying",
+        failure: {
+          code: "interrupted_apply_requires_recovery",
+          message: "Interrupted apply requires recovery",
+          retryable: false,
+          occurredAt: failedAt,
+        },
+      },
+    ],
+    reruns: [],
+    sourceHighWatermarks: [
+      {
+        sourceId,
+        sourceContentHash: RECOVERY_SOURCE_HASH,
+        pipelineFingerprint: RECOVERY_PIPELINE_FINGERPRINT,
+        inputRevision: 1,
+        observedAt: createdAt,
+      },
+    ],
+    pendingReviews: [],
+    reviewRejections: [],
+    applyAbandonments: [],
+    applyClaim: {
+      jobId: "job-interrupted-apply",
+      sourceId,
+      sourceContentHash: RECOVERY_SOURCE_HASH,
+      pipelineFingerprint: RECOVERY_PIPELINE_FINGERPRINT,
+      inputRevision: 1,
+      attempt: 1,
+      startedAt,
+    },
+  };
+}
+
+/** Persists a source-bearing Queue through the real Runtime observation authority. */
+async function writeObservedQueue(
+  runtime: KnowledgeRuntimeStore,
+  snapshot: IngestQueueSnapshot
+): Promise<void> {
+  const job = snapshot.jobs[0];
+  if (!job) throw new Error("Expected one source-bearing Queue job");
+  const allocation = await new KnowledgeRuntimeInputRevisionAllocator(runtime).allocate({
+    bundleId: snapshot.bundleId,
+    sourceId: job.sourceId,
+    captureId: "capture-paused-at-startup",
+  });
+  const binding = await new KnowledgeRuntimeInputObservationBinder(runtime).bind({
+    observationToken: allocation.observationToken,
+    sourceContentHash: job.sourceContentHash,
+    pipelineFingerprint: job.pipelineFingerprint,
+  });
+  if (binding.kind !== "ready" || allocation.inputRevision !== job.inputRevision) {
+    throw new Error("Expected one Queue-ready paused startup observation");
+  }
+  await new KnowledgeRuntimeQueueStorage(runtime).write(snapshot.bundleId, snapshot, null, {
+    kind: "source_observation",
+    observationToken: allocation.observationToken,
+  });
 }
 
 /** Creates the minimum Gate result consumed by the sanitizing composer boundary. */
@@ -476,7 +614,10 @@ function createGateResult(
       version: 5,
       bundleId,
       revision: 0,
-      control: { status: "running" },
+      control:
+        disposition === "blocked"
+          ? { status: "paused", reason: "recovery_required", pausedAt: 0 }
+          : { status: "running" },
       jobs: [],
       reruns: [],
       sourceHighWatermarks: [],
@@ -487,7 +628,18 @@ function createGateResult(
     globalTransaction: null,
     applyCommit: { kind: "none" },
     reviewReconciliations: [],
-    acceptedClassifications: [],
+    acceptedClassifications:
+      disposition === "attention_required"
+        ? [
+            {
+              kind: "accepted_not_started",
+              reference: { bundleId, recoveryId: "recovery-private" },
+              bundleId,
+              changeSetId: "changeset-private",
+              jobId: "job-private",
+            },
+          ]
+        : [],
     attention,
   };
 }
@@ -534,6 +686,115 @@ describe("KnowledgeProductionRecoveryComposer", () => {
       expect(Object.isFrozen(state.bundleResults[0])).toBe(true);
       expect(Object.isFrozen(state.bundleResults[0].attentionKinds)).toBe(true);
     }
+  });
+
+  it.each([
+    { pauseReason: "user" as const, releaseReason: "user_pause_preserved" as const },
+    {
+      pauseReason: "rate_limit" as const,
+      releaseReason: "rate_limit_pause_preserved" as const,
+    },
+  ])(
+    "accepts a safely preserved $pauseReason pause without changing Runtime or Queue bytes",
+    async ({ pauseReason, releaseReason }) => {
+      const { file, runtime, composer } = await createHarness();
+      const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
+      const queue = createPausedQueue("personal", pauseReason);
+      await writeObservedQueue(runtime, queue);
+
+      await composer.start();
+      expect(composer.getState()).toMatchObject({
+        status: "observed_clear",
+        bundleResults: [{ bundleId: "personal", disposition: "observed_clear" }],
+      });
+      const runtimeBytesBeforeRelease = await file.read();
+      const queueBeforeRelease = await queueStorage.read("personal");
+      const release = jest.spyOn(runtime, "releaseStartupRecovery");
+
+      await expect(composer.releaseFresh(jest.fn())).resolves.toEqual({
+        kind: "released",
+        bundleIds: ["personal"],
+      });
+
+      expect(release).toHaveBeenCalledTimes(1);
+      const releaseResult = release.mock.results[0];
+      if (!releaseResult || releaseResult.type !== "return") {
+        throw new Error("Expected one real Runtime startup release result");
+      }
+      await expect(releaseResult.value).resolves.toMatchObject({
+        kind: "unchanged",
+        bundleId: "personal",
+        reason: releaseReason,
+        queueSnapshot: queue,
+      });
+      await expect(file.read()).resolves.toBe(runtimeBytesBeforeRelease);
+      await expect(queueStorage.read("personal")).resolves.toEqual(queueBeforeRelease);
+      expect(composer.getState()).toMatchObject({ status: "observed_clear" });
+    }
+  );
+
+  it("keeps a real recovery-required Queue blocked without entering atomic release", async () => {
+    const { file, runtime, composer } = await createHarness();
+    const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
+    await writeObservedQueue(runtime, createRecoveryRequiredQueue("personal"));
+    const runtimeBytesBeforeRecovery = await file.read();
+    const queueBeforeRecovery = await queueStorage.read("personal");
+
+    await composer.start();
+    expect(composer.getState()).toMatchObject({
+      status: "blocked",
+      stoppedBundleId: "personal",
+      bundleResults: [
+        {
+          bundleId: "personal",
+          disposition: "blocked",
+          attentionKinds: ["queue_recovery_required"],
+        },
+      ],
+    });
+    const release = jest.spyOn(runtime, "releaseStartupRecovery");
+
+    await expect(composer.releaseFresh(jest.fn())).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+    });
+
+    expect(release).not.toHaveBeenCalled();
+    await expect(file.read()).resolves.toBe(runtimeBytesBeforeRecovery);
+    await expect(queueStorage.read("personal")).resolves.toEqual(queueBeforeRecovery);
+  });
+
+  it("keeps a startup-recovery pause with a retained paused job blocked atomically", async () => {
+    const { file, runtime, composer } = await createHarness();
+    const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
+    await writeObservedQueue(runtime, createPausedQueue("personal", "startup_recovery"));
+
+    await composer.start();
+    expect(composer.getState()).toMatchObject({
+      status: "observed_clear",
+      bundleResults: [{ bundleId: "personal", disposition: "observed_clear" }],
+    });
+    const runtimeBytesBeforeRelease = await file.read();
+    const queueBeforeRelease = await queueStorage.read("personal");
+    const release = jest.spyOn(runtime, "releaseStartupRecovery");
+
+    await expect(composer.releaseFresh(jest.fn())).resolves.toEqual({
+      kind: "blocked",
+      bundleId: "personal",
+    });
+
+    expect(release).toHaveBeenCalledTimes(1);
+    const releaseResult = release.mock.results[0];
+    if (!releaseResult || releaseResult.type !== "return") {
+      throw new Error("Expected one real Runtime startup release result");
+    }
+    await expect(releaseResult.value).resolves.toMatchObject({
+      kind: "blocked",
+      bundleId: "personal",
+      reason: "paused_job_present",
+    });
+    await expect(file.read()).resolves.toBe(runtimeBytesBeforeRelease);
+    await expect(queueStorage.read("personal")).resolves.toEqual(queueBeforeRelease);
   });
 
   it("rolls forward and finalizes one real authorized prepared journal", async () => {
@@ -716,6 +977,23 @@ describe("KnowledgeProductionRecoveryComposer", () => {
       });
       expect(JSON.stringify(composer.getState())).not.toContain("job-private");
       expect(JSON.stringify(composer.getState())).not.toContain("changeset-private");
+      const studio = composer.getStudioObservation("zeta");
+      expect(studio).toMatchObject({
+        bundleId: "zeta",
+        recovery: {
+          items: [
+            {
+              status:
+                disposition === "attention_required"
+                  ? "accepted_not_started"
+                  : "queue_recovery_required",
+            },
+          ],
+        },
+      });
+      expect(Object.isFrozen(studio)).toBe(true);
+      expect(Object.isFrozen(studio?.activity)).toBe(true);
+      expect(Object.isFrozen(studio?.recovery.items)).toBe(true);
     }
   );
 

@@ -33,6 +33,20 @@ const DEFAULT_CONTROLS: Readonly<KnowledgeActivityBundleControls> = {
   canResume: false,
 };
 
+const ENABLED_COMMAND_CAPABILITIES = {
+  pauseBundle: true,
+  resumeBundle: true,
+  cancelJob: true,
+  retryJob: true,
+} as const;
+
+const DISABLED_COMMAND_CAPABILITIES = {
+  pauseBundle: false,
+  resumeBundle: false,
+  cancelJob: false,
+  retryJob: false,
+} as const;
+
 const DEFAULT_CALLBACKS = {
   onPauseBundle: jest.fn(),
   onResumeBundle: jest.fn(),
@@ -115,13 +129,24 @@ function createModel(
   };
 }
 
+/** Returns one named button with its concrete disabled-state type. */
+function getButton(name: string): HTMLButtonElement {
+  return screen.getByRole("button", { name });
+}
+
 describe("KnowledgeActivityPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
   it("renders aggregate counts, an empty state, and the permitted bundle action", () => {
-    render(<KnowledgeActivityPanel model={createModel()} {...DEFAULT_CALLBACKS} />);
+    render(
+      <KnowledgeActivityPanel
+        commandCapabilities={ENABLED_COMMAND_CAPABILITIES}
+        model={createModel()}
+        {...DEFAULT_CALLBACKS}
+      />
+    );
 
     expect(screen.getByRole("heading", { name: "Knowledge activity" })).toBeTruthy();
     expect(screen.getByText("No knowledge activity yet")).toBeTruthy();
@@ -142,7 +167,11 @@ describe("KnowledgeActivityPanel", () => {
       actions: { canCancel: true, canRetry: false, canReview: false },
     });
     render(
-      <KnowledgeActivityPanel model={createModel({ items: [item] })} {...DEFAULT_CALLBACKS} />
+      <KnowledgeActivityPanel
+        commandCapabilities={ENABLED_COMMAND_CAPABILITIES}
+        model={createModel({ items: [item] })}
+        {...DEFAULT_CALLBACKS}
+      />
     );
 
     const row = screen.getByRole("listitem");
@@ -181,6 +210,7 @@ describe("KnowledgeActivityPanel", () => {
     });
     render(
       <KnowledgeActivityPanel
+        commandCapabilities={ENABLED_COMMAND_CAPABILITIES}
         model={createModel({ items: [review, failed] })}
         {...DEFAULT_CALLBACKS}
       />
@@ -223,6 +253,7 @@ describe("KnowledgeActivityPanel", () => {
     };
     render(
       <KnowledgeActivityPanel
+        commandCapabilities={ENABLED_COMMAND_CAPABILITIES}
         model={createModel({ items: [finalizing, applying], controls })}
         {...DEFAULT_CALLBACKS}
       />
@@ -253,6 +284,7 @@ describe("KnowledgeActivityPanel", () => {
     };
     render(
       <KnowledgeActivityPanel
+        commandCapabilities={ENABLED_COMMAND_CAPABILITIES}
         model={createModel({ items: [recovery], controls })}
         {...DEFAULT_CALLBACKS}
       />
@@ -274,7 +306,13 @@ describe("KnowledgeActivityPanel", () => {
       pausedAt: 1_700_000_000_000,
       resumeAt: 1_700_000_060_000,
     };
-    render(<KnowledgeActivityPanel model={createModel({ controls })} {...DEFAULT_CALLBACKS} />);
+    render(
+      <KnowledgeActivityPanel
+        commandCapabilities={ENABLED_COMMAND_CAPABILITIES}
+        model={createModel({ controls })}
+        {...DEFAULT_CALLBACKS}
+      />
+    );
 
     expect(screen.queryByRole("button", { name: "Pause bundle" })).toBeNull();
     expect(screen.getByText("2023-11-14T22:13:20.000Z", { selector: "time" })).toBeTruthy();
@@ -286,11 +324,76 @@ describe("KnowledgeActivityPanel", () => {
 
   it("reports omitted terminal history even when no rows are visible", () => {
     render(
-      <KnowledgeActivityPanel model={createModel({ hiddenTerminal: 3 })} {...DEFAULT_CALLBACKS} />
+      <KnowledgeActivityPanel
+        commandCapabilities={ENABLED_COMMAND_CAPABILITIES}
+        model={createModel({ hiddenTerminal: 3 })}
+        {...DEFAULT_CALLBACKS}
+      />
     );
 
     expect(screen.getByText("No recent activity to display")).toBeTruthy();
     expect(screen.getByText(/3 older terminal jobs are hidden/)).toBeTruthy();
     expect(screen.getByText("History").nextElementSibling?.textContent).toBe("3");
+  });
+
+  it("keeps durable Activity readable while every mutation command is disabled", () => {
+    const cancellable = createItem({ id: "job-cancel" });
+    const retryable = createItem({
+      id: "job-retry",
+      sourceId: "notes/retry.md",
+      status: "failed",
+      durableStage: "generating",
+      terminal: true,
+      actions: { canCancel: false, canRetry: true, canReview: false },
+      failure: {
+        code: "provider_timeout",
+        message: "The provider did not respond in time.",
+        retryable: true,
+        occurredAt: 1_700_000_001_000,
+      },
+    });
+    const reviewable = createItem({
+      id: "job-review",
+      sourceId: "notes/review.md",
+      status: "awaiting_review",
+      durableStage: "review",
+      changeSetId: "change-set-1",
+      actions: { canCancel: false, canRetry: false, canReview: true },
+    });
+    const { rerender } = render(
+      <KnowledgeActivityPanel
+        commandCapabilities={DISABLED_COMMAND_CAPABILITIES}
+        model={createModel({ items: [cancellable, retryable, reviewable] })}
+        {...DEFAULT_CALLBACKS}
+      />
+    );
+
+    expect(getButton("Pause bundle").disabled).toBe(true);
+    expect(getButton("Cancel notes/source.md").disabled).toBe(true);
+    expect(getButton("Retry notes/retry.md").disabled).toBe(true);
+    expect(getButton("Review notes/review.md").disabled).toBe(false);
+
+    fireEvent.click(getButton("Pause bundle"));
+    fireEvent.click(getButton("Cancel notes/source.md"));
+    fireEvent.click(getButton("Retry notes/retry.md"));
+    fireEvent.click(getButton("Review notes/review.md"));
+
+    expect(DEFAULT_CALLBACKS.onPauseBundle).not.toHaveBeenCalled();
+    expect(DEFAULT_CALLBACKS.onCancelJob).not.toHaveBeenCalled();
+    expect(DEFAULT_CALLBACKS.onRetryJob).not.toHaveBeenCalled();
+    expect(DEFAULT_CALLBACKS.onReviewJob).toHaveBeenCalledWith("job-review");
+
+    rerender(
+      <KnowledgeActivityPanel
+        commandCapabilities={DISABLED_COMMAND_CAPABILITIES}
+        model={createModel({
+          controls: { state: "paused", canPause: false, canResume: true },
+        })}
+        {...DEFAULT_CALLBACKS}
+      />
+    );
+    expect(getButton("Resume bundle").disabled).toBe(true);
+    fireEvent.click(getButton("Resume bundle"));
+    expect(DEFAULT_CALLBACKS.onResumeBundle).not.toHaveBeenCalled();
   });
 });

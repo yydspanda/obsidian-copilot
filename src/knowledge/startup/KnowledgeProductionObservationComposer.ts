@@ -1,6 +1,7 @@
-import type { App } from "obsidian";
+import type { App, EventRef, TAbstractFile } from "obsidian";
 
 import { ObsidianKnowledgeCompilerTargetResolver } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
+import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledgeFileStore";
 import { KnowledgeProductionCandidateValidator } from "@/knowledge/compiler/KnowledgeProductionCandidateValidator";
 import { KnowledgeProductionModelRouteLease } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
@@ -21,6 +22,8 @@ import {
 } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
+import { isPathWithinRoot } from "@/knowledge/paths/vaultPath";
+import { KnowledgeStudioScopedQueryAdapter } from "@/knowledge/query/KnowledgeStudioScopedQueryAdapter";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
 import {
   KnowledgeRuntimeInputObservationBinder,
@@ -28,10 +31,12 @@ import {
   KnowledgeRuntimeIngestExecutionProofPort,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeQueueStorage,
+  KnowledgeRuntimeReviewRejectPort,
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { KnowledgeProductionCompileReviewHandler } from "@/knowledge/startup/KnowledgeProductionCompileReviewHandler";
+import { KnowledgeProductionReviewedApplyCoordinator } from "@/knowledge/startup/KnowledgeProductionReviewedApplyCoordinator";
 import { KnowledgePluginProductionWorkflowLease } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import {
   KnowledgeSourceObservationStartupCoordinator,
@@ -44,6 +49,9 @@ import {
   KnowledgeProductionWorkerController,
   type KnowledgeProductionWorkerScheduler,
 } from "@/knowledge/startup/KnowledgeProductionWorkerController";
+import { KnowledgeStudioRuntimeReadAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeReadAdapter";
+import { KnowledgeStudioRuntimeCommandAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeCommandAdapter";
+import { KnowledgeStudioReviewedApplyPort } from "@/knowledge/ui/KnowledgeStudioReviewedApplyPort";
 import {
   KnowledgeProductionPreparationExecutor,
   type KnowledgePreparedIngestHandler,
@@ -159,6 +167,7 @@ interface KnowledgeProductionObservationInternalState {
   plan?: KnowledgeSourceExecutionPlan;
   lastResult?: KnowledgeProductionObservationResult | KnowledgeProductionObservationReproofResult;
   unsubscribeLease?: () => void;
+  closeListeners: Set<() => void>;
 }
 
 const composerStates = new WeakMap<object, KnowledgeProductionObservationInternalState>();
@@ -339,6 +348,67 @@ function closeCoordinator(state: KnowledgeProductionObservationInternalState): v
 }
 
 /**
+ * Subscribes one Studio Bundle to value-free changes beneath its exact Wiki root.
+ *
+ * @param composition - Current App/Vault and workflow generation
+ * @param bundleId - Configured Bundle whose Wiki targets are observed
+ * @param onHint - Non-authoritative reload callback
+ * @returns Idempotent exact-Vault listener cleanup
+ */
+function subscribeKnowledgeStudioVaultHints(
+  composition: KnowledgeProductionObservationComposition,
+  bundleId: string,
+  onHint: () => void
+): () => void {
+  const owner = composition.owners.find(({ config }) => config.id === bundleId);
+  if (!owner || typeof onHint !== "function") throw createAbortError();
+  composition.workflowLease.assertCurrent();
+  const vault = composition.app.vault;
+  let active = true;
+  const affectsWiki = (file: TAbstractFile, oldPath?: string): void => {
+    if (!active) return;
+    if (
+      isPathWithinRoot(file.path, owner.config.wikiRoot) ||
+      (oldPath !== undefined && isPathWithinRoot(oldPath, owner.config.wikiRoot))
+    ) {
+      try {
+        onHint();
+      } catch {
+        // Reload hints are non-authoritative and cannot disrupt Vault events.
+      }
+    }
+  };
+  const refs: EventRef[] = [];
+  try {
+    refs.push(vault.on("create", (file) => affectsWiki(file)));
+    refs.push(vault.on("modify", (file) => affectsWiki(file)));
+    refs.push(vault.on("delete", (file) => affectsWiki(file)));
+    refs.push(vault.on("rename", (file, oldPath) => affectsWiki(file, oldPath)));
+  } catch {
+    active = false;
+    for (const ref of refs) {
+      try {
+        vault.offref(ref);
+      } catch {
+        // Partial subscription authority is already discarded.
+      }
+    }
+    throw createAbortError();
+  }
+  return () => {
+    if (!active) return;
+    active = false;
+    for (const ref of refs) {
+      try {
+        vault.offref(ref);
+      } catch {
+        // The subscription is already non-authoritative for this generation.
+      }
+    }
+  };
+}
+
+/**
  * Owns one production observation generation without exposing Queue execution.
  *
  * The composer retains the listener after initial convergence so later startup
@@ -352,6 +422,7 @@ export class KnowledgeProductionObservationComposer {
       generation: 1,
       closed: false,
       started: false,
+      closeListeners: new Set(),
     };
     composerStates.set(this, state);
     try {
@@ -571,6 +642,112 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
+  /**
+   * Creates the Studio adapter for this exact released worker generation.
+   *
+   * The adapter receives the hidden exact Queue Activity boundary, atomic
+   * Review rejection, and—only when the lifecycle callback is supplied—a
+   * narrow reviewed-apply port. Transaction, Wiki, Runtime, and model authority
+   * remain inside generation-owned coordinators. Every read and command
+   * re-proves this workflow lease.
+   *
+   * @param retainCommandDrain - Optional Vault-level cross-generation drain retention
+   * @param onApplyGenerationRefreshRequired - Lifecycle callback that rebuilds Manifest-bound workflow state
+   */
+  createKnowledgeStudioRuntimeReadAdapter(
+    retainCommandDrain?: (drain: Promise<void>) => void,
+    onApplyGenerationRefreshRequired?: () => void
+  ): KnowledgeStudioRuntimeReadAdapter {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (!composition || !state.workerController || !state.plan) throw createAbortError();
+    this.assertHealthy();
+    const runtime = Object.freeze({
+      readStudioBundle: (bundleId: string) => composition.runtime.readStudioBundle(bundleId),
+      readAppliedProvenance: (bundleId: string) =>
+        composition.runtime.readAppliedProvenance(bundleId),
+      subscribeStudioBundle: (bundleId: string, onHint: () => void) =>
+        composition.runtime.subscribeStudioBundle(bundleId, onHint),
+    });
+    const assertCurrent = (): void => {
+      assertCompositionCurrent(state, state.generation, composition);
+      this.assertHealthy();
+    };
+    const targetResolver = new ObsidianKnowledgeCompilerTargetResolver(composition.app);
+    let reviewApply: KnowledgeStudioReviewedApplyPort | undefined;
+    if (onApplyGenerationRefreshRequired) {
+      const reviewedApplyCoordinator = new KnowledgeProductionReviewedApplyCoordinator({
+        runtime: composition.runtime,
+        queue: composition.queue,
+        reviews: new ChangeSetReviewRepository(
+          new KnowledgeRuntimeReviewStorage(composition.runtime, composition.executionOwner)
+        ),
+        plan: state.plan,
+        bundles: composition.owners.map(({ config }) => config),
+        targetResolver,
+        fileStore: new ObsidianKnowledgeFileStore(composition.app.vault),
+        assertCurrent,
+        onGenerationRefreshRequired: onApplyGenerationRefreshRequired,
+      });
+      reviewApply = new KnowledgeStudioReviewedApplyPort((bundleId, command, signal) =>
+        reviewedApplyCoordinator.submit(bundleId, command, signal)
+      );
+    }
+    const commands = new KnowledgeStudioRuntimeCommandAdapter({
+      queue: composition.queue,
+      reviewReject: new KnowledgeRuntimeReviewRejectPort(composition.runtime),
+      ...(reviewApply === undefined ? {} : { reviewApply }),
+      bundleIds: composition.owners.map(({ config }) => config.id),
+      assertCurrent,
+      ...(retainCommandDrain === undefined ? {} : { retainDrain: retainCommandDrain }),
+      notifyReviewWorkAvailable: () => composition.eventSink.emit(),
+    });
+    const query = new KnowledgeStudioScopedQueryAdapter({
+      app: composition.app,
+      runtime,
+      bundles: composition.owners.map(({ config }) => config),
+      targetResolver,
+      assertCurrent,
+    });
+    this.subscribeClose(() => query.close());
+    return new KnowledgeStudioRuntimeReadAdapter({
+      runtime,
+      bundles: composition.owners.map(({ config }) => config),
+      targetResolver,
+      assertCurrent,
+      commands,
+      query,
+      subscribeVaultHints: (bundleId, onHint) =>
+        subscribeKnowledgeStudioVaultHints(composition, bundleId, onHint),
+    });
+  }
+
+  /**
+   * Subscribes to synchronous generation closure without exposing internal state.
+   *
+   * @param listener - Best-effort callback used to revoke downstream capabilities
+   * @returns Idempotent unsubscription callback
+   */
+  subscribeClose(listener: () => void): () => void {
+    const state = requireComposerState(this);
+    if (typeof listener !== "function") throw createAbortError();
+    if (state.closed) {
+      try {
+        listener();
+      } catch {
+        // Closure already won; downstream notification is best-effort.
+      }
+      return () => undefined;
+    }
+    state.closeListeners.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      state.closeListeners.delete(listener);
+    };
+  }
+
   /** Synchronously closes listeners and invalidates all future plan/capture continuations. */
   close(): void {
     const state = composerStates.get(this);
@@ -612,6 +789,15 @@ export class KnowledgeProductionObservationComposer {
       // The local generation is already revoked; unsubscribe cannot revive it.
     }
     closeCoordinator(state);
+    const listeners = [...state.closeListeners];
+    state.closeListeners.clear();
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // Downstream cleanup cannot interrupt or revive the closed generation.
+      }
+    }
   }
 }
 

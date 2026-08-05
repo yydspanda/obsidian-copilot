@@ -1,4 +1,6 @@
 jest.mock("obsidian", () => {
+  class FileSystemAdapter {}
+
   class TFile {
     /** Creates one mutable fake Vault file. */
     constructor(public path: string) {}
@@ -9,7 +11,7 @@ jest.mock("obsidian", () => {
     constructor(public path: string) {}
   }
 
-  return { TFile, TFolder };
+  return { FileSystemAdapter, TFile, TFolder };
 });
 
 import {
@@ -30,10 +32,13 @@ import {
   type KnowledgePluginProductionPreflightAdmission,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import { KnowledgeStudioReadGenerationLease } from "@/knowledge/startup/KnowledgeStudioReadGenerationLease";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
-import { App, EventRef, TAbstractFile, TFile, Vault } from "obsidian";
+import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
+import { UnavailableKnowledgeStudioPort } from "@/knowledge/ui/KnowledgeStudioController";
+import { App, EventRef, FileSystemAdapter, TAbstractFile, TFile, Vault } from "obsidian";
 
 const PROJECT_ID = "project-personal";
 const MODEL_NAME = "deepseek-v4-pro";
@@ -190,10 +195,15 @@ class ProductionVaultHarness {
     const bytes = this.files.get(path);
     return bytes ? { type: "file" as const, ctime: 1, mtime: 1, size: bytes.byteLength } : null;
   });
+  readonly adapter = Object.assign(new FileSystemAdapter(), {
+    readBinary: this.readBinary,
+    read: this.read,
+    stat: this.stat,
+  });
   private nextRef = 0;
 
   readonly vault = {
-    adapter: { readBinary: this.readBinary, read: this.read, stat: this.stat },
+    adapter: this.adapter,
     getFiles: jest.fn(() => [...this.loadedFiles.values()]),
     getAllLoadedFiles: jest.fn(() => [...this.loadedFiles.values()]),
     getAbstractFileByPath: jest.fn((path: string) => this.loadedFiles.get(path) ?? null),
@@ -386,6 +396,202 @@ describe("KnowledgeProductionObservationComposer", () => {
 
     expect(vault.activeListenerCount()).toBe(0);
     expect(() => composer.assertHealthy()).toThrow("The operation was aborted");
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("publishes a least-authority live Studio command adapter for the exact worker generation", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+    await composer.start(new AbortController().signal);
+
+    expect(() => composer.createKnowledgeStudioRuntimeReadAdapter()).toThrow(
+      "The operation was aborted"
+    );
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler()
+    );
+    const onApplyGenerationRefreshRequired = jest.fn<void, []>();
+    const adapter = composer.createKnowledgeStudioRuntimeReadAdapter(
+      undefined,
+      onApplyGenerationRefreshRequired
+    );
+    const adapterInput = (
+      adapter as unknown as {
+        input: {
+          runtime: Record<PropertyKey, unknown>;
+          commands: Record<PropertyKey, unknown>;
+          query: Record<PropertyKey, unknown>;
+        };
+      }
+    ).input;
+    const adapterRuntime = adapterInput.runtime;
+    expect(Reflect.ownKeys(adapterRuntime).sort()).toEqual([
+      "readAppliedProvenance",
+      "readStudioBundle",
+      "subscribeStudioBundle",
+    ]);
+    expect(Object.isFrozen(adapterRuntime)).toBe(true);
+    expect("writeQueue" in adapterRuntime).toBe(false);
+    expect("writeReview" in adapterRuntime).toBe(false);
+    const queryAdapter = adapterInput.query;
+    expect(Reflect.ownKeys(queryAdapter)).toEqual([]);
+    expect(Object.isFrozen(queryAdapter)).toBe(true);
+    for (const forbiddenAuthority of [
+      "runtime",
+      "vault",
+      "model",
+      "search",
+      "write",
+      "queue",
+      "review",
+      "apply",
+    ]) {
+      expect(forbiddenAuthority in queryAdapter).toBe(false);
+    }
+    const commandAdapter = adapterInput.commands;
+    expect(Reflect.ownKeys(commandAdapter)).toEqual([]);
+    expect(Object.isFrozen(commandAdapter)).toBe(true);
+    for (const forbiddenAuthority of [
+      "queue",
+      "runtime",
+      "write",
+      "writeQueue",
+      "writeReview",
+      "apply",
+      "accept",
+      "model",
+      "executor",
+      "transaction",
+    ]) {
+      expect(forbiddenAuthority in commandAdapter).toBe(false);
+    }
+    const studioPort = new DelegatingKnowledgeStudioPort();
+    const studioReadGeneration = new KnowledgeStudioReadGenerationLease({
+      delegate: adapter,
+      subscribeInvalidation: (listener) => composer.subscribeClose(listener),
+      replaceDelegate: (delegate) => studioPort.replaceDelegate(delegate),
+      setUnavailable: () =>
+        studioPort.replaceDelegate(new UnavailableKnowledgeStudioPort("Generation closed")),
+      assertCurrent: () => composer.assertHealthy(),
+    });
+    const snapshot = await studioPort.load("personal", new AbortController().signal);
+
+    expect(snapshot).toMatchObject({
+      bundleId: "personal",
+      availability: "ready",
+      commandCapabilities: {
+        pauseBundle: true,
+        resumeBundle: true,
+        cancelJob: true,
+        retryJob: true,
+        reviewReject: true,
+        reviewAccept: true,
+        recoveryContinue: false,
+        recoveryAbandon: false,
+      },
+      activity: {
+        bundleId: "personal",
+        items: [expect.objectContaining({ sourceId: "source-1", status: "queued" })],
+      },
+      reviews: [],
+      recovery: {
+        bundleId: "personal",
+        items: [],
+      },
+      queryAvailable: true,
+    });
+    expect(snapshot.notice).toContain("scoped Query are connected");
+    expect(snapshot.notice).toContain(
+      "model synthesis, Save to Wiki, PDF jump, and delete remain disabled"
+    );
+    expect(Object.isFrozen(snapshot.commandCapabilities)).toBe(true);
+    expect(onApplyGenerationRefreshRequired).not.toHaveBeenCalled();
+
+    await expect(
+      studioPort.query("personal", { query: "grounded evidence" }, new AbortController().signal)
+    ).resolves.toMatchObject({
+      mode: "grounded_retrieval",
+      bundleId: "personal",
+      hits: [],
+    });
+
+    await expect(
+      studioPort.pauseBundle("personal", snapshot.activity.revision, new AbortController().signal)
+    ).resolves.toBeUndefined();
+    const pausedQueue = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+    expect(pausedQueue.ok).toBe(true);
+    if (!pausedQueue.ok) throw new Error("Expected a durably paused Queue snapshot");
+    expect(pausedQueue.value).toMatchObject({
+      revision: snapshot.activity.revision + 1,
+      control: { status: "paused", reason: "user" },
+      jobs: [expect.objectContaining({ sourceId: "source-1", status: "pending" })],
+    });
+    await expect(studioPort.load("personal", new AbortController().signal)).resolves.toMatchObject({
+      availability: "ready",
+      activity: {
+        revision: pausedQueue.value.revision,
+        controls: { state: "paused", canPause: false, canResume: true },
+      },
+    });
+
+    const onHint = jest.fn();
+    const unsubscribe = studioPort.subscribe("personal", onHint);
+    expect(vault.activeListenerCount()).toBe(8);
+
+    vault.trigger("create", createFile("Elsewhere/Note.md"));
+    expect(onHint).not.toHaveBeenCalled();
+    vault.trigger("create", createFile("Wiki/personal/Page.md"));
+    expect(onHint).toHaveBeenCalledTimes(1);
+    vault.trigger("modify", createFile("Wiki/personal/Page.md"));
+    vault.trigger("delete", createFile("Wiki/personal/Page.md"));
+    vault.trigger("rename", createFile("Elsewhere/Moved.md"), "Wiki/personal/BeforeMove.md");
+    vault.trigger("rename", createFile("Wiki/personal/MovedIn.md"), "Elsewhere/BeforeMove.md");
+    vault.trigger("create", createFile("wiki/PERSONAL/Case.md"));
+    vault.trigger("rename", createFile("Elsewhere/New.md"), "Elsewhere/Old.md");
+    expect(onHint).toHaveBeenCalledTimes(6);
+    const retainedHandlers = [...vault.handlers.values()].flatMap((handlers) => [
+      ...handlers.values(),
+    ]);
+
+    lifecycle.invalidate();
+    expect(vault.activeListenerCount()).toBe(0);
+    await expect(
+      adapter.pauseBundle("personal", pausedQueue.value.revision, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
+      adapter.query("personal", { query: "late" }, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeScopedQueryError" });
+    await expect(
+      studioPort.pauseBundle("personal", pausedQueue.value.revision, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+    await expect(
+      studioPort.query("personal", { query: "late" }, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+    await expect(studioPort.load("personal", new AbortController().signal)).resolves.toMatchObject({
+      availability: "adapter_unavailable",
+      notice: "Generation closed",
+    });
+    expect(parseIngestQueueSnapshot(await runtime.readQueue("personal"))).toEqual(pausedQueue);
+    const callsAfterInvalidation = onHint.mock.calls.length;
+    for (const handler of retainedHandlers) handler(createFile("Wiki/personal/Late.md"));
+    expect(onHint).toHaveBeenCalledTimes(callsAfterInvalidation);
+    unsubscribe();
+    unsubscribe();
+    studioReadGeneration.close();
+    composer.close();
+    await worker.whenSettled();
+    expect(vault.activeListenerCount()).toBe(0);
     expect(fetchPort).not.toHaveBeenCalled();
   });
 

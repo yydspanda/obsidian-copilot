@@ -37,6 +37,14 @@ import {
   KnowledgeRuntimeStartupReleasePort,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledgeFileStore";
+import {
+  deriveKnowledgeActivityModel,
+  type KnowledgeActivityModel,
+} from "@/knowledge/ui/activityModel";
+import {
+  deriveKnowledgeRecoveryModel,
+  type KnowledgeRecoveryModel,
+} from "@/knowledge/ui/recoveryModel";
 
 const MAX_CONFIGURED_BUNDLES = 10_000;
 
@@ -62,6 +70,15 @@ export interface KnowledgeProductionRecoveryBundleResult {
   bundleId: string;
   disposition: KnowledgeStartupGateDisposition;
   attentionKinds: readonly KnowledgeStartupAttention["kind"][];
+}
+
+/** Narrow stopped-Bundle projection retained only for the recovery Studio delegate. */
+export interface KnowledgeProductionRecoveryStudioObservation {
+  bundleId: string;
+  runtimeRevision: number;
+  reviewRevision: number;
+  activity: Readonly<KnowledgeActivityModel>;
+  recovery: Readonly<KnowledgeRecoveryModel>;
 }
 
 /** Sanitized outcome of a fresh Gate plus conditional release pass. */
@@ -150,8 +167,15 @@ interface KnowledgeProductionRecoveryInternalState {
   composition?: KnowledgeProductionRecoveryComposition;
   compositionFailure?: KnowledgeProductionRecoveryDiagnosticCode;
   published: KnowledgeProductionRecoveryState;
+  studioObservation?: Readonly<KnowledgeProductionRecoveryStudioObservation>;
   operationTail: Promise<void>;
   listeners: Set<KnowledgeProductionRecoveryStateListener>;
+}
+
+/** Internal Gate generation outcome and its optional recovery-only UI projection. */
+interface KnowledgeProductionRecoveryGenerationResult {
+  state: KnowledgeProductionRecoveryState;
+  studioObservation?: Readonly<KnowledgeProductionRecoveryStudioObservation>;
 }
 
 class KnowledgeProductionRecoveryInputError extends TypeError {
@@ -384,12 +408,33 @@ function classifyRecoveryFailure(error: unknown): KnowledgeProductionRecoveryDia
   return "recovery_failed";
 }
 
+/** Projects one trusted Gate result into the content-free recovery Studio contract. */
+function createStudioObservation(
+  result: KnowledgeStartupGateResult
+): Readonly<KnowledgeProductionRecoveryStudioObservation> {
+  const recovery = deriveKnowledgeRecoveryModel({
+    bundleId: result.bundleId,
+    runtimeRevision: result.runtimeRevision,
+    reviewRevision: result.reviewRevision,
+    queueSnapshot: result.queueSnapshot,
+    globalTransaction: result.globalTransaction,
+    classifications: result.acceptedClassifications,
+  });
+  return Object.freeze({
+    bundleId: result.bundleId,
+    runtimeRevision: result.runtimeRevision,
+    reviewRevision: result.reviewRevision,
+    activity: deriveKnowledgeActivityModel(result.queueSnapshot),
+    recovery,
+  });
+}
+
 /** Runs only the startup Gate and stops at the first non-clear Bundle. */
 async function runRecoveryGeneration(
   composition: KnowledgeProductionRecoveryComposition,
   generation: number,
   isCurrent: () => boolean
-): Promise<KnowledgeProductionRecoveryState | undefined> {
+): Promise<KnowledgeProductionRecoveryGenerationResult | undefined> {
   const bundles = await orderBundlesForRecovery(composition);
   if (!isCurrent()) return undefined;
   const bundleResults: KnowledgeProductionRecoveryBundleResult[] = [];
@@ -404,19 +449,24 @@ async function runRecoveryGeneration(
     const summary = summarizeGateResult(bundle.id, result);
     bundleResults.push(summary);
     if (summary.disposition !== "observed_clear") {
-      return freezeState({
-        generation,
-        status: summary.disposition,
-        stoppedBundleId: bundle.id,
-        bundleResults: Object.freeze([...bundleResults]),
-      });
+      return {
+        state: freezeState({
+          generation,
+          status: summary.disposition,
+          stoppedBundleId: bundle.id,
+          bundleResults: Object.freeze([...bundleResults]),
+        }),
+        studioObservation: createStudioObservation(result),
+      };
     }
   }
-  return freezeState({
-    generation,
-    status: "observed_clear",
-    bundleResults: Object.freeze([...bundleResults]),
-  });
+  return {
+    state: freezeState({
+      generation,
+      status: "observed_clear",
+      bundleResults: Object.freeze([...bundleResults]),
+    }),
+  };
 }
 
 /** Publishes one state, then notifies a stable listener snapshot. */
@@ -470,9 +520,33 @@ export class KnowledgeProductionRecoveryComposer {
     Object.freeze(this);
   }
 
+  /** Proves a recovery composer was constructed by this module without exposing its ports. */
+  static assert(value: unknown): asserts value is KnowledgeProductionRecoveryComposer {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Object.getPrototypeOf(value) !== KnowledgeProductionRecoveryComposer.prototype ||
+      !composerStates.has(value)
+    ) {
+      throw new KnowledgeProductionRecoveryInputError();
+    }
+  }
+
   /** Returns the latest immutable sanitized lifecycle observation. */
   getState(): KnowledgeProductionRecoveryState {
     return composerStates.get(this)?.published ?? INVALID_FALLBACK_STATE;
+  }
+
+  /** Returns the latest exact stopped-Bundle projection without exposing Gate mutation ports. */
+  getStudioObservation(
+    bundleId: string
+  ): Readonly<KnowledgeProductionRecoveryStudioObservation> | undefined {
+    const internal = composerStates.get(this);
+    const observation = internal?.studioObservation;
+    if (!internal || internal.closed || !observation || observation.bundleId !== bundleId) {
+      return undefined;
+    }
+    return observation;
   }
 
   /** Subscribes to current-generation state publications. */
@@ -494,6 +568,7 @@ export class KnowledgeProductionRecoveryComposer {
     const internal = composerStates.get(this);
     if (!internal || internal.closed) return;
     const generation = ++internal.generation;
+    internal.studioObservation = undefined;
     const composition = internal.composition;
     if (!composition) {
       publishState(
@@ -524,19 +599,22 @@ export class KnowledgeProductionRecoveryComposer {
           internal.generation === generation &&
           internal.composition === composition;
         if (!isCurrent()) return;
-        let next: KnowledgeProductionRecoveryState | undefined;
+        let next: KnowledgeProductionRecoveryGenerationResult | undefined;
         try {
           next = await runRecoveryGeneration(composition, generation, isCurrent);
         } catch (error) {
           if (!isCurrent()) return;
-          next = freezeState({
-            generation,
-            status: "diagnostic",
-            code: classifyRecoveryFailure(error),
-          });
+          next = {
+            state: freezeState({
+              generation,
+              status: "diagnostic",
+              code: classifyRecoveryFailure(error),
+            }),
+          };
         }
         if (next && isCurrent()) {
-          publishState(internal, next);
+          internal.studioObservation = next.studioObservation;
+          publishState(internal, next.state);
         }
       });
     internal.operationTail = work;
@@ -580,6 +658,7 @@ export class KnowledgeProductionRecoveryComposer {
     internal.closed = true;
     internal.generation += 1;
     internal.composition = undefined;
+    internal.studioObservation = undefined;
     publishState(internal, freezeState({ generation: internal.generation, status: "closed" }));
     internal.listeners.clear();
   }

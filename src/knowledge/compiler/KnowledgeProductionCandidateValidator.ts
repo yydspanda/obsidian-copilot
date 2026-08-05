@@ -638,7 +638,7 @@ function createOkfDocument(
 }
 
 /** Validates artifact identities and every material citation in the candidate. */
-function validateCitations(
+export function validateProductionCandidateCitations(
   artifacts: readonly SourceArtifactObservation[],
   citations: readonly ClaimCitation[],
   diagnostics: KnowledgeDiagnostic[]
@@ -678,7 +678,7 @@ function validateCitations(
 }
 
 /** Validates each non-delete file as OKF Markdown and rejects every link in generation one. */
-function validateGeneratedDocuments(
+export function validateProductionGeneratedDocuments(
   bundleWikiRoot: string,
   changes: readonly KnowledgeFileChange[],
   citations: readonly ClaimCitation[],
@@ -813,8 +813,12 @@ function validateCandidate(
     };
   }
 
-  const citationsValid = validateCitations(input.artifacts, proposed.citations, diagnostics);
-  const generated = validateGeneratedDocuments(
+  const citationsValid = validateProductionCandidateCitations(
+    input.artifacts,
+    proposed.citations,
+    diagnostics
+  );
+  const generated = validateProductionGeneratedDocuments(
     input.bundle.wikiRoot,
     proposed.changes,
     proposed.citations,

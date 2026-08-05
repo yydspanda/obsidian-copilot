@@ -14,11 +14,14 @@ import type {
 import { sha256 } from "@/utils/hash";
 
 const MAX_REVIEW_DIAGNOSTICS = 256;
+const MAX_REVIEW_COMMAND_ITEMS = 10_000;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 /** Exact transient observation used to build one review preview. */
 export type KnowledgeReviewTargetObservation =
   | { changeId: string; kind: "missing" }
   | { changeId: string; kind: "file"; content: string }
+  | { changeId: string; kind: "occupied" }
   | { changeId: string; kind: "directory" }
   | { changeId: string; kind: "unavailable" };
 
@@ -79,14 +82,144 @@ export interface KnowledgeReviewPlan {
 export type KnowledgeReviewFileDecision =
   | { changeId: string; decision: "accept_exact" }
   | { changeId: string; decision: "reject" }
-  | { changeId: string; decision: "accept_blocks"; acceptedBlockIds: string[] };
+  | { changeId: string; decision: "accept_blocks"; acceptedBlockIds: readonly string[] };
 
 /** Command emitted by the UI without paths, content, hashes, or status fields. */
 export interface KnowledgeReviewCommand {
   changeSetId: string;
   proposalDigest: string;
   expectedSnapshotToken: string;
-  decisions: KnowledgeReviewFileDecision[];
+  decisions: readonly KnowledgeReviewFileDecision[];
+}
+
+/** Reads one exact plain data record without invoking accessors or proxy iteration. */
+function readExactCommandRecord(
+  value: unknown,
+  expectedKeys: readonly string[]
+): Readonly<Record<string, unknown>> | undefined {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== expectedKeys.length ||
+      keys.some((key) => typeof key !== "string") ||
+      !expectedKeys.every((key) => keys.includes(key))
+    ) {
+      return undefined;
+    }
+    const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of expectedKeys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+      snapshot[key] = descriptor.value;
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Snapshots one bounded dense command array without invoking item accessors. */
+function snapshotCommandArray(value: unknown): readonly unknown[] | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined;
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !lengthDescriptor ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > MAX_REVIEW_COMMAND_ITEMS ||
+      Reflect.ownKeys(value).length !== lengthDescriptor.value + 1
+    ) {
+      return undefined;
+    }
+    const snapshot: unknown[] = [];
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+      snapshot.push(descriptor.value);
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reports whether one command identifier is canonical without normalizing it. */
+function isCommandIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.trim() === value;
+}
+
+/** Creates one fixed strict-command diagnostic. */
+function createCommandInputDiagnostic(field: string): KnowledgeDiagnostic {
+  return {
+    code: "review_command_input_invalid",
+    severity: "error",
+    field,
+    message: "Review command structure does not satisfy the strict opaque contract",
+  };
+}
+
+/**
+ * Strictly captures one opaque Review command without reading paths or content.
+ *
+ * @param value - Unknown UI command crossing the production mutation boundary
+ * @returns Detached, deeply frozen identifier-only command
+ */
+export function snapshotKnowledgeReviewCommand(value: unknown): KnowledgeReviewCommand {
+  const command = readExactCommandRecord(value, [
+    "changeSetId",
+    "proposalDigest",
+    "expectedSnapshotToken",
+    "decisions",
+  ]);
+  const decisions = snapshotCommandArray(command?.decisions);
+  if (
+    !command ||
+    !isCommandIdentifier(command.changeSetId) ||
+    typeof command.proposalDigest !== "string" ||
+    !SHA256_PATTERN.test(command.proposalDigest) ||
+    typeof command.expectedSnapshotToken !== "string" ||
+    !SHA256_PATTERN.test(command.expectedSnapshotToken) ||
+    !decisions ||
+    decisions.length === 0
+  ) {
+    throw new KnowledgeReviewDecisionError([createCommandInputDiagnostic("command")]);
+  }
+
+  const captured = decisions.map((value, index): KnowledgeReviewFileDecision => {
+    const base = readExactCommandRecord(value, ["changeId", "decision"]);
+    if (base && isCommandIdentifier(base.changeId)) {
+      if (base.decision === "accept_exact" || base.decision === "reject") {
+        return Object.freeze({ changeId: base.changeId, decision: base.decision });
+      }
+    }
+    const blocks = readExactCommandRecord(value, ["changeId", "decision", "acceptedBlockIds"]);
+    const blockIds = snapshotCommandArray(blocks?.acceptedBlockIds);
+    if (
+      !blocks ||
+      !isCommandIdentifier(blocks.changeId) ||
+      blocks.decision !== "accept_blocks" ||
+      !blockIds ||
+      blockIds.some((blockId) => !isCommandIdentifier(blockId))
+    ) {
+      throw new KnowledgeReviewDecisionError([createCommandInputDiagnostic(`decisions[${index}]`)]);
+    }
+    return Object.freeze({
+      changeId: blocks.changeId,
+      decision: "accept_blocks" as const,
+      acceptedBlockIds: Object.freeze([...(blockIds as readonly string[])]),
+    });
+  });
+  return Object.freeze({
+    changeSetId: command.changeSetId,
+    proposalDigest: command.proposalDigest,
+    expectedSnapshotToken: command.expectedSnapshotToken,
+    decisions: Object.freeze(captured),
+  });
 }
 
 /** Candidate supplied to deterministic review-time validation. */
@@ -312,6 +445,13 @@ function inspectTarget(
       integrity: "directory",
       capability: "reject_only",
       blockedReason: "review_target_is_directory",
+    };
+  }
+  if (observation.kind === "occupied") {
+    return {
+      integrity: "occupied",
+      capability: "reject_only",
+      blockedReason: "review_create_target_occupied",
     };
   }
   if (change.operation === "create") {
@@ -635,7 +775,8 @@ export function compileKnowledgeReviewSelection(
   plan: KnowledgeReviewPlan,
   command: KnowledgeReviewCommand
 ): { kind: "rejected" } | { kind: "candidate"; changeSet: KnowledgeChangeSet } {
-  validateReviewCommand(plan, command);
+  const capturedCommand = snapshotKnowledgeReviewCommand(command);
+  validateReviewCommand(plan, capturedCommand);
   const parsedProposal = parseKnowledgeChangeSet(proposal);
   if (!parsedProposal.ok) {
     throw new KnowledgeReviewDecisionError(parsedProposal.issues);
@@ -654,7 +795,9 @@ export function compileKnowledgeReviewSelection(
     ]);
   }
 
-  const decisionsById = new Map(command.decisions.map((decision) => [decision.changeId, decision]));
+  const decisionsById = new Map(
+    capturedCommand.decisions.map((decision) => [decision.changeId, decision])
+  );
   const filesById = new Map(plan.files.map((file) => [file.changeId, file]));
   const selectedChanges: KnowledgeFileChange[] = [];
   parsedProposal.value.changes.forEach((change) => {

@@ -39,7 +39,11 @@ export type KnowledgeStartupReleaseResult =
   | {
       kind: "unchanged";
       bundleId: string;
-      reason: "queue_absent" | "already_running";
+      reason:
+        | "queue_absent"
+        | "already_running"
+        | "user_pause_preserved"
+        | "rate_limit_pause_preserved";
       runtimeRevision: number;
       reviewRevision: number;
       queueSnapshot: IngestQueueSnapshot;

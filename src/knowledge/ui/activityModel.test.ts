@@ -19,6 +19,8 @@ const HASH_C = "c".repeat(64);
 
 interface TestJobOptions {
   sourceId?: string;
+  sourceContentHash?: string;
+  pipelineFingerprint?: string;
   createdAt?: number;
   updatedAt?: number;
   inputRevision?: number;
@@ -38,8 +40,8 @@ function createJobBase(id: string, options: TestJobOptions = {}) {
     id,
     bundleId: "personal",
     sourceId: options.sourceId ?? `source-${id}`,
-    sourceContentHash: HASH_A,
-    pipelineFingerprint: HASH_B,
+    sourceContentHash: options.sourceContentHash ?? HASH_A,
+    pipelineFingerprint: options.pipelineFingerprint ?? HASH_B,
     inputRevision: options.inputRevision ?? 1,
     attempt: options.attempt ?? 0,
     rerunRequested: options.rerunRequested ?? false,
@@ -210,6 +212,7 @@ function createSnapshot(
     applyClaim?: IngestApplyClaimMarker;
     applyCommit?: IngestApplyCommitMarker;
     pendingReviews?: IngestQueueSnapshot["pendingReviews"];
+    sourceHighWatermarks?: IngestQueueSnapshot["sourceHighWatermarks"];
   } = {}
 ): IngestQueueSnapshot {
   const pendingReviews =
@@ -234,7 +237,7 @@ function createSnapshot(
     control,
     jobs,
     reruns: [],
-    sourceHighWatermarks: [],
+    sourceHighWatermarks: markers.sourceHighWatermarks ?? [],
     pendingReviews,
     reviewRejections: [],
     applyAbandonments: [],
@@ -436,6 +439,67 @@ describe("deriveKnowledgeActivityModel stage projection", () => {
     expect(model.items.find((item) => item.id === "failed")?.actions.canRetry).toBe(false);
   });
 
+  it("blocks retry of stale input after a newer divergent source job becomes terminal", () => {
+    const failed = createFailedJob("failed", "generating", true, {
+      sourceId: "shared-source",
+      inputRevision: 1,
+    });
+    const rejected = createCancelledJob("rejected", {
+      sourceId: "shared-source",
+      sourceContentHash: HASH_C,
+      inputRevision: 2,
+    });
+    const model = deriveKnowledgeActivityModel(
+      createSnapshot(
+        [failed, rejected],
+        { status: "running" },
+        {
+          sourceHighWatermarks: [
+            {
+              sourceId: "shared-source",
+              sourceContentHash: HASH_C,
+              pipelineFingerprint: HASH_B,
+              inputRevision: 2,
+              observedAt: 20,
+            },
+          ],
+        }
+      )
+    );
+
+    expect(model.items.find((item) => item.id === "failed")?.actions.canRetry).toBe(false);
+  });
+
+  it("allows retry when a newer source revision has the same compile payload", () => {
+    const failed = createFailedJob("failed", "generating", true, {
+      sourceId: "shared-source",
+      inputRevision: 1,
+    });
+    const observed = createCancelledJob("observed", {
+      sourceId: "shared-source",
+      inputRevision: 2,
+    });
+    const model = deriveKnowledgeActivityModel(
+      createSnapshot(
+        [failed, observed],
+        { status: "running" },
+        {
+          sourceHighWatermarks: [
+            {
+              sourceId: "shared-source",
+              sourceContentHash: HASH_A,
+              pipelineFingerprint: HASH_B,
+              inputRevision: 2,
+              observedAt: 20,
+            },
+          ],
+        }
+      )
+    );
+
+    expect(model.items.find((item) => item.id === "failed")?.actions.canRetry).toBe(true);
+  });
+
   it("retains rerun markers and detached sanitized failures", () => {
     const failed = createFailedJob("failed", "generating", true, { rerunRequested: true });
     const snapshot = createSnapshot([failed]);
@@ -562,7 +626,7 @@ describe("deriveKnowledgeActivityModel Bundle controls", () => {
       control: { status: "paused", reason: "startup_recovery", pausedAt: 20 },
       state: "startup_recovery",
       canPause: false,
-      canResume: true,
+      canResume: false,
     },
   ])("maps $state to Bundle-level pause/resume controls", (expected) => {
     const model = deriveKnowledgeActivityModel(createSnapshot([], expected.control));
