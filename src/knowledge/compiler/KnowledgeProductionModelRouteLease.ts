@@ -19,6 +19,12 @@ import {
   type IngestExecutionContext,
 } from "@/knowledge/ingest/queue/IngestQueue";
 import type { KnowledgeIngestWorkStage } from "@/knowledge/model/types";
+import type { KnowledgeGroundedAnswerModelPort } from "@/knowledge/query/KnowledgeGroundedAnswer";
+import {
+  createKnowledgeGroundedAnswerModelPort,
+  KnowledgeGroundedAnswerModelRoute,
+  revokeKnowledgeGroundedAnswerModelRoute,
+} from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
 
 const MODEL_ROUTE_LEASE_TOKEN = Symbol("KnowledgeProductionModelRouteLease.constructor");
 const MODEL_ROUTE_OWNER_TOKEN = Symbol("KnowledgeProductionModelRouteLeaseOwner.constructor");
@@ -31,6 +37,7 @@ const COMPILE_ATTEMPT_TOKEN = Symbol("KnowledgeProductionCompileAttempt.construc
 export interface KnowledgeProductionModelRouteBinding {
   bundleId: string;
   route: KnowledgePrivateModelRoute;
+  answerRoute: KnowledgeGroundedAnswerModelRoute;
 }
 
 /** Generation-owned non-model ports captured before any Queue attempt exists. */
@@ -52,6 +59,8 @@ interface KnowledgeProductionModelRouteLeaseState {
   current: boolean;
   builderIssued: boolean;
   routes: Map<string, KnowledgePrivateModelRoute>;
+  answerRoutes: Map<string, KnowledgeGroundedAnswerModelRoute>;
+  answerAbortController: AbortController;
 }
 
 interface KnowledgeProductionModelRouteLeaseOwnerState {
@@ -186,8 +195,9 @@ function snapshotRouteBindingsUnsafe(
     }
     const bundleId = Object.getOwnPropertyDescriptor(record, "bundleId");
     const route = Object.getOwnPropertyDescriptor(record, "route");
+    const answerRoute = Object.getOwnPropertyDescriptor(record, "answerRoute");
     if (
-      Reflect.ownKeys(record).length !== 2 ||
+      Reflect.ownKeys(record).length !== 3 ||
       !bundleId ||
       !("value" in bundleId) ||
       !bundleId.enumerable ||
@@ -195,13 +205,26 @@ function snapshotRouteBindingsUnsafe(
       !route ||
       !("value" in route) ||
       !route.enumerable ||
+      !answerRoute ||
+      !("value" in answerRoute) ||
+      !answerRoute.enumerable ||
       bundleIds.has(bundleId.value)
     ) {
       throw new KnowledgeProductionModelRouteLeaseError();
     }
     KnowledgePrivateModelRoute.assert(route.value);
+    KnowledgeGroundedAnswerModelRoute.assert(answerRoute.value);
+    if (!answerRoute.value.matchesBundleId(bundleId.value)) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
     bundleIds.add(bundleId.value);
-    bindings.push(Object.freeze({ bundleId: bundleId.value, route: route.value }));
+    bindings.push(
+      Object.freeze({
+        bundleId: bundleId.value,
+        route: route.value,
+        answerRoute: answerRoute.value,
+      })
+    );
   }
   return Object.freeze(bindings);
 }
@@ -577,6 +600,8 @@ export class KnowledgeProductionModelRouteLease {
       current: true,
       builderIssued: false,
       routes: new Map(bindings.map(({ bundleId, route }) => [bundleId, route])),
+      answerRoutes: new Map(bindings.map(({ bundleId, answerRoute }) => [bundleId, answerRoute])),
+      answerAbortController: new AbortController(),
     });
     Object.freeze(this);
   }
@@ -600,12 +625,22 @@ export class KnowledgeProductionModelRouteLease {
   coversBundleIds(bundleIds: readonly string[]): boolean {
     const state = requireLeaseState(this);
     try {
-      if (!state.current || !Array.isArray(bundleIds) || bundleIds.length !== state.routes.size) {
+      if (
+        !state.current ||
+        !Array.isArray(bundleIds) ||
+        bundleIds.length !== state.routes.size ||
+        state.answerRoutes.size !== state.routes.size
+      ) {
         return false;
       }
       const seen = new Set<string>();
       for (const bundleId of bundleIds) {
-        if (!isCanonicalIdentifier(bundleId) || seen.has(bundleId) || !state.routes.has(bundleId)) {
+        if (
+          !isCanonicalIdentifier(bundleId) ||
+          seen.has(bundleId) ||
+          !state.routes.has(bundleId) ||
+          !state.answerRoutes.has(bundleId)
+        ) {
           return false;
         }
         seen.add(bundleId);
@@ -614,6 +649,26 @@ export class KnowledgeProductionModelRouteLease {
     } catch {
       return false;
     }
+  }
+
+  /** Creates one lifecycle-fenced answer port without exposing either private route. */
+  createGroundedAnswerModelPort(bundleId: string): Readonly<KnowledgeGroundedAnswerModelPort> {
+    const state = requireLeaseState(this);
+    assertLeaseCurrent(state);
+    if (!isCanonicalIdentifier(bundleId)) {
+      throw new KnowledgeProductionModelRouteLeaseError();
+    }
+    const route = state.answerRoutes.get(bundleId);
+    if (!route) throw new KnowledgeProductionModelRouteLeaseError();
+    return createKnowledgeGroundedAnswerModelPort(
+      route,
+      () => {
+        const current = requireLeaseState(this);
+        assertLeaseCurrent(current);
+        if (current.answerRoutes.get(bundleId) !== route) throw createAbortError();
+      },
+      state.answerAbortController.signal
+    );
   }
 
   /**
@@ -710,7 +765,12 @@ export class KnowledgeProductionModelRouteLeaseOwner {
     const state = requireLeaseState(requireOwnerState(this).lease);
     if (!state.current) return;
     state.current = false;
+    state.answerAbortController.abort();
+    for (const route of state.answerRoutes.values()) {
+      revokeKnowledgeGroundedAnswerModelRoute(route);
+    }
     state.routes.clear();
+    state.answerRoutes.clear();
   }
 }
 

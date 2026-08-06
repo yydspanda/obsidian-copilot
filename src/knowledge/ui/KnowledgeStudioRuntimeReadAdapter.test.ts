@@ -390,8 +390,8 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
     adapter.revokeCurrent(BUNDLE_ID, result.queryId);
 
     expect(snapshot.queryAvailable).toBe(true);
-    expect(snapshot.notice).toContain("scoped Query");
-    expect(snapshot.notice).toContain("model synthesis");
+    expect(snapshot.notice).toContain("grounded Query");
+    expect(snapshot.notice).toContain("selected DeepSeek model");
     expect(query).toHaveBeenCalledWith(BUNDLE_ID, { query: "topic" }, signal);
     expect(openCitation).toHaveBeenCalledWith(BUNDLE_ID, "query-1", "citation-1", signal);
     expect(revokeCurrent).toHaveBeenCalledWith(BUNDLE_ID, "query-1");

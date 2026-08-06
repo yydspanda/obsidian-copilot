@@ -23,6 +23,13 @@ import {
 } from "@/knowledge/model/fingerprint";
 import type { JsonValue } from "@/knowledge/model/types";
 import { SUPPORTED_OKF_VERSION } from "@/knowledge/model/types";
+import type { KnowledgeGroundedAnswerRequest } from "@/knowledge/query/KnowledgeGroundedAnswer";
+import {
+  encodeKnowledgeGroundedAnswerPrompt,
+  KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_IDENTITY,
+  KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_VERSION,
+} from "@/knowledge/query/KnowledgeGroundedAnswerPromptEncoder";
+import { bindKnowledgeGroundedAnswerModelRoute } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
 import { sha256 } from "@/utils/hash";
 
 /** Official DeepSeek OpenAI-compatible API origin reviewed for this route. */
@@ -78,6 +85,20 @@ export const KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY = sha256(
       "status-200-exact-url-json-fatal-utf8-one-stop-assistant-no-tools-bounded-usage-v1",
   })}`
 );
+
+/** Exact reviewed transport behavior identity for read-only grounded answers. */
+export const KNOWLEDGE_DEEPSEEK_GROUNDED_ANSWER_ROUTE_IDENTITY = sha256(
+  `knowledge-deepseek-grounded-answer-route-v1\n${canonicalizeJson({
+    endpoint: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
+    models: [...SUPPORTED_MODEL_IDENTITIES],
+    promptContractIdentity: KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_IDENTITY,
+    requestPolicy: "post-json-object-two-messages-non-streaming-no-tools-no-fallback-no-retry-v1",
+    responsePolicy:
+      "status-200-exact-url-json-fatal-utf8-one-stop-assistant-no-tools-bounded-usage-v1",
+  })}`
+);
+
+const GROUNDED_ANSWER_MAX_OUTPUT_TOKENS = 8_192;
 
 /** Minimal streamed HTTP response required from a native-fetch-compatible port. */
 export interface KnowledgeDeepSeekHttpResponse {
@@ -764,17 +785,15 @@ function createRequestBody(
   return encoded;
 }
 
-/** Executes one exact POST with no transport-level retry, fallback, or repair. */
-async function invokeDeepSeek(
-  stage: KnowledgePrivateModelStage,
-  request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>,
+/** Executes one already-encoded exact POST with no retry, fallback, or repair. */
+async function executeDeepSeekRequest(
+  body: string,
+  expectedModel: string,
+  maxTokens: number,
   signal: AbortSignal,
-  captured: CapturedDeepSeekProfile,
   apiKey: string,
   fetchPort: KnowledgeDeepSeekFetchPort
 ): Promise<string> {
-  if (signal.aborted) throw createAbortError();
-  const body = createRequestBody(stage, request, captured);
   if (signal.aborted) throw createAbortError();
   const headers = Object.freeze({
     Accept: "application/json",
@@ -823,7 +842,93 @@ async function invokeDeepSeek(
   }
   const bytes = await readBoundedResponseBytes(response, signal);
   if (signal.aborted) throw createAbortError();
-  return parseProviderResponse(bytes, captured.model, captured.configuration.maxTokens);
+  return parseProviderResponse(bytes, expectedModel, maxTokens);
+}
+
+/** Executes one exact Compiler POST with no transport-level retry, fallback, or repair. */
+async function invokeDeepSeek(
+  stage: KnowledgePrivateModelStage,
+  request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>,
+  signal: AbortSignal,
+  captured: CapturedDeepSeekProfile,
+  apiKey: string,
+  fetchPort: KnowledgeDeepSeekFetchPort
+): Promise<string> {
+  if (signal.aborted) throw createAbortError();
+  const body = createRequestBody(stage, request, captured);
+  if (signal.aborted) throw createAbortError();
+  return executeDeepSeekRequest(
+    body,
+    captured.model,
+    captured.configuration.maxTokens,
+    signal,
+    apiKey,
+    fetchPort
+  );
+}
+
+/** Creates the exact one-shot DeepSeek body for a grounded-answer request. */
+function createGroundedAnswerRequestBody(
+  request: Readonly<KnowledgeGroundedAnswerRequest>,
+  captured: CapturedDeepSeekProfile
+): Readonly<{ body: string; maxTokens: number }> {
+  const prompt = encodeKnowledgeGroundedAnswerPrompt(request, {
+    outputLanguage: captured.behavior.outputLanguage,
+  });
+  const maxTokens = Math.min(captured.configuration.maxTokens, GROUNDED_ANSWER_MAX_OUTPUT_TOKENS);
+  if (
+    prompt.promptUtf8Bytes + maxTokens + KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.promptTokenOverhead >
+    KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.contextTokens
+  ) {
+    throw createDeepSeekTransportError("request_too_large");
+  }
+  const thinkingEnabled = captured.configuration.reasoningEffort !== "minimal";
+  const reasoningEffort = captured.configuration.reasoningEffort === "xhigh" ? "max" : "high";
+  const body: JsonValue = {
+    model: captured.model,
+    messages: prompt.messages as unknown as JsonValue,
+    response_format: { type: "json_object" },
+    stream: false,
+    max_tokens: maxTokens,
+    thinking: { type: thinkingEnabled ? "enabled" : "disabled" },
+    ...(thinkingEnabled
+      ? { reasoning_effort: reasoningEffort }
+      : {
+          temperature: captured.configuration.temperature,
+          ...(captured.configuration.topP === undefined
+            ? {}
+            : { top_p: captured.configuration.topP }),
+        }),
+  };
+  const encoded = canonicalizeJson(body);
+  if (
+    new TextEncoder().encode(encoded).byteLength >
+    KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT.maxRequestBytes
+  ) {
+    throw createDeepSeekTransportError("request_too_large");
+  }
+  return Object.freeze({ body: encoded, maxTokens });
+}
+
+/** Executes one exact grounded-answer POST through the reviewed private transport. */
+async function invokeGroundedAnswerDeepSeek(
+  request: Readonly<KnowledgeGroundedAnswerRequest>,
+  signal: AbortSignal,
+  captured: CapturedDeepSeekProfile,
+  apiKey: string,
+  fetchPort: KnowledgeDeepSeekFetchPort
+): Promise<string> {
+  if (signal.aborted) throw createAbortError();
+  const encoded = createGroundedAnswerRequestBody(request, captured);
+  if (signal.aborted) throw createAbortError();
+  return executeDeepSeekRequest(
+    encoded.body,
+    captured.model,
+    encoded.maxTokens,
+    signal,
+    apiKey,
+    fetchPort
+  );
 }
 
 /**
@@ -850,5 +955,30 @@ export function createKnowledgeDeepSeekPrivateRoute(
     captured.profile,
     (stage, request, signal) => invokeDeepSeek(stage, request, signal, captured, apiKey, fetchPort),
     classifyDeepSeekTransportFailure
+  );
+}
+
+/**
+ * Creates one Bundle-bound, read-only DeepSeek grounded-answer model route.
+ *
+ * It shares only the reviewed HTTP mechanics with the Compiler route. The
+ * prompt, request authority, response schema, and lifecycle port remain
+ * independent, so Query cannot invoke either Compiler stage.
+ */
+export function createKnowledgeDeepSeekGroundedAnswerModelRoute(
+  profile: KnowledgeBundlePipelineProfile,
+  apiKeyValue: string,
+  fetchPort: KnowledgeDeepSeekFetchPort
+): ReturnType<typeof bindKnowledgeGroundedAnswerModelRoute> {
+  if (typeof fetchPort !== "function") {
+    throw createDeepSeekTransportError("dependency_invalid");
+  }
+  const captured = captureProfile(profile);
+  const apiKey = captureCredential(apiKeyValue);
+  if (KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_VERSION !== 1) {
+    throw createDeepSeekTransportError("configuration_unsupported");
+  }
+  return bindKnowledgeGroundedAnswerModelRoute(captured.profile.bundleId, (request, signal) =>
+    invokeGroundedAnswerDeepSeek(request, signal, captured, apiKey, fetchPort)
   );
 }

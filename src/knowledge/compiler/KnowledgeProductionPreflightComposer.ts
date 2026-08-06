@@ -1,6 +1,7 @@
 import { isCurrentDeepSeekModelIdentity } from "@/LLMProviders/deepseekModelPolicy";
 import {
   createKnowledgeDeepSeekPrivateRoute,
+  createKnowledgeDeepSeekGroundedAnswerModelRoute,
   KnowledgeDeepSeekTransportError,
   type KnowledgeDeepSeekFetchPort,
 } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
@@ -373,7 +374,12 @@ function composeGeneration(
         credential,
         fetchPort as KnowledgeDeepSeekFetchPort
       );
-      routeBindings.push(Object.freeze({ bundleId: profile.bundleId, route }));
+      const answerRoute = createKnowledgeDeepSeekGroundedAnswerModelRoute(
+        profile,
+        credential,
+        fetchPort as KnowledgeDeepSeekFetchPort
+      );
+      routeBindings.push(Object.freeze({ bundleId: profile.bundleId, route, answerRoute }));
       bundleIds.add(profile.bundleId);
       bundleCount += 1;
     }

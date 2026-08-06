@@ -29,10 +29,18 @@ export type ObsidianKnowledgeCitationNavigationResult =
   | { status: "unsupported" }
   | { status: "unavailable" };
 
+/** Value-free source verification result that performs no workspace mutation. */
+export type ObsidianKnowledgeCitationVerificationResult =
+  | { status: "verified" }
+  | { status: "stale" }
+  | { status: "unsupported" }
+  | { status: "unavailable" };
+
 const OPENED_RESULT = Object.freeze({ status: "opened" as const });
 const STALE_RESULT = Object.freeze({ status: "stale" as const });
 const UNSUPPORTED_RESULT = Object.freeze({ status: "unsupported" as const });
 const UNAVAILABLE_RESULT = Object.freeze({ status: "unavailable" as const });
+const VERIFIED_RESULT = Object.freeze({ status: "verified" as const });
 
 /**
  * Reports cancellation without retaining a caller-provided abort reason.
@@ -53,6 +61,15 @@ function isAborted(signal?: AbortSignal): boolean {
 function mapResolutionFailure(
   resolution: Exclude<KnowledgeCitationTargetResolution, { status: "resolved" }>
 ): ObsidianKnowledgeCitationNavigationResult {
+  if (resolution.status === "stale") return STALE_RESULT;
+  if (resolution.status === "unsupported") return UNSUPPORTED_RESULT;
+  return UNAVAILABLE_RESULT;
+}
+
+/** Converts a pure resolver failure into the no-mutation verification result. */
+function mapVerificationFailure(
+  resolution: Exclude<KnowledgeCitationTargetResolution, { status: "resolved" }>
+): ObsidianKnowledgeCitationVerificationResult {
   if (resolution.status === "stale") return STALE_RESULT;
   if (resolution.status === "unsupported") return UNSUPPORTED_RESULT;
   return UNAVAILABLE_RESULT;
@@ -137,6 +154,51 @@ export class ObsidianKnowledgeCitationNavigator {
       }
     });
     return matchingLeaf;
+  }
+
+  /**
+   * Re-proves one exact Markdown source citation without opening a leaf or changing selection.
+   *
+   * @param request - Source path and typed claim citation
+   * @param signal - Optional cancellation checked around the Vault read
+   * @returns Verified, stale, unsupported, or unavailable
+   */
+  async verify(
+    request: ObsidianKnowledgeCitationNavigationRequest,
+    signal?: AbortSignal
+  ): Promise<ObsidianKnowledgeCitationVerificationResult> {
+    try {
+      if (isAborted(signal) || !this.isCurrentOwner()) return UNAVAILABLE_RESULT;
+      const preflight = resolveKnowledgeCitationTarget({
+        sourcePath: request.sourcePath,
+        citation: request.citation,
+        content: "",
+      });
+      if (preflight.status === "unsupported" || preflight.status === "unavailable") {
+        return mapVerificationFailure(preflight);
+      }
+      const abstractFile = this.vaultOwner.getAbstractFileByPath(request.sourcePath);
+      if (
+        !(abstractFile instanceof TFile) ||
+        abstractFile.path !== request.sourcePath ||
+        abstractFile.extension.toLowerCase() !== "md"
+      ) {
+        return UNAVAILABLE_RESULT;
+      }
+      if (isAborted(signal)) return UNAVAILABLE_RESULT;
+      const content = await this.vaultOwner.read(abstractFile);
+      if (isAborted(signal) || !this.isCurrentOwner()) return UNAVAILABLE_RESULT;
+      const resolution = resolveKnowledgeCitationTarget({
+        sourcePath: request.sourcePath,
+        citation: request.citation,
+        content,
+      });
+      return resolution.status === "resolved"
+        ? VERIFIED_RESULT
+        : mapVerificationFailure(resolution);
+    } catch {
+      return UNAVAILABLE_RESULT;
+    }
   }
 
   /**

@@ -1,6 +1,6 @@
 import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
 import type {
-  KnowledgeGroundedRetrievalResult,
+  KnowledgeStudioQueryResult,
   KnowledgeStudioQueryPort,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import type {
@@ -150,7 +150,7 @@ export interface KnowledgeStudioFeedback {
 /** Ephemeral scoped-query state that is never written into the durable Runtime. */
 export interface KnowledgeStudioQueryState {
   status: "idle" | "loading" | "ready" | "error";
-  result?: Readonly<KnowledgeGroundedRetrievalResult>;
+  result?: Readonly<KnowledgeStudioQueryResult>;
   error?: string;
   openingCitationRef?: string;
 }
@@ -566,7 +566,7 @@ export class KnowledgeStudioController {
         return;
       }
       if (
-        result.mode !== "grounded_retrieval" ||
+        (result.mode !== "grounded_retrieval" && result.mode !== "grounded_answer") ||
         result.bundleId !== bundleId ||
         typeof result.queryId !== "string" ||
         result.queryId.length === 0 ||

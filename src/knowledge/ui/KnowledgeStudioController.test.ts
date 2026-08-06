@@ -11,9 +11,11 @@ import {
   createUnavailableKnowledgeStudioSnapshot,
 } from "@/knowledge/ui/KnowledgeStudioController";
 import type {
+  KnowledgeGroundedAnswerResult,
   KnowledgeGroundedRetrievalResult,
   KnowledgeStudioQueryPort,
   KnowledgeStudioQueryRequest,
+  KnowledgeStudioQueryResult,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import type {
   KnowledgeReviewCommand,
@@ -194,6 +196,29 @@ function createQueryResult(queryId = "knowledge-query-1"): KnowledgeGroundedRetr
         ],
       },
     ],
+  };
+}
+
+/** Creates one exact grounded-answer result over the same opaque retrieval authority. */
+function createAnswerQueryResult(
+  queryId = "knowledge-query-answer-1"
+): KnowledgeGroundedAnswerResult {
+  const retrieval = createQueryResult(queryId);
+  return {
+    ...retrieval,
+    mode: "grounded_answer",
+    answer: {
+      status: "answered",
+      claims: [
+        {
+          claimId: "claim-1",
+          kind: "source_fact",
+          text: "Grounded knowledge is available.",
+          citations: [retrieval.hits[0].citations[0]],
+        },
+      ],
+      insufficientEvidence: [],
+    },
   };
 }
 
@@ -390,17 +415,17 @@ class FakeKnowledgeStudioQueryPort implements KnowledgeStudioQueryPort {
   constructor(
     private readonly queryHandler: (
       call: RecordedQueryCall
-    ) => Promise<KnowledgeGroundedRetrievalResult> = async () => createQueryResult(),
+    ) => Promise<KnowledgeStudioQueryResult> = async () => createQueryResult(),
     private readonly citationHandler: (call: RecordedCitationCall) => Promise<void> = async () =>
       undefined
   ) {}
 
-  /** Records one retrieval-only Query request. */
+  /** Records one scoped retrieval or grounded-answer Query request. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
-  ): Promise<KnowledgeGroundedRetrievalResult> {
+  ): Promise<KnowledgeStudioQueryResult> {
     const call = { bundleId, request, signal };
     this.queryCalls.push(call);
     return this.queryHandler(call);
@@ -522,6 +547,36 @@ describe("KnowledgeStudioController", () => {
       status: "ready",
       openingCitationRef: undefined,
       error: undefined,
+    });
+  });
+
+  it("publishes a grounded answer without changing its opaque citation authority", async () => {
+    const snapshot = { ...createSnapshot(), queryAvailable: true };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+    const controller = new KnowledgeStudioController(port, port, queryPort);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.runQuery("grounded answer");
+
+    expect(controller.getState()).toMatchObject({
+      activeTab: "query",
+      query: {
+        status: "ready",
+        result: {
+          mode: "grounded_answer",
+          answer: {
+            status: "answered",
+            claims: [
+              {
+                kind: "source_fact",
+                citations: [{ citationRef: "knowledge-citation-1" }],
+              },
+            ],
+          },
+        },
+      },
     });
   });
 

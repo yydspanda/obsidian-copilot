@@ -14,6 +14,7 @@ import {
   createKnowledgeProductionModelRouteLeaseOwner,
   KnowledgeProductionModelRouteLease,
 } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
+import { bindKnowledgeGroundedAnswerModelRoute } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
   createKnowledgeExecutionOwner,
@@ -293,7 +294,12 @@ function createRouteLease(
   classifyFailure?: KnowledgePrivateModelFailureClassifier
 ) {
   const route = bindKnowledgePrivateModelRouteToProfile(profile, invoke, classifyFailure);
-  const owner = createKnowledgeProductionModelRouteLeaseOwner([{ bundleId: BUNDLE_ID, route }]);
+  const answerRoute = bindKnowledgeGroundedAnswerModelRoute(BUNDLE_ID, async () => {
+    throw new Error("Grounded answer is not used by compile-to-Review tests");
+  });
+  const owner = createKnowledgeProductionModelRouteLeaseOwner([
+    { bundleId: BUNDLE_ID, route, answerRoute },
+  ]);
   return { owner, lease: owner.getLease() };
 }
 

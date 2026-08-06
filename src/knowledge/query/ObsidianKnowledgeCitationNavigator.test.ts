@@ -138,6 +138,42 @@ class NavigatorHarness {
 }
 
 describe("ObsidianKnowledgeCitationNavigator", () => {
+  it("re-proves an exact Markdown citation without opening or changing the workspace", async () => {
+    const content = "# Evidence\nGrounded fact";
+    const harness = new NavigatorHarness(content);
+    const citation = createCitation({
+      ...createLocatorBase(content, "Grounded fact"),
+      kind: "markdown_lines",
+      startLine: 2,
+      endLine: 2,
+    });
+
+    await expect(
+      harness.createNavigator().verify({ sourcePath: SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "verified" });
+    expect(harness.vault.read).toHaveBeenCalledTimes(1);
+    expect(harness.workspace.iterateAllLeaves).not.toHaveBeenCalled();
+    expect(harness.workspace.getLeaf).not.toHaveBeenCalled();
+    expect(harness.workspace.revealLeaf).not.toHaveBeenCalled();
+    expect(harness.leaf.openFile).not.toHaveBeenCalled();
+    expect(harness.editor.setSelection).not.toHaveBeenCalled();
+  });
+
+  it("reports stale verification without mutating the workspace", async () => {
+    const original = "Grounded fact";
+    const harness = new NavigatorHarness("Changed fact");
+    const citation = createCitation({
+      ...createLocatorBase(original, original),
+      kind: "quote",
+    });
+
+    await expect(
+      harness.createNavigator().verify({ sourcePath: SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "stale" });
+    expect(harness.leaf.openFile).not.toHaveBeenCalled();
+    expect(harness.editor.setSelection).not.toHaveBeenCalled();
+  });
+
   it("opens an existing Markdown leaf and selects the hash-verified CRLF line range", async () => {
     const content = "# Evidence\r\nGrounded fact";
     const harness = new NavigatorHarness(content);

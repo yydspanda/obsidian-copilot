@@ -1,6 +1,7 @@
 import type { App } from "obsidian";
 
 import type { CompilerTargetResolver } from "@/knowledge/compiler/CompilerModelPort";
+import { KnowledgeProductionModelRouteLease } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import { validateKnowledgeBundleConfig } from "@/knowledge/model/validation";
 import { isPathWithinRoot } from "@/knowledge/paths/vaultPath";
@@ -14,7 +15,7 @@ import {
   KnowledgeScopedQueryError,
   type KnowledgeCitationNavigationPort,
   type KnowledgeCitationNavigationTarget,
-  type KnowledgeGroundedRetrievalResult,
+  type KnowledgeStudioQueryResult,
   type KnowledgeQueryIdFactory,
   type KnowledgeStudioQueryPort,
   type KnowledgeStudioQueryRequest,
@@ -32,6 +33,7 @@ export interface KnowledgeStudioScopedQueryAdapterInput {
   readonly runtime: KnowledgeAppliedProvenanceReadPort;
   readonly bundles: readonly KnowledgeBundleConfig[];
   readonly targetResolver: CompilerTargetResolver;
+  readonly modelRouteLease?: KnowledgeProductionModelRouteLease;
   readonly assertCurrent: () => void;
   readonly secureRandom?: KnowledgeQuerySecureRandomPort;
 }
@@ -118,6 +120,25 @@ function createBundleCitationNavigationPort(
   isClosed: () => boolean
 ): KnowledgeCitationNavigationPort {
   return Object.freeze({
+    verify: async (
+      target: Readonly<KnowledgeCitationNavigationTarget>,
+      signal: AbortSignal
+    ): Promise<boolean> => {
+      throwIfAborted(signal);
+      if (isClosed()) throw new KnowledgeScopedQueryError();
+      assertCurrent();
+      if (!bundle.sourceRoots.some((root) => isPathWithinRoot(target.sourcePath, root))) {
+        throw new KnowledgeScopedQueryError();
+      }
+      const result = await navigator.verify(
+        { sourcePath: target.sourcePath, citation: target.citation },
+        signal
+      );
+      throwIfAborted(signal);
+      if (isClosed()) throw new KnowledgeScopedQueryError();
+      assertCurrent();
+      return result.status === "verified";
+    },
     open: async (
       target: Readonly<KnowledgeCitationNavigationTarget>,
       signal: AbortSignal
@@ -146,7 +167,9 @@ function createBundleCitationNavigationPort(
  * Each coordinator reads the atomic applied-provenance projection, verifies
  * exact Wiki hashes through the captured target resolver, ranks only that
  * immutable in-memory corpus, and keeps actionable citations behind opaque
- * references. This adapter has no model, fallback-search, or write authority.
+ * references. When production supplies its exact model-route lease, each
+ * coordinator receives only a Bundle-bound grounded-answer port. This adapter
+ * has no fallback-search or write authority.
  */
 export class KnowledgeStudioScopedQueryAdapter implements KnowledgeStudioQueryPort {
   /** Captures all configured Bundle readers and their exact Obsidian citation edges. */
@@ -166,6 +189,10 @@ export class KnowledgeStudioScopedQueryAdapter implements KnowledgeStudioQueryPo
     const secureRandom = input.secureRandom ?? crypto;
     const idFactory = createKnowledgeQueryIdFactory(secureRandom);
     const navigator = new ObsidianKnowledgeCitationNavigator(input.app);
+    if (input.modelRouteLease !== undefined) {
+      KnowledgeProductionModelRouteLease.assert(input.modelRouteLease);
+      input.modelRouteLease.assertCurrent();
+    }
     const coordinators = new Map<string, KnowledgeScopedQueryCoordinator>();
     const state: KnowledgeStudioScopedQueryAdapterState = {
       coordinators,
@@ -194,6 +221,11 @@ export class KnowledgeStudioScopedQueryAdapter implements KnowledgeStudioQueryPo
           retriever: new KnowledgeScopedLexicalRetriever(),
           citationNavigation,
           idFactory,
+          ...(input.modelRouteLease === undefined
+            ? {}
+            : {
+                answerModel: input.modelRouteLease.createGroundedAnswerModelPort(bundle.id),
+              }),
         })
       );
     }
@@ -210,12 +242,12 @@ export class KnowledgeStudioScopedQueryAdapter implements KnowledgeStudioQueryPo
     return coordinator;
   }
 
-  /** Runs scoped retrieval without granting a cross-Bundle or fallback corpus. */
+  /** Runs scoped retrieval and optional grounded synthesis without a fallback corpus. */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
-  ): Promise<KnowledgeGroundedRetrievalResult> {
+  ): Promise<KnowledgeStudioQueryResult> {
     throwIfAborted(signal);
     return this.requireCoordinator(bundleId).query(bundleId, request, signal);
   }

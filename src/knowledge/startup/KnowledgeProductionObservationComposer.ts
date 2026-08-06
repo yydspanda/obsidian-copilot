@@ -164,6 +164,7 @@ interface KnowledgeProductionObservationInternalState {
   coordinator?: KnowledgeSourceObservationStartupCoordinator;
   worker?: KnowledgeProductionWorkerSession;
   workerController?: KnowledgeProductionWorkerController;
+  modelRouteLease?: KnowledgeProductionModelRouteLease;
   plan?: KnowledgeSourceExecutionPlan;
   lastResult?: KnowledgeProductionObservationResult | KnowledgeProductionObservationReproofResult;
   unsubscribeLease?: () => void;
@@ -613,7 +614,9 @@ export class KnowledgeProductionObservationComposer {
         handler,
         composition.executionOwner
       );
-      return this.createPreparedWorkerSession(handler, isReleased);
+      const worker = this.createPreparedWorkerSession(handler, isReleased);
+      state.modelRouteLease = routeLease;
+      return worker;
     } catch {
       throw createAbortError();
     }
@@ -655,12 +658,22 @@ export class KnowledgeProductionObservationComposer {
    * @param onApplyGenerationRefreshRequired - Lifecycle callback that rebuilds Manifest-bound workflow state
    */
   createKnowledgeStudioRuntimeReadAdapter(
+    modelRouteLease: KnowledgeProductionModelRouteLease,
     retainCommandDrain?: (drain: Promise<void>) => void,
     onApplyGenerationRefreshRequired?: () => void
   ): KnowledgeStudioRuntimeReadAdapter {
     const state = requireComposerState(this);
     const composition = state.composition;
-    if (!composition || !state.workerController || !state.plan) throw createAbortError();
+    if (
+      !composition ||
+      !state.workerController ||
+      !state.plan ||
+      state.modelRouteLease !== modelRouteLease
+    ) {
+      throw createAbortError();
+    }
+    KnowledgeProductionModelRouteLease.assert(modelRouteLease);
+    modelRouteLease.assertCurrent();
     this.assertHealthy();
     const runtime = Object.freeze({
       readStudioBundle: (bundleId: string) => composition.runtime.readStudioBundle(bundleId),
@@ -707,6 +720,7 @@ export class KnowledgeProductionObservationComposer {
       runtime,
       bundles: composition.owners.map(({ config }) => config),
       targetResolver,
+      modelRouteLease,
       assertCurrent,
     });
     this.subscribeClose(() => query.close());
@@ -761,6 +775,7 @@ export class KnowledgeProductionObservationComposer {
     state.plan = undefined;
     state.worker = undefined;
     state.workerController = undefined;
+    state.modelRouteLease = undefined;
     try {
       composition?.eventSink.close();
     } catch {

@@ -413,9 +413,9 @@ describe("KnowledgeProductionObservationComposer", () => {
     });
     await composer.start(new AbortController().signal);
 
-    expect(() => composer.createKnowledgeStudioRuntimeReadAdapter()).toThrow(
-      "The operation was aborted"
-    );
+    expect(() =>
+      composer.createKnowledgeStudioRuntimeReadAdapter(admission.modelRouteLease)
+    ).toThrow("The operation was aborted");
     const worker = composer.createCompileReviewWorkerController(
       admission.modelRouteLease,
       () => true,
@@ -423,6 +423,7 @@ describe("KnowledgeProductionObservationComposer", () => {
     );
     const onApplyGenerationRefreshRequired = jest.fn<void, []>();
     const adapter = composer.createKnowledgeStudioRuntimeReadAdapter(
+      admission.modelRouteLease,
       undefined,
       onApplyGenerationRefreshRequired
     );
@@ -511,18 +512,17 @@ describe("KnowledgeProductionObservationComposer", () => {
       },
       queryAvailable: true,
     });
-    expect(snapshot.notice).toContain("scoped Query are connected");
-    expect(snapshot.notice).toContain(
-      "model synthesis, Save to Wiki, PDF jump, and delete remain disabled"
-    );
+    expect(snapshot.notice).toContain("grounded Query are connected");
+    expect(snapshot.notice).toContain("Save to Wiki, PDF jump, and delete remain disabled");
     expect(Object.isFrozen(snapshot.commandCapabilities)).toBe(true);
     expect(onApplyGenerationRefreshRequired).not.toHaveBeenCalled();
 
     await expect(
       studioPort.query("personal", { query: "grounded evidence" }, new AbortController().signal)
     ).resolves.toMatchObject({
-      mode: "grounded_retrieval",
+      mode: "grounded_answer",
       bundleId: "personal",
+      answer: { status: "insufficient_evidence", claims: [] },
       hits: [],
     });
 

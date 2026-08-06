@@ -689,6 +689,7 @@ export default class CopilotPlugin extends Plugin {
               scheduler
             );
             const studioAdapter = candidate.createKnowledgeStudioRuntimeReadAdapter(
+              admission.modelRouteLease,
               (drain) => retainKnowledgeProductionDrain(this.app.vault, drain),
               () =>
                 this.deferKnowledgeProductionGenerationInvalidation(() => {

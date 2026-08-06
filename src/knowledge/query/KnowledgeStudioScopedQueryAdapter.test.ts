@@ -4,6 +4,10 @@ const mockNavigate = jest.fn<
   Promise<{ status: "opened" }>,
   [request: unknown, signal?: AbortSignal]
 >(async () => ({ status: "opened" }));
+const mockVerify = jest.fn<
+  Promise<{ status: "verified" }>,
+  [request: unknown, signal?: AbortSignal]
+>(async () => ({ status: "verified" }));
 
 jest.mock("@/knowledge/query/ObsidianKnowledgeCitationNavigator", () => ({
   ObsidianKnowledgeCitationNavigator: class TestKnowledgeCitationNavigator {
@@ -14,6 +18,11 @@ jest.mock("@/knowledge/query/ObsidianKnowledgeCitationNavigator", () => ({
     navigate(request: unknown, signal?: AbortSignal) {
       return mockNavigate(request, signal);
     }
+
+    /** Forwards exact no-mutation verification requests to the test spy. */
+    verify(request: unknown, signal?: AbortSignal) {
+      return mockVerify(request, signal);
+    }
   },
 }));
 
@@ -23,7 +32,17 @@ import type {
   CompilerTargetRequest,
   CompilerTargetResolver,
 } from "@/knowledge/compiler/CompilerModelPort";
+import {
+  bindKnowledgePrivateModelRoute,
+  KNOWLEDGE_DECODED_MODEL_OUTPUT_CONTRACT,
+} from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
+import {
+  createKnowledgeProductionModelRouteLeaseOwner,
+  type KnowledgeProductionModelRouteLeaseOwner,
+} from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
+import type { KnowledgeGroundedAnswerRequest } from "@/knowledge/query/KnowledgeGroundedAnswer";
+import { bindKnowledgeGroundedAnswerModelRoute } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
 import type { KnowledgeRuntimeAppliedProvenanceSnapshot } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import {
   createKnowledgeQueryIdFactory,
@@ -155,10 +174,40 @@ function createApp(): App {
   return { vault: {}, workspace: {} } as unknown as App;
 }
 
+/** Creates an authentic production lease owner with an isolated fake answer transport. */
+function createAnswerRouteOwner(
+  bundleId: string,
+  invoke: (
+    request: Readonly<KnowledgeGroundedAnswerRequest>,
+    signal: AbortSignal
+  ) => Promise<string>
+): KnowledgeProductionModelRouteLeaseOwner {
+  const route = bindKnowledgePrivateModelRoute(
+    {
+      provider: "test-provider",
+      model: "test-model",
+      configuration: {
+        behaviorContractVersion: 1,
+        routeContractVersion: 1,
+        adapterPolicy: "knowledge-projection-only-v1",
+        routingPolicy: "private-bound-capability-v1",
+        structuredOutput: KNOWLEDGE_DECODED_MODEL_OUTPUT_CONTRACT,
+        streaming: false,
+        modelFallback: false,
+      },
+    },
+    async () => "{}"
+  );
+  const answerRoute = bindKnowledgeGroundedAnswerModelRoute(bundleId, invoke);
+  return createKnowledgeProductionModelRouteLeaseOwner([{ bundleId, route, answerRoute }]);
+}
+
 describe("KnowledgeStudioScopedQueryAdapter", () => {
   beforeEach(() => {
     mockNavigate.mockReset();
     mockNavigate.mockResolvedValue({ status: "opened" });
+    mockVerify.mockReset();
+    mockVerify.mockResolvedValue({ status: "verified" });
   });
 
   it("creates 128-bit browser-safe opaque tokens from Web Crypto bytes", () => {
@@ -209,6 +258,65 @@ describe("KnowledgeStudioScopedQueryAdapter", () => {
     await expect(
       adapter.query("unknown", { query: "evidence" }, new AbortController().signal)
     ).rejects.toMatchObject({ name: "KnowledgeScopedQueryError" });
+  });
+
+  it("uses the exact Bundle lease to synthesize from source-reproved evidence", async () => {
+    const answerInvoke = jest.fn(async (request: Readonly<KnowledgeGroundedAnswerRequest>) =>
+      JSON.stringify({
+        version: 1,
+        contextDigest: request.contextDigest,
+        status: "answered",
+        claims: [
+          {
+            claimId: "claim-grounded",
+            kind: "source_fact",
+            text: "Grounded evidence lives here.",
+            evidenceIds: ["evidence-1"],
+          },
+        ],
+        insufficientEvidence: [],
+      })
+    );
+    const owner = createAnswerRouteOwner("personal", answerInvoke);
+    const readAppliedProvenance = jest.fn(async () => createAppliedProjection());
+    const adapter = new KnowledgeStudioScopedQueryAdapter({
+      app: createApp(),
+      runtime: { readAppliedProvenance },
+      bundles: [createBundle("personal")],
+      targetResolver: createTargetResolver(),
+      modelRouteLease: owner.getLease(),
+      assertCurrent: jest.fn(),
+      secureRandom: createSecureRandom(),
+    });
+
+    try {
+      await expect(
+        adapter.query("personal", { query: "grounded" }, new AbortController().signal)
+      ).resolves.toMatchObject({
+        mode: "grounded_answer",
+        bundleId: "personal",
+        answer: {
+          status: "answered",
+          claims: [
+            {
+              claimId: "claim-grounded",
+              kind: "source_fact",
+              citations: [expect.objectContaining({ sourcePath: SOURCE_PATH })],
+            },
+          ],
+        },
+      });
+      expect(answerInvoke).toHaveBeenCalledTimes(1);
+      expect(answerInvoke.mock.calls[0][0].contexts[0].content).toBe(PAGE_CONTENT);
+      expect(answerInvoke.mock.calls[0][0].evidence).toEqual([
+        expect.objectContaining({ sourceExcerpt: "Grounded evidence" }),
+      ]);
+      expect(mockVerify).toHaveBeenCalledTimes(2);
+      expect(readAppliedProvenance).toHaveBeenCalledTimes(4);
+    } finally {
+      adapter.close();
+      owner.close();
+    }
   });
 
   it("opens only current opaque citations whose source remains inside the Bundle roots", async () => {

@@ -1,4 +1,13 @@
 import type { ClaimCitation, SourceLocator } from "@/knowledge/model/types";
+import {
+  createInsufficientKnowledgeGroundedAnswer,
+  createKnowledgeGroundedAnswerRequest,
+  KNOWLEDGE_GROUNDED_ANSWER_LIMITS,
+  parseKnowledgeGroundedAnswerModelOutput,
+  type KnowledgeGroundedAnswer,
+  type KnowledgeGroundedAnswerClaimKind,
+  type KnowledgeGroundedAnswerModelPort,
+} from "@/knowledge/query/KnowledgeGroundedAnswer";
 import type {
   KnowledgeVerifiedWikiPage,
   KnowledgeVerifiedWikiSnapshot,
@@ -35,6 +44,12 @@ export interface KnowledgeCitationNavigationTarget {
 
 /** Platform adapter that opens one coordinator-authorized source citation. */
 export interface KnowledgeCitationNavigationPort {
+  /** Re-proves an exact source citation without changing the workspace. */
+  verify(
+    target: Readonly<KnowledgeCitationNavigationTarget>,
+    signal: AbortSignal
+  ): Promise<boolean>;
+
   /** Opens an exact source target selected through an opaque citation reference. */
   open(target: Readonly<KnowledgeCitationNavigationTarget>, signal: AbortSignal): Promise<void>;
 }
@@ -45,7 +60,7 @@ export type KnowledgeQueryOpaqueIdKind = "query" | "citation";
 /** Creates unpredictable identifier material without coupling core query code to a platform RNG. */
 export type KnowledgeQueryIdFactory = (kind: KnowledgeQueryOpaqueIdKind) => string;
 
-/** Strict request accepted by the retrieval-only query boundary. */
+/** Strict request accepted by the scoped retrieval and answer boundary. */
 export interface KnowledgeStudioQueryRequest {
   readonly query: string;
 }
@@ -97,6 +112,37 @@ export interface KnowledgeGroundedRetrievalResult {
   readonly hits: readonly Readonly<KnowledgeGroundedRetrievalHit>[];
 }
 
+/** One validated answer claim whose references were mapped by Core, never by the model. */
+export interface KnowledgeGroundedAnswerResultClaim {
+  readonly claimId: string;
+  readonly kind: KnowledgeGroundedAnswerClaimKind;
+  readonly text: string;
+  readonly citations: readonly Readonly<KnowledgeSourceCitationSummary>[];
+}
+
+/** User-visible answer projection with explicit support and insufficiency categories. */
+export interface KnowledgeGroundedAnswerResultBody {
+  readonly status: KnowledgeGroundedAnswer["status"];
+  readonly claims: readonly Readonly<KnowledgeGroundedAnswerResultClaim>[];
+  readonly insufficientEvidence: readonly string[];
+}
+
+/** Frozen read-only model answer over one exact applied-Wiki and source generation. */
+export interface KnowledgeGroundedAnswerResult {
+  readonly mode: "grounded_answer";
+  readonly bundleId: string;
+  readonly queryId: string;
+  readonly runtimeRevision: number;
+  readonly manifestRevision: number;
+  readonly answer: Readonly<KnowledgeGroundedAnswerResultBody>;
+  readonly hits: readonly Readonly<KnowledgeGroundedRetrievalHit>[];
+}
+
+/** H.1 retrieval or H.2 synthesized answer returned through the stable Query port. */
+export type KnowledgeStudioQueryResult =
+  | KnowledgeGroundedRetrievalResult
+  | KnowledgeGroundedAnswerResult;
+
 /** Independent UI boundary for scoped retrieval and opaque citation navigation. */
 export interface KnowledgeStudioQueryPort {
   /** Runs one retrieval-only query against the current exact applied Wiki. */
@@ -104,7 +150,7 @@ export interface KnowledgeStudioQueryPort {
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
-  ): Promise<KnowledgeGroundedRetrievalResult>;
+  ): Promise<KnowledgeStudioQueryResult>;
 
   /** Opens one source citation previously issued by the current query generation. */
   openCitation(
@@ -128,6 +174,7 @@ export interface KnowledgeScopedQueryCoordinatorInput {
   readonly retriever: KnowledgeScopedLexicalRetrievalPort;
   readonly citationNavigation: KnowledgeCitationNavigationPort;
   readonly idFactory: KnowledgeQueryIdFactory;
+  readonly answerModel?: KnowledgeGroundedAnswerModelPort;
 }
 
 /** Sanitized failure that never retains a query, path, locator, or adapter cause. */
@@ -413,12 +460,87 @@ function createGroundedHit(
   });
 }
 
+/** Compares every immutable source and citation field in one applied-page provenance record. */
+function isSameAppliedSourceProvenance(
+  before: Readonly<KnowledgeVerifiedWikiPage>["sources"][number],
+  after: Readonly<KnowledgeVerifiedWikiPage>["sources"][number]
+): boolean {
+  return (
+    before.sourceId === after.sourceId &&
+    before.sourcePath === after.sourcePath &&
+    before.custody === after.custody &&
+    before.sourceContentHash === after.sourceContentHash &&
+    before.pipelineFingerprint === after.pipelineFingerprint &&
+    before.inputRevision === after.inputRevision &&
+    before.changeSetId === after.changeSetId &&
+    before.changeSetDigest === after.changeSetDigest &&
+    before.acceptedAt === after.acceptedAt &&
+    before.citations.length === after.citations.length &&
+    before.citations.every(
+      (citation, index) =>
+        after.citations[index] !== undefined &&
+        createCitationKey(before.sourcePath, citation) ===
+          createCitationKey(after.sourcePath, after.citations[index])
+    )
+  );
+}
+
+/** Compares the exact Wiki material that was proven before and after model I/O. */
+function isSameVerifiedWikiSnapshot(
+  before: Readonly<KnowledgeVerifiedWikiSnapshot>,
+  after: Readonly<KnowledgeVerifiedWikiSnapshot>
+): boolean {
+  if (
+    before.bundleId !== after.bundleId ||
+    before.runtimeRevision !== after.runtimeRevision ||
+    before.manifestRevision !== after.manifestRevision ||
+    before.pages.length !== after.pages.length
+  ) {
+    return false;
+  }
+  return before.pages.every((page, index) => {
+    const current = after.pages[index];
+    return (
+      current !== undefined &&
+      page.evidenceId === current.evidenceId &&
+      page.path === current.path &&
+      page.windowsPathKey === current.windowsPathKey &&
+      page.ownership === current.ownership &&
+      page.contentHash === current.contentHash &&
+      page.content === current.content &&
+      page.sources.length === current.sources.length &&
+      page.sources.every(
+        (source: Readonly<KnowledgeVerifiedWikiPage>["sources"][number], sourceIndex: number) =>
+          current.sources[sourceIndex] !== undefined &&
+          isSameAppliedSourceProvenance(source, current.sources[sourceIndex])
+      )
+    );
+  });
+}
+
+/** Reports whether one citation can participate in the H.2 Markdown-only answer contract. */
+function isEligibleAnswerTarget(target: Readonly<StoredCitationTarget>): boolean {
+  const locator = target.target.citation.locator;
+  return (
+    locator.kind !== "pdf_page" &&
+    locator.excerpt.length > 0 &&
+    locator.excerpt.length <= KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxSourceExcerptCharacters
+  );
+}
+
+interface KnowledgeAnswerModelMaterial {
+  readonly request: ReturnType<typeof createKnowledgeGroundedAnswerRequest>;
+  readonly targetsByEvidenceId: ReadonlyMap<string, Readonly<StoredCitationTarget>>;
+}
+
 /**
  * Coordinates exact applied-Wiki retrieval and opaque source-citation navigation.
  *
- * The coordinator has no model, answer-generation, Queue, Review, Apply, or file
- * write dependency. Starting a new query immediately revokes the previous
- * generation and every citation reference it issued.
+ * An optional narrow answer model can synthesize only from source-reproved
+ * evidence prepared inside the same query generation. The coordinator has no
+ * Queue, Review, Apply, or file-write dependency. Starting a new query
+ * immediately revokes the previous generation and every citation reference it
+ * issued.
  */
 export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort {
   private readonly bundleId: string;
@@ -426,6 +548,7 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
   private readonly retriever: KnowledgeScopedLexicalRetrievalPort;
   private readonly citationNavigation: KnowledgeCitationNavigationPort;
   private readonly idFactory: KnowledgeQueryIdFactory;
+  private readonly answerModel: KnowledgeGroundedAnswerModelPort | undefined;
   private closed = false;
   private generation = 0;
   private generationController: AbortController | undefined;
@@ -439,8 +562,10 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
       input.bundleId.length < 1 ||
       typeof input.reader?.read !== "function" ||
       typeof input.retriever?.retrieve !== "function" ||
+      typeof input.citationNavigation?.verify !== "function" ||
       typeof input.citationNavigation?.open !== "function" ||
-      typeof input.idFactory !== "function"
+      typeof input.idFactory !== "function" ||
+      (input.answerModel !== undefined && typeof input.answerModel.generate !== "function")
     ) {
       throw new KnowledgeScopedQueryError();
     }
@@ -449,6 +574,7 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
     this.retriever = input.retriever;
     this.citationNavigation = input.citationNavigation;
     this.idFactory = input.idFactory;
+    this.answerModel = input.answerModel;
   }
 
   /** Rejects all work after this coordinator generation has been closed. */
@@ -528,19 +654,129 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
     return stored;
   }
 
+  /** Builds only source-reproved model evidence and keeps citation authority private. */
+  private async createAnswerModelMaterial(
+    question: string,
+    hits: readonly Readonly<KnowledgeGroundedRetrievalHit>[],
+    targetsByPageEvidenceId: ReadonlyMap<string, readonly Readonly<StoredCitationTarget>[]>,
+    generation: number,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeAnswerModelMaterial>> {
+    const contexts: Array<{
+      contextId: string;
+      pagePath: string;
+      pageContentHash: string;
+      heading: string;
+      headingPath: readonly string[];
+      content: string;
+    }> = [];
+    const evidence: Array<{
+      evidenceId: string;
+      contextId: string;
+      sourceExcerpt: string;
+      sourceRelation: ClaimCitation["relation"];
+    }> = [];
+    const targetsByEvidenceId = new Map<string, Readonly<StoredCitationTarget>>();
+    let totalCharacters = 0;
+
+    for (const hit of hits) {
+      if (
+        contexts.length >= KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxContextItems ||
+        evidence.length >= KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxEvidenceItems
+      ) {
+        break;
+      }
+      const candidates = targetsByPageEvidenceId.get(hit.pageEvidenceId) ?? [];
+      let contextId: string | undefined;
+      for (const candidate of candidates) {
+        if (evidence.length >= KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxEvidenceItems) break;
+        if (!isEligibleAnswerTarget(candidate)) continue;
+        const sourceExcerpt = candidate.target.citation.locator.excerpt;
+        const contextCost = contextId === undefined ? hit.snippet.length : 0;
+        if (
+          totalCharacters + contextCost + sourceExcerpt.length >
+          KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxTotalEvidenceCharacters
+        ) {
+          continue;
+        }
+        const verified = await this.citationNavigation.verify(candidate.target, signal);
+        this.assertCurrent(generation, signal);
+        if (verified !== true) continue;
+        if (contextId === undefined) {
+          contextId = `context-${contexts.length + 1}`;
+          contexts.push(
+            Object.freeze({
+              contextId,
+              pagePath: hit.pagePath,
+              pageContentHash: hit.pageContentHash,
+              heading: hit.heading,
+              headingPath: Object.freeze([...hit.headingPath]),
+              content: hit.snippet,
+            })
+          );
+          totalCharacters += hit.snippet.length;
+        }
+        const evidenceId = `evidence-${evidence.length + 1}`;
+        evidence.push(
+          Object.freeze({
+            evidenceId,
+            contextId,
+            sourceExcerpt,
+            sourceRelation: candidate.target.citation.relation,
+          })
+        );
+        targetsByEvidenceId.set(evidenceId, candidate);
+        totalCharacters += sourceExcerpt.length;
+      }
+    }
+
+    const request = createKnowledgeGroundedAnswerRequest(
+      question,
+      Object.freeze(contexts),
+      Object.freeze(evidence)
+    );
+    return Object.freeze({ request, targetsByEvidenceId });
+  }
+
+  /** Maps validated evidence ids to deduplicated opaque UI citation summaries. */
+  private createAnswerResultBody(
+    answer: Readonly<KnowledgeGroundedAnswer>,
+    targetsByEvidenceId: ReadonlyMap<string, Readonly<StoredCitationTarget>>
+  ): Readonly<KnowledgeGroundedAnswerResultBody> {
+    const claims = answer.claims.map((claim) => {
+      const citationsByRef = new Map<string, Readonly<KnowledgeSourceCitationSummary>>();
+      for (const evidenceId of claim.evidenceIds) {
+        const target = targetsByEvidenceId.get(evidenceId);
+        if (!target) throw new KnowledgeScopedQueryError();
+        citationsByRef.set(target.summary.citationRef, target.summary);
+      }
+      return Object.freeze({
+        claimId: claim.claimId,
+        kind: claim.kind,
+        text: claim.text,
+        citations: Object.freeze([...citationsByRef.values()]),
+      });
+    });
+    return Object.freeze({
+      status: answer.status,
+      claims: Object.freeze(claims),
+      insufficientEvidence: Object.freeze([...answer.insufficientEvidence]),
+    });
+  }
+
   /**
-   * Runs one retrieval-only query against the exact current applied Wiki.
+   * Runs one scoped retrieval and optional grounded answer against the exact current applied Wiki.
    *
    * @param bundleId - Exact Bundle identity owned by this coordinator
    * @param request - Strict one-field query request
    * @param signal - Caller cancellation signal
-   * @returns Frozen grounded retrieval result and opaque citation references
+   * @returns Frozen grounded result and opaque citation references
    */
   async query(
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
-  ): Promise<KnowledgeGroundedRetrievalResult> {
+  ): Promise<KnowledgeStudioQueryResult> {
     this.assertOpen();
     assertIdentifier(bundleId);
     assertAbortSignal(signal);
@@ -597,6 +833,10 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
         string,
         readonly Readonly<KnowledgeSourceCitationSummary>[]
       >();
+      const storedTargetsByEvidenceId = new Map<
+        string,
+        readonly Readonly<StoredCitationTarget>[]
+      >();
       const hits = lexicalHits.map((hit) => {
         const page = pagesByEvidenceId.get(hit.evidenceId);
         if (!page) throw new KnowledgeScopedQueryError();
@@ -604,27 +844,72 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
 
         let citations = citationsByEvidenceId.get(page.evidenceId);
         if (!citations) {
-          citations = Object.freeze(
-            collectCitationCandidates(page).map(
-              (candidate) =>
-                this.resolveCitationTarget(candidate, generation, targetsByKey, targetsByRef)
-                  .summary
+          const storedTargets = Object.freeze(
+            collectCitationCandidates(page).map((candidate) =>
+              this.resolveCitationTarget(candidate, generation, targetsByKey, targetsByRef)
             )
           );
+          storedTargetsByEvidenceId.set(page.evidenceId, storedTargets);
+          citations = Object.freeze(storedTargets.map(({ summary }) => summary));
           citationsByEvidenceId.set(page.evidenceId, citations);
         }
         return createGroundedHit(hit, citations);
       });
       this.assertCurrent(generation, linked.signal);
 
-      const result = Object.freeze({
-        mode: "grounded_retrieval" as const,
-        bundleId: this.bundleId,
-        queryId,
-        runtimeRevision: snapshot.runtimeRevision,
-        manifestRevision: snapshot.manifestRevision,
-        hits: Object.freeze(hits),
-      });
+      let result: KnowledgeStudioQueryResult;
+      if (!this.answerModel) {
+        result = Object.freeze({
+          mode: "grounded_retrieval" as const,
+          bundleId: this.bundleId,
+          queryId,
+          runtimeRevision: snapshot.runtimeRevision,
+          manifestRevision: snapshot.manifestRevision,
+          hits: Object.freeze(hits),
+        });
+      } else {
+        const material = await this.createAnswerModelMaterial(
+          query,
+          hits,
+          storedTargetsByEvidenceId,
+          generation,
+          linked.signal
+        );
+        this.assertCurrent(generation, linked.signal);
+        const answer =
+          material.request.evidence.length === 0
+            ? createInsufficientKnowledgeGroundedAnswer(material.request.contextDigest)
+            : parseKnowledgeGroundedAnswerModelOutput(
+                await this.answerModel.generate(material.request, linked.signal),
+                material.request
+              );
+        this.assertCurrent(generation, linked.signal);
+
+        const freshSnapshot = await this.reader.read(linked.signal);
+        this.assertCurrent(generation, linked.signal);
+        if (!isSameVerifiedWikiSnapshot(snapshot, freshSnapshot)) {
+          throw new KnowledgeScopedQueryError();
+        }
+        const usedEvidenceIds = new Set(
+          answer.claims.flatMap(({ evidenceIds }) => [...evidenceIds])
+        );
+        for (const evidenceId of usedEvidenceIds) {
+          const target = material.targetsByEvidenceId.get(evidenceId);
+          if (!target) throw new KnowledgeScopedQueryError();
+          const verified = await this.citationNavigation.verify(target.target, linked.signal);
+          this.assertCurrent(generation, linked.signal);
+          if (verified !== true) throw new KnowledgeScopedQueryError();
+        }
+        result = Object.freeze({
+          mode: "grounded_answer" as const,
+          bundleId: this.bundleId,
+          queryId,
+          runtimeRevision: snapshot.runtimeRevision,
+          manifestRevision: snapshot.manifestRevision,
+          answer: this.createAnswerResultBody(answer, material.targetsByEvidenceId),
+          hits: Object.freeze(hits),
+        });
+      }
       this.current = Object.freeze({
         generation,
         queryId,

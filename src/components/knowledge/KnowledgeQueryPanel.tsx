@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ExternalLink, FileSearch, Loader2, Search } from "lucide-react";
+import { ExternalLink, FileSearch, Loader2, Search, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import type {
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import type { KnowledgeStudioQueryState } from "@/knowledge/ui/KnowledgeStudioController";
 
-/** Props for the retrieval-only applied-Wiki Query surface. */
+/** Props for the read-only applied-Wiki Query and grounded-answer surface. */
 export interface KnowledgeQueryPanelProps {
   state: Readonly<KnowledgeStudioQueryState>;
   onQuery(this: void, query: string): void | Promise<void>;
@@ -66,11 +66,8 @@ function CitationButton({
 }
 
 /**
- * Renders scoped lexical evidence from only hash-verified applied Wiki pages.
- *
- * This first Query slice deliberately performs no model synthesis and exposes
- * no write action. Answer generation and Save to Wiki remain later reviewed
- * capabilities.
+ * Renders a strictly validated model answer plus the exact evidence retrieval.
+ * Save to Wiki remains a later reviewed capability and no Query control writes.
  */
 export function KnowledgeQueryPanel({
   state,
@@ -96,11 +93,14 @@ export function KnowledgeQueryPanel({
           <div>
             <h2 className="tw-m-0 tw-text-sm tw-font-semibold">Query applied knowledge</h2>
             <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
-              Searches only accepted, applied, SHA-256 verified Wiki pages. This checkpoint returns
-              grounded excerpts; model synthesis and Save to Wiki are not connected yet.
+              Searches only accepted, applied, SHA-256 verified Wiki pages. DeepSeek may synthesize
+              an answer only from source excerpts verified for this query; Save to Wiki is not
+              connected yet.
             </p>
           </div>
-          <Badge variant="outline">Grounded retrieval</Badge>
+          <Badge variant="outline">
+            {result?.mode === "grounded_answer" ? "Grounded answer" : "Grounded retrieval"}
+          </Badge>
         </div>
 
         <form className="tw-mt-3 tw-flex tw-gap-2" onSubmit={submit}>
@@ -135,8 +135,68 @@ export function KnowledgeQueryPanel({
           role="status"
         >
           <Loader2 aria-hidden="true" className="tw-size-4 tw-animate-spin" />
-          Proving the applied Wiki snapshot and ranking exact excerpts…
+          Proving the applied Wiki and source evidence, then generating a grounded answer…
         </div>
+      ) : null}
+
+      {state.status === "ready" && result?.mode === "grounded_answer" ? (
+        <section
+          aria-label="Grounded answer"
+          className="tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-4"
+        >
+          <div className="tw-flex tw-flex-wrap tw-items-center tw-justify-between tw-gap-2">
+            <h2 className="tw-m-0 tw-flex tw-items-center tw-gap-2 tw-text-sm tw-font-semibold">
+              <Sparkles aria-hidden="true" className="tw-size-4" />
+              Answer
+            </h2>
+            <Badge variant="secondary">
+              {result.answer.status === "answered"
+                ? "Supported"
+                : result.answer.status === "partial"
+                  ? "Partial"
+                  : "Insufficient evidence"}
+            </Badge>
+          </div>
+
+          {result.answer.claims.length > 0 ? (
+            <div className="tw-mt-3 tw-space-y-3">
+              {result.answer.claims.map((claim) => (
+                <article key={claim.claimId} className="tw-rounded-lg tw-bg-secondary-alt tw-p-3">
+                  <Badge variant="outline">
+                    {claim.kind === "source_fact" ? "Source fact" : "Inference"}
+                  </Badge>
+                  <p className="tw-m-0 tw-mt-2 tw-whitespace-pre-wrap tw-break-words tw-text-sm">
+                    {claim.text}
+                  </p>
+                  <div
+                    aria-label={`Citations for ${claim.claimId}`}
+                    className="tw-mt-3 tw-flex tw-flex-wrap tw-gap-2"
+                  >
+                    {claim.citations.map((citation) => (
+                      <CitationButton
+                        key={citation.citationRef}
+                        busy={state.openingCitationRef === citation.citationRef}
+                        citation={citation}
+                        onOpen={() => void onOpenCitation(citation.citationRef)}
+                      />
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {result.answer.insufficientEvidence.length > 0 ? (
+            <div className="tw-mt-3 tw-rounded-lg tw-bg-secondary-alt tw-p-3">
+              <p className="tw-m-0 tw-text-xs tw-font-semibold">Evidence still needed</p>
+              <ul className="tw-mb-0 tw-mt-2 tw-pl-5 tw-text-sm">
+                {result.answer.insufficientEvidence.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {state.status === "ready" && result?.hits.length === 0 ? (
@@ -152,6 +212,12 @@ export function KnowledgeQueryPanel({
             Unreviewed, unapplied, or externally changed pages are intentionally excluded.
           </p>
         </div>
+      ) : null}
+
+      {result?.hits.length ? (
+        <h2 className="tw-m-0 tw-text-sm tw-font-semibold">
+          {result.mode === "grounded_answer" ? "Evidence used for retrieval" : "Retrieved evidence"}
+        </h2>
       ) : null}
 
       {result?.hits.map((hit, index) => (

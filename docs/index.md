@@ -15,7 +15,7 @@ Welcome to the official documentation for **Copilot for Obsidian**, an AI-powere
 | [Vault Search and Indexing](vault-search-and-indexing.md)   | Lexical search, semantic search, index management, exclusions                   |
 | [Agent Mode and Tools](agent-mode-and-tools.md)             | Autonomous agent, all 13 tools, file editing, web search                        |
 | [Projects](projects.md)                                     | Focused workspaces with isolated context, model, and chat history               |
-| [Personal Knowledge Studio](personal-knowledge.md)          | Windows-only Knowledge Studio, Activity semantics, and safe multi-file review   |
+| [Personal Knowledge Studio](personal-knowledge.md)          | Windows-only Studio, review/recovery, and grounded personal-knowledge Query     |
 | [System Prompts](system-prompts.md)                         | Customizing AI behavior with built-in and custom system prompts                 |
 | [Copilot Plus and Self-Host](copilot-plus-and-self-host.md) | Copilot Plus features, memory system, self-host mode, Miyo                      |
 | [Troubleshooting and FAQ](troubleshooting-and-faq.md)       | Common errors, provider-specific issues, performance, FAQ                       |

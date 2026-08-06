@@ -1,6 +1,6 @@
 import type { KnowledgeReviewCommand } from "@/knowledge/review/ReviewDecision";
 import type {
-  KnowledgeGroundedRetrievalResult,
+  KnowledgeStudioQueryResult,
   KnowledgeStudioQueryPort,
   KnowledgeStudioQueryRequest,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
@@ -299,7 +299,7 @@ export class DelegatingKnowledgeStudioPort
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
-  ): Promise<KnowledgeGroundedRetrievalResult> {
+  ): Promise<KnowledgeStudioQueryResult> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       typeof delegate.query === "function"
         ? delegate.query(bundleId, request, delegatedSignal)

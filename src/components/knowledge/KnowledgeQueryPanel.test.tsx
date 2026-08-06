@@ -2,7 +2,10 @@ import * as React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import { KnowledgeQueryPanel } from "@/components/knowledge/KnowledgeQueryPanel";
-import type { KnowledgeGroundedRetrievalResult } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
+import type {
+  KnowledgeGroundedAnswerResult,
+  KnowledgeGroundedRetrievalResult,
+} from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 
 /** Creates one grounded result containing Markdown and intentionally disabled PDF citations. */
 function createResult(): KnowledgeGroundedRetrievalResult {
@@ -46,8 +49,35 @@ function createResult(): KnowledgeGroundedRetrievalResult {
   };
 }
 
+/** Creates one validated H.2 answer with fact, inference, and missing evidence. */
+function createAnswerResult(): KnowledgeGroundedAnswerResult {
+  const retrieval = createResult();
+  return {
+    ...retrieval,
+    mode: "grounded_answer",
+    answer: {
+      status: "partial",
+      claims: [
+        {
+          claimId: "claim-fact",
+          kind: "source_fact",
+          text: "The applied Wiki excerpt is hash verified.",
+          citations: [retrieval.hits[0].citations[0]],
+        },
+        {
+          claimId: "claim-inference",
+          kind: "inference",
+          text: "This suggests the answer is tied to durable provenance.",
+          citations: [retrieval.hits[0].citations[0]],
+        },
+      ],
+      insufficientEvidence: ["No source states how frequently the page changes."],
+    },
+  };
+}
+
 describe("KnowledgeQueryPanel", () => {
-  it("submits only a trimmed non-empty Query and exposes the retrieval-only contract", () => {
+  it("submits only a trimmed non-empty Query and explains the read-only answer contract", () => {
     const onQuery = jest.fn();
     render(
       <KnowledgeQueryPanel
@@ -59,7 +89,7 @@ describe("KnowledgeQueryPanel", () => {
 
     expect(screen.getByText("Grounded retrieval")).toBeTruthy();
     expect(
-      screen.getByText(/model synthesis and Save to Wiki are not connected yet/i)
+      screen.getByText(/DeepSeek may synthesize an answer only from source excerpts/i)
     ).toBeTruthy();
     const input = screen.getByRole("textbox", { name: "Knowledge query" });
     const submit = screen.getByRole("button", { name: /Search/ });
@@ -70,6 +100,28 @@ describe("KnowledgeQueryPanel", () => {
 
     expect(onQuery).toHaveBeenCalledTimes(1);
     expect(onQuery).toHaveBeenCalledWith("exact topic");
+  });
+
+  it("renders fact, inference, insufficiency, and only Core-issued citation controls", () => {
+    const onOpenCitation = jest.fn();
+    render(
+      <KnowledgeQueryPanel
+        state={{ status: "ready", result: createAnswerResult() }}
+        onOpenCitation={onOpenCitation}
+        onQuery={jest.fn()}
+      />
+    );
+
+    expect(screen.getByText("Grounded answer")).toBeTruthy();
+    expect(screen.getByText("Source fact")).toBeTruthy();
+    expect(screen.getByText("Inference")).toBeTruthy();
+    expect(screen.getByText("The applied Wiki excerpt is hash verified.")).toBeTruthy();
+    expect(screen.getByText("No source states how frequently the page changes.")).toBeTruthy();
+    const claimCitations = screen.getAllByRole("button", {
+      name: /Sources\/Topic\.md.*lines 3–5/,
+    });
+    fireEvent.click(claimCitations[0]);
+    expect(onOpenCitation).toHaveBeenCalledWith("citation-markdown");
   });
 
   it("renders exact excerpts and forwards only the opaque Markdown citation reference", () => {
@@ -107,7 +159,7 @@ describe("KnowledgeQueryPanel", () => {
         onQuery={jest.fn()}
       />
     );
-    expect(screen.getByRole("status").textContent).toContain("ranking exact excerpts");
+    expect(screen.getByRole("status").textContent).toContain("generating a grounded answer");
 
     rerender(
       <KnowledgeQueryPanel

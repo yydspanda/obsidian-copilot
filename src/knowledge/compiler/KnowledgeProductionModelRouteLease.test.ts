@@ -20,6 +20,11 @@ import {
   KnowledgeProductionModelRouteLeaseOwner,
   type KnowledgeProductionCompileAttemptDependencies,
 } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
+import { bindKnowledgeGroundedAnswerModelRoute } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
+import {
+  createKnowledgeGroundedAnswerRequest,
+  type KnowledgeGroundedAnswerRequest,
+} from "@/knowledge/query/KnowledgeGroundedAnswer";
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
@@ -339,7 +344,10 @@ function createLease(
   lease: KnowledgeProductionModelRouteLease;
 } {
   const route = bindKnowledgePrivateModelRouteToProfile(profile, invoke);
-  const owner = createKnowledgeProductionModelRouteLeaseOwner([{ bundleId, route }]);
+  const answerRoute = bindKnowledgeGroundedAnswerModelRoute(bundleId, async () => {
+    throw new Error("Grounded answer is not used by Compiler tests");
+  });
+  const owner = createKnowledgeProductionModelRouteLeaseOwner([{ bundleId, route, answerRoute }]);
   return { owner, lease: owner.getLease() };
 }
 
@@ -356,6 +364,72 @@ async function captureFailure(action: () => Promise<unknown>): Promise<unknown> 
 }
 
 describe("KnowledgeProductionModelRouteLease", () => {
+  it("fences the independent grounded-answer route behind the same lifecycle owner", async () => {
+    const profile = createPipelineProfile();
+    const compilerRoute = bindKnowledgePrivateModelRouteToProfile(profile, async () =>
+      createAnalysisWireOutput(false)
+    );
+    const pendingEntered = createDeferred<void>();
+    const pendingResponse = createDeferred<string>();
+    const answerSignals: AbortSignal[] = [];
+    const answerInvoke = jest.fn(
+      async (_request: Readonly<KnowledgeGroundedAnswerRequest>, signal: AbortSignal) => {
+        answerSignals.push(signal);
+        if (answerSignals.length === 1) return "answer-json";
+        pendingEntered.resolve();
+        return pendingResponse.promise;
+      }
+    );
+    const answerRoute = bindKnowledgeGroundedAnswerModelRoute(BUNDLE_ID, answerInvoke);
+    const owner = createKnowledgeProductionModelRouteLeaseOwner([
+      { bundleId: BUNDLE_ID, route: compilerRoute, answerRoute },
+    ]);
+    const lease = owner.getLease();
+    const port = lease.createGroundedAnswerModelPort(BUNDLE_ID);
+    const request = createKnowledgeGroundedAnswerRequest(
+      "Question",
+      [
+        {
+          contextId: "context-1",
+          pagePath: "Wiki/Page.md",
+          pageContentHash: "a".repeat(64),
+          heading: "Page",
+          headingPath: ["Page"],
+          content: "Wiki context",
+        },
+      ],
+      [
+        {
+          evidenceId: "evidence-1",
+          contextId: "context-1",
+          sourceExcerpt: "Exact source excerpt",
+          sourceRelation: "supports",
+        },
+      ]
+    );
+
+    await expect(port.generate(request, new AbortController().signal)).resolves.toBe("answer-json");
+    expect(answerInvoke).toHaveBeenCalledTimes(1);
+    expect(() => lease.createGroundedAnswerModelPort("other")).toThrow(
+      KnowledgeProductionModelRouteLeaseError
+    );
+
+    const pending = port.generate(request, new AbortController().signal);
+    await pendingEntered.promise;
+    expect(answerSignals[1].aborted).toBe(false);
+
+    owner.close();
+
+    expect(answerSignals[1].aborted).toBe(true);
+    pendingResponse.resolve("late-answer-json");
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+
+    await expect(port.generate(request, new AbortController().signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(answerInvoke).toHaveBeenCalledTimes(2);
+  });
+
   it("returns no_changes through an authentic Queue claim without exposing a captured secret", async () => {
     const profile = createPipelineProfile();
     const secretCanary = "sk-production-route-result-canary";
@@ -789,7 +863,10 @@ describe("KnowledgeProductionModelRouteLease", () => {
       invokeCalls += 1;
       return createAnalysisWireOutput(false);
     });
-    const bindings = [{ bundleId: BUNDLE_ID, route }];
+    const answerRoute = bindKnowledgeGroundedAnswerModelRoute(BUNDLE_ID, async () => {
+      throw new Error("Grounded answer is not used by Compiler tests");
+    });
+    const bindings = [{ bundleId: BUNDLE_ID, route, answerRoute }];
     const owner = createKnowledgeProductionModelRouteLeaseOwner(bindings);
     const lease = owner.getLease();
 

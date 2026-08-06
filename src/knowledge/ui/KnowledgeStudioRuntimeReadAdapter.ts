@@ -34,7 +34,7 @@ import type {
   KnowledgeStudioSnapshot,
 } from "@/knowledge/ui/KnowledgeStudioController";
 import type {
-  KnowledgeGroundedRetrievalResult,
+  KnowledgeStudioQueryResult,
   KnowledgeStudioQueryPort,
   KnowledgeStudioQueryRequest,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
@@ -160,7 +160,7 @@ class CapturedKnowledgeStudioQueryPort
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
-  ): Promise<KnowledgeGroundedRetrievalResult> {
+  ): Promise<KnowledgeStudioQueryResult> {
     const state = requireCapturedQueryState(this);
     return Reflect.apply(state.query, state.owner, [bundleId, request, signal]);
   }
@@ -663,11 +663,11 @@ export class KnowledgeStudioRuntimeReadAdapter
           notice: this.input.commands
             ? this.input.commands.getCapabilities().reviewAccept
               ? this.input.query
-                ? "Durable Activity, Review, Apply, and scoped Query are connected. Query currently returns grounded excerpts; model synthesis, Save to Wiki, PDF jump, and delete remain disabled."
+                ? "Durable Activity, Review, Apply, and grounded Query are connected. Query may call the selected DeepSeek model using only freshly verified source excerpts. Save to Wiki, PDF jump, and delete remain disabled."
                 : "Durable Activity and Review are connected. Eligible create and update selections can be explicitly applied; delete acceptance and Query remain disabled."
               : "Durable Activity commands and proposal rejection are connected. Acceptance and Wiki apply remain disabled."
             : this.input.query
-              ? "Live durable Activity, Review, and scoped Query are connected. Query currently returns grounded excerpts; model synthesis, Save to Wiki, PDF jump, Review decisions, and Wiki apply remain disabled."
+              ? "Live durable Activity, Review, and grounded Query are connected. Query may call the selected DeepSeek model using only freshly verified source excerpts. Save to Wiki, PDF jump, Review decisions, and Wiki apply remain disabled."
               : "Live durable Activity and Review are connected. Review decisions and Wiki apply remain disabled until their safe adapters are connected.",
         });
       } catch (error) {
@@ -818,7 +818,7 @@ export class KnowledgeStudioRuntimeReadAdapter
     bundleId: string,
     request: Readonly<KnowledgeStudioQueryRequest>,
     signal: AbortSignal
-  ): Promise<KnowledgeGroundedRetrievalResult> {
+  ): Promise<KnowledgeStudioQueryResult> {
     if (!this.input.query) throw new KnowledgeStudioAdapterUnavailableError();
     return this.input.query.query(bundleId, request, signal);
   }

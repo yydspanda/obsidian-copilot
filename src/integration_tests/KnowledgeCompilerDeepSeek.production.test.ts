@@ -22,9 +22,13 @@ import {
 } from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
 import { IngestQueue } from "@/knowledge/ingest/queue/IngestQueue";
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
-import { createSourceContentHash } from "@/knowledge/model/fingerprint";
+import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeBundleConfig, SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import {
+  createKnowledgeGroundedAnswerRequest,
+  parseKnowledgeGroundedAnswerModelOutput,
+} from "@/knowledge/query/KnowledgeGroundedAnswer";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
 import {
   KnowledgeRuntimeIngestExecutionProofPort,
@@ -339,6 +343,90 @@ class ExactArtifactReader implements KnowledgeExactArtifactReaderPort {
 }
 
 describeWithDeepSeek("Knowledge Compiler DeepSeek production chain", () => {
+  it("runs one strict grounded-answer request through the exact preflight lease", async () => {
+    const apiKey = DEEPSEEK_API_KEY;
+    if (!apiKey) throw new Error("DEEPSEEK_API_KEY is required for this live integration test");
+
+    const nativeWebRuntime = getNativeWebRuntime();
+    const restoreAbortController = installNativeAbortController(nativeWebRuntime.AbortController);
+    const requestMetadata: SafeFetchMetadata[] = [];
+    let preflight: KnowledgeProductionPreflightComposer | undefined;
+
+    try {
+      const owner = createOwner();
+      const project = createProject();
+      const settings = createSettings(apiKey);
+      const resources = createKnowledgeProductionPipelineResources();
+      const profileSource = new ProjectKnowledgePipelineProfileSource(
+        [project],
+        settings,
+        resources.profileOptions
+      );
+      preflight = new KnowledgeProductionPreflightComposer({
+        owners: [owner],
+        projects: [project],
+        settings,
+        profileOptions: resources.profileOptions,
+        profileSource,
+        fetchPort: createSafeNativeFetchPort(requestMetadata, nativeWebRuntime),
+      });
+      expect(preflight.preflight()).toEqual({ kind: "ready", bundleCount: 1 });
+      expect(requestMetadata).toEqual([]);
+      const lease = preflight.getModelRouteLeaseOwner().getLease();
+      const answerPort = lease.createGroundedAnswerModelPort(BUNDLE_ID);
+      const wikiContext = "# Project Atlas\n\nProject Atlas launches on 2026-08-01.\n";
+      const request = createKnowledgeGroundedAnswerRequest(
+        "What is the Project Atlas launch date?",
+        [
+          {
+            contextId: "context-1",
+            pagePath: ATLAS_PATH,
+            pageContentHash: createFileContentHash(wikiContext),
+            heading: "Project Atlas",
+            headingPath: ["Project Atlas"],
+            content: wikiContext,
+          },
+        ],
+        [
+          {
+            evidenceId: "evidence-1",
+            contextId: "context-1",
+            sourceExcerpt: "Project Atlas launch date is 2026-08-01.",
+            sourceRelation: "supports",
+          },
+        ]
+      );
+
+      const raw = await answerPort.generate(request, new AbortController().signal);
+      const answer = parseKnowledgeGroundedAnswerModelOutput(raw, request);
+
+      expect(answer.status === "answered" || answer.status === "partial").toBe(true);
+      expect(answer.claims.length).toBeGreaterThan(0);
+      expect(answer.claims.map(({ text }) => text).join(" ")).toContain("2026-08-01");
+      expect(answer.claims.every(({ evidenceIds }) => evidenceIds.includes("evidence-1"))).toBe(
+        true
+      );
+      expect(requestMetadata).toHaveLength(1);
+      expect(requestMetadata[0]).toMatchObject({
+        url: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
+        method: "POST",
+        responseStatus: 200,
+      });
+
+      preflight.close();
+      await expect(
+        answerPort.generate(request, new AbortController().signal)
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(requestMetadata).toHaveLength(1);
+    } finally {
+      try {
+        preflight?.close();
+      } finally {
+        restoreAbortController();
+      }
+    }
+  }, 120_000);
+
   it("persists an exact pending Review without mutating Manifest or Wiki bytes", async () => {
     const apiKey = DEEPSEEK_API_KEY;
     if (!apiKey) throw new Error("DEEPSEEK_API_KEY is required for this live integration test");
