@@ -4,6 +4,7 @@ import { createChangeSetTransactionDigest } from "@/knowledge/changeset/Transact
 import {
   createManifestCommitIntentDigest,
   createManifestCommitPlanDigest,
+  getManifestCommitPlanOperation,
   manifestCommitIntentSchema,
   manifestCommitPlanSchema,
   projectManifestCommitIntent,
@@ -369,12 +370,12 @@ function validateManifestPlanBinding(
       "Manifest commit plan must match the Review, Bundle, exact source content, pipeline, and input revision"
     );
   }
-  if (record.proposal.operation !== "ingest") {
+  if (record.proposal.operation !== getManifestCommitPlanOperation(plan)) {
     addError(
       diagnostics,
       "review_manifest_plan_operation_mismatch",
       `${field}.proposal.operation`,
-      "A source-compile Manifest plan may accompany only an ingest proposal"
+      "Proposal operation must match the exact source-compile Manifest plan"
     );
   }
 }

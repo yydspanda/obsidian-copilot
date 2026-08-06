@@ -2,6 +2,7 @@ import {
   ALL_KNOWLEDGE_FILE_MUTATIONS,
   createKnowledgeChangeSetDigest,
   type KnowledgeFileCompareAndSwapResult,
+  type KnowledgeFileMutationCapabilities,
   type KnowledgeFileObservation,
   type KnowledgeFileStore,
 } from "@/knowledge/changeset/ChangeSetValidator";
@@ -117,9 +118,19 @@ let transactionSequence = 0;
 
 /** Exact in-memory Wiki mutation boundary used by reviewed-apply tests. */
 class MemoryKnowledgeFileStore implements KnowledgeFileStore {
-  readonly mutationCapabilities = ALL_KNOWLEDGE_FILE_MUTATIONS;
+  readonly mutationCapabilities: Readonly<KnowledgeFileMutationCapabilities>;
   readonly files = new Map<string, string>();
   compareAndSwapCalls = 0;
+
+  /** Creates a logical store with an optional real-parent precondition. */
+  constructor(requiresExistingParentForCreate = false) {
+    this.mutationCapabilities = requiresExistingParentForCreate
+      ? Object.freeze({
+          ...ALL_KNOWLEDGE_FILE_MUTATIONS,
+          requiresExistingParentForCreate: true,
+        })
+      : ALL_KNOWLEDGE_FILE_MUTATIONS;
+  }
 
   /** Observes one exact Wiki path. */
   async observe(path: string): Promise<KnowledgeFileObservation> {
@@ -430,9 +441,16 @@ interface ReviewedApplyHarness {
   jobId: string;
 }
 
-/** Seeds one exact awaiting-Review queue job and production apply coordinator. */
+/**
+ * Seeds one exact awaiting-Review queue job and production apply coordinator.
+ *
+ * @param targetKind - Current target observation exposed to Review
+ * @param requiresExistingParentForCreate - Whether the test CAS needs a real parent directory
+ * @returns Authentic pending Review and released production coordinator
+ */
 async function createReviewedApplyHarness(
-  targetKind: "missing" | "occupied"
+  targetKind: "missing" | "occupied",
+  requiresExistingParentForCreate = false
 ): Promise<ReviewedApplyHarness> {
   const owner = createOwner();
   const bundle = owner.config;
@@ -504,7 +522,7 @@ async function createReviewedApplyHarness(
     status: "awaiting_review",
   });
   const resolver = createTargetResolver(targetKind);
-  const fileStore = new MemoryKnowledgeFileStore();
+  const fileStore = new MemoryKnowledgeFileStore(requiresExistingParentForCreate);
   const refresh = jest.fn<void, []>();
   const coordinator = new KnowledgeProductionReviewedApplyCoordinator({
     runtime: capabilities.runtime,
@@ -760,6 +778,38 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
     );
     expect(runtime.activeTransaction).toBeNull();
     expect(runtime.applyCommits).toHaveLength(1);
+  });
+
+  it("blocks a missing create parent before durable Review acceptance", async () => {
+    const harness = await createReviewedApplyHarness("missing", true);
+    const command = await createAcceptCommand(harness);
+
+    const result = await harness.coordinator.submit(
+      BUNDLE_ID,
+      command,
+      new AbortController().signal
+    );
+    expect(result.kind).toBe("blocked");
+    if (result.kind !== "blocked") throw new Error("Expected blocked Review submission");
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "changeset_create_parent_missing"
+    );
+
+    await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+      outcome: "pending",
+      recordRevision: 0,
+    });
+    await expect(harness.capabilities.queue.load(BUNDLE_ID)).resolves.toMatchObject({
+      jobs: [{ id: "job-reviewed-apply", status: "awaiting_review", stage: "review" }],
+      pendingReviews: [expect.objectContaining({ changeSetId: harness.changeSetId })],
+    });
+    expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+    expect(harness.refresh).not.toHaveBeenCalled();
+    const runtime = parseKnowledgeRuntimeStoreSnapshot(
+      JSON.parse(await harness.capabilities.file.read()) as unknown
+    );
+    expect(runtime.activeTransaction).toBeNull();
+    expect(runtime.applyCommits).toEqual([]);
   });
 
   it("applies one fresh Manifest-authorized update against its exact before state", async () => {

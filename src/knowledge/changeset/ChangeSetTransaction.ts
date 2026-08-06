@@ -1,6 +1,7 @@
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
 import {
   createManifestCommitIntentDigest,
+  getManifestCommitIntentOperation,
   parseManifestCommitIntent,
   validateManifestCommitIntent,
   type ManifestCommitIntent,
@@ -550,12 +551,12 @@ function parseApplyManifestCommitIntent(
         "Manifest intent must match the Bundle, ChangeSet, exact source content, pipeline, and input revision",
     });
   }
-  if (changeSet.operation !== "ingest") {
+  if (changeSet.operation !== getManifestCommitIntentOperation(parsed.value)) {
     diagnostics.push({
-      code: "transaction_manifest_intent_operation_unsupported",
+      code: "transaction_manifest_intent_operation_mismatch",
       severity: "error",
       field: "changeSet.operation",
-      message: "Source-compile Manifest commits currently support only ingest ChangeSets",
+      message: "ChangeSet operation must match the exact source-compile Manifest intent",
     });
   }
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {

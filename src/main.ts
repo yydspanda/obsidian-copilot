@@ -22,6 +22,14 @@ import { ProjectRegister } from "@/projects/projectRegister";
 import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/constants";
 import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
+import { DelegatingKnowledgeChatCapturePort } from "@/knowledge/capture/DelegatingKnowledgeChatCapturePort";
+import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
+import { KnowledgeChatCaptureGenerationLease } from "@/knowledge/capture/KnowledgeChatCaptureGenerationLease";
+import {
+  KnowledgeProductionChatCaptureCoordinator,
+  ObsidianKnowledgeVaultSourcePresence,
+} from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
+import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
 import {
@@ -38,7 +46,11 @@ import { KnowledgeProductionRecoveryActionCoordinator } from "@/knowledge/startu
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
 import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgePluginProductionRecoveryPort } from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
-import type { KnowledgeRuntimeStore } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
+import {
+  KnowledgeRuntimeManifestStorage,
+  type KnowledgeRuntimeStore,
+} from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { initializeKnowledgeRuntimeForCurrentGeneration } from "@/knowledge/startup/KnowledgeRuntimeFoundationInitializer";
 import {
   KnowledgePluginStartupBarrier,
@@ -193,6 +205,7 @@ export default class CopilotPlugin extends Plugin {
       createResources: () => createKnowledgeProductionPipelineResources(),
     });
   private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
+  private readonly knowledgeChatCapturePort = new DelegatingKnowledgeChatCapturePort();
   private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
   private readonly knowledgeStudioStartupAvailability =
     new KnowledgeStudioStartupAvailabilityAdapter(
@@ -206,6 +219,12 @@ export default class CopilotPlugin extends Plugin {
     ensureInitialized: () => this.ensureProjectsInitializedAfterLayout(),
   });
   private readonly chatHistoryLastAccessedAtManager = new RecentUsageManager<string>();
+
+  /** Returns the stable least-authority Add-to-Knowledge command surface for Chat views. */
+  getKnowledgeChatCapturePort(): KnowledgeChatCapturePort {
+    return this.knowledgeChatCapturePort;
+  }
+
   async onload(): Promise<void> {
     this.knowledgeLifecycleClosed = false;
     // Reason: clear stale module-level persistence state + KeychainService
@@ -339,7 +358,7 @@ export default class CopilotPlugin extends Plugin {
       void this.initializeKnowledgeStartupPrerequisites();
       this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
         const port = this.knowledgeStudioPort;
-        const controller = new KnowledgeStudioController(port, port, port);
+        const controller = new KnowledgeStudioController(port, port, port, port);
         return new KnowledgeStudioView(leaf, controller, this.knowledgeStudioSessionStore);
       });
       this.addRibbonIcon("library-big", "Open Knowledge Studio", () => {
@@ -639,6 +658,7 @@ export default class CopilotPlugin extends Plugin {
       | ReturnType<KnowledgeProductionObservationComposer["createCompileReviewWorkerController"]>
       | undefined;
     let studioReadGeneration: KnowledgeStudioReadGenerationLease | undefined;
+    let captureGeneration: KnowledgeChatCaptureGenerationLease | undefined;
     try {
       throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
       this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
@@ -673,14 +693,25 @@ export default class CopilotPlugin extends Plugin {
             )
           ) {
             released = true;
+            const assertCurrent = (): void => {
+              if (
+                !released ||
+                this.knowledgeLifecycleClosed ||
+                this.knowledgeRuntime !== runtime ||
+                this.knowledgeProductionObservation !== port
+              ) {
+                throw new DOMException("The operation was aborted", "AbortError");
+              }
+              this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
+              candidate.assertHealthy();
+            };
             const scheduler = createKnowledgeWorkerScheduler(this.app.workspace.containerEl.win);
             workerController = candidate.createCompileReviewWorkerController(
               admission.modelRouteLease,
               () => {
                 if (!released || this.knowledgeLifecycleClosed) return false;
                 try {
-                  this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-                  candidate.assertHealthy();
+                  assertCurrent();
                   return true;
                 } catch {
                   return false;
@@ -717,6 +748,29 @@ export default class CopilotPlugin extends Plugin {
               },
               assertCurrent: () => candidate.assertHealthy(),
             });
+            const registration = new KnowledgeSourceRegistrationCore(
+              new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime)),
+              { assertCurrent }
+            );
+            const nextCaptureDelegate = new KnowledgeProductionChatCaptureCoordinator({
+              owners: admission.owners,
+              parserProfiles: admission.workflowLease
+                .getParsers()
+                .map((parser) => parser.getProfile()),
+              sourcePresence: new ObsidianKnowledgeVaultSourcePresence(this.app.vault),
+              registration,
+              assertCurrent,
+              onGenerationRefreshRequired: () =>
+                this.deferKnowledgeProductionGenerationInvalidation(assertCurrent),
+            });
+            captureGeneration = new KnowledgeChatCaptureGenerationLease({
+              delegate: nextCaptureDelegate,
+              subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
+              replaceDelegate: (delegate) =>
+                this.knowledgeChatCapturePort.replaceDelegate(delegate),
+              revokeDelegate: (delegate) => this.knowledgeChatCapturePort.revokeDelegate(delegate),
+              assertCurrent,
+            });
             retainKnowledgeProductionDrain(this.app.vault, workerController.whenSettled());
             workerController.start();
             studioReadGeneration.assertCurrent();
@@ -728,6 +782,8 @@ export default class CopilotPlugin extends Plugin {
         } catch (error) {
           releaseState = "closed";
           released = false;
+          captureGeneration?.close();
+          captureGeneration = undefined;
           studioReadGeneration?.close();
           studioReadGeneration = undefined;
           workerController?.close();
@@ -737,6 +793,8 @@ export default class CopilotPlugin extends Plugin {
       close: () => {
         releaseState = "closed";
         released = false;
+        captureGeneration?.close();
+        captureGeneration = undefined;
         studioReadGeneration?.close();
         studioReadGeneration = undefined;
         workerController?.close();
@@ -857,6 +915,7 @@ export default class CopilotPlugin extends Plugin {
     this.knowledgeLayoutCoordinator.close();
     this.knowledgeStudioSessionStore.dispose();
     this.knowledgeStudioPort.dispose();
+    this.knowledgeChatCapturePort.dispose();
     this.knowledgeProjectRecordsUnsubscriber?.();
     this.knowledgeProjectRecordsUnsubscriber = undefined;
     // Unsubscribe ProjectManager before releasing project state. Reversing

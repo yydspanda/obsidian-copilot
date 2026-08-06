@@ -2,6 +2,7 @@ import type {
   CompilerSourceIdentity,
   CompilerSchemaSnapshot,
 } from "@/knowledge/compiler/CompilerModelPort";
+import type { KnowledgeSourceCompileOperation } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   KnowledgeIngestExecutionAuthority,
   type KnowledgeAuthorizedExecutionStage,
@@ -23,7 +24,7 @@ const AUTHORIZED_PREPARATION_TOKEN = Symbol("KnowledgeAuthorizedSourcePreparatio
 
 /** Compiler foundation released only through an authentic execution capability. */
 export interface KnowledgeAuthorizedCompilePreparation {
-  operation: "ingest";
+  operation: KnowledgeSourceCompileOperation;
   bundle: KnowledgeBundleConfig;
   manifest: SourceManifest;
   schema: CompilerSchemaSnapshot;
@@ -155,7 +156,7 @@ function createAuthorizedPreparation(
     throw new KnowledgeAuthorizedSourcePreparationError("preparation_mismatch");
   }
   return Object.freeze({
-    operation: "ingest" as const,
+    operation: value.operation,
     bundle: value.bundle,
     manifest: value.manifest,
     schema: value.schema,

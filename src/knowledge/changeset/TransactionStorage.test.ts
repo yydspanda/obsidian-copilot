@@ -384,6 +384,41 @@ describe("parseChangeSetTransactionJournal", () => {
 });
 
 describe("validateChangeSetTransactionJournal", () => {
+  it("accepts a source-backed query-writeback intent and rejects operation drift", () => {
+    const base = createPreparedJournal();
+    const changeSet: KnowledgeChangeSet = {
+      ...base.changeSet,
+      operation: "query_writeback",
+    };
+    const manifestCommitIntent: ManifestCommitIntent = {
+      ...base.manifestCommitIntent,
+      kind: "query_writeback_source_compile",
+      sourceOriginDigest: "d".repeat(64),
+    };
+    const queryJournal: ChangeSetTransactionJournal = {
+      ...base,
+      changeSet,
+      changeSetDigest: createChangeSetTransactionDigest(changeSet),
+      manifestCommitIntent,
+      manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
+    };
+
+    expect(validateChangeSetTransactionJournal(queryJournal)).toEqual({
+      valid: true,
+      diagnostics: [],
+    });
+    expect(
+      diagnosticCodes({
+        ...queryJournal,
+        changeSet: { ...queryJournal.changeSet, operation: "lint_fix" },
+        changeSetDigest: createChangeSetTransactionDigest({
+          ...queryJournal.changeSet,
+          operation: "lint_fix",
+        }),
+      })
+    ).toContain("transaction_manifest_intent_operation_mismatch");
+  });
+
   it("validates journal, claim, commit, and conflict timestamps", () => {
     const prepared = createPreparedJournal();
     expect(diagnosticCodes({ ...prepared, updatedAt: 199 })).toContain(

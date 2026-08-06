@@ -22,6 +22,7 @@ export const WINDOWS_KNOWLEDGE_FILE_MUTATION_CAPABILITIES: Readonly<KnowledgeFil
     create: true,
     update: true,
     delete: false,
+    requiresExistingParentForCreate: true,
   });
 
 /** Result of attempting to create one absent file with native exclusive semantics. */

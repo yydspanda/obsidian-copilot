@@ -497,8 +497,10 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
         {state.activeTab === "query" ? (
           <KnowledgeQueryPanel
             state={state.query ?? { status: "idle" }}
+            writebackAvailable={snapshot.queryWritebackAvailable === true}
             onOpenCitation={(citationRef) => controller.openQueryCitation(citationRef)}
             onQuery={(query) => controller.runQuery(query)}
+            onSaveToWiki={(title) => controller.saveCurrentQueryToWiki(title)}
           />
         ) : state.activeTab === "activity" ? (
           snapshot.availability === "adapter_unavailable" ? (

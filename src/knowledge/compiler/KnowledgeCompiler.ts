@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { deriveKnowledgeSourceCompileAuthority } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   DEFAULT_KNOWLEDGE_COMPILER_LIMITS,
   KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
@@ -937,13 +938,13 @@ function validateCompileInput(
   diagnostics.push(
     ...prefixDiagnostics(validateSourceManifest(input.manifest).diagnostics, "manifest")
   );
-  if (input.operation !== "ingest") {
+  if (input.operation === "lint_fix") {
     addDiagnostic(
       diagnostics,
       "error",
       "compiler_manifest_operation_unsupported",
       "operation",
-      "Durable Source Manifest compilation currently supports only ingest operations"
+      "Source-backed compilation does not authorize lint-fix operations"
     );
   }
   if (input.manifest.bundleId !== input.bundle.id) {
@@ -966,6 +967,39 @@ function validateCompileInput(
       "source.sourceId",
       "Primary compile source must already have a stable Manifest identity"
     );
+  } else {
+    try {
+      const sourceCompileAuthority = deriveKnowledgeSourceCompileAuthority(primaryManifestEntry);
+      if (input.operation !== sourceCompileAuthority.operation) {
+        addDiagnostic(
+          diagnostics,
+          "error",
+          "compiler_manifest_operation_mismatch",
+          "operation",
+          "Compile operation must match the exact Manifest source origin"
+        );
+      }
+      if (
+        sourceCompileAuthority.operation === "query_writeback" &&
+        input.source.sourceContentHash !== sourceCompileAuthority.expectedSourceContentHash
+      ) {
+        addDiagnostic(
+          diagnostics,
+          "error",
+          "compiler_manifest_capture_hash_mismatch",
+          "source.sourceContentHash",
+          "Managed query capture bytes must match their exact Manifest origin"
+        );
+      }
+    } catch {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_manifest_source_origin_invalid",
+        "manifest.entries.extensions",
+        "Primary source origin is invalid"
+      );
+    }
   }
   primaryManifestEntry?.lastSuccessful?.generatedPages.forEach((page, index) => {
     if (page.contentHash === undefined) {

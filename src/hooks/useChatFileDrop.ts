@@ -1,4 +1,6 @@
 import { isAllowedFileForNoteContext } from "@/utils";
+import { isKnowledgeChatCapturePath } from "@/knowledge/capture/KnowledgeChatCapturePort";
+import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { App, Notice, TFile } from "obsidian";
 import { RefObject, useEffect, useState } from "react";
 
@@ -16,6 +18,8 @@ export interface UseChatFileDropProps {
   selectedImages: File[];
   /** Callback to add images */
   onAddImage: (files: File[]) => void;
+  /** Callback for Vault text files that require an explicit use-versus-capture choice */
+  onKnowledgeFileDrop: (files: TFile[]) => void;
   /** Reference to the container element for drag-and-drop */
   containerRef: RefObject<HTMLElement>;
 }
@@ -37,11 +41,16 @@ export interface UseChatFileDropReturn {
  * @returns The resolved TFile, or null if file not found
  */
 function parseObsidianUri(app: App, uriString: string): TFile | null {
-  // Parse Obsidian URI format: obsidian://open?vault=...&file=...
-  const match = uriString.match(/obsidian:\/\/open\?vault=.*?&file=(.*)$/);
-  if (!match) return null;
-
-  const filePath = decodeURIComponent(match[1]);
+  let uri: URL;
+  try {
+    uri = new URL(uriString);
+  } catch {
+    return null;
+  }
+  if (uri.protocol !== "obsidian:" || uri.hostname !== "open") return null;
+  const vaultName = uri.searchParams.get("vault");
+  const filePath = uri.searchParams.get("file");
+  if (!vaultName || vaultName !== app.vault.getName() || !filePath) return null;
 
   // Try 1: Load file as-is (works for images, pdfs, canvas, and .md files)
   let file = app.vault.getAbstractFileByPath(filePath);
@@ -84,12 +93,21 @@ function parseObsidianUris(app: App, uriString: string): TFile[] {
  * Supports:
  * - Dropping files from Obsidian nav bar (md, pdf, canvas, images)
  * - Dropping external image files
+ * - Diverting eligible Vault text files into an explicit Chat/Knowledge choice
  *
  * @param props - Configuration for the drag-and-drop functionality
  * @returns Object containing drag state
  */
 export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropReturn {
-  const { app, contextNotes, setContextNotes, selectedImages, onAddImage, containerRef } = props;
+  const {
+    app,
+    contextNotes,
+    setContextNotes,
+    selectedImages,
+    onAddImage,
+    onKnowledgeFileDrop,
+    containerRef,
+  } = props;
   const [isDragActive, setIsDragActive] = useState(false);
 
   useEffect(() => {
@@ -181,9 +199,11 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
         for (const uriString of uriStrings) {
           const files = parseObsidianUris(app, uriString);
           for (const file of files) {
-            fileMap.set(file.path, file);
+            fileMap.set(toWindowsPathKey(file.path), file);
           }
         }
+
+        const knowledgeFiles: TFile[] = [];
 
         // Now process each unique file sequentially
         for (const file of fileMap.values()) {
@@ -206,6 +226,9 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
               type: `image/${file.extension}`,
             });
             onAddImage([imageFile]);
+          } else if (isKnowledgeChatCapturePath(file.path)) {
+            // Do not mutate Chat or Knowledge state before the user chooses.
+            knowledgeFiles.push(file);
           } else if (isAllowedFileForNoteContext(file)) {
             // Handle as note (md, pdf, canvas)
             // Check for duplicate notes
@@ -223,6 +246,9 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
               `Unsupported file type: ${file.extension}. Supported types: md, pdf, canvas, and images.`
             );
           }
+        }
+        if (knowledgeFiles.length > 0) {
+          onKnowledgeFileDrop(knowledgeFiles);
         }
       } else if (fileItems.length > 0) {
         // Process external file drops (images only)
@@ -256,7 +282,15 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
       container.removeEventListener("dragleave", handleDragLeave);
       container.removeEventListener("drop", handleDropEvent);
     };
-  }, [app, contextNotes, selectedImages, onAddImage, setContextNotes, containerRef]);
+  }, [
+    app,
+    contextNotes,
+    selectedImages,
+    onAddImage,
+    onKnowledgeFileDrop,
+    setContextNotes,
+    containerRef,
+  ]);
 
   return { isDragActive };
 }

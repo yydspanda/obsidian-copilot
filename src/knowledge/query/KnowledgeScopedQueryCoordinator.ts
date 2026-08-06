@@ -17,6 +17,13 @@ import {
   type KnowledgeScopedLexicalHit,
   type KnowledgeScopedPageSnapshot,
 } from "@/knowledge/query/KnowledgeScopedLexicalRetriever";
+import {
+  createKnowledgeQueryWritebackCapture,
+  type KnowledgeQueryWritebackSubmissionPort,
+  type KnowledgeStudioQueryWritebackPort,
+  type KnowledgeStudioQueryWritebackRequest,
+  type KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
 
 const MAX_CITATION_TARGETS = 512;
 const OPAQUE_TOKEN_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
@@ -175,6 +182,7 @@ export interface KnowledgeScopedQueryCoordinatorInput {
   readonly citationNavigation: KnowledgeCitationNavigationPort;
   readonly idFactory: KnowledgeQueryIdFactory;
   readonly answerModel?: KnowledgeGroundedAnswerModelPort;
+  readonly writeback?: KnowledgeQueryWritebackSubmissionPort;
 }
 
 /** Sanitized failure that never retains a query, path, locator, or adapter cause. */
@@ -199,6 +207,9 @@ interface StoredCitationTarget {
 interface StoredQueryGeneration {
   readonly generation: number;
   readonly queryId: string;
+  readonly question: string;
+  readonly snapshot: Readonly<KnowledgeVerifiedWikiSnapshot>;
+  readonly result: Readonly<KnowledgeStudioQueryResult>;
   readonly citationsByRef: ReadonlyMap<string, Readonly<KnowledgeCitationNavigationTarget>>;
 }
 
@@ -251,10 +262,10 @@ function captureQuery(request: unknown): string {
   if (typeof request !== "object" || request === null || Array.isArray(request)) {
     throw new KnowledgeScopedQueryError();
   }
-  let keys: string[];
+  let keys: PropertyKey[];
   let descriptor: PropertyDescriptor | undefined;
   try {
-    keys = Object.keys(request);
+    keys = Reflect.ownKeys(request);
     descriptor = Object.getOwnPropertyDescriptor(request, "query");
   } catch {
     throw new KnowledgeScopedQueryError();
@@ -264,6 +275,7 @@ function captureQuery(request: unknown): string {
     keys[0] !== "query" ||
     !descriptor ||
     !("value" in descriptor) ||
+    !descriptor.enumerable ||
     typeof descriptor.value !== "string"
   ) {
     throw new KnowledgeScopedQueryError();
@@ -273,6 +285,36 @@ function captureQuery(request: unknown): string {
     throw new KnowledgeScopedQueryError();
   }
   return query;
+}
+
+/** Captures the only user-authored field accepted by Save to Wiki. */
+function captureWritebackTitle(request: unknown): string {
+  if (typeof request !== "object" || request === null || Array.isArray(request)) {
+    throw new KnowledgeScopedQueryError();
+  }
+  let keys: PropertyKey[];
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    keys = Reflect.ownKeys(request);
+    descriptor = Object.getOwnPropertyDescriptor(request, "title");
+  } catch {
+    throw new KnowledgeScopedQueryError();
+  }
+  if (
+    keys.length !== 1 ||
+    keys[0] !== "title" ||
+    !descriptor ||
+    !("value" in descriptor) ||
+    !descriptor.enumerable ||
+    typeof descriptor.value !== "string"
+  ) {
+    throw new KnowledgeScopedQueryError();
+  }
+  const title = descriptor.value.trim();
+  if (title.length < 1 || title.length > 256 || /[\r\n]/.test(title)) {
+    throw new KnowledgeScopedQueryError();
+  }
+  return title;
 }
 
 /** Links caller and generation cancellation without letting one caller revoke the generation. */
@@ -542,13 +584,16 @@ interface KnowledgeAnswerModelMaterial {
  * immediately revokes the previous generation and every citation reference it
  * issued.
  */
-export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort {
+export class KnowledgeScopedQueryCoordinator
+  implements KnowledgeStudioQueryPort, KnowledgeStudioQueryWritebackPort
+{
   private readonly bundleId: string;
   private readonly reader: KnowledgeAppliedWikiSnapshotReadPort;
   private readonly retriever: KnowledgeScopedLexicalRetrievalPort;
   private readonly citationNavigation: KnowledgeCitationNavigationPort;
   private readonly idFactory: KnowledgeQueryIdFactory;
   private readonly answerModel: KnowledgeGroundedAnswerModelPort | undefined;
+  private readonly writeback: KnowledgeQueryWritebackSubmissionPort | undefined;
   private closed = false;
   private generation = 0;
   private generationController: AbortController | undefined;
@@ -565,7 +610,8 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
       typeof input.citationNavigation?.verify !== "function" ||
       typeof input.citationNavigation?.open !== "function" ||
       typeof input.idFactory !== "function" ||
-      (input.answerModel !== undefined && typeof input.answerModel.generate !== "function")
+      (input.answerModel !== undefined && typeof input.answerModel.generate !== "function") ||
+      (input.writeback !== undefined && typeof input.writeback.submit !== "function")
     ) {
       throw new KnowledgeScopedQueryError();
     }
@@ -575,6 +621,7 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
     this.citationNavigation = input.citationNavigation;
     this.idFactory = input.idFactory;
     this.answerModel = input.answerModel;
+    this.writeback = input.writeback;
   }
 
   /** Rejects all work after this coordinator generation has been closed. */
@@ -913,6 +960,9 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
       this.current = Object.freeze({
         generation,
         queryId,
+        question: query,
+        snapshot,
+        result,
         citationsByRef: targetsByRef,
       });
       return result;
@@ -920,6 +970,128 @@ export class KnowledgeScopedQueryCoordinator implements KnowledgeStudioQueryPort
       if (generation === this.generation) {
         this.current = undefined;
       }
+      if (linked.signal.aborted || signal.aborted || isAbortError(error)) {
+        throw new DOMException("The operation was aborted", "AbortError");
+      }
+      throw error instanceof KnowledgeScopedQueryError ? error : new KnowledgeScopedQueryError();
+    } finally {
+      linked.dispose();
+    }
+  }
+
+  /**
+   * Captures the current grounded answer as a managed source for reviewed writeback.
+   *
+   * The coordinator re-proves the complete applied-Wiki snapshot and every
+   * actually used source citation before handing a content-addressed capture to
+   * the narrow production submission edge. It never receives a path or Wiki
+   * payload from the UI and cannot apply the eventual ChangeSet.
+   *
+   * @param bundleId - Exact Bundle identity owned by this coordinator
+   * @param queryId - Opaque current query identity returned by query
+   * @param request - Single user-authored display title
+   * @param signal - Caller cancellation signal
+   * @returns Truthful durable registration result
+   */
+  async saveQueryToWiki(
+    bundleId: string,
+    queryId: string,
+    request: Readonly<KnowledgeStudioQueryWritebackRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioQueryWritebackResult> {
+    this.assertOpen();
+    assertIdentifier(bundleId);
+    assertIdentifier(queryId);
+    assertAbortSignal(signal);
+    const title = captureWritebackTitle(request);
+    throwIfAborted(signal);
+    const current = this.current;
+    const generationController = this.generationController;
+    const result = current?.result;
+    if (
+      bundleId !== this.bundleId ||
+      !this.writeback ||
+      !current ||
+      !generationController ||
+      current.queryId !== queryId ||
+      !result ||
+      result.mode !== "grounded_answer" ||
+      result.answer.status === "insufficient_evidence" ||
+      result.answer.claims.length === 0
+    ) {
+      throw new KnowledgeScopedQueryError();
+    }
+
+    const linked = linkAbortSignals([signal, generationController.signal]);
+    try {
+      const freshBeforeEvidence = await this.reader.read(linked.signal);
+      this.assertCurrent(current.generation, linked.signal);
+      if (!isSameVerifiedWikiSnapshot(current.snapshot, freshBeforeEvidence)) {
+        throw new KnowledgeScopedQueryError();
+      }
+
+      const citationRefs: string[] = [];
+      const seenReferences = new Set<string>();
+      for (const claim of result.answer.claims) {
+        for (const citation of claim.citations) {
+          if (!seenReferences.has(citation.citationRef)) {
+            seenReferences.add(citation.citationRef);
+            citationRefs.push(citation.citationRef);
+          }
+        }
+      }
+      const evidence = [];
+      for (const citationRef of citationRefs) {
+        const target = current.citationsByRef.get(citationRef);
+        if (!target) throw new KnowledgeScopedQueryError();
+        const verified = await this.citationNavigation.verify(target, linked.signal);
+        this.assertCurrent(current.generation, linked.signal);
+        if (verified !== true) throw new KnowledgeScopedQueryError();
+        evidence.push(
+          Object.freeze({
+            citationRef,
+            sourcePath: target.sourcePath,
+            citation: target.citation,
+          })
+        );
+      }
+      const freshAfterEvidence = await this.reader.read(linked.signal);
+      this.assertCurrent(current.generation, linked.signal);
+      if (!isSameVerifiedWikiSnapshot(current.snapshot, freshAfterEvidence)) {
+        throw new KnowledgeScopedQueryError();
+      }
+
+      const capture = createKnowledgeQueryWritebackCapture({
+        bundleId: this.bundleId,
+        query: current.question,
+        title,
+        runtimeRevision: current.snapshot.runtimeRevision,
+        manifestRevision: current.snapshot.manifestRevision,
+        answerStatus: result.answer.status,
+        claims: result.answer.claims.map((claim) =>
+          Object.freeze({
+            claimId: claim.claimId,
+            kind: claim.kind,
+            text: claim.text,
+            citationRefs: Object.freeze(claim.citations.map((citation) => citation.citationRef)),
+          })
+        ),
+        insufficientEvidence: result.answer.insufficientEvidence,
+        evidence: Object.freeze(evidence),
+      });
+      const submission = await this.writeback.submit(capture, linked.signal);
+      this.assertCurrent(current.generation, linked.signal);
+      if (
+        typeof submission !== "object" ||
+        submission === null ||
+        Array.isArray(submission) ||
+        Reflect.ownKeys(submission).length !== 1 ||
+        Object.getOwnPropertyDescriptor(submission, "kind")?.value !== "registered"
+      ) {
+        throw new KnowledgeScopedQueryError();
+      }
+      return Object.freeze({ kind: "registered" as const });
+    } catch (error) {
       if (linked.signal.aborted || signal.aborted || isAbortError(error)) {
         throw new DOMException("The operation was aborted", "AbortError");
       }

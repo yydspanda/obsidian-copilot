@@ -1,3 +1,4 @@
+import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   MANIFEST_COMMIT_INTENT_VERSION,
   MANIFEST_COMMIT_PLAN_VERSION,
@@ -387,6 +388,99 @@ describe("createManifestCommitPlan", () => {
       "Wiki/New.md",
     ]);
     expect(validateManifestCommitPlanForChangeSet(plan, proposal, createBundle()).valid).toBe(true);
+    expect(Object.keys(plan).sort()).toEqual([
+      "baseGeneratedPages",
+      "bundleId",
+      "changeSetId",
+      "expectedManifestDigest",
+      "expectedManifestRevision",
+      "inputRevision",
+      "kind",
+      "mutations",
+      "pipelineFingerprint",
+      "sourceContentHash",
+      "sourceId",
+      "version",
+    ]);
+  });
+
+  it("creates an additive query-writeback plan from an exact managed capture origin", () => {
+    const extensions = createKnowledgeSourceOriginExtensions("query_writeback", {
+      captureDigest: "c".repeat(64),
+      captureContentHash: SOURCE_HASH,
+    });
+    const manifest = createManifest([
+      {
+        ...createSourceEntry("source-1", "Sources/Query.md"),
+        custody: "managed_copy",
+        extensions,
+      },
+    ]);
+    const change = createCreateChange();
+    const proposal = createChangeSet([change], "proposed", {
+      operation: "query_writeback",
+    });
+    const plan = createPlan(proposal, [createMutation(change, "generated", false)], manifest);
+    const accepted = createChangeSet([change], "accepted", {
+      operation: "query_writeback",
+    });
+    const intent = projectManifestCommitIntent(plan, accepted);
+
+    expect(plan.kind).toBe("query_writeback_source_compile");
+    if (plan.kind !== "query_writeback_source_compile") {
+      throw new Error("Expected a query-writeback plan");
+    }
+    expect(plan.sourceContentHash).toBe(SOURCE_HASH);
+    expect(plan.sourceOriginDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(intent).toMatchObject({
+      kind: "query_writeback_source_compile",
+      sourceOriginDigest:
+        plan.kind === "query_writeback_source_compile" ? plan.sourceOriginDigest : undefined,
+    });
+    expect(
+      validateManifestCommitIntentForCommit(intent, manifest, accepted, createBundle()).valid
+    ).toBe(true);
+  });
+
+  it("rejects lint-fix and edited managed captures before plan creation", () => {
+    const extensions = createKnowledgeSourceOriginExtensions("query_writeback", {
+      captureDigest: "c".repeat(64),
+      captureContentHash: SOURCE_HASH,
+    });
+    const manifest = createManifest([
+      {
+        ...createSourceEntry("source-1", "Sources/Query.md"),
+        custody: "managed_copy",
+        extensions,
+      },
+    ]);
+    const change = createCreateChange();
+
+    expectManifestFailure(
+      () =>
+        createPlan(
+          createChangeSet([change], "proposed", { operation: "lint_fix" }),
+          [createMutation(change, "generated", false)],
+          manifest
+        ),
+      "manifest_commit_operation_mismatch"
+    );
+    expectManifestFailure(
+      () =>
+        createManifestCommitPlan({
+          bundle: createBundle(),
+          manifest,
+          sourceId: "source-1",
+          sourceContentHash: "d".repeat(64),
+          pipelineFingerprint: PIPELINE_HASH,
+          inputRevision: 7,
+          changeSet: createChangeSet([change], "proposed", {
+            operation: "query_writeback",
+          }),
+          mutations: [createMutation(change, "generated", false)],
+        }),
+      "manifest_commit_source_capture_hash_mismatch"
+    );
   });
 
   it("fails closed when a previous page has no last-generated hash", () => {

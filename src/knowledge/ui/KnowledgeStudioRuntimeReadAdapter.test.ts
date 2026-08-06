@@ -19,6 +19,10 @@ import type {
   KnowledgeGroundedRetrievalResult,
   KnowledgeStudioQueryPort,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
+import type {
+  KnowledgeStudioQueryWritebackPort,
+  KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
 import type { KnowledgeReviewCommand } from "@/knowledge/review/ReviewDecision";
 import {
   CHANGESET_REVIEW_SNAPSHOT_VERSION,
@@ -281,7 +285,8 @@ function createAdapter(
   subscribeVaultHints?: KnowledgeStudioVaultHintPort,
   assertCurrent: () => void = () => undefined,
   commands?: KnowledgeStudioRuntimeCommandAdapter,
-  query?: Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">
+  query?: Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent"> &
+    Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">>
 ): KnowledgeStudioRuntimeReadAdapter {
   return new KnowledgeStudioRuntimeReadAdapter({
     runtime,
@@ -360,6 +365,7 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
       reviews: [],
       recovery: { bundleId: BUNDLE_ID, runtimeRevision: 4, items: [] },
       queryAvailable: false,
+      queryWritebackAvailable: false,
     });
     expect(snapshot.notice).toContain("Review decisions and Wiki apply remain disabled");
     expect(snapshot.revisionToken).toMatch(/^r4-q0-v0-[a-f0-9]{12}$/);
@@ -389,12 +395,55 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
     await adapter.openCitation(BUNDLE_ID, result.queryId, "citation-1", signal);
     adapter.revokeCurrent(BUNDLE_ID, result.queryId);
 
-    expect(snapshot.queryAvailable).toBe(true);
+    expect(snapshot).toMatchObject({
+      queryAvailable: true,
+      queryWritebackAvailable: false,
+    });
     expect(snapshot.notice).toContain("grounded Query");
     expect(snapshot.notice).toContain("selected DeepSeek model");
     expect(query).toHaveBeenCalledWith(BUNDLE_ID, { query: "topic" }, signal);
     expect(openCitation).toHaveBeenCalledWith(BUNDLE_ID, "query-1", "citation-1", signal);
     expect(revokeCurrent).toHaveBeenCalledWith(BUNDLE_ID, "query-1");
+    await expect(
+      adapter.saveQueryToWiki(BUNDLE_ID, "query-1", { title: "Unavailable" }, signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+  });
+
+  it("publishes and delegates reviewed writeback only when its exact method is captured", async () => {
+    const projection = createProjection(4);
+    const query = jest.fn(async () => createQueryResult());
+    const openCitation = jest.fn(async () => undefined);
+    const revokeCurrent = jest.fn();
+    const saveQueryToWiki = jest.fn(async () => ({ kind: "registered" }) as const);
+    const adapter = createAdapter(
+      new FakeRuntime([projection, projection]),
+      createMissingResolver(),
+      undefined,
+      () => undefined,
+      undefined,
+      { query, openCitation, revokeCurrent, saveQueryToWiki }
+    );
+    const signal = new AbortController().signal;
+
+    const snapshot = await adapter.load(BUNDLE_ID, signal);
+    const receipt = await adapter.saveQueryToWiki(
+      BUNDLE_ID,
+      "query-1",
+      { title: "Durable answer" },
+      signal
+    );
+
+    expect(snapshot).toMatchObject({
+      queryAvailable: true,
+      queryWritebackAvailable: true,
+    });
+    expect(receipt).toEqual({ kind: "registered" });
+    expect(saveQueryToWiki).toHaveBeenCalledWith(
+      BUNDLE_ID,
+      "query-1",
+      { title: "Durable answer" },
+      signal
+    );
   });
 
   it("captures one immutable Query generation instead of following caller substitution", async () => {
@@ -402,8 +451,14 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
     const originalQuery = jest.fn(async () => createQueryResult());
     const originalOpenCitation = jest.fn(async () => undefined);
     const originalRevokeCurrent = jest.fn();
+    const originalSaveQueryToWiki = jest.fn(
+      async (): Promise<KnowledgeStudioQueryWritebackResult> => ({ kind: "registered" })
+    );
     const replacementQuery = jest.fn(async () => ({ ...createQueryResult(), queryId: "replaced" }));
     const replacementRevokeCurrent = jest.fn();
+    const replacementSaveQueryToWiki = jest.fn(
+      async (): Promise<KnowledgeStudioQueryWritebackResult> => ({ kind: "registered" })
+    );
     const input: KnowledgeStudioRuntimeReadAdapterInput = {
       runtime: new FakeRuntime([projection, projection]),
       bundles: [createBundle()],
@@ -413,6 +468,7 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
         query: originalQuery,
         openCitation: originalOpenCitation,
         revokeCurrent: originalRevokeCurrent,
+        saveQueryToWiki: originalSaveQueryToWiki,
       },
     };
     const adapter = new KnowledgeStudioRuntimeReadAdapter(input);
@@ -420,20 +476,32 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
       query: replacementQuery,
       openCitation: jest.fn(async () => undefined),
       revokeCurrent: replacementRevokeCurrent,
+      saveQueryToWiki: replacementSaveQueryToWiki,
     };
     const signal = new AbortController().signal;
 
     const snapshot = await adapter.load(BUNDLE_ID, signal);
     const result = await adapter.query(BUNDLE_ID, { query: "topic" }, signal);
     await adapter.openCitation(BUNDLE_ID, result.queryId, "citation-1", signal);
+    await adapter.saveQueryToWiki(BUNDLE_ID, result.queryId, { title: "Captured" }, signal);
     adapter.revokeCurrent(BUNDLE_ID, result.queryId);
 
-    expect(snapshot.queryAvailable).toBe(true);
+    expect(snapshot).toMatchObject({
+      queryAvailable: true,
+      queryWritebackAvailable: true,
+    });
     expect(result.queryId).toBe("query-1");
     expect(originalQuery).toHaveBeenCalledTimes(1);
     expect(originalOpenCitation).toHaveBeenCalledTimes(1);
+    expect(originalSaveQueryToWiki).toHaveBeenCalledWith(
+      BUNDLE_ID,
+      "query-1",
+      { title: "Captured" },
+      signal
+    );
     expect(originalRevokeCurrent).toHaveBeenCalledWith(BUNDLE_ID, "query-1");
     expect(replacementQuery).not.toHaveBeenCalled();
+    expect(replacementSaveQueryToWiki).not.toHaveBeenCalled();
     expect(replacementRevokeCurrent).not.toHaveBeenCalled();
   });
 
@@ -441,6 +509,7 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
     const projection = createProjection(4);
     let getterCalls = 0;
     let revokeGetterCalls = 0;
+    let writebackGetterCalls = 0;
     const accessorQuery = {
       get query(): KnowledgeStudioQueryPort["query"] {
         getterCalls += 1;
@@ -479,6 +548,22 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
         })
     ).toThrow(KnowledgeStudioRuntimeReadError);
     expect(revokeGetterCalls).toBe(0);
+    expect(
+      () =>
+        new KnowledgeStudioRuntimeReadAdapter({
+          ...base,
+          query: {
+            query: async () => createQueryResult(),
+            openCitation: async () => undefined,
+            revokeCurrent: () => undefined,
+            get saveQueryToWiki(): KnowledgeStudioQueryWritebackPort["saveQueryToWiki"] {
+              writebackGetterCalls += 1;
+              return async () => ({ kind: "registered" });
+            },
+          },
+        })
+    ).toThrow(KnowledgeStudioRuntimeReadError);
+    expect(writebackGetterCalls).toBe(0);
     expect(
       () =>
         new KnowledgeStudioRuntimeReadAdapter({

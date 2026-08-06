@@ -4,6 +4,10 @@ import type {
   KnowledgeStudioQueryPort,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import type {
+  KnowledgeStudioQueryWritebackPort,
+  KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
+import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
@@ -43,6 +47,8 @@ export interface KnowledgeStudioSnapshot {
   recovery: Readonly<KnowledgeRecoveryModel>;
   /** Whether the exact adapter generation exposes scoped applied-Wiki Query. */
   queryAvailable?: boolean;
+  /** Whether current grounded answers can enter the reviewed writeback pipeline. */
+  queryWritebackAvailable?: boolean;
   notice?: string;
 }
 
@@ -153,6 +159,7 @@ export interface KnowledgeStudioQueryState {
   result?: Readonly<KnowledgeStudioQueryResult>;
   error?: string;
   openingCitationRef?: string;
+  savingToWiki?: boolean;
 }
 
 /** Immutable controller state consumed by React through subscription. */
@@ -381,7 +388,11 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
     (commandCapabilities.recoveryContinue !== undefined &&
       typeof commandCapabilities.recoveryContinue !== "boolean") ||
     (commandCapabilities.recoveryAbandon !== undefined &&
-      typeof commandCapabilities.recoveryAbandon !== "boolean")
+      typeof commandCapabilities.recoveryAbandon !== "boolean") ||
+    (snapshot.queryAvailable !== undefined && typeof snapshot.queryAvailable !== "boolean") ||
+    (snapshot.queryWritebackAvailable !== undefined &&
+      typeof snapshot.queryWritebackAvailable !== "boolean") ||
+    (snapshot.queryWritebackAvailable === true && snapshot.queryAvailable !== true)
   ) {
     throw new TypeError("Knowledge Studio snapshot identity is invalid");
   }
@@ -418,11 +429,13 @@ export class KnowledgeStudioController {
    * @param readPort - Durable snapshot read boundary
    * @param commandPort - Durable mutation orchestration boundary
    * @param queryPort - Optional scoped Query and citation-navigation boundary
+   * @param queryWritebackPort - Optional current-answer capture boundary
    */
   constructor(
     private readonly readPort: KnowledgeStudioReadPort,
     private readonly commandPort: KnowledgeStudioCommandPort,
-    private readonly queryPort?: KnowledgeStudioQueryPort
+    private readonly queryPort?: KnowledgeStudioQueryPort,
+    private readonly queryWritebackPort?: KnowledgeStudioQueryWritebackPort
   ) {}
 
   /** Returns the current immutable-by-contract controller state. */
@@ -660,6 +673,109 @@ export class KnowledgeStudioController {
       this.emit();
     } finally {
       if (generation === this.queryGeneration) this.queryAbort = undefined;
+    }
+  }
+
+  /**
+   * Registers the current grounded answer as a managed source for Review/Apply.
+   *
+   * @param title - User-selected display title embedded in the immutable capture
+   */
+  async saveCurrentQueryToWiki(title: string): Promise<void> {
+    const bundleId = this.state.bundleId;
+    const currentQuery = this.state.query;
+    const result = currentQuery?.result;
+    const answer = result?.mode === "grounded_answer" ? result.answer : undefined;
+    if (
+      !bundleId ||
+      !this.queryWritebackPort ||
+      this.state.snapshot?.queryWritebackAvailable !== true ||
+      this.state.pendingAction !== undefined ||
+      currentQuery?.savingToWiki === true ||
+      !result ||
+      !answer ||
+      (answer.status !== "answered" && answer.status !== "partial") ||
+      answer.claims.length === 0 ||
+      typeof title !== "string" ||
+      title.trim().length === 0
+    ) {
+      this.state = {
+        ...this.state,
+        query: {
+          ...(currentQuery ?? { status: "error" as const }),
+          error: "Only a current source-grounded answer can be sent to reviewed Wiki writeback.",
+          savingToWiki: false,
+        },
+      };
+      this.emit();
+      return;
+    }
+
+    this.queryAbort?.abort();
+    const abort = new AbortController();
+    this.queryAbort = abort;
+    const generation = ++this.queryGeneration;
+    this.state = {
+      ...this.state,
+      query: { ...currentQuery, error: undefined, savingToWiki: true },
+      feedback: undefined,
+    };
+    this.emit();
+
+    try {
+      const saved = await this.queryWritebackPort.saveQueryToWiki(
+        bundleId,
+        result.queryId,
+        { title: title.trim() },
+        abort.signal
+      );
+      this.assertQueryWritebackResult(saved);
+      if (
+        abort.signal.aborted ||
+        generation !== this.queryGeneration ||
+        this.state.bundleId !== bundleId
+      ) {
+        return;
+      }
+      this.state = {
+        ...this.state,
+        query: { ...currentQuery, error: undefined, savingToWiki: false },
+        feedback: {
+          kind: "success",
+          message:
+            "Grounded answer registered as a managed source. Background compilation will create a Review proposal before any Wiki file changes.",
+        },
+      };
+      this.emit();
+    } catch (error) {
+      if (abort.signal.aborted || generation !== this.queryGeneration || isAbortError(error))
+        return;
+      this.state = {
+        ...this.state,
+        query: {
+          ...currentQuery,
+          savingToWiki: false,
+          error:
+            "The grounded answer could not be registered. No Wiki file was changed; retry from a fresh query.",
+        },
+      };
+      this.emit();
+    } finally {
+      if (generation === this.queryGeneration) this.queryAbort = undefined;
+    }
+  }
+
+  /** Requires the exact value-free receipt returned by the writeback boundary. */
+  private assertQueryWritebackResult(
+    value: KnowledgeStudioQueryWritebackResult
+  ): asserts value is Readonly<{ kind: "registered" }> {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Reflect.ownKeys(value).length !== 1 ||
+      Object.getOwnPropertyDescriptor(value, "kind")?.value !== "registered"
+    ) {
+      throw new TypeError("Knowledge query writeback receipt is invalid");
     }
   }
 

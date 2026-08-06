@@ -7,7 +7,7 @@ import type {
   KnowledgeGroundedRetrievalResult,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 
-/** Creates one grounded result containing Markdown and intentionally disabled PDF citations. */
+/** Creates one grounded result containing Markdown and PDF citation controls. */
 function createResult(): KnowledgeGroundedRetrievalResult {
   return {
     mode: "grounded_retrieval",
@@ -82,8 +82,10 @@ describe("KnowledgeQueryPanel", () => {
     render(
       <KnowledgeQueryPanel
         state={{ status: "idle" }}
+        writebackAvailable={false}
         onOpenCitation={jest.fn()}
         onQuery={onQuery}
+        onSaveToWiki={jest.fn()}
       />
     );
 
@@ -107,8 +109,10 @@ describe("KnowledgeQueryPanel", () => {
     render(
       <KnowledgeQueryPanel
         state={{ status: "ready", result: createAnswerResult() }}
+        writebackAvailable={false}
         onOpenCitation={onOpenCitation}
         onQuery={jest.fn()}
+        onSaveToWiki={jest.fn()}
       />
     );
 
@@ -124,13 +128,15 @@ describe("KnowledgeQueryPanel", () => {
     expect(onOpenCitation).toHaveBeenCalledWith("citation-markdown");
   });
 
-  it("renders exact excerpts and forwards only the opaque Markdown citation reference", () => {
+  it("renders exact excerpts and forwards only opaque Markdown and PDF citation references", () => {
     const onOpenCitation = jest.fn();
     render(
       <KnowledgeQueryPanel
         state={{ status: "ready", result: createResult() }}
+        writebackAvailable={false}
         onOpenCitation={onOpenCitation}
         onQuery={jest.fn()}
+        onSaveToWiki={jest.fn()}
       />
     );
 
@@ -142,21 +148,25 @@ describe("KnowledgeQueryPanel", () => {
     const pdfCitation = screen.getByRole("button", {
       name: /Sources\/Topic\.pdf.*PDF page 4/,
     });
-    expect(pdfCitation.hasAttribute("disabled")).toBe(true);
-    expect(pdfCitation.getAttribute("title")).toContain("not enabled");
+    expect(pdfCitation.hasAttribute("disabled")).toBe(false);
+    expect(pdfCitation.getAttribute("title")).toBe("Open Sources/Topic.pdf at PDF page 4");
 
     fireEvent.click(markdownCitation);
+    fireEvent.click(pdfCitation);
 
-    expect(onOpenCitation).toHaveBeenCalledTimes(1);
-    expect(onOpenCitation).toHaveBeenCalledWith("citation-markdown");
+    expect(onOpenCitation).toHaveBeenCalledTimes(2);
+    expect(onOpenCitation).toHaveBeenNthCalledWith(1, "citation-markdown");
+    expect(onOpenCitation).toHaveBeenNthCalledWith(2, "citation-pdf");
   });
 
   it("shows loading, empty, and sanitized error states without inventing an answer", () => {
     const { rerender } = render(
       <KnowledgeQueryPanel
         state={{ status: "loading" }}
+        writebackAvailable={false}
         onOpenCitation={jest.fn()}
         onQuery={jest.fn()}
+        onSaveToWiki={jest.fn()}
       />
     );
     expect(screen.getByRole("status").textContent).toContain("generating a grounded answer");
@@ -164,8 +174,10 @@ describe("KnowledgeQueryPanel", () => {
     rerender(
       <KnowledgeQueryPanel
         state={{ status: "ready", result: { ...createResult(), hits: [] } }}
+        writebackAvailable={false}
         onOpenCitation={jest.fn()}
         onQuery={jest.fn()}
+        onSaveToWiki={jest.fn()}
       />
     );
     expect(screen.getByText("No applied Wiki excerpt matched")).toBeTruthy();
@@ -173,10 +185,128 @@ describe("KnowledgeQueryPanel", () => {
     rerender(
       <KnowledgeQueryPanel
         state={{ status: "error", error: "Scoped Query is unavailable." }}
+        writebackAvailable={false}
         onOpenCitation={jest.fn()}
         onQuery={jest.fn()}
+        onSaveToWiki={jest.fn()}
       />
     );
     expect(screen.getByRole("alert").textContent).toBe("Scoped Query is unavailable.");
+  });
+
+  it("shows Save to Wiki only for writeback-enabled answered or partial results with claims", () => {
+    const partial = createAnswerResult();
+    const answered: KnowledgeGroundedAnswerResult = {
+      ...partial,
+      answer: { ...partial.answer, status: "answered" },
+    };
+    const withoutClaims: KnowledgeGroundedAnswerResult = {
+      ...partial,
+      answer: { ...partial.answer, claims: [] },
+    };
+    const insufficient: KnowledgeGroundedAnswerResult = {
+      ...partial,
+      answer: {
+        ...partial.answer,
+        status: "insufficient_evidence",
+        insufficientEvidence: ["No current source-backed evidence supports an answer."],
+      },
+    };
+    const callbacks = {
+      onOpenCitation: jest.fn(),
+      onQuery: jest.fn(),
+      onSaveToWiki: jest.fn(),
+    };
+    const { rerender } = render(
+      <KnowledgeQueryPanel
+        {...callbacks}
+        state={{ status: "ready", result: partial }}
+        writebackAvailable={false}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "Save to Wiki" })).toBeNull();
+
+    rerender(
+      <KnowledgeQueryPanel
+        {...callbacks}
+        state={{ status: "ready", result: createResult() }}
+        writebackAvailable
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Save to Wiki" })).toBeNull();
+
+    rerender(
+      <KnowledgeQueryPanel
+        {...callbacks}
+        state={{ status: "ready", result: withoutClaims }}
+        writebackAvailable
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Save to Wiki" })).toBeNull();
+
+    rerender(
+      <KnowledgeQueryPanel
+        {...callbacks}
+        state={{ status: "ready", result: insufficient }}
+        writebackAvailable
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Save to Wiki" })).toBeNull();
+
+    rerender(
+      <KnowledgeQueryPanel
+        {...callbacks}
+        state={{ status: "ready", result: partial }}
+        writebackAvailable
+      />
+    );
+    expect(screen.getByRole("button", { name: "Save to Wiki" })).toBeTruthy();
+
+    rerender(
+      <KnowledgeQueryPanel
+        {...callbacks}
+        state={{ status: "ready", result: answered }}
+        writebackAvailable
+      />
+    );
+    expect(screen.getByRole("button", { name: "Save to Wiki" })).toBeTruthy();
+  });
+
+  it("trims the writeback title and disables the writeback form while saving", () => {
+    const onSaveToWiki = jest.fn();
+    const state = { status: "ready" as const, result: createAnswerResult() };
+    const { rerender } = render(
+      <KnowledgeQueryPanel
+        state={state}
+        writebackAvailable
+        onOpenCitation={jest.fn()}
+        onQuery={jest.fn()}
+        onSaveToWiki={onSaveToWiki}
+      />
+    );
+    const title = screen.getByRole("textbox", { name: "Wiki writeback title" });
+    const save = screen.getByRole("button", { name: "Save to Wiki" });
+
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(title, { target: { value: "   Durable insight   " } });
+    expect(save.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(save);
+    expect(onSaveToWiki).toHaveBeenCalledTimes(1);
+    expect(onSaveToWiki).toHaveBeenCalledWith("Durable insight");
+
+    rerender(
+      <KnowledgeQueryPanel
+        state={{ ...state, savingToWiki: true }}
+        writebackAvailable
+        onOpenCitation={jest.fn()}
+        onQuery={jest.fn()}
+        onSaveToWiki={onSaveToWiki}
+      />
+    );
+    expect(title.hasAttribute("disabled")).toBe(true);
+    expect(save.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(save);
+    expect(onSaveToWiki).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+import {
+  deriveKnowledgeSourceCompileAuthority,
+  type KnowledgeSourceCompileOperation,
+} from "@/knowledge/capture/KnowledgeSourceOrigin";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import { parseKnowledgeChangeSet, parseSourceManifest } from "@/knowledge/model/schemas";
 import type {
@@ -50,10 +54,9 @@ export interface ManifestCommitMutation {
   wasTrackedByPrimarySource: boolean;
 }
 
-/** Durable proposal-time material needed to derive a reviewed final intent. */
-export interface ManifestCommitPlan {
+/** Fields shared by every source-backed proposal-time Manifest plan. */
+interface ManifestCommitPlanBase {
   version: typeof MANIFEST_COMMIT_PLAN_VERSION;
-  kind: "source_compile";
   bundleId: string;
   sourceId: string;
   sourceContentHash: string;
@@ -66,10 +69,23 @@ export interface ManifestCommitPlan {
   mutations: ManifestCommitMutation[];
 }
 
-/** Complete post-commit Manifest state for one accepted source compile. */
-export interface ManifestCommitIntent {
-  version: typeof MANIFEST_COMMIT_INTENT_VERSION;
+/** Legacy-compatible ordinary ingest plan with unchanged serialized identity. */
+export interface SourceCompileManifestCommitPlan extends ManifestCommitPlanBase {
   kind: "source_compile";
+}
+
+/** Managed query-capture plan bound to its exact strict origin extension. */
+export interface QueryWritebackManifestCommitPlan extends ManifestCommitPlanBase {
+  kind: "query_writeback_source_compile";
+  sourceOriginDigest: string;
+}
+
+/** Durable proposal-time material needed to derive a reviewed final intent. */
+export type ManifestCommitPlan = SourceCompileManifestCommitPlan | QueryWritebackManifestCommitPlan;
+
+/** Fields shared by every complete post-commit Manifest intent. */
+interface ManifestCommitIntentBase {
+  version: typeof MANIFEST_COMMIT_INTENT_VERSION;
   bundleId: string;
   sourceId: string;
   sourceContentHash: string;
@@ -81,6 +97,22 @@ export interface ManifestCommitIntent {
   expectedManifestDigest: string;
   generatedPages: ManifestCommitPage[];
 }
+
+/** Legacy-compatible final intent for an ordinary ingest source compile. */
+export interface SourceCompileManifestCommitIntent extends ManifestCommitIntentBase {
+  kind: "source_compile";
+}
+
+/** Final intent for a managed query capture with immutable origin binding. */
+export interface QueryWritebackManifestCommitIntent extends ManifestCommitIntentBase {
+  kind: "query_writeback_source_compile";
+  sourceOriginDigest: string;
+}
+
+/** Complete post-commit Manifest state for one accepted source compile. */
+export type ManifestCommitIntent =
+  | SourceCompileManifestCommitIntent
+  | QueryWritebackManifestCommitIntent;
 
 /** Input used to construct one proposal-time Manifest commit plan. */
 export interface CreateManifestCommitPlanInput {
@@ -121,41 +153,81 @@ const manifestCommitMutationSchema: z.ZodType<ManifestCommitMutation> = z
   })
   .strict();
 
+const manifestCommitPlanBaseShape = {
+  version: z.literal(MANIFEST_COMMIT_PLAN_VERSION),
+  bundleId: nonEmptyStringSchema,
+  sourceId: nonEmptyStringSchema,
+  sourceContentHash: sha256Schema,
+  pipelineFingerprint: sha256Schema,
+  inputRevision: nonNegativeIntegerSchema,
+  changeSetId: nonEmptyStringSchema,
+  expectedManifestRevision: nonNegativeIntegerSchema,
+  expectedManifestDigest: sha256Schema,
+  baseGeneratedPages: z.array(manifestCommitPageSchema),
+  mutations: z.array(manifestCommitMutationSchema).min(1),
+} as const;
+
 /** Strict composable Zod schema for a persisted Manifest commit plan. */
-export const manifestCommitPlanSchema: z.ZodType<ManifestCommitPlan> = z
-  .object({
-    version: z.literal(MANIFEST_COMMIT_PLAN_VERSION),
-    kind: z.literal("source_compile"),
-    bundleId: nonEmptyStringSchema,
-    sourceId: nonEmptyStringSchema,
-    sourceContentHash: sha256Schema,
-    pipelineFingerprint: sha256Schema,
-    inputRevision: nonNegativeIntegerSchema,
-    changeSetId: nonEmptyStringSchema,
-    expectedManifestRevision: nonNegativeIntegerSchema,
-    expectedManifestDigest: sha256Schema,
-    baseGeneratedPages: z.array(manifestCommitPageSchema),
-    mutations: z.array(manifestCommitMutationSchema).min(1),
-  })
-  .strict();
+export const manifestCommitPlanSchema: z.ZodType<ManifestCommitPlan> = z.union([
+  z
+    .object({
+      ...manifestCommitPlanBaseShape,
+      kind: z.literal("source_compile"),
+    })
+    .strict(),
+  z
+    .object({
+      ...manifestCommitPlanBaseShape,
+      kind: z.literal("query_writeback_source_compile"),
+      sourceOriginDigest: sha256Schema,
+    })
+    .strict(),
+]);
+
+const manifestCommitIntentBaseShape = {
+  version: z.literal(MANIFEST_COMMIT_INTENT_VERSION),
+  bundleId: nonEmptyStringSchema,
+  sourceId: nonEmptyStringSchema,
+  sourceContentHash: sha256Schema,
+  pipelineFingerprint: sha256Schema,
+  inputRevision: nonNegativeIntegerSchema,
+  manifestCommitPlanDigest: sha256Schema,
+  changeSetId: nonEmptyStringSchema,
+  expectedManifestRevision: nonNegativeIntegerSchema,
+  expectedManifestDigest: sha256Schema,
+  generatedPages: z.array(manifestCommitPageSchema).min(1),
+} as const;
 
 /** Strict composable Zod schema for a persisted final Manifest commit intent. */
-export const manifestCommitIntentSchema: z.ZodType<ManifestCommitIntent> = z
-  .object({
-    version: z.literal(MANIFEST_COMMIT_INTENT_VERSION),
-    kind: z.literal("source_compile"),
-    bundleId: nonEmptyStringSchema,
-    sourceId: nonEmptyStringSchema,
-    sourceContentHash: sha256Schema,
-    pipelineFingerprint: sha256Schema,
-    inputRevision: nonNegativeIntegerSchema,
-    manifestCommitPlanDigest: sha256Schema,
-    changeSetId: nonEmptyStringSchema,
-    expectedManifestRevision: nonNegativeIntegerSchema,
-    expectedManifestDigest: sha256Schema,
-    generatedPages: z.array(manifestCommitPageSchema).min(1),
-  })
-  .strict();
+export const manifestCommitIntentSchema: z.ZodType<ManifestCommitIntent> = z.union([
+  z
+    .object({
+      ...manifestCommitIntentBaseShape,
+      kind: z.literal("source_compile"),
+    })
+    .strict(),
+  z
+    .object({
+      ...manifestCommitIntentBaseShape,
+      kind: z.literal("query_writeback_source_compile"),
+      sourceOriginDigest: sha256Schema,
+    })
+    .strict(),
+]);
+
+/** Derives the authorized compiler operation from one exact plan variant. */
+export function getManifestCommitPlanOperation(
+  plan: ManifestCommitPlan
+): KnowledgeSourceCompileOperation {
+  return plan.kind === "query_writeback_source_compile" ? "query_writeback" : "ingest";
+}
+
+/** Derives the authorized compiler operation from one exact intent variant. */
+export function getManifestCommitIntentOperation(
+  intent: ManifestCommitIntent
+): KnowledgeSourceCompileOperation {
+  return intent.kind === "query_writeback_source_compile" ? "query_writeback" : "ingest";
+}
 
 /** Reports a contract value that cannot be safely projected or committed. */
 export class ManifestCommitValidationError extends Error {
@@ -949,12 +1021,12 @@ function validatePlanChangeSetCoverage(
       "ChangeSet id must match the Manifest commit plan"
     );
   }
-  if (parsedChangeSet.operation !== "ingest") {
+  if (parsedChangeSet.operation !== getManifestCommitPlanOperation(plan)) {
     addError(
       diagnostics,
-      "manifest_commit_operation_unsupported",
+      "manifest_commit_operation_mismatch",
       "changeSet.operation",
-      "Only ingest ChangeSets may update a source compile Manifest"
+      "ChangeSet operation must match the exact source compile plan"
     );
   }
   if (!parsedChangeSet.sourceRefs.includes(plan.sourceId)) {
@@ -1084,6 +1156,40 @@ export function createManifestCommitPlan(input: CreateManifestCommitPlanInput): 
       "Primary source is not registered in the exact Source Manifest"
     );
   }
+  let sourceCompileAuthority: ReturnType<typeof deriveKnowledgeSourceCompileAuthority> = {
+    operation: "ingest",
+  };
+  if (source) {
+    try {
+      sourceCompileAuthority = deriveKnowledgeSourceCompileAuthority(source);
+    } catch {
+      addError(
+        diagnostics,
+        "manifest_commit_source_origin_invalid",
+        "manifest.entries.extensions",
+        "Primary source origin does not authorize a source compile"
+      );
+    }
+  }
+  if (changeSet.operation !== sourceCompileAuthority.operation) {
+    addError(
+      diagnostics,
+      "manifest_commit_operation_mismatch",
+      "changeSet.operation",
+      "ChangeSet operation must match the exact Manifest source origin"
+    );
+  }
+  if (
+    sourceCompileAuthority.operation === "query_writeback" &&
+    input.sourceContentHash !== sourceCompileAuthority.expectedSourceContentHash
+  ) {
+    addError(
+      diagnostics,
+      "manifest_commit_source_capture_hash_mismatch",
+      "sourceContentHash",
+      "Managed query capture bytes must match their exact Manifest origin"
+    );
+  }
 
   const rawBasePages = source?.lastSuccessful?.generatedPages ?? [];
   rawBasePages.forEach((page, index) => {
@@ -1180,9 +1286,8 @@ export function createManifestCommitPlan(input: CreateManifestCommitPlanInput): 
     }
   });
 
-  const plan: ManifestCommitPlan = {
+  const commonPlan: ManifestCommitPlanBase = {
     version: MANIFEST_COMMIT_PLAN_VERSION,
-    kind: "source_compile",
     bundleId: input.bundle.id,
     sourceId: input.sourceId,
     sourceContentHash: input.sourceContentHash,
@@ -1194,6 +1299,14 @@ export function createManifestCommitPlan(input: CreateManifestCommitPlanInput): 
     baseGeneratedPages,
     mutations,
   };
+  const plan: ManifestCommitPlan =
+    sourceCompileAuthority.operation === "query_writeback"
+      ? {
+          ...commonPlan,
+          kind: "query_writeback_source_compile",
+          sourceOriginDigest: sourceCompileAuthority.sourceOriginDigest,
+        }
+      : { ...commonPlan, kind: "source_compile" };
   diagnostics.push(
     ...validateManifestCommitPlanForChangeSet(plan, changeSet, input.bundle).diagnostics
   );
@@ -1286,9 +1399,8 @@ export function projectManifestCommitIntent(
     throw new ManifestCommitValidationError(diagnostics);
   }
 
-  const intent: ManifestCommitIntent = {
+  const commonIntent: ManifestCommitIntentBase = {
     version: MANIFEST_COMMIT_INTENT_VERSION,
-    kind: "source_compile",
     bundleId: plan.bundleId,
     sourceId: plan.sourceId,
     sourceContentHash: plan.sourceContentHash,
@@ -1300,6 +1412,14 @@ export function projectManifestCommitIntent(
     expectedManifestDigest: plan.expectedManifestDigest,
     generatedPages: normalizePages([...pagesByKey.values()]),
   };
+  const intent: ManifestCommitIntent =
+    plan.kind === "query_writeback_source_compile"
+      ? {
+          ...commonIntent,
+          kind: "query_writeback_source_compile",
+          sourceOriginDigest: plan.sourceOriginDigest,
+        }
+      : { ...commonIntent, kind: "source_compile" };
   requireValid(validateManifestCommitIntent(intent));
   const parsed = parseManifestCommitIntent(intent);
   if (!parsed.ok) {
@@ -1382,7 +1502,7 @@ export function validateManifestCommitIntentForCommit(
   if (
     changeSet.id !== intent.changeSetId ||
     changeSet.bundleId !== intent.bundleId ||
-    changeSet.operation !== "ingest"
+    changeSet.operation !== getManifestCommitIntentOperation(intent)
   ) {
     addError(
       diagnostics,
@@ -1417,6 +1537,37 @@ export function validateManifestCommitIntentForCommit(
       "Primary source is not registered in the actual Manifest"
     );
     return toValidationResult(diagnostics);
+  }
+  try {
+    const sourceCompileAuthority = deriveKnowledgeSourceCompileAuthority(source);
+    if (sourceCompileAuthority.operation !== getManifestCommitIntentOperation(intent)) {
+      addError(
+        diagnostics,
+        "manifest_commit_source_origin_mismatch",
+        "manifest.entries.extensions",
+        "Actual Manifest source origin does not match the final intent operation"
+      );
+    } else if (sourceCompileAuthority.operation === "query_writeback") {
+      if (
+        intent.kind !== "query_writeback_source_compile" ||
+        sourceCompileAuthority.sourceOriginDigest !== intent.sourceOriginDigest ||
+        sourceCompileAuthority.expectedSourceContentHash !== intent.sourceContentHash
+      ) {
+        addError(
+          diagnostics,
+          "manifest_commit_source_origin_mismatch",
+          "manifest.entries.extensions",
+          "Actual managed query source no longer matches the reviewed origin"
+        );
+      }
+    }
+  } catch {
+    addError(
+      diagnostics,
+      "manifest_commit_source_origin_invalid",
+      "manifest.entries.extensions",
+      "Actual Manifest source origin is invalid"
+    );
   }
   const basePages: ManifestCommitPage[] = [];
   (source.lastSuccessful?.generatedPages ?? []).forEach((page, index) => {

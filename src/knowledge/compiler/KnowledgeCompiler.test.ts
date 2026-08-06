@@ -2,6 +2,7 @@ import type {
   CompilerAnalysisModelOutput,
   CompilerAnalysisTargetDraft,
 } from "@/knowledge/compiler/analysisSchema";
+import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import type {
   CompilerAnalysisRequest,
   CompilerCandidateValidationInput,
@@ -370,6 +371,38 @@ function diagnosticCodes(result: KnowledgeCompileFailure | KnowledgeCompileNoCha
 }
 
 describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
+  it("compiles an exact managed capture as query writeback and keeps lint-fix rejected", async () => {
+    const manifest = createManifest("personal", []);
+    manifest.entries[0] = {
+      ...manifest.entries[0],
+      custody: "managed_copy",
+      extensions: createKnowledgeSourceOriginExtensions("query_writeback", {
+        captureDigest: "c".repeat(64),
+        captureContentHash: SOURCE_CONTENT_HASH,
+      }),
+    };
+    const harness = createHarness();
+    const queryInput = createCompileInput({ operation: "query_writeback", manifest });
+
+    const proposal = requireProposal(
+      await harness.compiler.compile(queryInput, new AbortController().signal)
+    );
+    expect(proposal.changeSet.operation).toBe("query_writeback");
+    expect(proposal.manifestCommitPlan.kind).toBe("query_writeback_source_compile");
+    if (proposal.manifestCommitPlan.kind !== "query_writeback_source_compile") {
+      throw new Error("Expected a query-writeback plan");
+    }
+    expect(proposal.manifestCommitPlan.sourceOriginDigest).toMatch(/^[a-f0-9]{64}$/);
+
+    const lintFailure = requireFailure(
+      await harness.compiler.compile(
+        createCompileInput({ operation: "lint_fix", manifest }),
+        new AbortController().signal
+      )
+    );
+    expect(diagnosticCodes(lintFailure)).toContain("compiler_manifest_operation_unsupported");
+  });
+
   it("produces byte-stable proposed create/update/delete changes with runtime-owned identity", async () => {
     const analysis = createAnalysisOutput([
       {

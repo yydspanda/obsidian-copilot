@@ -1,3 +1,4 @@
+import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
   buildKnowledgeSourceWatchPlan,
@@ -302,6 +303,59 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
     expect(plan.getBundleAuthority("missing")).toBeUndefined();
     expect(plan.getDigest()).toMatch(SHA256_PATTERN);
     expect(plan.getDigest()).not.toBe(authority.manifestDigest);
+  });
+
+  it("binds managed query origin into an additive operation-specific fingerprint", () => {
+    const captureContentHash = "a".repeat(64);
+    const queryEntry: SourceManifestEntry = {
+      ...createEntry("Sources/Query.md"),
+      custody: "managed_copy",
+      extensions: createKnowledgeSourceOriginExtensions("query_writeback", {
+        captureDigest: "b".repeat(64),
+        captureContentHash,
+      }),
+    };
+    const input = createFixture({ entries: [queryEntry] });
+    const source = requireOnlySource(buildKnowledgeSourceWatchPlan([input]));
+
+    expect("operation" in source ? source.operation : "ingest").toBe("query_writeback");
+    if (!("operation" in source)) throw new Error("Expected a query-writeback source");
+    expect(source.expectedSourceContentHash).toBe(captureContentHash);
+    expect(source.sourceOriginDigest).toMatch(SHA256_PATTERN);
+    expect(source.pipelineFingerprint).not.toBe(
+      createExpectedFingerprint(input, input.pipeline.parsers[0])
+    );
+
+    const changedInput = createFixture({
+      entries: [
+        {
+          ...queryEntry,
+          extensions: createKnowledgeSourceOriginExtensions("query_writeback", {
+            captureDigest: "c".repeat(64),
+            captureContentHash,
+          }),
+        },
+      ],
+    });
+    expect(
+      requireOnlySource(buildKnowledgeSourceWatchPlan([changedInput])).pipelineFingerprint
+    ).not.toBe(source.pipelineFingerprint);
+  });
+
+  it("rejects query-writeback origin on user-managed custody", () => {
+    const input = createFixture({
+      entries: [
+        {
+          ...createEntry("Sources/Query.md"),
+          extensions: createKnowledgeSourceOriginExtensions("query_writeback", {
+            captureDigest: "b".repeat(64),
+            captureContentHash: "a".repeat(64),
+          }),
+        },
+      ],
+    });
+
+    expectBuildError(() => buildKnowledgeSourceWatchPlan([input]), "source_origin_invalid");
   });
 
   it("is independent of Bundle, parser, and suffix input ordering", () => {

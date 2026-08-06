@@ -341,6 +341,7 @@ describe("ObsidianKnowledgeFileStore", () => {
       create: true,
       update: true,
       delete: false,
+      requiresExistingParentForCreate: true,
     });
     expect(Object.isFrozen(store.mutationCapabilities)).toBe(true);
   });
@@ -386,13 +387,16 @@ describe("WindowsExclusiveKnowledgeFileCreator", () => {
   it("rejects a missing parent and a symlink escape", async () => {
     const adapter = await createNativeAdapter();
     const creator = new WindowsExclusiveKnowledgeFileCreator(adapter, loadTestNodeRuntime);
+    const adapterWithPath = adapter as never as { getFullPath(path: string): string };
     await expect(creator.create("Missing/Page.md", "content")).rejects.toBeInstanceOf(
       KnowledgeFileParentUnavailableError
     );
+    await expect(fs.stat(adapterWithPath.getFullPath("Missing"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-knowledge-outside-"));
     temporaryDirectories.push(outside);
-    const adapterWithPath = adapter as never as { getFullPath(path: string): string };
     await fs.symlink(outside, adapterWithPath.getFullPath("Outside"), "dir");
     await expect(creator.create("Outside/Page.md", "content")).rejects.toBeInstanceOf(
       KnowledgeFileParentUnavailableError

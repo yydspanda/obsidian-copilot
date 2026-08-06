@@ -1,5 +1,9 @@
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
+  deriveKnowledgeSourceCompileAuthority,
+  type KnowledgeSourceCompileOperation,
+} from "@/knowledge/capture/KnowledgeSourceOrigin";
+import {
   assertKnowledgeConfigurationContainsNoSecrets,
   canonicalizeJson,
   createKnowledgeBundleConfigDigest,
@@ -66,14 +70,29 @@ export interface KnowledgeBundleWatchPlanInput {
   pipeline: KnowledgeBundlePipelineProfile;
 }
 
-/** One durable Manifest source projected into the exact watcher contract. */
-export interface WatchedKnowledgeSource {
+/** Fields retained for every durable source without changing legacy ingest identity. */
+interface WatchedKnowledgeSourceBase {
   bundleId: string;
   sourceId: string;
   sourcePath: string;
   sourceKey: string;
   pipelineFingerprint: string;
 }
+
+/** Legacy-compatible ordinary ingest source projection. */
+export type WatchedKnowledgeIngestSource = WatchedKnowledgeSourceBase;
+
+/** Managed derived source whose exact origin authorizes query writeback. */
+export interface WatchedKnowledgeQueryWritebackSource extends WatchedKnowledgeSourceBase {
+  operation: "query_writeback";
+  sourceOriginDigest: string;
+  expectedSourceContentHash: string;
+}
+
+/** One durable Manifest source projected into the exact watcher contract. */
+export type WatchedKnowledgeSource =
+  | WatchedKnowledgeIngestSource
+  | WatchedKnowledgeQueryWritebackSource;
 
 /** Config-free parser routing authority retained for one durable source. */
 export interface KnowledgeSourceParserAuthority {
@@ -106,6 +125,7 @@ export type KnowledgeSourceWatchPlanBuildErrorCode =
   | "parser_registry_invalid"
   | "source_parser_missing"
   | "source_parser_ambiguous"
+  | "source_origin_invalid"
   | "bundle_id_duplicate"
   | "bundle_boundary_conflict"
   | "schema_snapshot_conflict"
@@ -635,6 +655,33 @@ function createFingerprintInput(
 }
 
 /**
+ * Binds a managed query origin into its pipeline identity without changing any
+ * legacy ingest fingerprint.
+ *
+ * @param basePipelineFingerprint - Existing exact parser/compiler fingerprint
+ * @param operation - Operation derived from the exact Manifest source
+ * @param sourceOriginDigest - Canonical strict origin-extension identity
+ * @returns Operation-bound pipeline fingerprint
+ */
+function createSourcePipelineFingerprint(
+  basePipelineFingerprint: string,
+  operation: KnowledgeSourceCompileOperation,
+  sourceOriginDigest?: string
+): string {
+  if (operation === "ingest") return basePipelineFingerprint;
+  if (!sourceOriginDigest) {
+    throw new KnowledgeSourceWatchPlanBuildError("source_origin_invalid");
+  }
+  return sha256(
+    `knowledge-query-writeback-pipeline-v1\n${canonicalizeJson({
+      basePipelineFingerprint,
+      operation,
+      sourceOriginDigest,
+    })}`
+  );
+}
+
+/**
  * Parses and validates one Bundle input without retaining schema bytes.
  *
  * @param value - Unknown-at-runtime Bundle plan input
@@ -797,6 +844,15 @@ function projectBundleWatchInput(
   const parserAuthorities: ImmutableSourceParserAuthority[] = [];
   const sources = entries.map((entry, sourceIndex) => {
     const parser = selectSourceParser(input.pipeline, entry.sourceKey, bundleIndex, sourceIndex);
+    let sourceAuthority: ReturnType<typeof deriveKnowledgeSourceCompileAuthority>;
+    try {
+      sourceAuthority = deriveKnowledgeSourceCompileAuthority(entry);
+    } catch {
+      throw new KnowledgeSourceWatchPlanBuildError("source_origin_invalid", {
+        bundleIndex,
+        sourceIndex,
+      });
+    }
     parserAuthorities.push(
       Object.freeze({
         bundleId: input.bundle.id,
@@ -806,20 +862,35 @@ function projectBundleWatchInput(
         parserProfileDigest: createKnowledgeSourceParserProfileDigest(parser),
       })
     );
-    return Object.freeze({
+    const basePipelineFingerprint = createPipelineFingerprint(
+      createFingerprintInput(
+        input.pipeline,
+        parser,
+        input.bundleConfigDigest,
+        input.schemaContentHash
+      )
+    );
+    const common = {
       bundleId: input.bundle.id,
       sourceId: entry.sourceId,
       sourcePath: entry.sourcePath,
       sourceKey: entry.sourceKey,
-      pipelineFingerprint: createPipelineFingerprint(
-        createFingerprintInput(
-          input.pipeline,
-          parser,
-          input.bundleConfigDigest,
-          input.schemaContentHash
-        )
+      pipelineFingerprint: createSourcePipelineFingerprint(
+        basePipelineFingerprint,
+        sourceAuthority.operation,
+        sourceAuthority.operation === "query_writeback"
+          ? sourceAuthority.sourceOriginDigest
+          : undefined
       ),
-    });
+    };
+    return sourceAuthority.operation === "query_writeback"
+      ? Object.freeze({
+          ...common,
+          operation: sourceAuthority.operation,
+          sourceOriginDigest: sourceAuthority.sourceOriginDigest,
+          expectedSourceContentHash: sourceAuthority.expectedSourceContentHash,
+        })
+      : Object.freeze(common);
   });
   const authority = Object.freeze({
     bundleId: input.bundle.id,

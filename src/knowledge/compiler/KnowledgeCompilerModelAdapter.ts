@@ -689,7 +689,7 @@ function capturePreparation(preparation: KnowledgeAuthorizedSourcePreparation): 
     });
     if (
       readOwnDataProperty(foundation.bundle, "id") !== readOwnDataProperty(claim, "bundleId") ||
-      foundation.operation !== "ingest" ||
+      (foundation.operation !== "ingest" && foundation.operation !== "query_writeback") ||
       readOwnDataProperty(foundation.source, "sourceId") !==
         readOwnDataProperty(claim, "sourceId") ||
       readOwnDataProperty(foundation.source, "sourceContentHash") !==

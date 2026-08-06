@@ -129,16 +129,22 @@ jest.mock("@/components/knowledge/KnowledgeQueryPanel", () => ({
   /** Test seam that exposes Query and opaque citation callback wiring. */
   KnowledgeQueryPanel: (props: {
     state: { status: string };
+    writebackAvailable: boolean;
     onQuery: (query: string) => void;
     onOpenCitation: (citationRef: string) => void;
+    onSaveToWiki: (title: string) => void;
   }) => (
     <div data-testid="query-panel">
       <span>Query status {props.state.status}</span>
+      <span>Query writeback {String(props.writebackAvailable)}</span>
       <button type="button" onClick={() => props.onQuery("grounded topic")}>
         Query submit
       </button>
       <button type="button" onClick={() => props.onOpenCitation("citation-ref-1")}>
         Query citation
+      </button>
+      <button type="button" onClick={() => props.onSaveToWiki("Durable insight")}>
+        Query save
       </button>
     </div>
   ),
@@ -386,6 +392,11 @@ class TestKnowledgeStudioController {
   async openQueryCitation(citationRef: string): Promise<void> {
     this.calls.push(`citation:${citationRef}`);
   }
+
+  /** Records one reviewed writeback title without receiving generated content or paths. */
+  async saveCurrentQueryToWiki(title: string): Promise<void> {
+    this.calls.push(`save:${title}`);
+  }
 }
 
 /** Converts the focused fake to the concrete controller boundary expected by React. */
@@ -525,20 +536,27 @@ describe("KnowledgeStudioRoot", () => {
     const ready = createReadyState([]);
     const controller = new TestKnowledgeStudioController({
       ...ready,
-      snapshot: { ...ready.snapshot!, queryAvailable: true },
+      snapshot: {
+        ...ready.snapshot!,
+        queryAvailable: true,
+        queryWritebackAvailable: true,
+      },
       query: { status: "idle" },
     });
     render(<KnowledgeStudioRoot controller={asController(controller)} />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Query" }));
     expect(screen.getByTestId("query-panel")).toBeTruthy();
+    expect(screen.getByText("Query writeback true")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Query submit" }));
     fireEvent.click(screen.getByRole("button", { name: "Query citation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Query save" }));
 
     expect(controller.calls).toEqual([
       "tab:query",
       "query:grounded topic",
       "citation:citation-ref-1",
+      "save:Durable insight",
     ]);
   });
 

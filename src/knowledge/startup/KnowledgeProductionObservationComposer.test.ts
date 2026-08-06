@@ -511,9 +511,11 @@ describe("KnowledgeProductionObservationComposer", () => {
         items: [],
       },
       queryAvailable: true,
+      queryWritebackAvailable: true,
     });
-    expect(snapshot.notice).toContain("grounded Query are connected");
-    expect(snapshot.notice).toContain("Save to Wiki, PDF jump, and delete remain disabled");
+    expect(snapshot.notice).toContain("reviewed Save to Wiki");
+    expect(snapshot.notice).toContain("Saved answers enter Review");
+    expect(snapshot.notice).toContain("delete remains disabled");
     expect(Object.isFrozen(snapshot.commandCapabilities)).toBe(true);
     expect(onApplyGenerationRefreshRequired).not.toHaveBeenCalled();
 

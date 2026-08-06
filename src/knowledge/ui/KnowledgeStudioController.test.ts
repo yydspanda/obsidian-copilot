@@ -18,6 +18,11 @@ import type {
   KnowledgeStudioQueryResult,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import type {
+  KnowledgeStudioQueryWritebackPort,
+  KnowledgeStudioQueryWritebackRequest,
+  KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
+import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
@@ -42,6 +47,14 @@ interface RecordedCitationCall {
   bundleId: string;
   queryId: string;
   citationRef: string;
+  signal: AbortSignal;
+}
+
+/** One recorded current-answer writeback call. */
+interface RecordedQueryWritebackCall {
+  bundleId: string;
+  queryId: string;
+  request: Readonly<KnowledgeStudioQueryWritebackRequest>;
   signal: AbortSignal;
 }
 
@@ -454,6 +467,30 @@ class FakeKnowledgeStudioQueryPort implements KnowledgeStudioQueryPort {
   }
 }
 
+/** Scriptable reviewed-writeback port that records exact opaque query authority. */
+class FakeKnowledgeStudioQueryWritebackPort implements KnowledgeStudioQueryWritebackPort {
+  readonly calls: RecordedQueryWritebackCall[] = [];
+
+  /** Creates a fake around one optional asynchronous registration handler. */
+  constructor(
+    private readonly handler: (
+      call: RecordedQueryWritebackCall
+    ) => Promise<KnowledgeStudioQueryWritebackResult> = async () => ({ kind: "registered" })
+  ) {}
+
+  /** Records one current-answer registration request. */
+  async saveQueryToWiki(
+    bundleId: string,
+    queryId: string,
+    request: Readonly<KnowledgeStudioQueryWritebackRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioQueryWritebackResult> {
+    const call = { bundleId, queryId, request, signal };
+    this.calls.push(call);
+    return this.handler(call);
+  }
+}
+
 /** Builds the content-free command expected by the controller boundary. */
 function createReviewCommand(token = "snapshot-1"): KnowledgeReviewCommand {
   return {
@@ -578,6 +615,170 @@ describe("KnowledgeStudioController", () => {
         },
       },
     });
+  });
+
+  it("registers a current grounded answer only through the published reviewed-writeback capability", async () => {
+    const snapshot = {
+      ...createSnapshot(),
+      queryAvailable: true,
+      queryWritebackAvailable: true,
+    };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort();
+    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+    controller.start("personal");
+    await flushAsync();
+    await controller.runQuery("grounded answer");
+
+    await controller.saveCurrentQueryToWiki("  Durable answer  ");
+
+    expect(writebackPort.calls).toHaveLength(1);
+    expect(writebackPort.calls[0]).toMatchObject({
+      bundleId: "personal",
+      queryId: "knowledge-query-answer-1",
+      request: { title: "Durable answer" },
+    });
+    expect(writebackPort.calls[0].signal.aborted).toBe(false);
+    const state = controller.getState();
+    expect(state).toMatchObject({
+      query: {
+        status: "ready",
+        savingToWiki: false,
+        error: undefined,
+        result: { queryId: "knowledge-query-answer-1" },
+      },
+      feedback: {
+        kind: "success",
+      },
+    });
+    expect(state.feedback?.message).toContain("Review proposal");
+  });
+
+  it("keeps answer writeback unavailable unless the current snapshot publishes it", async () => {
+    const snapshot = {
+      ...createSnapshot(),
+      queryAvailable: true,
+      queryWritebackAvailable: false,
+    };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort();
+    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+    controller.start("personal");
+    await flushAsync();
+    await controller.runQuery("grounded answer");
+
+    await controller.saveCurrentQueryToWiki("Blocked answer");
+
+    expect(writebackPort.calls).toHaveLength(0);
+    expect(controller.getState().query).toMatchObject({
+      status: "ready",
+      savingToWiki: false,
+      error: "Only a current source-grounded answer can be sent to reviewed Wiki writeback.",
+    });
+  });
+
+  it("rejects a writeback snapshot capability that is not backed by scoped Query", async () => {
+    const invalid = {
+      ...createSnapshot(),
+      queryAvailable: false,
+      queryWritebackAvailable: true,
+    };
+    const port = new FakeKnowledgeStudioPort(async () => invalid);
+    const controller = new KnowledgeStudioController(port, port);
+
+    controller.start("personal");
+    await flushAsync();
+
+    expect(controller.getState()).toMatchObject({
+      status: "error",
+      error: "Knowledge Studio could not load its durable state.",
+    });
+    expect(controller.getState().snapshot).toBeUndefined();
+  });
+
+  it("aborts an in-flight answer writeback and ignores its late old-generation receipt", async () => {
+    const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+    const snapshots = [
+      {
+        ...createSnapshot("before"),
+        queryAvailable: true,
+        queryWritebackAvailable: true,
+      },
+      {
+        ...createSnapshot("after"),
+        queryAvailable: true,
+        queryWritebackAvailable: true,
+      },
+    ];
+    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
+    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(
+      async () => registration.promise
+    );
+    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+    controller.start("personal");
+    await flushAsync();
+    await controller.runQuery("grounded answer");
+
+    const pending = controller.saveCurrentQueryToWiki("Durable answer");
+    await flushAsync();
+    await controller.refresh();
+
+    expect(writebackPort.calls[0].signal.aborted).toBe(true);
+    expect(queryPort.revokeCalls).toEqual([
+      { bundleId: "personal", queryId: "knowledge-query-answer-1" },
+    ]);
+    expect(controller.getState()).toMatchObject({
+      snapshot: { revisionToken: "after" },
+      query: { status: "idle" },
+    });
+
+    registration.resolve({ kind: "registered" });
+    await pending;
+    expect(controller.getState()).toMatchObject({
+      snapshot: { revisionToken: "after" },
+      query: { status: "idle" },
+    });
+    expect(controller.getState().feedback).toBeUndefined();
+  });
+
+  it("rejects an accessor-backed writeback receipt without invoking its getter", async () => {
+    let getterCalls = 0;
+    const receipt = {};
+    Object.defineProperty(receipt, "kind", {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        throw new Error("private getter payload");
+      },
+    });
+    const snapshot = {
+      ...createSnapshot(),
+      queryAvailable: true,
+      queryWritebackAvailable: true,
+    };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(async () =>
+      Promise.resolve(receipt as unknown as KnowledgeStudioQueryWritebackResult)
+    );
+    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+    controller.start("personal");
+    await flushAsync();
+    await controller.runQuery("grounded answer");
+
+    await controller.saveCurrentQueryToWiki("Durable answer");
+
+    expect(getterCalls).toBe(0);
+    expect(controller.getState().query).toMatchObject({
+      status: "ready",
+      savingToWiki: false,
+      error:
+        "The grounded answer could not be registered. No Wiki file was changed; retry from a fresh query.",
+    });
+    expect(controller.getState().feedback).toBeUndefined();
   });
 
   it("keeps Query fail-closed when the current snapshot did not publish the adapter", async () => {

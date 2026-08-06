@@ -5,6 +5,11 @@ import type {
   KnowledgeStudioQueryRequest,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import type {
+  KnowledgeStudioQueryWritebackPort,
+  KnowledgeStudioQueryWritebackRequest,
+  KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
+import type {
   KnowledgeStudioCommandPort,
   KnowledgeStudioReadPort,
   KnowledgeStudioRecoverySubmissionResult,
@@ -18,7 +23,8 @@ import {
 
 type KnowledgeStudioPort = KnowledgeStudioReadPort & KnowledgeStudioCommandPort;
 type QueryCapableKnowledgeStudioPort = KnowledgeStudioPort &
-  Partial<Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">>;
+  Partial<Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">> &
+  Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">>;
 
 interface DelegateGeneration {
   delegate: QueryCapableKnowledgeStudioPort;
@@ -82,7 +88,11 @@ function linkAbortSignals(signals: readonly AbortSignal[]): LinkedAbortSignal {
  * every read goes to the implementation active for that exact generation.
  */
 export class DelegatingKnowledgeStudioPort
-  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeStudioQueryPort
+  implements
+    KnowledgeStudioReadPort,
+    KnowledgeStudioCommandPort,
+    KnowledgeStudioQueryPort,
+    KnowledgeStudioQueryWritebackPort
 {
   private readonly unavailableDelegate: KnowledgeStudioPort;
   private generation: DelegateGeneration;
@@ -317,6 +327,20 @@ export class DelegatingKnowledgeStudioPort
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       typeof delegate.openCitation === "function"
         ? delegate.openCitation(bundleId, queryId, citationRef, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
+  /** Routes one current-answer capture through the exact delegate generation. */
+  async saveQueryToWiki(
+    bundleId: string,
+    queryId: string,
+    request: Readonly<KnowledgeStudioQueryWritebackRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioQueryWritebackResult> {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.saveQueryToWiki === "function"
+        ? delegate.saveQueryToWiki(bundleId, queryId, request, delegatedSignal)
         : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
     );
   }

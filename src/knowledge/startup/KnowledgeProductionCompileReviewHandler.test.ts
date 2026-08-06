@@ -1,9 +1,17 @@
 import type {
+  CompilerAnalysisRequest,
   CompilerCandidateValidator,
   CompilerGenerationRequest,
   CompilerTargetRequest,
   CompilerTargetResolver,
 } from "@/knowledge/compiler/CompilerModelPort";
+import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
+import {
+  createChangeSetTransactionDigest,
+  TRANSACTION_JOURNAL_VERSION,
+  type ChangeSetTransactionJournal,
+  validateChangeSetTransactionJournal,
+} from "@/knowledge/changeset/TransactionStorage";
 import {
   bindKnowledgePrivateModelRouteToProfile,
   KNOWLEDGE_DECODED_MODEL_OUTPUT_CONTRACT,
@@ -40,7 +48,10 @@ import type { SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
-import type { ChangeSetReviewSnapshot } from "@/knowledge/review/ReviewStorage";
+import type {
+  AcceptedChangeSetReviewRecord,
+  ChangeSetReviewSnapshot,
+} from "@/knowledge/review/ReviewStorage";
 import {
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
@@ -72,6 +83,8 @@ const VALIDATION_SUCCESS = Object.freeze({
 
 interface AttemptOptions {
   invoke: KnowledgePrivateModelInvoke;
+  manifest?: SourceManifest;
+  acceptAfterCompile?: boolean;
   classifyFailure?: KnowledgePrivateModelFailureClassifier;
   targetResolver?: CompilerTargetResolver;
   candidateValidator?: CompilerCandidateValidator;
@@ -87,6 +100,7 @@ interface AttemptResult {
   queueSnapshot: IngestQueueSnapshot;
   reviewSnapshot: ChangeSetReviewSnapshot;
   runtimeContent: string;
+  plannedOperation: "ingest" | "query_writeback";
 }
 
 /** Creates the single project-owned Bundle used by authentic preparation tests. */
@@ -116,6 +130,24 @@ function createManifest(): SourceManifest {
         sourcePath: SOURCE_PATH,
         sourceKey: toWindowsPathKey(SOURCE_PATH),
         custody: "user_managed",
+      },
+    ],
+  };
+}
+
+/** Creates an exact managed source whose strict origin authorizes query writeback. */
+function createQueryWritebackManifest(): SourceManifest {
+  const manifest = createManifest();
+  return {
+    ...manifest,
+    entries: [
+      {
+        ...manifest.entries[0],
+        custody: "managed_copy",
+        extensions: createKnowledgeSourceOriginExtensions("query_writeback", {
+          captureDigest: "c".repeat(64),
+          captureContentHash: SOURCE_CONTENT_HASH,
+        }),
       },
     ],
   };
@@ -306,7 +338,7 @@ function createRouteLease(
 /** Runs the complete authentic Queue → preparation → compile → Review handler chain. */
 async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
   const profile = createPipelineProfile();
-  const manifest = createManifest();
+  const manifest = options.manifest ?? createManifest();
   const executionOwner = createKnowledgeExecutionOwner();
   const plan = await createExecutionPlan(profile, manifest, executionOwner);
   const source = plan.getWatchPlan().getSource(BUNDLE_ID, SOURCE_ID);
@@ -355,11 +387,26 @@ async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
     );
     if (options.closeRouteBeforeRun) route.owner.close();
     const queueResult = await capabilities.queue.runNext(BUNDLE_ID);
+    if (options.acceptAfterCompile) {
+      const reviewSnapshot = await reviews.load(BUNDLE_ID);
+      const record = reviewSnapshot.records[0];
+      if (!record || reviewSnapshot.records.length !== 1 || record.outcome !== "pending") {
+        throw new Error("Expected one pending proposal before test-only acceptance");
+      }
+      await reviews.accept(
+        BUNDLE_ID,
+        record.changeSetId,
+        record.recordRevision,
+        record.proposalDigest,
+        { ...record.proposal, status: "accepted" }
+      );
+    }
     return {
       queueResult,
       queueSnapshot: await capabilities.queue.load(BUNDLE_ID),
       reviewSnapshot: await reviews.load(BUNDLE_ID),
       runtimeContent: await capabilities.file.read(),
+      plannedOperation: "operation" in source ? source.operation : "ingest",
     };
   } finally {
     route.owner.close();
@@ -373,7 +420,97 @@ function requireOnlyJob(snapshot: IngestQueueSnapshot) {
   return job;
 }
 
+/** Builds one valid prepared transaction journal from an accepted Review record. */
+function createPreparedJournal(record: AcceptedChangeSetReviewRecord): ChangeSetTransactionJournal {
+  const targets = record.acceptedChangeSet.changes.map((change) => {
+    if (change.operation !== "create") {
+      throw new Error("The query-writeback integration fixture expects only create changes");
+    }
+    return {
+      changeId: change.id,
+      path: change.path,
+      windowsPathKey: toWindowsPathKey(change.path),
+      operation: change.operation,
+      before: { kind: "missing" as const },
+      after: {
+        kind: "file" as const,
+        content: change.afterContent,
+        contentHash: change.afterHash,
+      },
+    };
+  });
+  return {
+    version: TRANSACTION_JOURNAL_VERSION,
+    transactionId: "transaction-query-writeback",
+    revision: 0,
+    bundleId: BUNDLE_ID,
+    bundle: createOwner().config,
+    changeSetId: record.acceptedChangeSet.id,
+    changeSetDigest: createChangeSetTransactionDigest(record.acceptedChangeSet),
+    manifestCommitIntent: record.manifestCommitIntent,
+    manifestCommitIntentDigest: record.manifestCommitIntentDigest,
+    jobClaim: { ...record.jobClaim, startedAt: 100 },
+    changeSet: record.acceptedChangeSet,
+    targets,
+    appliedCount: 0,
+    createdAt: 120,
+    updatedAt: 120,
+    phase: "prepared",
+  };
+}
+
 describe("KnowledgeProductionCompileReviewHandler", () => {
+  it("propagates a strict managed query origin through preparation, Compiler, Review, and transaction binding", async () => {
+    const analysisOperations: string[] = [];
+    const attempt = await runAttempt({
+      manifest: createQueryWritebackManifest(),
+      acceptAfterCompile: true,
+      invoke: async (stage, request) => {
+        if (stage === "analysis") {
+          analysisOperations.push((request as CompilerAnalysisRequest).operation);
+          return createAnalysisWireOutput(true);
+        }
+        return createGenerationWireOutput(request as CompilerGenerationRequest);
+      },
+    });
+
+    expect(attempt.plannedOperation).toBe("query_writeback");
+    expect(analysisOperations).toEqual(["query_writeback"]);
+    expect(attempt.queueResult).toMatchObject({
+      kind: "executed",
+      status: "awaiting_review",
+    });
+
+    const record = attempt.reviewSnapshot.records[0];
+    if (!record || attempt.reviewSnapshot.records.length !== 1 || record.outcome !== "accepted") {
+      throw new Error("Expected one accepted query-writeback Review record");
+    }
+    expect(record.proposal.operation).toBe("query_writeback");
+    if (record.manifestCommitPlan.kind !== "query_writeback_source_compile") {
+      throw new Error("Expected a query-writeback Manifest commit plan");
+    }
+    expect(record.manifestCommitPlan.sourceOriginDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(record.acceptedChangeSet.operation).toBe("query_writeback");
+    expect(record.manifestCommitIntent).toMatchObject({
+      kind: "query_writeback_source_compile",
+      sourceOriginDigest: record.manifestCommitPlan.sourceOriginDigest,
+    });
+
+    const journal = createPreparedJournal(record);
+    expect(validateChangeSetTransactionJournal(journal)).toEqual({ valid: true, diagnostics: [] });
+
+    const mismatchedChangeSet = { ...journal.changeSet, operation: "ingest" as const };
+    const mismatched = validateChangeSetTransactionJournal({
+      ...journal,
+      changeSet: mismatchedChangeSet,
+      changeSetDigest: createChangeSetTransactionDigest(mismatchedChangeSet),
+    });
+    expect(mismatched.valid).toBe(false);
+    expect(mismatched.diagnostics.map(({ code }) => code)).toContain(
+      "transaction_manifest_intent_operation_mismatch"
+    );
+  });
+
   it("rejects a Review owner from another workflow before invoking the model", async () => {
     const invoke = jest.fn(async () => createAnalysisWireOutput(false));
     const attempt = await runAttempt({

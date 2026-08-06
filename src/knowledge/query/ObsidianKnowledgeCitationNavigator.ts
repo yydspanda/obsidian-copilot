@@ -8,8 +8,14 @@ import {
   type WorkspaceLeaf,
 } from "obsidian";
 
-import { normalizeCitationText } from "@/knowledge/model/fingerprint";
+import {
+  createSourceContentHash,
+  isExactUint8Array,
+  normalizeCitationText,
+} from "@/knowledge/model/fingerprint";
 import type { ClaimCitation } from "@/knowledge/model/types";
+import { validateClaimCitation } from "@/knowledge/model/validation";
+import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import {
   resolveKnowledgeCitationTarget,
   type KnowledgeCitationMarkdownRangeTarget,
@@ -42,6 +48,27 @@ const UNSUPPORTED_RESULT = Object.freeze({ status: "unsupported" as const });
 const UNAVAILABLE_RESULT = Object.freeze({ status: "unavailable" as const });
 const VERIFIED_RESULT = Object.freeze({ status: "verified" as const });
 
+// Captured intrinsic performs a non-spoofable ArrayBuffer internal-slot check.
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  "byteLength"
+)?.get;
+
+/** Exact resolved PDF page whose artifact bytes have been re-proved. */
+interface KnowledgeCitationPdfPageTarget {
+  readonly kind: "pdf_page";
+  readonly sourcePath: string;
+  readonly page: number;
+}
+
+/** Sanitized result of resolving one PDF citation against current raw bytes. */
+type KnowledgeCitationPdfPageResolution =
+  | { status: "resolved"; target: KnowledgeCitationPdfPageTarget }
+  | { status: "stale" }
+  | { status: "unsupported" }
+  | { status: "unavailable" };
+
 /**
  * Reports cancellation without retaining a caller-provided abort reason.
  *
@@ -50,6 +77,59 @@ const VERIFIED_RESULT = Object.freeze({ status: "verified" as const });
  */
 function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
+}
+
+/**
+ * Tests exact ArrayBuffer identity across renderer realms.
+ *
+ * @param value - Unknown Vault binary-read result
+ * @returns Whether ArrayBuffer's intrinsic byteLength getter accepts the receiver
+ */
+function isExactArrayBuffer(value: unknown): value is ArrayBuffer {
+  if (!ARRAY_BUFFER_BYTE_LENGTH_GETTER || typeof value !== "object" || value === null) {
+    return false;
+  }
+  try {
+    Reflect.apply(ARRAY_BUFFER_BYTE_LENGTH_GETTER, value, []);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves a structurally valid PDF locator against exact current source bytes.
+ *
+ * Page numbers are admitted only through the shared ClaimCitation validator,
+ * which requires a positive safe integer. The raw-byte SHA-256 must match before
+ * the page can become actionable; no decoded PDF text or private viewer state is
+ * trusted by this navigation boundary.
+ *
+ * @param request - Source path and typed claim citation
+ * @param bytes - Exact bytes returned by the captured Vault
+ * @returns A hash-proved PDF page or one sanitized failure category
+ */
+function resolvePdfPageTarget(
+  request: ObsidianKnowledgeCitationNavigationRequest,
+  bytes: Uint8Array
+): KnowledgeCitationPdfPageResolution {
+  if (typeof request !== "object" || request === null || !isExactUint8Array(bytes)) {
+    return UNAVAILABLE_RESULT;
+  }
+  const parsedPath = parseVaultPath(request.sourcePath);
+  if (!parsedPath.ok || parsedPath.path !== request.sourcePath) return UNAVAILABLE_RESULT;
+  if (!validateClaimCitation(request.citation).valid) return UNAVAILABLE_RESULT;
+  const locator = request.citation.locator;
+  if (locator.kind !== "pdf_page") return UNSUPPORTED_RESULT;
+  if (createSourceContentHash(bytes) !== locator.artifactContentHash) return STALE_RESULT;
+  return Object.freeze({
+    status: "resolved" as const,
+    target: Object.freeze({
+      kind: "pdf_page" as const,
+      sourcePath: parsedPath.path,
+      page: locator.page,
+    }),
+  });
 }
 
 /**
@@ -105,7 +185,7 @@ function isRangeAvailableInEditor(
 }
 
 /**
- * Opens hash-verified Markdown citations using only a captured Obsidian owner.
+ * Opens hash-verified citations using only a captured Obsidian owner.
  *
  * The adapter performs no writes. It re-reads the source after opening its leaf,
  * confirms the resulting view is a MarkdownView, and refuses exact navigation
@@ -136,6 +216,70 @@ export class ObsidianKnowledgeCitationNavigator {
     return (
       this.appOwner.vault === this.vaultOwner && this.appOwner.workspace === this.workspaceOwner
     );
+  }
+
+  /**
+   * Re-reads and resolves one exact PDF page without changing the workspace.
+   *
+   * @param request - Source path and typed claim citation
+   * @param signal - Optional cancellation checked around the binary Vault read
+   * @returns Current PDF page resolution or a sanitized failure
+   */
+  private async resolveCurrentPdfPage(
+    request: ObsidianKnowledgeCitationNavigationRequest,
+    signal?: AbortSignal
+  ): Promise<KnowledgeCitationPdfPageResolution> {
+    if (isAborted(signal) || !this.isCurrentOwner()) return UNAVAILABLE_RESULT;
+    const abstractFile = this.vaultOwner.getAbstractFileByPath(request.sourcePath);
+    if (
+      !(abstractFile instanceof TFile) ||
+      abstractFile.path !== request.sourcePath ||
+      abstractFile.extension.toLowerCase() !== "pdf"
+    ) {
+      return UNAVAILABLE_RESULT;
+    }
+    if (isAborted(signal)) return UNAVAILABLE_RESULT;
+    const binary = await this.vaultOwner.readBinary(abstractFile);
+    if (isAborted(signal) || !this.isCurrentOwner()) return UNAVAILABLE_RESULT;
+    if (!isExactArrayBuffer(binary)) return UNAVAILABLE_RESULT;
+
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(binary);
+    } catch {
+      return UNAVAILABLE_RESULT;
+    }
+    return resolvePdfPageTarget(request, bytes);
+  }
+
+  /**
+   * Opens a hash-proved PDF page through Obsidian's canonical public link contract.
+   *
+   * The exact raw bytes are re-read after the asynchronous workspace operation,
+   * matching the Markdown navigator's fail-closed drift check. Private PDF view,
+   * DOM, and ephemeral-state APIs are intentionally not used.
+   *
+   * @param request - Source path and typed PDF claim citation
+   * @param signal - Optional cancellation checked around every async boundary
+   * @returns Opened, stale, unsupported, or unavailable
+   */
+  private async navigatePdfPage(
+    request: ObsidianKnowledgeCitationNavigationRequest,
+    signal?: AbortSignal
+  ): Promise<ObsidianKnowledgeCitationNavigationResult> {
+    const initial = await this.resolveCurrentPdfPage(request, signal);
+    if (initial.status !== "resolved") return mapResolutionFailure(initial);
+    if (isAborted(signal) || !this.isCurrentOwner()) return UNAVAILABLE_RESULT;
+
+    await this.workspaceOwner.openLinkText(
+      `${initial.target.sourcePath}#page=${initial.target.page}`,
+      "",
+      "tab"
+    );
+    if (isAborted(signal) || !this.isCurrentOwner()) return UNAVAILABLE_RESULT;
+
+    const current = await this.resolveCurrentPdfPage(request, signal);
+    return current.status === "resolved" ? OPENED_RESULT : mapResolutionFailure(current);
   }
 
   /**
@@ -174,7 +318,13 @@ export class ObsidianKnowledgeCitationNavigator {
         citation: request.citation,
         content: "",
       });
-      if (preflight.status === "unsupported" || preflight.status === "unavailable") {
+      if (preflight.status === "unsupported") {
+        const resolution = await this.resolveCurrentPdfPage(request, signal);
+        return resolution.status === "resolved"
+          ? VERIFIED_RESULT
+          : mapVerificationFailure(resolution);
+      }
+      if (preflight.status === "unavailable") {
         return mapVerificationFailure(preflight);
       }
       const abstractFile = this.vaultOwner.getAbstractFileByPath(request.sourcePath);
@@ -202,11 +352,11 @@ export class ObsidianKnowledgeCitationNavigator {
   }
 
   /**
-   * Navigates to one exact grounded Markdown range.
+   * Navigates to one exact grounded Markdown range or hash-proved PDF page.
    *
-   * PDF pages remain unsupported until Obsidian exposes a stable public page
-   * navigation contract. All exceptions and unavailable views collapse to a
-   * value-free result; source paths and adapter causes are never returned.
+   * PDF pages use Obsidian's public canonical `path#page=N` link contract. All
+   * exceptions and unavailable views collapse to a value-free result; source
+   * paths and adapter causes are never returned.
    *
    * @param request - Source path and typed claim citation
    * @param signal - Optional cancellation checked around every asynchronous boundary
@@ -224,7 +374,10 @@ export class ObsidianKnowledgeCitationNavigator {
         citation: request.citation,
         content: "",
       });
-      if (preflight.status === "unsupported" || preflight.status === "unavailable") {
+      if (preflight.status === "unsupported") {
+        return await this.navigatePdfPage(request, signal);
+      }
+      if (preflight.status === "unavailable") {
         return mapResolutionFailure(preflight);
       }
       if (isAborted(signal)) return UNAVAILABLE_RESULT;

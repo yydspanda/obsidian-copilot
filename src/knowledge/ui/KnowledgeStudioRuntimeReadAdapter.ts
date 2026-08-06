@@ -38,6 +38,11 @@ import type {
   KnowledgeStudioQueryPort,
   KnowledgeStudioQueryRequest,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
+import type {
+  KnowledgeStudioQueryWritebackPort,
+  KnowledgeStudioQueryWritebackRequest,
+  KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
 import {
   KnowledgeStudioAdapterUnavailableError,
   NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES,
@@ -57,6 +62,14 @@ export type KnowledgeStudioRuntimePort = Pick<
 /** Optional Vault hint source; callbacks never carry authoritative state. */
 export type KnowledgeStudioVaultHintPort = (bundleId: string, onHint: () => void) => () => void;
 
+/** Query capabilities accepted from one exact production generation. */
+type KnowledgeStudioRuntimeQueryPort = Pick<
+  KnowledgeStudioQueryPort,
+  "query" | "openCitation" | "revokeCurrent"
+> &
+  Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">> &
+  Partial<Readonly<{ supportsWriteback(): boolean }>>;
+
 /** Dependencies captured by one exact production Studio generation. */
 export interface KnowledgeStudioRuntimeReadAdapterInput {
   runtime: KnowledgeStudioRuntimePort;
@@ -64,7 +77,7 @@ export interface KnowledgeStudioRuntimeReadAdapterInput {
   targetResolver: CompilerTargetResolver;
   assertCurrent(): void;
   commands?: KnowledgeStudioRuntimeCommandAdapter;
-  query?: Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">;
+  query?: KnowledgeStudioRuntimeQueryPort;
   subscribeVaultHints?: KnowledgeStudioVaultHintPort;
   maxConsistencyAttempts?: number;
 }
@@ -101,6 +114,7 @@ interface CapturedKnowledgeStudioQueryState {
   readonly query: KnowledgeStudioQueryPort["query"];
   readonly openCitation: KnowledgeStudioQueryPort["openCitation"];
   readonly revokeCurrent: KnowledgeStudioQueryPort["revokeCurrent"];
+  readonly saveQueryToWiki?: KnowledgeStudioQueryWritebackPort["saveQueryToWiki"];
 }
 
 const capturedKnowledgeStudioQueryStates = new WeakMap<object, CapturedKnowledgeStudioQueryState>();
@@ -108,7 +122,7 @@ const capturedKnowledgeStudioQueryStates = new WeakMap<object, CapturedKnowledge
 /** Finds one callable data method without invoking an accessor. */
 function captureQueryDataMethod(
   owner: object,
-  key: "query" | "openCitation" | "revokeCurrent"
+  key: "query" | "openCitation" | "revokeCurrent" | "saveQueryToWiki"
 ): (...args: never[]) => unknown {
   try {
     let candidate: object | null = owner;
@@ -130,6 +144,32 @@ function captureQueryDataMethod(
   throw new KnowledgeStudioRuntimeReadError();
 }
 
+/** Captures one optional data method without invoking an accessor. */
+function captureOptionalQueryDataMethod(
+  owner: object,
+  key: "saveQueryToWiki"
+): ((...args: never[]) => unknown) | undefined {
+  try {
+    let candidate: object | null = owner;
+    const visited = new Set<object>();
+    while (candidate && !visited.has(candidate)) {
+      visited.add(candidate);
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      if (descriptor) {
+        if (!("value" in descriptor) || typeof descriptor.value !== "function") {
+          throw new KnowledgeStudioRuntimeReadError();
+        }
+        return descriptor.value as (...args: never[]) => unknown;
+      }
+      candidate = Object.getPrototypeOf(candidate) as object | null;
+    }
+    return undefined;
+  } catch (error) {
+    if (error instanceof KnowledgeStudioRuntimeReadError) throw error;
+    throw new KnowledgeStudioRuntimeReadError();
+  }
+}
+
 /** Returns hidden state only for an authentic captured Query capability. */
 function requireCapturedQueryState(value: object): CapturedKnowledgeStudioQueryState {
   const state = capturedKnowledgeStudioQueryStates.get(value);
@@ -138,11 +178,10 @@ function requireCapturedQueryState(value: object): CapturedKnowledgeStudioQueryS
 }
 
 /** Immutable method snapshot that cannot be swapped through the caller's input object. */
-class CapturedKnowledgeStudioQueryPort
-  implements Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">
-{
+class CapturedKnowledgeStudioQueryPort implements KnowledgeStudioRuntimeQueryPort {
   /** Captures exact data methods and their receiver without exposing them as properties. */
   constructor(owner: object) {
+    const saveQueryToWiki = captureOptionalQueryDataMethod(owner, "saveQueryToWiki");
     capturedKnowledgeStudioQueryStates.set(this, {
       owner,
       query: captureQueryDataMethod(owner, "query") as unknown as KnowledgeStudioQueryPort["query"],
@@ -151,6 +190,12 @@ class CapturedKnowledgeStudioQueryPort
         "openCitation"
       ) as unknown as KnowledgeStudioQueryPort["openCitation"],
       revokeCurrent: captureQueryDataMethod(owner, "revokeCurrent"),
+      ...(saveQueryToWiki === undefined
+        ? {}
+        : {
+            saveQueryToWiki:
+              saveQueryToWiki as KnowledgeStudioQueryWritebackPort["saveQueryToWiki"],
+          }),
     });
     Object.freeze(this);
   }
@@ -182,6 +227,23 @@ class CapturedKnowledgeStudioQueryPort
     const result = Reflect.apply(state.revokeCurrent, state.owner, [bundleId, queryId]);
     if (result !== undefined) throw new KnowledgeStudioRuntimeReadError();
   }
+
+  /** Reports whether the captured generation exposed reviewed writeback. */
+  supportsWriteback(): boolean {
+    return requireCapturedQueryState(this).saveQueryToWiki !== undefined;
+  }
+
+  /** Invokes the exact current-answer capture method retained by this generation. */
+  async saveQueryToWiki(
+    bundleId: string,
+    queryId: string,
+    request: Readonly<KnowledgeStudioQueryWritebackRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioQueryWritebackResult> {
+    const state = requireCapturedQueryState(this);
+    if (!state.saveQueryToWiki) throw new KnowledgeStudioAdapterUnavailableError();
+    return Reflect.apply(state.saveQueryToWiki, state.owner, [bundleId, queryId, request, signal]);
+  }
 }
 
 Object.freeze(CapturedKnowledgeStudioQueryPort.prototype);
@@ -190,7 +252,7 @@ Object.freeze(CapturedKnowledgeStudioQueryPort);
 /** Captures an optional own Query data property without invoking a getter. */
 function captureOptionalQueryPort(
   input: KnowledgeStudioRuntimeReadAdapterInput
-): Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent"> | undefined {
+): CapturedKnowledgeStudioQueryPort | undefined {
   let descriptor: PropertyDescriptor | undefined;
   try {
     descriptor = Object.getOwnPropertyDescriptor(input, "query");
@@ -576,7 +638,7 @@ function createRevisionToken(
  * unless an authentic same-generation command adapter was installed explicitly.
  */
 export class KnowledgeStudioRuntimeReadAdapter
-  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort
+  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeStudioQueryWritebackPort
 {
   private readonly input: KnowledgeStudioRuntimeReadAdapterInput;
   private readonly bundles: ReadonlyMap<string, KnowledgeBundleConfig>;
@@ -660,10 +722,13 @@ export class KnowledgeStudioRuntimeReadAdapter
             items: Object.freeze([]),
           }),
           queryAvailable: this.input.query !== undefined,
+          queryWritebackAvailable: this.input.query?.supportsWriteback?.() === true,
           notice: this.input.commands
             ? this.input.commands.getCapabilities().reviewAccept
               ? this.input.query
-                ? "Durable Activity, Review, Apply, and grounded Query are connected. Query may call the selected DeepSeek model using only freshly verified source excerpts. Save to Wiki, PDF jump, and delete remain disabled."
+                ? this.input.query.supportsWriteback?.() === true
+                  ? "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, and exact source citation navigation are connected. Saved answers enter Review before any Wiki change; delete remains disabled."
+                  : "Durable Activity, Review, Apply, and grounded Query are connected. Query may call the selected DeepSeek model using only freshly verified source excerpts. Save to Wiki and delete remain disabled."
                 : "Durable Activity and Review are connected. Eligible create and update selections can be explicitly applied; delete acceptance and Query remain disabled."
               : "Durable Activity commands and proposal rejection are connected. Acceptance and Wiki apply remain disabled."
             : this.input.query
@@ -832,6 +897,19 @@ export class KnowledgeStudioRuntimeReadAdapter
   ): Promise<void> {
     if (!this.input.query) throw new KnowledgeStudioAdapterUnavailableError();
     return this.input.query.openCitation(bundleId, queryId, citationRef, signal);
+  }
+
+  /** Registers one current grounded answer through the captured generation. */
+  async saveQueryToWiki(
+    bundleId: string,
+    queryId: string,
+    request: Readonly<KnowledgeStudioQueryWritebackRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioQueryWritebackResult> {
+    if (!this.input.query?.supportsWriteback?.() || !this.input.query.saveQueryToWiki) {
+      throw new KnowledgeStudioAdapterUnavailableError();
+    }
+    return this.input.query.saveQueryToWiki(bundleId, queryId, request, signal);
   }
 
   /** Revokes the current scoped Query and opaque citation references. */

@@ -25,6 +25,7 @@ import {
 import {
   createFileContentHash,
   createQuoteHash,
+  createSourceContentHash,
   normalizeCitationText,
 } from "@/knowledge/model/fingerprint";
 import type { ClaimCitation, SourceLocator } from "@/knowledge/model/types";
@@ -32,6 +33,12 @@ import type { ClaimCitation, SourceLocator } from "@/knowledge/model/types";
 import { ObsidianKnowledgeCitationNavigator } from "./ObsidianKnowledgeCitationNavigator";
 
 const SOURCE_PATH = "Sources/Research.md";
+const PDF_SOURCE_PATH = "Sources/研究 Paper.pdf";
+
+/** Creates detached exact bytes for one fake Vault binary read. */
+function createBinary(...values: number[]): ArrayBuffer {
+  return new Uint8Array(values).buffer;
+}
 
 /** Creates one fake TFile despite Obsidian's opaque public constructor. */
 function createTestFile(path: string): TFile {
@@ -72,9 +79,11 @@ function createCitation(locator: SourceLocator): ClaimCitation {
 class NavigatorHarness {
   content: string;
   editorContent: string;
+  binaryContent = createBinary(0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37);
   existingLeaf = true;
   missingFile = false;
   readonly readQueue: string[] = [];
+  readonly binaryReadQueue: ArrayBuffer[] = [];
   readonly file: TFile;
   readonly editor: Editor & {
     getValue: jest.Mock;
@@ -86,20 +95,30 @@ class NavigatorHarness {
   };
   readonly view: MarkdownView;
   readonly leaf: WorkspaceLeaf & { openFile: jest.Mock };
-  readonly vault: Vault & { getAbstractFileByPath: jest.Mock; read: jest.Mock };
+  readonly vault: Vault & {
+    getAbstractFileByPath: jest.Mock;
+    read: jest.Mock;
+    readBinary: jest.Mock;
+  };
   readonly workspace: Workspace & {
     iterateAllLeaves: jest.Mock;
     getLeaf: jest.Mock;
     revealLeaf: jest.Mock;
+    openLinkText: jest.Mock;
   };
   readonly appOwner: { vault: Vault; workspace: Workspace };
   onOpen?: () => void;
+  onOpenLink?: () => void;
 
   /** Creates one stable captured owner and visible Markdown editor. */
-  constructor(content: string, editorContent = normalizeCitationText(content)) {
+  constructor(
+    content: string,
+    editorContent = normalizeCitationText(content),
+    sourcePath = SOURCE_PATH
+  ) {
     this.content = content;
     this.editorContent = editorContent;
-    this.file = createTestFile(SOURCE_PATH);
+    this.file = createTestFile(sourcePath);
     this.editor = {
       getValue: jest.fn(() => this.editorContent),
       lineCount: jest.fn(() => normalizeCitationText(this.editorContent).split("\n").length),
@@ -118,8 +137,11 @@ class NavigatorHarness {
       }),
     } as unknown as NavigatorHarness["leaf"];
     this.vault = {
-      getAbstractFileByPath: jest.fn(() => (this.missingFile ? null : this.file)),
+      getAbstractFileByPath: jest.fn((path: string) =>
+        this.missingFile || path !== this.file.path ? null : this.file
+      ),
       read: jest.fn(async () => this.readQueue.shift() ?? this.content),
+      readBinary: jest.fn(async () => this.binaryReadQueue.shift() ?? this.binaryContent.slice(0)),
     } as unknown as NavigatorHarness["vault"];
     this.workspace = {
       iterateAllLeaves: jest.fn((callback: (leaf: WorkspaceLeaf) => void) => {
@@ -127,6 +149,9 @@ class NavigatorHarness {
       }),
       getLeaf: jest.fn(() => this.leaf),
       revealLeaf: jest.fn(),
+      openLinkText: jest.fn(async () => {
+        this.onOpenLink?.();
+      }),
     } as unknown as NavigatorHarness["workspace"];
     this.appOwner = { vault: this.vault, workspace: this.workspace };
   }
@@ -293,21 +318,215 @@ describe("ObsidianKnowledgeCitationNavigator", () => {
     expect(harness.editor.setSelection).not.toHaveBeenCalled();
   });
 
-  it("returns unsupported for PDF pages without touching the Vault or Workspace", async () => {
-    const content = "PDF page text";
-    const harness = new NavigatorHarness(content);
+  it("verifies a PDF page from its exact raw-byte SHA-256 without workspace mutation", async () => {
+    const harness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
     const citation = createCitation({
-      ...createLocatorBase(content, "page text"),
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(harness.binaryContent),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
       kind: "pdf_page",
-      page: 1,
+      page: 4,
     });
 
     await expect(
-      harness.createNavigator().navigate({ sourcePath: "Sources/Paper.pdf", citation })
-    ).resolves.toEqual({ status: "unsupported" });
-    expect(harness.vault.getAbstractFileByPath).not.toHaveBeenCalled();
+      harness.createNavigator().verify({ sourcePath: PDF_SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "verified" });
+    expect(harness.vault.readBinary).toHaveBeenCalledTimes(1);
     expect(harness.vault.read).not.toHaveBeenCalled();
     expect(harness.workspace.iterateAllLeaves).not.toHaveBeenCalled();
+    expect(harness.workspace.openLinkText).not.toHaveBeenCalled();
+  });
+
+  it("opens a hash-proved PDF at its validated page through the canonical link contract", async () => {
+    const harness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const citation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(harness.binaryContent),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 4,
+    });
+
+    await expect(
+      harness.createNavigator().navigate({ sourcePath: PDF_SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "opened" });
+    expect(harness.vault.readBinary).toHaveBeenCalledTimes(2);
+    expect(harness.workspace.openLinkText).toHaveBeenCalledWith(
+      `${PDF_SOURCE_PATH}#page=4`,
+      "",
+      "tab"
+    );
+    expect(harness.workspace.iterateAllLeaves).not.toHaveBeenCalled();
+    expect(harness.leaf.openFile).not.toHaveBeenCalled();
+  });
+
+  it("fails stale before opening when current PDF bytes do not match the locator", async () => {
+    const harness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const citation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(createBinary(1, 2, 3)),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 4,
+    });
+
+    await expect(
+      harness.createNavigator().navigate({ sourcePath: PDF_SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "stale" });
+    expect(harness.vault.readBinary).toHaveBeenCalledTimes(1);
+    expect(harness.workspace.openLinkText).not.toHaveBeenCalled();
+  });
+
+  it("reports stale when the PDF changes across the asynchronous page open", async () => {
+    const harness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const original = harness.binaryContent;
+    harness.binaryReadQueue.push(original, createBinary(9, 8, 7));
+    const citation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(original),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 2,
+    });
+
+    await expect(
+      harness.createNavigator().navigate({ sourcePath: PDF_SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "stale" });
+    expect(harness.workspace.openLinkText).toHaveBeenCalledTimes(1);
+    expect(harness.vault.readBinary).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an invalid PDF page or non-PDF TFile before opening", async () => {
+    const invalidPageHarness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const invalidCitation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(invalidPageHarness.binaryContent),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 0,
+    });
+    await expect(
+      invalidPageHarness
+        .createNavigator()
+        .navigate({ sourcePath: PDF_SOURCE_PATH, citation: invalidCitation })
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(invalidPageHarness.vault.getAbstractFileByPath).not.toHaveBeenCalled();
+
+    const wrongFileHarness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    (wrongFileHarness.file as unknown as { extension: string }).extension = "md";
+    const validCitation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(wrongFileHarness.binaryContent),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 1,
+    });
+    await expect(
+      wrongFileHarness
+        .createNavigator()
+        .navigate({ sourcePath: PDF_SOURCE_PATH, citation: validCitation })
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(wrongFileHarness.vault.readBinary).not.toHaveBeenCalled();
+    expect(wrongFileHarness.workspace.openLinkText).not.toHaveBeenCalled();
+  });
+
+  it("honors PDF cancellation and owner replacement around public page navigation", async () => {
+    const readHarness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const readController = new AbortController();
+    const readCitation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(readHarness.binaryContent),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 1,
+    });
+    readHarness.vault.readBinary.mockImplementationOnce(async () => {
+      readController.abort("private PDF read reason");
+      return readHarness.binaryContent;
+    });
+    await expect(
+      readHarness
+        .createNavigator()
+        .navigate({ sourcePath: PDF_SOURCE_PATH, citation: readCitation }, readController.signal)
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(readHarness.workspace.openLinkText).not.toHaveBeenCalled();
+
+    const cancelledOpenHarness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const openController = new AbortController();
+    const cancelledOpenCitation = createCitation({
+      ...readCitation.locator,
+      artifactContentHash: createSourceContentHash(cancelledOpenHarness.binaryContent),
+    });
+    cancelledOpenHarness.onOpenLink = () => {
+      openController.abort("private PDF open reason");
+    };
+    await expect(
+      cancelledOpenHarness
+        .createNavigator()
+        .navigate(
+          { sourcePath: PDF_SOURCE_PATH, citation: cancelledOpenCitation },
+          openController.signal
+        )
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(cancelledOpenHarness.workspace.openLinkText).toHaveBeenCalledTimes(1);
+    expect(cancelledOpenHarness.vault.readBinary).toHaveBeenCalledTimes(1);
+
+    const openHarness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const openCitation = createCitation({
+      ...readCitation.locator,
+      artifactContentHash: createSourceContentHash(openHarness.binaryContent),
+    });
+    openHarness.onOpenLink = () => {
+      openHarness.appOwner.workspace = {} as Workspace;
+    };
+    await expect(
+      openHarness
+        .createNavigator()
+        .navigate({ sourcePath: PDF_SOURCE_PATH, citation: openCitation })
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(openHarness.workspace.openLinkText).toHaveBeenCalledTimes(1);
+    expect(openHarness.vault.readBinary).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes malformed PDF reads and public link-open failures", async () => {
+    const malformedHarness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    const citation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(malformedHarness.binaryContent),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 1,
+    });
+    malformedHarness.vault.readBinary.mockResolvedValueOnce({ byteLength: 8 });
+    await expect(
+      malformedHarness.createNavigator().navigate({ sourcePath: PDF_SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(malformedHarness.workspace.openLinkText).not.toHaveBeenCalled();
+
+    const openFailureHarness = new NavigatorHarness("", "", PDF_SOURCE_PATH);
+    openFailureHarness.workspace.openLinkText.mockRejectedValueOnce(
+      new Error(`${PDF_SOURCE_PATH}: private viewer cause`)
+    );
+    await expect(
+      openFailureHarness.createNavigator().navigate({ sourcePath: PDF_SOURCE_PATH, citation })
+    ).resolves.toEqual({ status: "unavailable" });
+    expect(openFailureHarness.vault.readBinary).toHaveBeenCalledTimes(1);
   });
 
   it("returns unavailable for a missing file or replaced App owner", async () => {

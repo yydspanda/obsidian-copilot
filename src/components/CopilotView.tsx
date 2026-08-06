@@ -192,6 +192,7 @@ export default class CopilotView extends ItemView {
             plugin={this.plugin}
             onSaveChat={handleSaveAsNote}
             chatUIState={this.plugin.chatUIState}
+            knowledgeChatCapturePort={this.plugin.getKnowledgeChatCapturePort()}
           />
         </Tooltip.Provider>
       </EventTargetContext.Provider>

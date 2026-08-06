@@ -20,6 +20,12 @@ import {
   type KnowledgeStudioQueryPort,
   type KnowledgeStudioQueryRequest,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
+import type {
+  KnowledgeQueryWritebackSubmissionPort,
+  KnowledgeStudioQueryWritebackPort,
+  KnowledgeStudioQueryWritebackRequest,
+  KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
 import { ObsidianKnowledgeCitationNavigator } from "@/knowledge/query/ObsidianKnowledgeCitationNavigator";
 
 const OPAQUE_RANDOM_BYTE_COUNT = 16;
@@ -34,6 +40,7 @@ export interface KnowledgeStudioScopedQueryAdapterInput {
   readonly bundles: readonly KnowledgeBundleConfig[];
   readonly targetResolver: CompilerTargetResolver;
   readonly modelRouteLease?: KnowledgeProductionModelRouteLease;
+  readonly writeback?: KnowledgeQueryWritebackSubmissionPort;
   readonly assertCurrent: () => void;
   readonly secureRandom?: KnowledgeQuerySecureRandomPort;
 }
@@ -171,7 +178,9 @@ function createBundleCitationNavigationPort(
  * coordinator receives only a Bundle-bound grounded-answer port. This adapter
  * has no fallback-search or write authority.
  */
-export class KnowledgeStudioScopedQueryAdapter implements KnowledgeStudioQueryPort {
+export class KnowledgeStudioScopedQueryAdapter
+  implements KnowledgeStudioQueryPort, KnowledgeStudioQueryWritebackPort
+{
   /** Captures all configured Bundle readers and their exact Obsidian citation edges. */
   constructor(input: KnowledgeStudioScopedQueryAdapterInput) {
     if (
@@ -226,6 +235,7 @@ export class KnowledgeStudioScopedQueryAdapter implements KnowledgeStudioQueryPo
             : {
                 answerModel: input.modelRouteLease.createGroundedAnswerModelPort(bundle.id),
               }),
+          ...(input.writeback === undefined ? {} : { writeback: input.writeback }),
         })
       );
     }
@@ -261,6 +271,17 @@ export class KnowledgeStudioScopedQueryAdapter implements KnowledgeStudioQueryPo
   ): Promise<void> {
     throwIfAborted(signal);
     return this.requireCoordinator(bundleId).openCitation(bundleId, queryId, citationRef, signal);
+  }
+
+  /** Captures only the current opaque grounded answer through its Bundle coordinator. */
+  async saveQueryToWiki(
+    bundleId: string,
+    queryId: string,
+    request: Readonly<KnowledgeStudioQueryWritebackRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioQueryWritebackResult> {
+    throwIfAborted(signal);
+    return this.requireCoordinator(bundleId).saveQueryToWiki(bundleId, queryId, request, signal);
   }
 
   /** Revokes exact or Bundle-wide opaque Query authority for one configured Bundle. */

@@ -1,3 +1,4 @@
+import { createQuoteHash } from "@/knowledge/model/fingerprint";
 import type { ClaimCitation } from "@/knowledge/model/types";
 import type { KnowledgeVerifiedWikiSnapshot } from "@/knowledge/query/KnowledgeAppliedWikiSnapshotReader";
 import type {
@@ -5,6 +6,10 @@ import type {
   KnowledgeGroundedAnswerRequest,
 } from "@/knowledge/query/KnowledgeGroundedAnswer";
 import { KnowledgeScopedLexicalRetriever } from "@/knowledge/query/KnowledgeScopedLexicalRetriever";
+import type {
+  KnowledgeQueryWritebackCapture,
+  KnowledgeQueryWritebackSubmissionPort,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
 
 import {
   type KnowledgeAppliedWikiSnapshotReadPort,
@@ -26,7 +31,7 @@ const CITATION: ClaimCitation = {
     artifactId: "artifact-1",
     artifactContentHash: SOURCE_HASH,
     excerpt: "The exact raw source sentence.",
-    quoteHash: "c".repeat(64),
+    quoteHash: createQuoteHash("The exact raw source sentence."),
     startLine: 4,
     endLine: 4,
     heading: "Evidence",
@@ -112,7 +117,8 @@ function createCoordinator(
   reader: KnowledgeAppliedWikiSnapshotReadPort = createReader(),
   navigation: KnowledgeCitationNavigationPort = createNavigation(),
   idFactory = createIdFactory(),
-  answerModel?: KnowledgeGroundedAnswerModelPort
+  answerModel?: KnowledgeGroundedAnswerModelPort,
+  writeback?: KnowledgeQueryWritebackSubmissionPort
 ): KnowledgeScopedQueryCoordinator {
   return new KnowledgeScopedQueryCoordinator({
     bundleId: "personal",
@@ -121,6 +127,7 @@ function createCoordinator(
     citationNavigation: navigation,
     idFactory,
     ...(answerModel === undefined ? {} : { answerModel }),
+    ...(writeback === undefined ? {} : { writeback }),
   });
 }
 
@@ -146,6 +153,137 @@ function createAnswerWireOutput(
 }
 
 describe("KnowledgeScopedQueryCoordinator", () => {
+  it("re-proves and captures a grounded answer without accepting a path from UI", async () => {
+    const reader = createReader();
+    const navigation = createNavigation();
+    const generate = jest.fn(async (request: Readonly<KnowledgeGroundedAnswerRequest>) =>
+      createAnswerWireOutput(request)
+    );
+    const submit = jest.fn<
+      Promise<{ kind: "registered" }>,
+      [Readonly<KnowledgeQueryWritebackCapture>, AbortSignal]
+    >(async () => ({ kind: "registered" as const }));
+    const coordinator = createCoordinator(
+      reader,
+      navigation,
+      createIdFactory(),
+      { generate },
+      { submit }
+    );
+    const result = await coordinator.query(
+      "personal",
+      { query: "knowledge engine" },
+      new AbortController().signal
+    );
+
+    await expect(
+      coordinator.saveQueryToWiki(
+        "personal",
+        result.queryId,
+        { title: "Grounded engine answer" },
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "registered" });
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    const submitCall = submit.mock.calls[0];
+    if (!submitCall) throw new Error("Expected one writeback submission");
+    const submittedCapture = submitCall[0];
+    expect(submittedCapture.bundleId).toBe("personal");
+    expect(submittedCapture.captureDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(submittedCapture.sourceContent).toContain("# Grounded engine answer");
+    expect(submittedCapture.sourceContent).toContain('### [1] "Sources/Raw.md"');
+    expect(Reflect.ownKeys(submittedCapture)).not.toContain("sourcePath");
+    expect(reader.read).toHaveBeenCalledTimes(4);
+    expect(navigation.verify).toHaveBeenCalledTimes(3);
+  });
+
+  it("blocks writeback for insufficient answers, stale snapshots, and invalid title accessors", async () => {
+    const noEvidenceNavigation: KnowledgeCitationNavigationPort = {
+      verify: jest.fn(async () => false),
+      open: jest.fn(async () => undefined),
+    };
+    const generate = jest.fn(async () => {
+      throw new Error("must not run");
+    });
+    const submit = jest.fn<
+      Promise<{ kind: "registered" }>,
+      [Readonly<KnowledgeQueryWritebackCapture>, AbortSignal]
+    >(async () => ({ kind: "registered" as const }));
+    const insufficient = createCoordinator(
+      createReader(),
+      noEvidenceNavigation,
+      createIdFactory(),
+      { generate },
+      { submit }
+    );
+    const insufficientResult = await insufficient.query(
+      "personal",
+      { query: "knowledge" },
+      new AbortController().signal
+    );
+    await expect(
+      insufficient.saveQueryToWiki(
+        "personal",
+        insufficientResult.queryId,
+        { title: "Not grounded" },
+        new AbortController().signal
+      )
+    ).rejects.toEqual(new KnowledgeScopedQueryError());
+
+    const reader = createReader();
+    const validGenerate = jest.fn(async (request: Readonly<KnowledgeGroundedAnswerRequest>) =>
+      createAnswerWireOutput(request)
+    );
+    const stale = createCoordinator(
+      reader,
+      createNavigation(),
+      createIdFactory(),
+      { generate: validGenerate },
+      { submit }
+    );
+    const staleResult = await stale.query(
+      "personal",
+      { query: "knowledge" },
+      new AbortController().signal
+    );
+    reader.read.mockResolvedValueOnce(createSnapshot(undefined, undefined, 8));
+    await expect(
+      stale.saveQueryToWiki(
+        "personal",
+        staleResult.queryId,
+        { title: "Stale answer" },
+        new AbortController().signal
+      )
+    ).rejects.toEqual(new KnowledgeScopedQueryError());
+
+    const titleRequest = {} as { title: string };
+    Object.defineProperty(titleRequest, "title", {
+      enumerable: true,
+      get: () => "Accessor title",
+    });
+    await expect(
+      stale.saveQueryToWiki(
+        "personal",
+        staleResult.queryId,
+        titleRequest,
+        new AbortController().signal
+      )
+    ).rejects.toEqual(new KnowledgeScopedQueryError());
+
+    const extraFieldRequest = { title: "Hidden extra field" } as Record<PropertyKey, unknown>;
+    extraFieldRequest[Symbol("extra")] = "not accepted";
+    await expect(
+      stale.saveQueryToWiki(
+        "personal",
+        staleResult.queryId,
+        extraFieldRequest as unknown as { title: string },
+        new AbortController().signal
+      )
+    ).rejects.toEqual(new KnowledgeScopedQueryError());
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it("synthesizes only from verified Wiki context plus exact source excerpts", async () => {
     const reader = createReader();
     const navigation = createNavigation();

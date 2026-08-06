@@ -21,7 +21,12 @@ jest.mock("obsidian", () => {
 
 jest.mock("@/knowledge/runtime/ObsidianKnowledgeFileStore", () => ({
   ObsidianKnowledgeFileStore: class {
-    readonly mutationCapabilities = Object.freeze({ create: true, update: true, delete: false });
+    readonly mutationCapabilities = Object.freeze({
+      create: true,
+      update: true,
+      delete: false,
+      requiresExistingParentForCreate: false,
+    });
 
     /** Captures the in-memory Vault edge used by coordinator tests. */
     constructor(

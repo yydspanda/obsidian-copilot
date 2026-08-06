@@ -599,7 +599,7 @@ export class ContextProcessor {
 
         // 3. If we reach here, parse the file (md, canvas, or other supported type in Plus mode)
         const content =
-          note.extension === "md"
+          note.extension === "md" || note.extension === "markdown"
             ? await this.buildMarkdownContextContent(note, vault, fileParserManager, currentChain)
             : await fileParserManager.parseFile(note, vault);
 

@@ -38,11 +38,18 @@ export interface KnowledgeFileMutationCapabilities {
   create: boolean;
   update: boolean;
   delete: boolean;
+  /** Whether create requires its exact parent directory to exist before CAS. */
+  requiresExistingParentForCreate: boolean;
 }
 
 /** Full capabilities used by explicitly complete in-memory and test stores. */
 export const ALL_KNOWLEDGE_FILE_MUTATIONS: Readonly<KnowledgeFileMutationCapabilities> =
-  Object.freeze({ create: true, update: true, delete: true });
+  Object.freeze({
+    create: true,
+    update: true,
+    delete: true,
+    requiresExistingParentForCreate: false,
+  });
 
 /** File I/O boundary used by preflight validation and transaction application. */
 export interface KnowledgeFileStore {
@@ -261,6 +268,20 @@ function compareTargets(left: TransactionTarget, right: TransactionTarget): numb
 }
 
 /**
+ * Derives the canonical Vault-relative parent of one already validated target.
+ *
+ * @param path - Strict descendant target path accepted by ChangeSet validation
+ * @returns Non-empty Vault-relative parent directory path
+ */
+function getTargetParentPath(path: string): string {
+  const separatorIndex = path.lastIndexOf("/");
+  if (separatorIndex < 1) {
+    throw new TypeError("Knowledge target must have a Vault-relative parent");
+  }
+  return path.slice(0, separatorIndex);
+}
+
+/**
  * Checks whether every persisted review-time validation flag is affirmative.
  *
  * @param summary - Validation flags stored with the accepted ChangeSet
@@ -292,7 +313,8 @@ export class ChangeSetValidator {
       mutationCapabilities === null ||
       typeof mutationCapabilities.create !== "boolean" ||
       typeof mutationCapabilities.update !== "boolean" ||
-      typeof mutationCapabilities.delete !== "boolean"
+      typeof mutationCapabilities.delete !== "boolean" ||
+      typeof mutationCapabilities.requiresExistingParentForCreate !== "boolean"
     ) {
       throw new TypeError("mutationCapabilities must declare every file operation");
     }
@@ -376,10 +398,12 @@ export class ChangeSetValidator {
     const { bundle, changeSet } = validated;
 
     const observations = await this.observeTargets(changeSet);
+    const parentObservations = await this.observeCreateParents(changeSet, observations);
     const targets = changeSet.changes
       .map((change, index) => this.createTarget(change, observations[index], index, diagnostics))
       .filter((target): target is TransactionTarget => target !== null)
       .sort(compareTargets);
+    this.validateCreateParents(changeSet, parentObservations, diagnostics);
 
     const citationValid = await this.validateCitations(changeSet, diagnostics);
     const projection = await this.validateProjection(bundle, changeSet, targets);
@@ -456,6 +480,74 @@ export class ChangeSetValidator {
     } catch {
       throw new ChangeSetValidationInfrastructureError("file_observation");
     }
+  }
+
+  /**
+   * Reads create parents only when the concrete CAS adapter requires them.
+   *
+   * Existing create conflicts do not need a parent read because they already
+   * fail deterministic target validation. Returned slots retain ChangeSet order.
+   *
+   * @param changeSet - Strictly parsed ChangeSet
+   * @param targetObservations - Exact observations in ChangeSet order
+   * @returns Optional parent observations aligned with ChangeSet changes
+   */
+  private async observeCreateParents(
+    changeSet: KnowledgeChangeSet,
+    targetObservations: readonly KnowledgeFileObservation[]
+  ): Promise<Array<KnowledgeFileObservation | undefined>> {
+    if (!this.mutationCapabilities.requiresExistingParentForCreate) {
+      return changeSet.changes.map(() => undefined);
+    }
+    try {
+      return await Promise.all(
+        changeSet.changes.map((change, index) =>
+          change.operation === "create" && targetObservations[index]?.kind === "missing"
+            ? this.fileStore.observe(getTargetParentPath(change.path))
+            : Promise.resolve(undefined)
+        )
+      );
+    } catch {
+      throw new ChangeSetValidationInfrastructureError("file_observation");
+    }
+  }
+
+  /**
+   * Rejects creates whose required parent is missing or is a regular file.
+   *
+   * This keeps a known adapter limitation out of the durable transaction:
+   * parent directory creation is not journaled and must never occur implicitly.
+   *
+   * @param changeSet - Strictly parsed ChangeSet
+   * @param observations - Optional parent observations in ChangeSet order
+   * @param diagnostics - Mutable deterministic validation diagnostics
+   */
+  private validateCreateParents(
+    changeSet: KnowledgeChangeSet,
+    observations: readonly (KnowledgeFileObservation | undefined)[],
+    diagnostics: KnowledgeDiagnostic[]
+  ): void {
+    changeSet.changes.forEach((change, index) => {
+      if (change.operation !== "create") return;
+      const observation = observations[index];
+      if (!observation || observation.kind === "directory") return;
+      const field = `changeSet.changes[${index}].path`;
+      if (observation.kind === "missing") {
+        addError(
+          diagnostics,
+          "changeset_create_parent_missing",
+          field,
+          "Create target requires an existing parent directory"
+        );
+        return;
+      }
+      addError(
+        diagnostics,
+        "changeset_create_parent_not_directory",
+        field,
+        "Create target parent must be a directory"
+      );
+    });
   }
 
   /**

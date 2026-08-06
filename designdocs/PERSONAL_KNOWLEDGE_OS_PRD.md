@@ -46,7 +46,7 @@ Primary platform: Obsidian Desktop on Windows
 ### 2.4 当前证据
 
 - 用户明确希望把当前项目长期作为自己的助手、笔记和知识引擎，优先把个人体验做到最好。
-- 当前分支已经具备成熟 Chat、上下文、Search v3、文件解析，以及 Source Manifest、Queue/Transaction/Compiler/Review Core、strict runtime state foundation、no-journal classify/continue/abandon Core、带 revision 单调性、accepted 一一对应和 Vault-global transaction 观察的单-envelope startup gate Core、同 envelope 原子 conditional release Core、create/update 文件 adapter 代码和最小 Windows Knowledge Studio shell。Windows 启动仍只初始化私有 runtime state；Gate/release 缺少生产 Bundle 配置、source observation payload hand-off、完整 recovery validator/file adapter composition、插件级 startup barrier、稳定 Studio port 与恢复 UI，因此真实 workflow、Windows 实机验收、safe delete、Chat 入口和查询闭环仍未完成。
+- 当前分支已把 strict Bundle discovery、source observation、durable Queue、DeepSeek 两阶段 Compiler、Review、显式 create/update Apply、限定 Recovery、grounded Query 与 citation jump 组成 production generation lifecycle。G.2z-d/H.1/H.2 已通过各自的 bounded Windows 交互验收。H.3 已接通 Vault 文本的 Chat intent 分流、raw-byte-verified PDF page navigation，以及 reviewed Save-to-Wiki 生产写回：Save 重证当前答案与 citation，创建 content-addressed managed Markdown capture 并注册 exact `managed_copy` Manifest origin，随后必须经过真实 watcher → Queue → Compiler `query_writeback` → Review → transaction → Apply，不能直接写 Wiki。Save capture-through-Apply/Recovery 已通过真实 DeepSeek Windows 端到端验收；要求既有父目录的 Windows create 也会在 durable Review acceptance 前 fail closed，而不会隐式创建未 journal 的目录。Chat 两种 intent 也已通过选择前零副作用、临时 context、durable Manifest/Queue/Activity 与重复注册幂等的 Windows 验收；只剩 PDF exact-page Windows 交互待验收。safe delete、PDF/binary ingestion parser、PDF/Windows Explorer capture 与自动审核/自动 Apply 仍未完成或保持 fail closed。
 - 对 `llm_wiki`、`llm-wiki-compiler`、`claude-obsidian`、OKF 和 Graphiti 的代码审计显示，优秀项目正在共同收敛到两阶段摄入、增量 manifest、持久队列、来源追踪、渐进检索、审核和维护闭环。
 
 ## 3. Target User and Jobs-to-be-Done
@@ -288,13 +288,14 @@ one source
 - 先服务一个长期个人用户，不为商业化削弱体验，也不增加商业系统复杂度。
 - 以端到端体验切片驱动架构，而不是先完成所有底层模块再做 UI。
 - Markdown/Raw Sources 是 canonical data；图数据库和索引均为可选投影。
+- PDF citation 不只信任页码：locator 同时绑定 raw artifact SHA-256、positive safe-integer page、原文 excerpt 与 quote hash；页面跳转前后必须复证 exact `.pdf` bytes。导航使用 Obsidian 的 public `path#page=N` 契约，不依赖 private PDF view/DOM，也不等同于 PDF ingestion parser。
 - 开源项目可以 copy、port 或 reference，但每项都进入复用台账。
 
 ### Open Questions to Resolve with Real Usage
 
 - 默认 Knowledge Bundle 应怎样初始化，才能既零配置又不硬编码用户目录？
 - 哪些 generated Wiki 目录在用户明确授权后可以跳过逐次 diff？
-- PDF citation 在不同解析器间应以页码、文本 quote hash 还是两者共同定位？
+- 不同 PDF parser 的文本排序、空白归一和 OCR 结果如何进入 parser fingerprint，并在升级后触发可解释的重新摄入？
 - Knowledge Studio 首页最有价值的是最近活动、待审核、主题入口还是当前项目？
 - 大批量 PDF、目录监听和未来 Graphiti 是否需要可选 Windows 本地 helper，还是始终保持单插件进程？
 

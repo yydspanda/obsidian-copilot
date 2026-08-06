@@ -1146,12 +1146,20 @@ export class ObsidianVaultSourceWatcher {
       try {
         const artifact = await this.artifactReader.read(work.capturedPath);
         if (!this.isAuthorityCurrent(work)) return undefined;
-        return verifySourceArtifact(artifact, work.capturedPath);
+        const verified = verifySourceArtifact(artifact, work.capturedPath);
+        if (
+          "expectedSourceContentHash" in work.source &&
+          verified.sourceContentHash !== work.source.expectedSourceContentHash
+        ) {
+          throw new SourceArtifactHashMismatchError();
+        }
+        return verified;
       } catch (error) {
         lastError = error;
         if (
           !this.isAuthorityCurrent(work) ||
           error instanceof SourceArtifactAdapterPayloadError ||
+          error instanceof SourceArtifactHashMismatchError ||
           error instanceof VaultSourceObservationContractError
         ) {
           break;

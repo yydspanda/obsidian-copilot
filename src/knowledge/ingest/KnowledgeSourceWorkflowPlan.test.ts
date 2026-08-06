@@ -1,3 +1,4 @@
+import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
   KnowledgeExecutionOwner,
@@ -667,6 +668,32 @@ describe("KnowledgeSourceExecutionPlan.prepare", () => {
       sourcePath: SOURCE_PATH,
       sourceContentHash: job.sourceContentHash,
     });
+  });
+
+  it("derives query writeback from the exact managed capture and rejects edited bytes", async () => {
+    const sourceBytes = new TextEncoder().encode("# Captured answer\n");
+    const sourceContentHash = createSourceContentHash(sourceBytes);
+    const queryManifest = createManifest();
+    queryManifest.entries[0] = {
+      ...queryManifest.entries[0],
+      custody: "managed_copy",
+      extensions: createKnowledgeSourceOriginExtensions("query_writeback", {
+        captureDigest: "a".repeat(64),
+        captureContentHash: sourceContentHash,
+      }),
+    };
+    const harness = createHarness({ manifest: queryManifest, sourceBytes });
+    const { plan, job } = await loadPlanAndJob(harness);
+
+    const prepared = await plan.prepare(job, new AbortController().signal);
+    expect(prepared.operation).toBe("query_writeback");
+
+    const editedJob = { ...job, sourceContentHash: "b".repeat(64) };
+    await expectWorkflowError(
+      () => plan.prepare(editedJob, new AbortController().signal),
+      "manifest_stale",
+      "manifest"
+    );
   });
 
   it("detects parser mutation of the retained exact bytes", async () => {

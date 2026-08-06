@@ -41,8 +41,10 @@ import {
   type KnowledgeProductionModelRouteLeaseOwner,
 } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
+import { createQuoteHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeGroundedAnswerRequest } from "@/knowledge/query/KnowledgeGroundedAnswer";
 import { bindKnowledgeGroundedAnswerModelRoute } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
+import { assertKnowledgeQueryWritebackCapture } from "@/knowledge/query/KnowledgeQueryWritebackCapture";
 import type { KnowledgeRuntimeAppliedProvenanceSnapshot } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import {
   createKnowledgeQueryIdFactory,
@@ -142,7 +144,7 @@ function createAppliedProjection(
                   artifactId: "artifact-1",
                   artifactContentHash: "d".repeat(64),
                   excerpt: "Grounded evidence",
-                  quoteHash: "e".repeat(64),
+                  quoteHash: createQuoteHash("Grounded evidence"),
                   startLine: 1,
                   endLine: 1,
                 },
@@ -313,6 +315,66 @@ describe("KnowledgeStudioScopedQueryAdapter", () => {
       ]);
       expect(mockVerify).toHaveBeenCalledTimes(2);
       expect(readAppliedProvenance).toHaveBeenCalledTimes(4);
+    } finally {
+      adapter.close();
+      owner.close();
+    }
+  });
+
+  it("routes current grounded answers only through the configured writeback submission", async () => {
+    const answerInvoke = jest.fn(async (request: Readonly<KnowledgeGroundedAnswerRequest>) =>
+      JSON.stringify({
+        version: 1,
+        contextDigest: request.contextDigest,
+        status: "answered",
+        claims: [
+          {
+            claimId: "claim-grounded",
+            kind: "source_fact",
+            text: "Grounded evidence lives here.",
+            evidenceIds: ["evidence-1"],
+          },
+        ],
+        insufficientEvidence: [],
+      })
+    );
+    const owner = createAnswerRouteOwner("personal", answerInvoke);
+    const submit = jest.fn(async (capture: unknown) => {
+      assertKnowledgeQueryWritebackCapture(capture);
+      return Object.freeze({ kind: "registered" as const });
+    });
+    const adapter = new KnowledgeStudioScopedQueryAdapter({
+      app: createApp(),
+      runtime: { readAppliedProvenance: jest.fn(async () => createAppliedProjection()) },
+      bundles: [createBundle("personal")],
+      targetResolver: createTargetResolver(),
+      modelRouteLease: owner.getLease(),
+      writeback: { submit },
+      assertCurrent: jest.fn(),
+      secureRandom: createSecureRandom(),
+    });
+
+    try {
+      const result = await adapter.query(
+        "personal",
+        { query: "grounded" },
+        new AbortController().signal
+      );
+      await expect(
+        adapter.saveQueryToWiki(
+          "personal",
+          result.queryId,
+          { title: "Grounded finding" },
+          new AbortController().signal
+        )
+      ).resolves.toEqual({ kind: "registered" });
+      expect(submit).toHaveBeenCalledTimes(1);
+      const submitCall = submit.mock.calls[0];
+      if (!submitCall) throw new Error("Expected one writeback submission");
+      const submittedCapture = submitCall[0];
+      assertKnowledgeQueryWritebackCapture(submittedCapture);
+      expect(submittedCapture.bundleId).toBe("personal");
+      expect(submittedCapture.sourceContent).toContain("# Grounded finding");
     } finally {
       adapter.close();
       owner.close();

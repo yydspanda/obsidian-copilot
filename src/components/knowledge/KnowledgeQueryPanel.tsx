@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ExternalLink, FileSearch, Loader2, Search, Sparkles } from "lucide-react";
+import { BookPlus, ExternalLink, FileSearch, Loader2, Search, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,8 +13,10 @@ import type { KnowledgeStudioQueryState } from "@/knowledge/ui/KnowledgeStudioCo
 /** Props for the read-only applied-Wiki Query and grounded-answer surface. */
 export interface KnowledgeQueryPanelProps {
   state: Readonly<KnowledgeStudioQueryState>;
+  writebackAvailable: boolean;
   onQuery(this: void, query: string): void | Promise<void>;
   onOpenCitation(this: void, citationRef: string): void | Promise<void>;
+  onSaveToWiki(this: void, title: string): void | Promise<void>;
 }
 
 /** Produces a compact human-readable citation location. */
@@ -43,17 +45,12 @@ function CitationButton({
   busy: boolean;
   onOpen(this: void): void;
 }): React.ReactElement {
-  const pdfNavigationPending = citation.location.kind === "pdf_page";
   return (
     <Button
       className="tw-h-auto tw-max-w-full tw-gap-1 tw-whitespace-normal tw-px-2 tw-py-1 tw-text-left tw-text-xs"
-      disabled={busy || pdfNavigationPending}
+      disabled={busy}
       size="sm"
-      title={
-        pdfNavigationPending
-          ? "Exact PDF page navigation is not enabled until its Windows Obsidian contract is verified."
-          : `Open ${citation.sourcePath} at ${formatLocation(citation.location)}`
-      }
+      title={`Open ${citation.sourcePath} at ${formatLocation(citation.location)}`}
       type="button"
       variant="secondary"
       onClick={onOpen}
@@ -66,16 +63,19 @@ function CitationButton({
 }
 
 /**
- * Renders a strictly validated model answer plus the exact evidence retrieval.
- * Save to Wiki remains a later reviewed capability and no Query control writes.
+ * Renders a strictly validated answer, exact evidence, and optional reviewed capture.
  */
 export function KnowledgeQueryPanel({
   state,
+  writebackAvailable,
   onQuery,
   onOpenCitation,
+  onSaveToWiki,
 }: KnowledgeQueryPanelProps): React.ReactElement {
   const [query, setQuery] = React.useState("");
+  const [writebackTitle, setWritebackTitle] = React.useState("");
   const loading = state.status === "loading";
+  const savingToWiki = state.savingToWiki === true;
   const result = state.result;
 
   /** Submits one non-empty bounded query through the controller. */
@@ -86,6 +86,14 @@ export function KnowledgeQueryPanel({
     void onQuery(trimmed);
   }
 
+  /** Sends one explicit title with the still-current opaque grounded answer. */
+  function submitWriteback(event: React.FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const title = writebackTitle.trim();
+    if (!title || savingToWiki) return;
+    void onSaveToWiki(title);
+  }
+
   return (
     <div className="tw-space-y-4">
       <section className="tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-4">
@@ -94,8 +102,8 @@ export function KnowledgeQueryPanel({
             <h2 className="tw-m-0 tw-text-sm tw-font-semibold">Query applied knowledge</h2>
             <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
               Searches only accepted, applied, SHA-256 verified Wiki pages. DeepSeek may synthesize
-              an answer only from source excerpts verified for this query; Save to Wiki is not
-              connected yet.
+              an answer only from source excerpts verified for this query. Eligible answers can
+              enter the normal Review/Apply pipeline before any Wiki file changes.
             </p>
           </div>
           <Badge variant="outline">
@@ -195,6 +203,39 @@ export function KnowledgeQueryPanel({
                 ))}
               </ul>
             </div>
+          ) : null}
+
+          {writebackAvailable &&
+          result.answer.claims.length > 0 &&
+          (result.answer.status === "answered" || result.answer.status === "partial") ? (
+            <form
+              className="tw-mt-4 tw-rounded-lg tw-border tw-border-solid tw-border-border tw-p-3"
+              onSubmit={submitWriteback}
+            >
+              <p className="tw-m-0 tw-text-xs tw-font-semibold">Save through Review</p>
+              <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
+                Creates an immutable managed source first. Background compilation then proposes Wiki
+                changes for your approval.
+              </p>
+              <div className="tw-mt-3 tw-flex tw-gap-2">
+                <Input
+                  aria-label="Wiki writeback title"
+                  disabled={savingToWiki}
+                  maxLength={256}
+                  placeholder="Title for this knowledge result…"
+                  value={writebackTitle}
+                  onChange={(event) => setWritebackTitle(event.target.value)}
+                />
+                <Button disabled={savingToWiki || writebackTitle.trim().length === 0} type="submit">
+                  {savingToWiki ? (
+                    <Loader2 aria-hidden="true" className="tw-size-4 tw-animate-spin" />
+                  ) : (
+                    <BookPlus aria-hidden="true" className="tw-size-4" />
+                  )}
+                  Save to Wiki
+                </Button>
+              </div>
+            </form>
           ) : null}
         </section>
       ) : null}

@@ -17,6 +17,7 @@ import { logInfo, logError } from "@/logger";
 import type { WebTabContext } from "@/types/message";
 
 import { ChatControls, reloadCurrentProject } from "@/components/chat-components/ChatControls";
+import { ChatAttachmentIntentCard } from "@/components/chat-components/ChatAttachmentIntentCard";
 import ChatInput from "@/components/chat-components/ChatInput";
 import ChatMessages from "@/components/chat-components/ChatMessages";
 import { NewVersionBanner } from "@/components/chat-components/NewVersionBanner";
@@ -35,6 +36,10 @@ import { AppContext, EventTargetContext } from "@/context";
 import { ChatInputProvider, useChatInput } from "@/context/ChatInputContext";
 import { useChatManager } from "@/hooks/useChatManager";
 import { useChatFileDrop } from "@/hooks/useChatFileDrop";
+import {
+  KnowledgeChatCaptureError,
+  type KnowledgeChatCapturePort,
+} from "@/knowledge/capture/KnowledgeChatCapturePort";
 import { getAIResponse } from "@/langchainStream";
 import ChainManager from "@/LLMProviders/chainManager";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
@@ -67,6 +72,7 @@ interface ChatProps {
   plugin: CopilotPlugin;
   mode?: ChatMode;
   chatUIState: ChatUIState;
+  knowledgeChatCapturePort: KnowledgeChatCapturePort;
 }
 
 // Internal component that has access to the ChatInput context
@@ -77,6 +83,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   fileParserManager,
   plugin,
   chatUIState,
+  knowledgeChatCapturePort,
   chatInput,
 }) => {
   const settings = useSettingsValue();
@@ -122,6 +129,8 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     settings.autoAddActiveContentToContext === true && currentChain !== ChainType.PROJECT_CHAIN
   );
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
+  const [pendingKnowledgeFiles, setPendingKnowledgeFiles] = useState<TFile[]>([]);
+  const [addingKnowledgePath, setAddingKnowledgePath] = useState<string>();
   const [showChatUI, setShowChatUI] = useState(false);
   const [chatHistoryItems, setChatHistoryItems] = useState<ChatHistoryItem[]>([]);
   // null: keep default behavior; true: show; false: hide
@@ -258,6 +267,94 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     setSelectedImages((prev) => appendUniqueFiles(prev, files));
   }, []);
 
+  /** Adds newly dropped candidates without choosing a durable or temporary action. */
+  const handleKnowledgeFileDrop = useCallback((files: TFile[]) => {
+    setPendingKnowledgeFiles((previous) => {
+      const seen = new Set(previous.map((file) => file.path));
+      const additions = files.filter((file) => {
+        if (seen.has(file.path)) return false;
+        seen.add(file.path);
+        return true;
+      });
+      return additions.length === 0 ? previous : [...previous, ...additions];
+    });
+  }, []);
+
+  /** Removes one pending intent choice by exact Vault path. */
+  const removePendingKnowledgeFile = useCallback((sourcePath: string) => {
+    setPendingKnowledgeFiles((files) => files.filter((file) => file.path !== sourcePath));
+  }, []);
+
+  /** Chooses ephemeral Chat context without invoking any Knowledge capability. */
+  const handleUseDroppedFileInChat = useCallback(
+    (file: TFile) => {
+      setContextNotes((notes) =>
+        notes.some((note) => note.path === file.path) ? notes : [...notes, file]
+      );
+      removePendingKnowledgeFile(file.path);
+    },
+    [removePendingKnowledgeFile]
+  );
+
+  /** Maps a sanitized capture category to one actionable user notice. */
+  const getKnowledgeCaptureNotice = useCallback((error: unknown): string => {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return "Knowledge configuration changed. Please try adding the file again.";
+    }
+    if (!(error instanceof KnowledgeChatCaptureError)) {
+      return "The file could not be registered in Knowledge.";
+    }
+    switch (error.code) {
+      case "unavailable":
+        return "Knowledge is not ready yet. Open Knowledge Studio and check its startup status.";
+      case "ambiguous_bundle":
+        return "Add to Knowledge requires exactly one configured Knowledge Bundle.";
+      case "ambiguous_source_root":
+        return "Add to Knowledge requires exactly one source folder in the Bundle.";
+      case "unsupported_source_type":
+        return "Add to Knowledge currently supports Vault Markdown and plain-text files only.";
+      case "source_outside_root":
+        return "Move this file into the configured Knowledge source folder, then try again.";
+      case "source_missing":
+        return "The Vault file no longer exists. Drop it into Chat again.";
+      case "source_conflict":
+        return "This file conflicts with an existing Knowledge source identity.";
+      case "registration_failed":
+        return "Knowledge could not durably register this file. Please try again.";
+    }
+  }, []);
+
+  /** Chooses durable Knowledge registration without adding the file to Chat context. */
+  const handleAddDroppedFileToKnowledge = useCallback(
+    async (file: TFile) => {
+      if (addingKnowledgePath !== undefined) return;
+      const controller = new AbortController();
+      setAddingKnowledgePath(file.path);
+      try {
+        const receipt = await knowledgeChatCapturePort.addVaultSource(
+          { sourcePath: file.path },
+          controller.signal
+        );
+        removePendingKnowledgeFile(file.path);
+        new Notice(
+          receipt.status === "registered"
+            ? "Added to Knowledge. Background ingest is starting; progress will appear in Activity."
+            : "This file is already registered in Knowledge."
+        );
+      } catch (error) {
+        new Notice(getKnowledgeCaptureNotice(error));
+      } finally {
+        setAddingKnowledgePath((path) => (path === file.path ? undefined : path));
+      }
+    },
+    [
+      addingKnowledgePath,
+      getKnowledgeCaptureNotice,
+      knowledgeChatCapturePort,
+      removePendingKnowledgeFile,
+    ]
+  );
+
   // Drag-and-drop hook for file handling
   const { isDragActive } = useChatFileDrop({
     app,
@@ -265,6 +362,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
     setContextNotes,
     selectedImages,
     onAddImage: handleAddImage,
+    onKnowledgeFileDrop: handleKnowledgeFileDrop,
     containerRef: chatContainerRef,
   });
 
@@ -897,6 +995,13 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
               onLoadChat={handleLoadChat}
               onOpenSourceFile={handleOpenSourceFile}
               latestTokenCount={latestTokenCount}
+            />
+            <ChatAttachmentIntentCard
+              files={pendingKnowledgeFiles}
+              addingPath={addingKnowledgePath}
+              onUseInChat={handleUseDroppedFileInChat}
+              onAddToKnowledge={(file) => void handleAddDroppedFileToKnowledge(file)}
+              onDismiss={(file) => removePendingKnowledgeFile(file.path)}
             />
             <ChatInput
               inputMessage={inputMessage}

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
 import {
   createManifestCommitIntentDigest,
+  getManifestCommitIntentOperation,
   manifestCommitIntentSchema,
   validateManifestCommitIntent,
   type ManifestCommitIntent,
@@ -639,12 +640,14 @@ export function validateChangeSetTransactionJournal(value: unknown): KnowledgeVa
       "Manifest intent source content, pipeline, and input revision must match the owning job claim"
     );
   }
-  if (journal.changeSet.operation !== "ingest") {
+  if (
+    journal.changeSet.operation !== getManifestCommitIntentOperation(journal.manifestCommitIntent)
+  ) {
     addError(
       diagnostics,
-      "transaction_manifest_intent_operation_unsupported",
+      "transaction_manifest_intent_operation_mismatch",
       "changeSet.operation",
-      "Source-compile Manifest commits currently support only ingest ChangeSets"
+      "ChangeSet operation must match the exact source-compile Manifest intent"
     );
   }
 

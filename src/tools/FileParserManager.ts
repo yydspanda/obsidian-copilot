@@ -77,7 +77,7 @@ class SelfHostPdfParser {
 }
 
 class MarkdownParser implements FileParser {
-  supportedExtensions = ["md", "base"];
+  supportedExtensions = ["md", "markdown", "txt", "base"];
 
   async parseFile(file: TFile, vault: Vault): Promise<string> {
     return await vault.read(file);
@@ -486,8 +486,10 @@ export class FileParserManager {
   public static getProjectSupportedExtensions(): Set<string> {
     const extensions = new Set<string>();
 
-    // MarkdownParser: ["md"]
+    // MarkdownParser: local UTF-8 text formats
     extensions.add("md");
+    extensions.add("markdown");
+    extensions.add("txt");
 
     // Docs4LLMParser: all document/image/spreadsheet/audio types (read from shared constant)
     for (const ext of DOCS4LLM_SUPPORTED_EXTENSIONS) {
@@ -506,11 +508,11 @@ export class FileParserManager {
     isProjectMode: boolean = false,
     project: ProjectConfig | null = null
   ) {
-    // Register parsers
-    this.registerParser(new MarkdownParser());
-
     // In project mode, use Docs4LLMParser for all supported files including PDFs
     this.registerParser(new Docs4LLMParser(brevilabsClient, vault, project));
+
+    // Keep direct text reads local, overriding broader document-conversion routes.
+    this.registerParser(new MarkdownParser());
 
     // Only register PDFParser when not in project mode
     if (!isProjectMode) {

@@ -1,5 +1,6 @@
 import type { App, EventRef, TAbstractFile } from "obsidian";
 
+import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import { ObsidianKnowledgeCompilerTargetResolver } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
 import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledgeFileStore";
 import { KnowledgeProductionCandidateValidator } from "@/knowledge/compiler/KnowledgeProductionCandidateValidator";
@@ -24,6 +25,7 @@ import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHa
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { isPathWithinRoot } from "@/knowledge/paths/vaultPath";
 import { KnowledgeStudioScopedQueryAdapter } from "@/knowledge/query/KnowledgeStudioScopedQueryAdapter";
+import { KnowledgeProductionQueryWritebackCoordinator } from "@/knowledge/query/KnowledgeProductionQueryWritebackCoordinator";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
 import {
   KnowledgeRuntimeInputObservationBinder,
@@ -687,6 +689,7 @@ export class KnowledgeProductionObservationComposer {
       this.assertHealthy();
     };
     const targetResolver = new ObsidianKnowledgeCompilerTargetResolver(composition.app);
+    const fileStore = new ObsidianKnowledgeFileStore(composition.app.vault);
     let reviewApply: KnowledgeStudioReviewedApplyPort | undefined;
     if (onApplyGenerationRefreshRequired) {
       const reviewedApplyCoordinator = new KnowledgeProductionReviewedApplyCoordinator({
@@ -698,7 +701,7 @@ export class KnowledgeProductionObservationComposer {
         plan: state.plan,
         bundles: composition.owners.map(({ config }) => config),
         targetResolver,
-        fileStore: new ObsidianKnowledgeFileStore(composition.app.vault),
+        fileStore,
         assertCurrent,
         onGenerationRefreshRequired: onApplyGenerationRefreshRequired,
       });
@@ -715,12 +718,26 @@ export class KnowledgeProductionObservationComposer {
       ...(retainCommandDrain === undefined ? {} : { retainDrain: retainCommandDrain }),
       notifyReviewWorkAvailable: () => composition.eventSink.emit(),
     });
+    const writeback = onApplyGenerationRefreshRequired
+      ? new KnowledgeProductionQueryWritebackCoordinator({
+          owners: composition.owners,
+          fileStore,
+          registration: new KnowledgeSourceRegistrationCore(
+            new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(composition.runtime)),
+            { assertCurrent }
+          ),
+          assertCurrent,
+          onGenerationRefreshRequired: onApplyGenerationRefreshRequired,
+          ...(retainCommandDrain === undefined ? {} : { retainDrain: retainCommandDrain }),
+        })
+      : undefined;
     const query = new KnowledgeStudioScopedQueryAdapter({
       app: composition.app,
       runtime,
       bundles: composition.owners.map(({ config }) => config),
       targetResolver,
       modelRouteLease,
+      ...(writeback === undefined ? {} : { writeback }),
       assertCurrent,
     });
     this.subscribeClose(() => query.close());

@@ -68,9 +68,8 @@ function createManifestCommitPlan(
   proposal: KnowledgeChangeSet,
   jobClaim = createJobClaim()
 ): ManifestCommitPlan {
-  return {
+  const common = {
     version: 1,
-    kind: "source_compile",
     bundleId: proposal.bundleId,
     sourceId: jobClaim.sourceId,
     sourceContentHash: jobClaim.sourceContentHash,
@@ -93,6 +92,14 @@ function createManifestCommitPlan(
       wasTrackedByPrimarySource: change.operation !== "create",
     })),
   };
+  return proposal.operation === "query_writeback"
+    ? {
+        ...common,
+        version: 1,
+        kind: "query_writeback_source_compile",
+        sourceOriginDigest: "d".repeat(64),
+      }
+    : { ...common, version: 1, kind: "source_compile" };
 }
 
 /** Creates one pending record whose proposal digest is exact. */
@@ -125,6 +132,34 @@ function diagnosticCodes(snapshot: ChangeSetReviewSnapshot): string[] {
 }
 
 describe("ReviewStorage contracts", () => {
+  it("accepts query writeback only with its additive source-backed Manifest plan", () => {
+    const queryProposal = {
+      ...createProposal("changeset-query"),
+      operation: "query_writeback" as const,
+    };
+    const queryRecord = createPendingRecord(queryProposal);
+
+    expect(validateChangeSetReviewSnapshot(createSnapshot([queryRecord]))).toEqual({
+      valid: true,
+      diagnostics: [],
+    });
+    if (queryRecord.manifestCommitPlan.kind !== "query_writeback_source_compile") {
+      throw new Error("Expected a query-writeback plan");
+    }
+    const { sourceOriginDigest: _sourceOriginDigest, ...legacyFields } =
+      queryRecord.manifestCommitPlan;
+    expect(_sourceOriginDigest).toMatch(/^[a-f0-9]{64}$/);
+    const ingestPlan: ManifestCommitPlan = { ...legacyFields, kind: "source_compile" };
+    const forgedIngestPlan = {
+      ...queryRecord,
+      manifestCommitPlan: ingestPlan,
+      manifestCommitPlanDigest: createManifestCommitPlanDigest(ingestPlan),
+    };
+    expect(diagnosticCodes(createSnapshot([forgedIngestPlan]))).toContain(
+      "review_manifest_plan_operation_mismatch"
+    );
+  });
+
   it("strictly parses a valid pending snapshot and clones its input", () => {
     const snapshot = createSnapshot([createPendingRecord()]);
     const parsed = parseChangeSetReviewSnapshot(snapshot);

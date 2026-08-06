@@ -375,6 +375,15 @@ export class KnowledgeProductionReviewedApplyCoordinator {
         return { kind: "rejected" };
       }
 
+      // Revalidate target bytes, citations, projection, and adapter-specific
+      // create prerequisites before the Review becomes durably accepted.
+      await new ChangeSetValidator(
+        state.fileStore,
+        new KnowledgeProductionSourceArtifactResolver(reviewPreparation.artifacts),
+        new KnowledgeProductionProjectionValidator()
+      ).prepare(decision.changeSet, bundle);
+      assertInvocation(state, signal);
+
       const accepted = await acceptWithConfirmation(
         state,
         bundleId,

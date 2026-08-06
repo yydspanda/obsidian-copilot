@@ -12,6 +12,11 @@ import type {
   KnowledgeStudioQueryPort,
   KnowledgeStudioQueryRequest,
 } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
+import type {
+  KnowledgeStudioQueryWritebackPort,
+  KnowledgeStudioQueryWritebackRequest,
+  KnowledgeStudioQueryWritebackResult,
+} from "@/knowledge/query/KnowledgeQueryWritebackCapture";
 
 /** Promise whose settlement is controlled by one test. */
 interface Deferred<T> {
@@ -50,6 +55,13 @@ type RecordedQueryCall =
       queryId: string;
       citationRef: string;
       signal: AbortSignal;
+    }
+  | {
+      kind: "writeback";
+      bundleId: string;
+      queryId: string;
+      request: Readonly<KnowledgeStudioQueryWritebackRequest>;
+      signal: AbortSignal;
     };
 
 /** Optional behavior injected into the recording Studio port. */
@@ -64,6 +76,9 @@ interface RecordingPortHandlers {
     call: Extract<RecordedQueryCall, { kind: "query" }>
   ) => Promise<KnowledgeGroundedRetrievalResult>;
   citation?: (call: Extract<RecordedQueryCall, { kind: "citation" }>) => Promise<void>;
+  writeback?: (
+    call: Extract<RecordedQueryCall, { kind: "writeback" }>
+  ) => Promise<KnowledgeStudioQueryWritebackResult>;
 }
 
 /** Creates a manually controlled promise. */
@@ -131,7 +146,11 @@ function createQueryResult(queryId = "query-1"): KnowledgeGroundedRetrievalResul
 
 /** Read/command delegate that records operations, signals, and hint bindings. */
 class RecordingKnowledgeStudioPort
-  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeStudioQueryPort
+  implements
+    KnowledgeStudioReadPort,
+    KnowledgeStudioCommandPort,
+    KnowledgeStudioQueryPort,
+    KnowledgeStudioQueryWritebackPort
 {
   readonly loadCalls: { bundleId: string; signal: AbortSignal }[] = [];
   readonly commandCalls: RecordedCommandCall[] = [];
@@ -255,6 +274,18 @@ class RecordingKnowledgeStudioPort
     const call = { kind: "citation" as const, bundleId, queryId, citationRef, signal };
     this.queryCalls.push(call);
     return this.handlers.citation?.(call) ?? Promise.resolve();
+  }
+
+  /** Records and executes one reviewed current-answer registration. */
+  async saveQueryToWiki(
+    bundleId: string,
+    queryId: string,
+    request: Readonly<KnowledgeStudioQueryWritebackRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeStudioQueryWritebackResult> {
+    const call = { kind: "writeback" as const, bundleId, queryId, request, signal };
+    this.queryCalls.push(call);
+    return this.handlers.writeback?.(call) ?? Promise.resolve({ kind: "registered" });
   }
 
   /** Records synchronous exact or Bundle-wide Query revocation. */
@@ -402,6 +433,55 @@ describe("DelegatingKnowledgeStudioPort", () => {
     await flushAsync();
   });
 
+  it("routes reviewed writeback through one generation and rejects its late replaced result", async () => {
+    const oldWriteback = createDeferred<KnowledgeStudioQueryWritebackResult>();
+    const oldDelegate = new RecordingKnowledgeStudioPort("old", {
+      writeback: async () => oldWriteback.promise,
+    });
+    const replacement = new RecordingKnowledgeStudioPort("new");
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(oldDelegate);
+
+    const stale = port.saveQueryToWiki(
+      "personal",
+      "query-old",
+      { title: "Old answer" },
+      new AbortController().signal
+    );
+    await flushAsync();
+    port.replaceDelegate(replacement);
+
+    expect(oldDelegate.queryCalls).toHaveLength(1);
+    expect(oldDelegate.queryCalls[0]).toMatchObject({
+      kind: "writeback",
+      bundleId: "personal",
+      queryId: "query-old",
+      request: { title: "Old answer" },
+    });
+    expect(oldDelegate.queryCalls[0].signal.aborted).toBe(true);
+    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
+
+    await expect(
+      port.saveQueryToWiki(
+        "personal",
+        "query-current",
+        { title: "Current answer" },
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "registered" });
+    expect(replacement.queryCalls).toMatchObject([
+      {
+        kind: "writeback",
+        bundleId: "personal",
+        queryId: "query-current",
+        request: { title: "Current answer" },
+      },
+    ]);
+
+    oldWriteback.resolve({ kind: "registered" });
+    await flushAsync();
+  });
+
   it("routes synchronous Query revocation only to the current delegate generation", () => {
     const port = new DelegatingKnowledgeStudioPort();
     const oldDelegate = new RecordingKnowledgeStudioPort("old");
@@ -468,13 +548,23 @@ describe("DelegatingKnowledgeStudioPort", () => {
     expect(replacement.queryCalls).toHaveLength(0);
   });
 
-  it("keeps Query fail-closed before installation and after permanent closure", async () => {
+  it("keeps Query and reviewed writeback fail-closed when their adapter is unavailable", async () => {
     const port = new DelegatingKnowledgeStudioPort();
     const signal = new AbortController().signal;
 
     await expect(port.query("personal", { query: "blocked" }, signal)).rejects.toMatchObject({
       name: "KnowledgeStudioAdapterUnavailableError",
     });
+    await expect(
+      port.saveQueryToWiki("personal", "query", { title: "Blocked" }, signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+
+    const withoutWriteback = new RecordingKnowledgeStudioPort("query-only");
+    Object.defineProperty(withoutWriteback, "saveQueryToWiki", { value: undefined });
+    port.replaceDelegate(withoutWriteback);
+    await expect(
+      port.saveQueryToWiki("personal", "query", { title: "Blocked" }, signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
 
     port.replaceDelegate(new RecordingKnowledgeStudioPort("ready"));
     port.close();
@@ -482,6 +572,9 @@ describe("DelegatingKnowledgeStudioPort", () => {
     await expect(port.openCitation("personal", "query", "citation", signal)).rejects.toMatchObject({
       name: "KnowledgeStudioAdapterUnavailableError",
     });
+    await expect(
+      port.saveQueryToWiki("personal", "query", { title: "Blocked" }, signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
   });
 
   it("aborts in-flight old work and rejects late load and command results after replacement", async () => {

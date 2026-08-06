@@ -142,6 +142,19 @@ async function rejectedCodes(promise: Promise<unknown>): Promise<string[]> {
 }
 
 describe("ChangeSetValidator", () => {
+  it("rejects a mutation capability contract that omits create-parent semantics", () => {
+    const store = createFileStore({}, {
+      create: true,
+      update: true,
+      delete: true,
+    } as unknown as KnowledgeFileMutationCapabilities);
+
+    expect(
+      () => new ChangeSetValidator(store, createArtifactResolver(), createProjectionValidator())
+    ).toThrow(TypeError);
+    expect(store.observe).not.toHaveBeenCalled();
+  });
+
   it("captures exact pre-state, revalidates semantics, and orders targets by Windows key", async () => {
     const zeta = createFileChange("Wiki/Zeta.md", "zeta");
     const alphaContent = "before\r\n";
@@ -241,7 +254,12 @@ describe("ChangeSetValidator", () => {
       reason: "Remove obsolete generated content",
       beforeHash: createFileContentHash(content),
     };
-    const capabilities = { create: true, update: true, delete: false };
+    const capabilities = {
+      create: true,
+      update: true,
+      delete: false,
+      requiresExistingParentForCreate: false,
+    };
     const store = createFileStore({ "Wiki/Generated.md": { kind: "file", content } }, capabilities);
     const resolver = createArtifactResolver();
     const projection = createProjectionValidator();
@@ -287,6 +305,78 @@ describe("ChangeSetValidator", () => {
     await expect(
       rejectedCodes(validator.prepare(createChangeSet(), createBundle()))
     ).resolves.toContain("changeset_expected_absent_conflict");
+  });
+
+  it.each([
+    [{ kind: "missing" } as const, "changeset_create_parent_missing"],
+    [
+      { kind: "file", content: "not a directory" } as const,
+      "changeset_create_parent_not_directory",
+    ],
+  ])("rejects a create whose required parent is unavailable", async (parent, code) => {
+    const capabilities: KnowledgeFileMutationCapabilities = {
+      ...ALL_KNOWLEDGE_FILE_MUTATIONS,
+      requiresExistingParentForCreate: true,
+    };
+    const change = createFileChange("Wiki/Queries/New.md");
+    const store = createFileStore({ "Wiki/Queries": parent }, capabilities);
+    const validator = new ChangeSetValidator(
+      store,
+      createArtifactResolver(),
+      createProjectionValidator()
+    );
+
+    await expect(
+      rejectedCodes(validator.prepare(createChangeSet([change]), createBundle()))
+    ).resolves.toContain(code);
+    expect(store.observe).toHaveBeenCalledWith("Wiki/Queries/New.md");
+    expect(store.observe).toHaveBeenCalledWith("Wiki/Queries");
+    expect(store.compareAndSwap).not.toHaveBeenCalled();
+  });
+
+  it("accepts a create when its required parent is an existing directory", async () => {
+    const capabilities: KnowledgeFileMutationCapabilities = {
+      ...ALL_KNOWLEDGE_FILE_MUTATIONS,
+      requiresExistingParentForCreate: true,
+    };
+    const change = createFileChange("Wiki/Queries/New.md");
+    const store = createFileStore({ "Wiki/Queries": { kind: "directory" } }, capabilities);
+    const validator = new ChangeSetValidator(
+      store,
+      createArtifactResolver(),
+      createProjectionValidator()
+    );
+
+    const prepared = await validator.prepare(createChangeSet([change]), createBundle());
+
+    expect(prepared.targets).toHaveLength(1);
+    expect(prepared.targets[0].path).toBe("Wiki/Queries/New.md");
+    expect(store.observe).toHaveBeenCalledWith("Wiki/Queries");
+  });
+
+  it("sanitizes a required create-parent observation failure", async () => {
+    const capabilities: KnowledgeFileMutationCapabilities = {
+      ...ALL_KNOWLEDGE_FILE_MUTATIONS,
+      requiresExistingParentForCreate: true,
+    };
+    const change = createFileChange("Wiki/Queries/New.md");
+    const store = createFileStore({}, capabilities);
+    store.observe.mockImplementation(async (path) => {
+      if (path === "Wiki/Queries") throw new Error("secret parent failure");
+      return { kind: "missing" };
+    });
+    const validator = new ChangeSetValidator(
+      store,
+      createArtifactResolver(),
+      createProjectionValidator()
+    );
+
+    await expect(
+      validator.prepare(createChangeSet([change]), createBundle())
+    ).rejects.toMatchObject({
+      name: "ChangeSetValidationInfrastructureError",
+      stage: "file_observation",
+    } satisfies Partial<ChangeSetValidationInfrastructureError>);
   });
 
   it("rejects missing, directory, and changed update targets", async () => {

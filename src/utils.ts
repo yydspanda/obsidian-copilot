@@ -342,7 +342,7 @@ export function stringToFormattedDateTime(timestamp: string): FormattedDateTime 
 }
 
 /**
- * Check if a file has a text-readable extension (md, canvas, base).
+ * Check if a file has a locally text-readable extension.
  */
 export function isTextReadableFile(file: TFile | null): boolean {
   if (!file) return false;

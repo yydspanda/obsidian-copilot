@@ -1,6 +1,11 @@
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import type { CompilerSchemaSnapshot } from "@/knowledge/compiler/CompilerModelPort";
 import {
+  deriveKnowledgeSourceCompileAuthority,
+  type KnowledgeSourceCompileAuthority,
+  type KnowledgeSourceCompileOperation,
+} from "@/knowledge/capture/KnowledgeSourceOrigin";
+import {
   buildKnowledgeSourceWatchPlan,
   createKnowledgeSourceParserProfileDigest,
   type KnowledgeBundlePipelineProfile,
@@ -97,11 +102,45 @@ export interface KnowledgeUnboundSourceObservation {
 /** Strict source material that remains unusable until a future Queue authority binding. */
 export interface KnowledgeSourceParsePreparation {
   authority: "unbound_read_only";
+  operation: KnowledgeSourceCompileOperation;
   bundle: KnowledgeBundleConfig;
   manifest: SourceManifest;
   schema: CompilerSchemaSnapshot;
   source: KnowledgeUnboundSourceObservation;
   artifacts: readonly SourceArtifactObservation[];
+}
+
+/** Requires current Manifest origin authority to equal the retained watch source. */
+function requireMatchingSourceCompileAuthority(
+  watchedSource: ReturnType<KnowledgeSourceWatchPlan["getSource"]>,
+  manifestEntry: SourceManifest["entries"][number],
+  sourceContentHash: string
+): KnowledgeSourceCompileAuthority {
+  if (!watchedSource) {
+    throw new KnowledgeSourceWorkflowPlanError("job_not_authorized", "job");
+  }
+  let current: KnowledgeSourceCompileAuthority;
+  try {
+    current = deriveKnowledgeSourceCompileAuthority(manifestEntry);
+  } catch {
+    throw new KnowledgeSourceWorkflowPlanError("manifest_stale", "manifest");
+  }
+  const retainedOperation =
+    "operation" in watchedSource ? watchedSource.operation : ("ingest" as const);
+  if (current.operation !== retainedOperation) {
+    throw new KnowledgeSourceWorkflowPlanError("manifest_stale", "manifest");
+  }
+  if (current.operation === "query_writeback") {
+    if (
+      !("sourceOriginDigest" in watchedSource) ||
+      current.sourceOriginDigest !== watchedSource.sourceOriginDigest ||
+      current.expectedSourceContentHash !== watchedSource.expectedSourceContentHash ||
+      current.expectedSourceContentHash !== sourceContentHash
+    ) {
+      throw new KnowledgeSourceWorkflowPlanError("manifest_stale", "manifest");
+    }
+  }
+  return current;
 }
 
 /** Exact secret-free Bundle authority retained and freshly re-proved by one execution plan. */
@@ -1059,6 +1098,11 @@ export class KnowledgeSourceExecutionPlan {
     ) {
       throw new KnowledgeSourceWorkflowPlanError("manifest_stale", "manifest");
     }
+    const sourceCompileAuthority = requireMatchingSourceCompileAuthority(
+      source,
+      manifestSource,
+      job.sourceContentHash
+    );
     let rawArtifact: unknown;
     try {
       rawArtifact = await state.readExpectedArtifact(
@@ -1107,6 +1151,24 @@ export class KnowledgeSourceExecutionPlan {
     const finalAuthority = await reproveBundleMaterial(state, material, signal);
     assertCurrent(signal, state.isCurrent);
     assertParserBytesUnchanged(artifact.bytes, hashBeforeParse);
+    const finalManifestSource = finalAuthority.manifest.entries.find(
+      (entry) => entry.sourceId === job.sourceId
+    );
+    if (
+      !finalManifestSource ||
+      finalManifestSource.sourcePath !== source.sourcePath ||
+      finalManifestSource.sourceKey !== source.sourceKey
+    ) {
+      throw new KnowledgeSourceWorkflowPlanError("manifest_stale", "manifest");
+    }
+    const finalSourceCompileAuthority = requireMatchingSourceCompileAuthority(
+      source,
+      finalManifestSource,
+      job.sourceContentHash
+    );
+    if (finalSourceCompileAuthority.operation !== sourceCompileAuthority.operation) {
+      throw new KnowledgeSourceWorkflowPlanError("manifest_stale", "manifest");
+    }
     const sourceIdentity = Object.freeze({
       sourceId: job.sourceId,
       sourceContentHash: job.sourceContentHash,
@@ -1115,6 +1177,7 @@ export class KnowledgeSourceExecutionPlan {
     });
     return Object.freeze({
       authority: "unbound_read_only" as const,
+      operation: sourceCompileAuthority.operation,
       bundle: material.owner.config,
       manifest: finalAuthority.manifest,
       schema: material.schema,
