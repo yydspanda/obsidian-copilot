@@ -4,10 +4,16 @@ import {
   createSourceContentHash,
   isExactUint8Array,
 } from "@/knowledge/model/fingerprint";
-import type { TextArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
+import type {
+  PdfArtifactObservation,
+  TextArtifactObservation,
+} from "@/knowledge/model/locatorMaterialValidation";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+
+/** Hard parser-output ceiling aligned with the production evidence-item budget. */
+export const MAX_KNOWLEDGE_PARSED_PDF_PAGES = 2_048;
 
 /** Exact, already-observed bytes transferred to a path-incapable parser. */
 export interface KnowledgeByteParserRequest {
@@ -17,9 +23,9 @@ export interface KnowledgeByteParserRequest {
   bytes: Uint8Array;
 }
 
-/** First production parser projection: one deterministic quote-addressable text artifact. */
+/** Production parser projection: one deterministic, locator-addressable artifact. */
 export interface KnowledgeParsedSource {
-  artifact: TextArtifactObservation;
+  artifact: TextArtifactObservation | PdfArtifactObservation;
 }
 
 /**
@@ -108,6 +114,51 @@ function snapshotExactRecord(
   }
 }
 
+/**
+ * Reads one dense plain array without invoking accessors or inherited behavior.
+ *
+ * @param value - Unknown runtime array
+ * @param maxItems - Largest accepted dense length
+ * @returns Detached one-read item snapshot, or undefined for any exotic shape
+ */
+function snapshotExactArray(value: unknown, maxItems: number): readonly unknown[] | undefined {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+      return undefined;
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !lengthDescriptor ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > maxItems
+    ) {
+      return undefined;
+    }
+    const length = lengthDescriptor.value as number;
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.length !== length + 1 || ownKeys[length] !== "length") {
+      return undefined;
+    }
+    const snapshot: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const key = String(index);
+      if (ownKeys[index] !== key) {
+        return undefined;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        return undefined;
+      }
+      snapshot.push(descriptor.value);
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Checks one identifier without trimming or otherwise changing its identity. */
 function isCanonicalText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.trim() === value;
@@ -150,7 +201,7 @@ export function verifyKnowledgeByteParserRequest(
 }
 
 /**
- * Recomputes and freezes a parser's data-only text success payload.
+ * Recomputes and freezes a parser's data-only success payload.
  *
  * @param value - Unknown parser success
  * @param request - Exact request the parser received
@@ -167,7 +218,7 @@ export function verifyKnowledgeParsedSource(
   }
   const verifiedRequest = verifyKnowledgeByteParserRequest(request);
   const result = snapshotExactRecord(value, ["artifact"]);
-  const artifact = result
+  const textArtifact = result
     ? snapshotExactRecord(result.artifact, [
         "kind",
         "sourceId",
@@ -177,26 +228,79 @@ export function verifyKnowledgeParsedSource(
       ])
     : undefined;
   if (
-    !artifact ||
-    artifact.kind !== "text" ||
-    artifact.sourceId !== verifiedRequest.sourceId ||
-    !isCanonicalText(artifact.artifactId) ||
-    typeof artifact.text !== "string" ||
-    artifact.text.trim().length === 0 ||
-    artifact.text.length > maxCharacters ||
-    typeof artifact.artifactContentHash !== "string" ||
-    !SHA256_PATTERN.test(artifact.artifactContentHash) ||
-    createFileContentHash(artifact.text) !== artifact.artifactContentHash
+    textArtifact &&
+    textArtifact.kind === "text" &&
+    textArtifact.sourceId === verifiedRequest.sourceId &&
+    isCanonicalText(textArtifact.artifactId) &&
+    typeof textArtifact.text === "string" &&
+    textArtifact.text.trim().length > 0 &&
+    textArtifact.text.length <= maxCharacters &&
+    typeof textArtifact.artifactContentHash === "string" &&
+    SHA256_PATTERN.test(textArtifact.artifactContentHash) &&
+    createFileContentHash(textArtifact.text) === textArtifact.artifactContentHash
   ) {
+    return Object.freeze({
+      artifact: Object.freeze({
+        kind: "text",
+        sourceId: textArtifact.sourceId,
+        artifactId: textArtifact.artifactId,
+        artifactContentHash: textArtifact.artifactContentHash,
+        text: textArtifact.text,
+      }),
+    });
+  }
+
+  const pdfArtifact = result
+    ? snapshotExactRecord(result.artifact, [
+        "kind",
+        "sourceId",
+        "artifactId",
+        "artifactContentHash",
+        "pages",
+      ])
+    : undefined;
+  const pageValues = pdfArtifact
+    ? snapshotExactArray(pdfArtifact.pages, MAX_KNOWLEDGE_PARSED_PDF_PAGES)
+    : undefined;
+  if (
+    !pdfArtifact ||
+    pdfArtifact.kind !== "pdf" ||
+    pdfArtifact.sourceId !== verifiedRequest.sourceId ||
+    !isCanonicalText(pdfArtifact.artifactId) ||
+    pdfArtifact.artifactContentHash !== verifiedRequest.sourceContentHash ||
+    !pageValues ||
+    pageValues.length === 0
+  ) {
+    throw new KnowledgeByteParserOutputError();
+  }
+
+  const pages: PdfArtifactObservation["pages"][number][] = [];
+  let totalCharacters = 0;
+  let hasNonBlankPage = false;
+  for (let index = 0; index < pageValues.length; index += 1) {
+    const page = snapshotExactRecord(pageValues[index], ["page", "text"]);
+    if (
+      !page ||
+      page.page !== index + 1 ||
+      typeof page.text !== "string" ||
+      page.text.length > maxCharacters - totalCharacters
+    ) {
+      throw new KnowledgeByteParserOutputError();
+    }
+    totalCharacters += page.text.length;
+    hasNonBlankPage ||= page.text.trim().length > 0;
+    pages.push(Object.freeze({ page: index + 1, text: page.text }));
+  }
+  if (!hasNonBlankPage) {
     throw new KnowledgeByteParserOutputError();
   }
   return Object.freeze({
     artifact: Object.freeze({
-      kind: "text",
-      sourceId: artifact.sourceId,
-      artifactId: artifact.artifactId,
-      artifactContentHash: artifact.artifactContentHash,
-      text: artifact.text,
+      kind: "pdf",
+      sourceId: pdfArtifact.sourceId,
+      artifactId: pdfArtifact.artifactId,
+      artifactContentHash: pdfArtifact.artifactContentHash,
+      pages: Object.freeze(pages),
     }),
   });
 }

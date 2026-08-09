@@ -51,6 +51,7 @@ describe("Utf8TextKnowledgeByteParser", () => {
       artifactContentHash: createFileContentHash(text),
       text,
     });
+    if (parsed.artifact.kind !== "text") throw new Error("Expected text artifact");
     expect([...new TextEncoder().encode(parsed.artifact.text)]).toEqual([...bytes]);
     expect(request.bytes).toBe(bytes);
   });

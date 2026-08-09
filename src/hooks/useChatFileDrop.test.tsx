@@ -58,31 +58,33 @@ function createApp(file: TFile): App {
 }
 
 describe("useChatFileDrop", () => {
-  it.each(["Sources/Note.md", "Sources/Note.markdown", "Sources/Note.txt"])(
-    "holds %s for an explicit choice instead of mutating Chat context",
-    async (sourcePath) => {
-      const file = new TestTFile(sourcePath);
-      const setContextNotes = jest.fn();
-      const onKnowledgeFileDrop = jest.fn();
-      const { getByTestId } = render(
-        <DropHarness
-          app={createApp(file)}
-          setContextNotes={setContextNotes}
-          onKnowledgeFileDrop={onKnowledgeFileDrop}
-        />
-      );
+  it.each([
+    "Sources/Note.md",
+    "Sources/Note.markdown",
+    "Sources/Note.txt",
+    "Sources/研究 Paper.pdf",
+  ])("holds %s for an explicit choice instead of mutating Chat context", async (sourcePath) => {
+    const file = new TestTFile(sourcePath);
+    const setContextNotes = jest.fn();
+    const onKnowledgeFileDrop = jest.fn();
+    const { getByTestId } = render(
+      <DropHarness
+        app={createApp(file)}
+        setContextNotes={setContextNotes}
+        onKnowledgeFileDrop={onKnowledgeFileDrop}
+      />
+    );
 
-      fireEvent.drop(getByTestId("drop-target"), {
-        dataTransfer: createUriDataTransfer(sourcePath),
-      });
+    fireEvent.drop(getByTestId("drop-target"), {
+      dataTransfer: createUriDataTransfer(sourcePath),
+    });
 
-      await waitFor(() => expect(onKnowledgeFileDrop).toHaveBeenCalledWith([file]));
-      expect(setContextNotes).not.toHaveBeenCalled();
-    }
-  );
+    await waitFor(() => expect(onKnowledgeFileDrop).toHaveBeenCalledWith([file]));
+    expect(setContextNotes).not.toHaveBeenCalled();
+  });
 
-  it("preserves the existing direct Chat-context behavior for a Vault PDF", async () => {
-    const file = new TestTFile("Sources/Reference.pdf");
+  it("preserves direct Chat-context behavior for a non-Knowledge Vault canvas", async () => {
+    const file = new TestTFile("Sources/Reference.canvas");
     const setContextNotes = jest.fn();
     const onKnowledgeFileDrop = jest.fn();
     const { getByTestId } = render(

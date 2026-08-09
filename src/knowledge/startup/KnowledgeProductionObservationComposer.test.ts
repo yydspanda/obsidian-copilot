@@ -11,7 +11,7 @@ jest.mock("obsidian", () => {
     constructor(public path: string) {}
   }
 
-  return { FileSystemAdapter, TFile, TFolder };
+  return { apiVersion: "1.13.4-test", FileSystemAdapter, TFile, TFolder };
 });
 
 import {

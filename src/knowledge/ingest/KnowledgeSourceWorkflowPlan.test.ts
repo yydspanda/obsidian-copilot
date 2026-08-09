@@ -137,6 +137,22 @@ function createParsedSource(sourceId = SOURCE_ID, text = "parsed source text") {
   };
 }
 
+/** Creates one strict PDF parser result bound to exact raw source bytes. */
+function createParsedPdfSource(request: Readonly<KnowledgeByteParserRequest>) {
+  return {
+    artifact: {
+      kind: "pdf" as const,
+      sourceId: request.sourceId,
+      artifactId: "primary",
+      artifactContentHash: request.sourceContentHash,
+      pages: [
+        { page: 1, text: "first page" },
+        { page: 2, text: "第二页" },
+      ],
+    },
+  };
+}
+
 interface HarnessOptions {
   executionOwner?: KnowledgeExecutionOwner;
   manifest?: SourceManifest;
@@ -995,6 +1011,31 @@ describe("KnowledgeSourceExecutionPlan.prepare", () => {
     expect(plan.getWatchPlan().getBundleAuthority(BUNDLE_ID)?.schemaContentHash).toBe(
       createSourceContentHash(schemaBytes)
     );
+  });
+
+  it("bridges a dense PDF parser artifact while retaining the exact raw source hash", async () => {
+    const sourceBytes = new TextEncoder().encode("%PDF-1.7\nraw fixture bytes");
+    const harness = createHarness({ sourceBytes });
+    harness.state.parse = async (request) => createParsedPdfSource(request);
+    const { plan, job } = await loadPlanAndJob(harness);
+
+    const prepared = await plan.prepare(job, new AbortController().signal);
+
+    expect(prepared.artifacts).toHaveLength(1);
+    expect(prepared.artifacts[0]).toEqual({
+      kind: "pdf",
+      sourceId: SOURCE_ID,
+      artifactId: "primary",
+      artifactContentHash: createSourceContentHash(sourceBytes),
+      pages: [
+        { page: 1, text: "first page" },
+        { page: 2, text: "第二页" },
+      ],
+    });
+    expect(Object.isFrozen(prepared.artifacts[0])).toBe(true);
+    if (prepared.artifacts[0].kind !== "pdf") throw new Error("Expected PDF artifact");
+    expect(Object.isFrozen(prepared.artifacts[0].pages)).toBe(true);
+    expect(prepared.artifacts[0].pages.every(Object.isFrozen)).toBe(true);
   });
 
   it("returns a detached deeply frozen preparation", async () => {

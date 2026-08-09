@@ -108,16 +108,18 @@ Use the command palette: **Add web selection to chat context**
 
 Works similarly but captures selected text from the Web Viewer. Available on desktop only.
 
-### Choose Chat or Knowledge for a Vault text file
+### Choose Chat or Knowledge for a Vault source
 
-When you drag a `.md`, `.markdown`, or `.txt` file from Obsidian's Vault file explorer into Chat, Copilot pauses before changing either Chat or Knowledge and shows two explicit actions:
+When you drag a `.md`, `.markdown`, `.txt`, or `.pdf` file from Obsidian's Vault file explorer into Chat, Copilot pauses before changing either Chat or Knowledge and shows two explicit actions:
 
 - **Use in this chat** adds the existing Vault file to the current Chat context. It does not register a Knowledge source or start background ingestion.
 - **Add to Knowledge** registers the existing Vault file as a durable source without adding it to Chat context. After a new registration, the Knowledge workflow restarts and progress appears in Knowledge Studio's **Activity** tab.
 
 **Add to Knowledge** is currently available only on Windows when Knowledge is ready, exactly one Knowledge Bundle is configured, that Bundle has exactly one source folder, and the dropped file already lives inside that folder. Move an outside file into the configured source folder before adding it. Registering the same file again is an idempotent no-op.
 
-This chooser does not yet handle a PDF dragged from the Vault or a document dragged from Windows Explorer. Existing PDF and image context behavior remains separate.
+For a PDF, **Add to Knowledge** uses Obsidian's local PDF engine to extract bounded text page by page. The original Vault PDF remains the source of record, so accepted citations can reopen an exact page only while its raw file hash still matches; changing the PDF revokes the old citation until the new bytes complete the normal ingest and review flow. It does not use Copilot Plus, Miyo, Brevilabs, a converted Markdown cache, or OCR. Image-only, encrypted, malformed, empty-text, and over-limit PDFs fail closed. A document dragged from Windows Explorer is not captured through this chooser yet; move it into the configured Vault source folder first.
+
+This local parser applies only to **Add to Knowledge**. **Use in this chat** keeps the existing PDF-context behavior described below, including its existing Copilot Plus or configured document-conversion requirements.
 
 ### Adding a PDF as Context (Copilot Plus)
 

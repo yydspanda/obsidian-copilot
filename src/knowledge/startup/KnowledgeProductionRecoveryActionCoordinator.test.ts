@@ -16,7 +16,7 @@ jest.mock("obsidian", () => {
     constructor(public readonly path: string) {}
   }
 
-  return { FileSystemAdapter, TFile };
+  return { apiVersion: "1.13.4-test", FileSystemAdapter, TFile };
 });
 
 jest.mock("@/knowledge/runtime/ObsidianKnowledgeFileStore", () => ({

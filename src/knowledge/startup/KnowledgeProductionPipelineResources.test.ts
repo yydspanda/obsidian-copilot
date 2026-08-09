@@ -1,6 +1,7 @@
 import {
   createKnowledgeProductionPipelineResources,
   KNOWLEDGE_PRODUCTION_COMPILER_VERSION,
+  KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS,
   KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS,
 } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import {
@@ -9,11 +10,12 @@ import {
 } from "@/knowledge/model/fingerprint";
 
 describe("Knowledge production pipeline resources", () => {
-  it("creates an owned UTF-8 registry and matching immutable production profile", () => {
+  it("creates owned text/PDF parsers and a matching immutable production profile", () => {
     const resources = createKnowledgeProductionPipelineResources();
-    const parserProfile = resources.parsers[0].getProfile();
+    const textParserProfile = resources.parsers[0].getProfile();
+    const pdfParserProfile = resources.parsers[1].getProfile();
 
-    expect(parserProfile).toMatchObject({
+    expect(textParserProfile).toMatchObject({
       id: "knowledge-utf8-text",
       pathSuffixes: [".markdown", ".md", ".txt"],
       configuration: {
@@ -21,9 +23,20 @@ describe("Knowledge production pipeline resources", () => {
         maxCharacters: KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS.maxCharacters,
       },
     });
+    expect(pdfParserProfile).toMatchObject({
+      id: "knowledge-pdf-pages",
+      pathSuffixes: [".pdf"],
+      configuration: {
+        artifactKind: "pdf",
+        isEvalSupported: false,
+        maxBytes: KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS.maxBytes,
+        maxPages: KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS.maxPages,
+        maxCharacters: KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS.maxCharacters,
+      },
+    });
     expect(resources.profileOptions).toMatchObject({
       compilerVersion: KNOWLEDGE_PRODUCTION_COMPILER_VERSION,
-      parsers: [parserProfile],
+      parsers: [textParserProfile, pdfParserProfile],
       outputLanguage: "source-language",
       supportedProviders: ["deepseek"],
     });
@@ -38,6 +51,7 @@ describe("Knowledge production pipeline resources", () => {
     const serialized = canonicalizeJson(first.profileOptions as never);
 
     expect(first.parsers[0]).not.toBe(second.parsers[0]);
+    expect(first.parsers[1]).not.toBe(second.parsers[1]);
     expect(canonicalizeJson(second.profileOptions as never)).toBe(serialized);
     expect(() =>
       assertKnowledgeConfigurationContainsNoSecrets(first.profileOptions.compilerConfiguration)

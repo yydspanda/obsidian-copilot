@@ -55,6 +55,7 @@ export * from "@/knowledge/model/types";
 export * from "@/knowledge/model/validation";
 export * from "@/knowledge/paths/vaultPath";
 export * from "@/knowledge/parser/KnowledgeByteParser";
+export * from "@/knowledge/parser/PdfPageKnowledgeByteParser";
 export * from "@/knowledge/parser/Utf8TextKnowledgeByteParser";
 export * from "@/knowledge/query/KnowledgeAppliedWikiSnapshotReader";
 export * from "@/knowledge/query/KnowledgeCitationTargetResolver";

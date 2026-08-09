@@ -79,7 +79,7 @@ export class ObsidianKnowledgeVaultSourcePresence implements KnowledgeVaultSourc
 /**
  * Generation-bound production adapter for explicit Chat Add-to-Knowledge choices.
  *
- * This adapter can register only an existing Vault text source under one uniquely
+ * This adapter can register only an existing parser-supported Vault source under one uniquely
  * configured Bundle/root. It never attaches Chat context and never writes Queue
  * state directly; a fresh production generation performs authoritative ingest.
  */

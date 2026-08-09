@@ -3,7 +3,11 @@ import { KNOWLEDGE_COMPILER_PROTOCOL_VERSION } from "@/knowledge/compiler/Compil
 import { KNOWLEDGE_COMPILER_PROMPT_CONTRACT_IDENTITY } from "@/knowledge/compiler/KnowledgeCompilerPromptEncoder";
 import { KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import type { ProjectKnowledgePipelineProfileSourceOptions } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
-import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
+import {
+  MAX_KNOWLEDGE_PARSED_PDF_PAGES,
+  type KnowledgeByteParser,
+} from "@/knowledge/parser/KnowledgeByteParser";
+import { PdfPageKnowledgeByteParser } from "@/knowledge/parser/PdfPageKnowledgeByteParser";
 import { Utf8TextKnowledgeByteParser } from "@/knowledge/parser/Utf8TextKnowledgeByteParser";
 
 /** Exact production compiler behavior version included in every pipeline fingerprint. */
@@ -12,6 +16,13 @@ export const KNOWLEDGE_PRODUCTION_COMPILER_VERSION = "knowledge-compiler-v1" as 
 /** Current bounded UTF-8 source policy for the first Windows production generation. */
 export const KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS = Object.freeze({
   maxBytes: 8_388_608,
+  maxCharacters: 8_000_000,
+});
+
+/** Current bounded PDF source policy for the Windows production generation. */
+export const KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS = Object.freeze({
+  maxBytes: 8_388_608,
+  maxPages: MAX_KNOWLEDGE_PARSED_PDF_PAGES,
   maxCharacters: 8_000_000,
 });
 
@@ -35,7 +46,14 @@ export function createKnowledgeProductionPipelineResources(): KnowledgeProductio
     maxBytes: KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS.maxBytes,
     maxCharacters: KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS.maxCharacters,
   });
-  const parsers: readonly KnowledgeByteParser[] = Object.freeze([textParser]);
+  const pdfParser = new PdfPageKnowledgeByteParser({
+    id: "knowledge-pdf-pages",
+    pathSuffixes: [".pdf"],
+    maxBytes: KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS.maxBytes,
+    maxPages: KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS.maxPages,
+    maxCharacters: KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS.maxCharacters,
+  });
+  const parsers: readonly KnowledgeByteParser[] = Object.freeze([textParser, pdfParser]);
   const compilerLimits = Object.freeze({ ...DEFAULT_KNOWLEDGE_COMPILER_LIMITS });
   const profileOptions: ProjectKnowledgePipelineProfileSourceOptions = Object.freeze({
     compilerVersion: KNOWLEDGE_PRODUCTION_COMPILER_VERSION,

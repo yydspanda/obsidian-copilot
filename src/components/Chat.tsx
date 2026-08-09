@@ -312,7 +312,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       case "ambiguous_source_root":
         return "Add to Knowledge requires exactly one source folder in the Bundle.";
       case "unsupported_source_type":
-        return "Add to Knowledge currently supports Vault Markdown and plain-text files only.";
+        return "Add to Knowledge currently supports Vault Markdown, plain-text, and PDF files only.";
       case "source_outside_root":
         return "Move this file into the configured Knowledge source folder, then try again.";
       case "source_missing":

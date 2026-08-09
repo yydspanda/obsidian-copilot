@@ -38,8 +38,8 @@ export interface KnowledgeChatCapturePort {
   ): Promise<KnowledgeChatCaptureReceipt>;
 }
 
-/** Exact source suffixes enabled for the first Chat capture production slice. */
-export const KNOWLEDGE_CHAT_CAPTURE_SUFFIXES = Object.freeze([".markdown", ".md", ".txt"]);
+/** Exact source suffixes enabled for the current Chat capture production slice. */
+export const KNOWLEDGE_CHAT_CAPTURE_SUFFIXES = Object.freeze([".markdown", ".md", ".pdf", ".txt"]);
 
 /**
  * Checks whether a Vault path is eligible for the H.3a intent chooser.
@@ -48,7 +48,7 @@ export const KNOWLEDGE_CHAT_CAPTURE_SUFFIXES = Object.freeze([".markdown", ".md"
  * only controls which existing Chat drops are diverted into an explicit choice.
  *
  * @param sourcePath - Vault-relative candidate path
- * @returns Whether the path has one supported text suffix
+ * @returns Whether the path has one supported production parser suffix
  */
 export function isKnowledgeChatCapturePath(sourcePath: string): boolean {
   const key = sourcePath.replace(/\\/g, "/").normalize("NFC").toLowerCase().normalize("NFC");

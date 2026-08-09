@@ -15,7 +15,9 @@ let requestUrlImpl = jest.fn().mockResolvedValue({
 module.exports = {
   // Reason: normalizePath is used by projectPaths.ts; identity function is sufficient for tests
   normalizePath: jest.fn().mockImplementation((p) => p),
+  apiVersion: "1.13.4-test",
   moment: jest.requireActual("moment"),
+  loadPdfJs: jest.fn(),
   requestUrl: (...args) => requestUrlImpl(...args),
   __setRequestUrlImpl: (impl) => {
     requestUrlImpl = impl;

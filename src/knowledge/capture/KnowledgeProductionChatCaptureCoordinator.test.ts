@@ -8,6 +8,7 @@ import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/Projec
 import type { KnowledgeSourceParserProfile } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import type { SourceRegistration } from "@/knowledge/manifest/SourceManifestRepository";
 import type { SourceManifest, SourceManifestEntry } from "@/knowledge/model/types";
+import { PDF_PAGE_KNOWLEDGE_PARSER_VERSION } from "@/knowledge/parser/PdfPageKnowledgeByteParser";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 /** Creates one valid project-owned Bundle for capture tests. */
@@ -25,12 +26,22 @@ function createOwner(sourceRoots: string[] = ["Sources"]): ConfiguredProjectKnow
   };
 }
 
-/** Creates the exact first-production text parser profile. */
+/** Creates the exact current production parser profiles. */
 function createParserProfile(): KnowledgeSourceParserProfile {
   return {
     id: "knowledge-utf8-text",
     version: "utf8-text-v1",
     pathSuffixes: [".markdown", ".md", ".txt"],
+    configuration: {},
+  };
+}
+
+/** Creates the exact current production PDF parser profile. */
+function createPdfParserProfile(): KnowledgeSourceParserProfile {
+  return {
+    id: "knowledge-pdf-pages",
+    version: PDF_PAGE_KNOWLEDGE_PARSER_VERSION,
+    pathSuffixes: [".pdf"],
     configuration: {},
   };
 }
@@ -84,7 +95,7 @@ function createCoordinator(options?: {
   return {
     coordinator: new KnowledgeProductionChatCaptureCoordinator({
       owners: options?.owners ?? [createOwner()],
-      parserProfiles: options?.parserProfiles ?? [createParserProfile()],
+      parserProfiles: options?.parserProfiles ?? [createParserProfile(), createPdfParserProfile()],
       sourcePresence: { isFile: () => options?.isFile ?? true },
       registration: registration.core,
       assertCurrent: () => undefined,
@@ -145,6 +156,23 @@ describe("KnowledgeProductionChatCaptureCoordinator", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
+  it("registers an in-root Vault PDF through its unique production parser", async () => {
+    const { coordinator, registrations, refresh } = createCoordinator();
+
+    await expect(
+      coordinator.addVaultSource(
+        { sourcePath: "Sources/论文 资料/三页.PDF" },
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ status: "registered", bundleId: "personal" });
+    expect(registrations).toHaveLength(1);
+    expect(registrations[0]).toMatchObject({
+      sourcePath: "Sources/论文 资料/三页.PDF",
+      custody: "user_managed",
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
   it.each<[string, KnowledgeChatCaptureErrorCode, Parameters<typeof createCoordinator>[0]]>([
     ["rejects multiple Bundles", "ambiguous_bundle", { owners: [createOwner(), createOwner()] }],
     [
@@ -167,7 +195,7 @@ describe("KnowledgeProductionChatCaptureCoordinator", () => {
     const { coordinator, registrations, refresh } = createCoordinator();
 
     await expectCaptureError(
-      coordinator.addVaultSource({ sourcePath: "Sources/Note.pdf" }, new AbortController().signal),
+      coordinator.addVaultSource({ sourcePath: "Sources/Note.docx" }, new AbortController().signal),
       "unsupported_source_type"
     );
     await expectCaptureError(

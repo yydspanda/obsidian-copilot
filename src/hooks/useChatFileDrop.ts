@@ -18,7 +18,7 @@ export interface UseChatFileDropProps {
   selectedImages: File[];
   /** Callback to add images */
   onAddImage: (files: File[]) => void;
-  /** Callback for Vault text files that require an explicit use-versus-capture choice */
+  /** Callback for parser-supported Vault files requiring an explicit use-versus-capture choice */
   onKnowledgeFileDrop: (files: TFile[]) => void;
   /** Reference to the container element for drag-and-drop */
   containerRef: RefObject<HTMLElement>;
@@ -93,7 +93,7 @@ function parseObsidianUris(app: App, uriString: string): TFile[] {
  * Supports:
  * - Dropping files from Obsidian nav bar (md, pdf, canvas, images)
  * - Dropping external image files
- * - Diverting eligible Vault text files into an explicit Chat/Knowledge choice
+ * - Diverting eligible Vault text and PDF files into an explicit Chat/Knowledge choice
  *
  * @param props - Configuration for the drag-and-drop functionality
  * @returns Object containing drag state

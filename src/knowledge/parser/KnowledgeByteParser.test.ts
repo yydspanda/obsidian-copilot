@@ -32,6 +32,23 @@ function createParsedSource(sourceId = "source-1", text = "parsed source") {
   };
 }
 
+/** Creates one valid data-only PDF parser success for exact request bytes. */
+function createParsedPdfSource(request: KnowledgeByteParserRequest) {
+  return {
+    artifact: {
+      kind: "pdf" as const,
+      sourceId: request.sourceId,
+      artifactId: "primary",
+      artifactContentHash: request.sourceContentHash,
+      pages: [
+        { page: 1, text: "第一页" },
+        { page: 2, text: "" },
+        { page: 3, text: "third page" },
+      ],
+    },
+  };
+}
+
 describe("verifyKnowledgeByteParserRequest", () => {
   it("preserves the exact byte reference in a frozen detached request", () => {
     const bytes = new TextEncoder().encode("\ufeff标题\r\n正文 🦌\r\n");
@@ -168,6 +185,107 @@ describe("verifyKnowledgeParsedSource", () => {
     ).toThrow(KnowledgeByteParserOutputError);
     expect(() =>
       verifyKnowledgeParsedSource(createParsedSource("source-1", " \r\n\t"), request, 1_000)
+    ).toThrow(KnowledgeByteParserOutputError);
+  });
+
+  it("accepts only raw-hash-bound dense PDF pages and deeply freezes them", () => {
+    const request = verifyKnowledgeByteParserRequest(
+      createRequest(new Uint8Array([37, 80, 68, 70]))
+    );
+    const output = createParsedPdfSource(request);
+
+    const verified = verifyKnowledgeParsedSource(output, request, 1_000);
+
+    expect(verified).not.toBe(output);
+    expect(verified.artifact).not.toBe(output.artifact);
+    expect(verified.artifact).toEqual(output.artifact);
+    expect(verified.artifact.kind).toBe("pdf");
+    if (verified.artifact.kind !== "pdf") throw new Error("Expected PDF artifact");
+    expect(verified.artifact.artifactContentHash).toBe(request.sourceContentHash);
+    expect(Object.isFrozen(verified.artifact.pages)).toBe(true);
+    expect(verified.artifact.pages.every(Object.isFrozen)).toBe(true);
+  });
+
+  it("rejects PDF hash drift, sparse numbering, blank material, and character overflow", () => {
+    const request = verifyKnowledgeByteParserRequest(
+      createRequest(new Uint8Array([37, 80, 68, 70]))
+    );
+    const output = createParsedPdfSource(request);
+
+    expect(() =>
+      verifyKnowledgeParsedSource(
+        {
+          artifact: {
+            ...output.artifact,
+            artifactContentHash: "f".repeat(64),
+          },
+        },
+        request,
+        1_000
+      )
+    ).toThrow(KnowledgeByteParserOutputError);
+    expect(() =>
+      verifyKnowledgeParsedSource(
+        {
+          artifact: {
+            ...output.artifact,
+            pages: [output.artifact.pages[0], { page: 3, text: "skipped" }],
+          },
+        },
+        request,
+        1_000
+      )
+    ).toThrow(KnowledgeByteParserOutputError);
+    expect(() =>
+      verifyKnowledgeParsedSource(
+        {
+          artifact: {
+            ...output.artifact,
+            pages: [{ page: 1, text: " \r\n" }],
+          },
+        },
+        request,
+        1_000
+      )
+    ).toThrow(KnowledgeByteParserOutputError);
+    expect(() => verifyKnowledgeParsedSource(output, request, 5)).toThrow(
+      KnowledgeByteParserOutputError
+    );
+  });
+
+  it("rejects PDF page accessors and extra page fields without invoking them", () => {
+    const request = verifyKnowledgeByteParserRequest(
+      createRequest(new Uint8Array([37, 80, 68, 70]))
+    );
+    const output = createParsedPdfSource(request);
+    let getterCalls = 0;
+    const accessorPage = Object.defineProperty({ page: 1 }, "text", {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        return "must not be read";
+      },
+    });
+
+    expect(() =>
+      verifyKnowledgeParsedSource(
+        { artifact: { ...output.artifact, pages: [accessorPage] } },
+        request,
+        1_000
+      )
+    ).toThrow(KnowledgeByteParserOutputError);
+    expect(getterCalls).toBe(0);
+    expect(() =>
+      verifyKnowledgeParsedSource(
+        {
+          artifact: {
+            ...output.artifact,
+            pages: [{ page: 1, text: "page", unexpected: true }],
+          },
+        },
+        request,
+        1_000
+      )
     ).toThrow(KnowledgeByteParserOutputError);
   });
 });
