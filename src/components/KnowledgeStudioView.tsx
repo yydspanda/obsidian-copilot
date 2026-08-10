@@ -1,4 +1,5 @@
 import { KnowledgeStudioRoot } from "@/components/knowledge/KnowledgeStudioRoot";
+import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 import { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
 import type { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
@@ -22,11 +23,13 @@ export class KnowledgeStudioView extends ItemView {
    * @param leaf - Obsidian workspace leaf
    * @param controller - Read/command controller for one Bundle session
    * @param sessionStore - Dynamic validated Bundle selection for this plugin lifecycle
+   * @param folderImportPort - Stable, revocable folder import capability
    */
   constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: KnowledgeStudioController,
-    private readonly sessionStore: KnowledgeStudioSessionStore
+    private readonly sessionStore: KnowledgeStudioSessionStore,
+    private readonly folderImportPort: KnowledgeFolderImportPort
   ) {
     super(leaf);
   }
@@ -95,7 +98,9 @@ export class KnowledgeStudioView extends ItemView {
     contentEl.empty();
     const rootEl = contentEl.createDiv({ cls: "copilot-knowledge-studio-root tw-h-full" });
     this.root = createPluginRoot(rootEl, this.app);
-    this.root.render(<KnowledgeStudioRoot controller={this.controller} />);
+    this.root.render(
+      <KnowledgeStudioRoot controller={this.controller} folderImportPort={this.folderImportPort} />
+    );
   }
 
   /** Unmounts the React tree from the exact document that created it. */

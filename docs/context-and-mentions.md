@@ -96,6 +96,16 @@ Example:
 
 ## Adding Context Manually
 
+### Import an External Folder into Knowledge
+
+On Windows, open **Knowledge Studio** and choose **Import folder** to take a one-time snapshot of an external folder. This is separate from Chat context: Copilot copies supported `.md`, `.markdown`, `.txt`, and `.pdf` files into the active Bundle's one configured Knowledge source folder, beneath a folder with the selected root's name. Nested folders are preserved.
+
+Folder import is available only while exactly one Knowledge Bundle with exactly one source folder is live. The external folder is read-only: Copilot does not rename, edit, delete, or remember the external absolute path. The Vault copies are registered as managed Knowledge sources, appear in **Activity**, and any generated Wiki changes still require explicit **Review** and **Apply**.
+
+The import runs one file at a time. An existing destination with identical bytes is reused; different bytes at the same destination are reported as a conflict and are never overwritten. Supported files already completed by a partial run can therefore be retried safely. Unsupported files are skipped, and the Studio reports only aggregate imported, reused, skipped, conflict, and failure counts.
+
+This product path is folder-only. A web-page URL, browser clipper, or one-off file dragged from Windows Explorer is not a Knowledge import entry point; use **Import folder** for external material. `@URL` and PDF Chat attachments keep their existing context-only behavior. The production stable-port path has passed a bounded real-folder Windows run with exact retry, missing-copy repair, unchanged external originals, completed Activity, and a clean console. The native system picker was not physically clicked in that run, and the compiler returned `no_changes`, so a picker interaction and a non-empty proposal taken through explicit Review and Apply remain separate acceptance work.
+
 ### Add Selection to Chat Context
 
 Use the command palette: **Add selection to chat context**
@@ -115,9 +125,9 @@ When you drag a `.md`, `.markdown`, `.txt`, or `.pdf` file from Obsidian's Vault
 - **Use in this chat** adds the existing Vault file to the current Chat context. It does not register a Knowledge source or start background ingestion.
 - **Add to Knowledge** registers the existing Vault file as a durable source without adding it to Chat context. After a new registration, the Knowledge workflow restarts and progress appears in Knowledge Studio's **Activity** tab.
 
-**Add to Knowledge** is currently available only on Windows when Knowledge is ready, exactly one Knowledge Bundle is configured, that Bundle has exactly one source folder, and the dropped file already lives inside that folder. Move an outside file into the configured source folder before adding it. Registering the same file again is an idempotent no-op.
+**Add to Knowledge** is currently available only on Windows when Knowledge is ready, exactly one Knowledge Bundle is configured, that Bundle has exactly one source folder, and the dropped file already lives inside that folder. Use Knowledge Studio's **Import folder** action for external material. Registering the same Vault file again is an idempotent no-op.
 
-For a PDF, **Add to Knowledge** uses Obsidian's local PDF engine to extract bounded text page by page. The original Vault PDF remains the source of record, so accepted citations can reopen an exact page only while its raw file hash still matches; changing the PDF revokes the old citation until the new bytes complete the normal ingest and review flow. It does not use Copilot Plus, Miyo, Brevilabs, a converted Markdown cache, or OCR. Image-only, encrypted, malformed, empty-text, and over-limit PDFs fail closed. A document dragged from Windows Explorer is not captured through this chooser yet; move it into the configured Vault source folder first.
+For a PDF, **Add to Knowledge** uses Obsidian's local PDF engine to extract bounded text page by page. The original Vault PDF remains the source of record, so accepted citations can reopen an exact page only while its raw file hash still matches; changing the PDF revokes the old citation until the new bytes complete the normal ingest and review flow. It does not use Copilot Plus, Miyo, Brevilabs, a converted Markdown cache, or OCR. Image-only, encrypted, malformed, empty-text, and over-limit PDFs fail closed. External folders use the same reviewed Knowledge pipeline after **Import folder** creates and registers their Vault copies.
 
 This local parser applies only to **Add to Knowledge**. **Use in this chat** keeps the existing PDF-context behavior described below, including its existing Copilot Plus or configured document-conversion requirements.
 

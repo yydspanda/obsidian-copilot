@@ -50,6 +50,7 @@ jest.mock("obsidian", () => {
 });
 
 import { KNOWLEDGE_STUDIO_VIEW_TYPE, KnowledgeStudioView } from "@/components/KnowledgeStudioView";
+import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 import type { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
 import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
@@ -80,6 +81,11 @@ function createLeaf(): WorkspaceLeaf {
   return {} as WorkspaceLeaf;
 }
 
+/** Creates one stable folder import capability for view-prop verification. */
+function createFolderImportPort(): KnowledgeFolderImportPort {
+  return { importFolder: jest.fn() };
+}
+
 describe("KnowledgeStudioView", () => {
   const roots: Root[] = [];
 
@@ -100,7 +106,8 @@ describe("KnowledgeStudioView", () => {
     const controller = createController();
     const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
     sessionStore.replaceSelection("bundle-1", "Workflow adapters remain unavailable.");
-    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore);
+    const folderImportPort = createFolderImportPort();
+    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore, folderImportPort);
 
     await view.onOpen();
 
@@ -110,12 +117,20 @@ describe("KnowledgeStudioView", () => {
     expect(controller.start).toHaveBeenCalledWith("bundle-1");
     expect(controller.showUnavailable).not.toHaveBeenCalled();
     expect(roots[0].render).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(roots[0].render).mock.calls[0]?.[0]).toMatchObject({
+      props: { controller, folderImportPort },
+    });
   });
 
   it("moves between unavailable and exact Bundle sessions without a shell Bundle identity", async () => {
     const controller = createController();
     const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
-    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore);
+    const view = new KnowledgeStudioView(
+      createLeaf(),
+      controller,
+      sessionStore,
+      createFolderImportPort()
+    );
 
     await view.onOpen();
     expect(controller.showUnavailable).toHaveBeenLastCalledWith(
@@ -138,7 +153,8 @@ describe("KnowledgeStudioView", () => {
     const controller = createController();
     const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
     sessionStore.replaceSelection("bundle-2", "Workflow adapters remain unavailable.");
-    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore);
+    const folderImportPort = createFolderImportPort();
+    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore, folderImportPort);
     const container = view.containerEl as TestContainer;
     await view.onOpen();
     const firstHost = view.containerEl.children[1].firstElementChild;
@@ -149,6 +165,9 @@ describe("KnowledgeStudioView", () => {
     expect(createPluginRoot).toHaveBeenCalledTimes(2);
     expect(view.containerEl.children[1].firstElementChild).not.toBe(firstHost);
     expect(controller.start).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(roots[1].render).mock.calls[0]?.[0]).toMatchObject({
+      props: { controller, folderImportPort },
+    });
 
     await view.onClose();
 

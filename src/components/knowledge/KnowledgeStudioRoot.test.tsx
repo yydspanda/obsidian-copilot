@@ -2,6 +2,7 @@ import * as React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
 import { KnowledgeStudioRoot } from "@/components/knowledge/KnowledgeStudioRoot";
+import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
@@ -404,6 +405,20 @@ function asController(controller: TestKnowledgeStudioController): KnowledgeStudi
   return controller as unknown as KnowledgeStudioController;
 }
 
+const FOLDER_IMPORT_PORT: KnowledgeFolderImportPort = {
+  importFolder: jest.fn(),
+};
+
+/** Renders Knowledge Studio with the suite's inert folder import boundary. */
+function renderStudio(controller: TestKnowledgeStudioController): ReturnType<typeof render> {
+  return render(
+    <KnowledgeStudioRoot
+      controller={asController(controller)}
+      folderImportPort={FOLDER_IMPORT_PORT}
+    />
+  );
+}
+
 describe("KnowledgeStudioRoot", () => {
   it("renders startup unavailability without displaying a fabricated Bundle identity", () => {
     const controller = new TestKnowledgeStudioController({
@@ -412,7 +427,7 @@ describe("KnowledgeStudioRoot", () => {
       refreshing: false,
       unavailableNotice: "No project has a Knowledge Bundle configuration.",
     });
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     expect(screen.getByRole("alert").textContent).toContain(
       "No project has a Knowledge Bundle configuration."
@@ -428,7 +443,7 @@ describe("KnowledgeStudioRoot", () => {
       refreshing: true,
       bundleId: "personal",
     });
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     expect(screen.getByText("Loading durable knowledge state…")).toBeTruthy();
     expect(screen.queryByTestId("activity-panel")).toBeNull();
@@ -436,6 +451,7 @@ describe("KnowledgeStudioRoot", () => {
     act(() => controller.publish(createReadyState()));
 
     expect(screen.getByTestId("activity-panel")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Import folder" })).toBeTruthy();
     expect(screen.queryByText("Loading durable knowledge state…")).toBeNull();
     expect(screen.queryByRole("tab", { name: /Recovery/ })).toBeNull();
   });
@@ -449,7 +465,7 @@ describe("KnowledgeStudioRoot", () => {
       error: "Knowledge Studio could not load its durable state.",
     };
     const controller = new TestKnowledgeStudioController(state);
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     fireEvent.click(screen.getByRole("button", { name: "Retry load" }));
 
@@ -468,7 +484,7 @@ describe("KnowledgeStudioRoot", () => {
         notice: "Runtime adapters are not connected. No files can be changed.",
       },
     });
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     expect(screen.getByRole("alert").textContent).toContain("No files can be changed");
     expect(screen.queryByTestId("activity-panel")).toBeNull();
@@ -477,7 +493,7 @@ describe("KnowledgeStudioRoot", () => {
 
   it("delegates Activity actions and maps a review job to its current ChangeSet", () => {
     const controller = new TestKnowledgeStudioController(createReadyState());
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     fireEvent.click(screen.getByRole("button", { name: "Activity pause" }));
     fireEvent.click(screen.getByRole("button", { name: "Activity resume" }));
@@ -499,7 +515,7 @@ describe("KnowledgeStudioRoot", () => {
     const controller = new TestKnowledgeStudioController(
       createReadyState([createReviewPlan("changeset-1")], DISABLED_COMMAND_CAPABILITIES)
     );
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     expect(screen.getByTestId("activity-panel")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Activity pause" }).hasAttribute("disabled")).toBe(
@@ -529,7 +545,7 @@ describe("KnowledgeStudioRoot", () => {
 
   it("reveals Query only for a query-capable snapshot and delegates opaque controls", () => {
     const hiddenController = new TestKnowledgeStudioController(createReadyState([]));
-    const hidden = render(<KnowledgeStudioRoot controller={asController(hiddenController)} />);
+    const hidden = renderStudio(hiddenController);
     expect(screen.queryByRole("tab", { name: "Query" })).toBeNull();
     hidden.unmount();
 
@@ -543,7 +559,7 @@ describe("KnowledgeStudioRoot", () => {
       },
       query: { status: "idle" },
     });
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     fireEvent.click(screen.getByRole("tab", { name: "Query" }));
     expect(screen.getByTestId("query-panel")).toBeTruthy();
@@ -562,7 +578,7 @@ describe("KnowledgeStudioRoot", () => {
 
   it("renders a Review empty state when no current proposal exists", () => {
     const controller = new TestKnowledgeStudioController(createReadyState([]));
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     fireEvent.click(screen.getByRole("tab", { name: "Review" }));
 
@@ -579,7 +595,7 @@ describe("KnowledgeStudioRoot", () => {
       selectedReviewChangeSetId: "changeset-2",
       pendingAction: { kind: "submit_review", targetId: "changeset-2" },
     });
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     expect(screen.getByText("Review plan changeset-2")).toBeTruthy();
     expect(screen.getByText("Review busy true")).toBeTruthy();
@@ -600,7 +616,7 @@ describe("KnowledgeStudioRoot", () => {
     const controller = new TestKnowledgeStudioController(
       createReadyState([], ENABLED_COMMAND_CAPABILITIES, createRecoveryModel())
     );
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     const recoveryTab = screen.getByRole("tab", { name: /Recovery/ });
     expect(recoveryTab.textContent).toContain("Recovery");
@@ -630,7 +646,7 @@ describe("KnowledgeStudioRoot", () => {
       activeTab: "recovery",
       pendingAction: { kind: "continue_recovery", targetId: "recovery-1" },
     });
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     expect(screen.getByText("Recovery pending recovery-1")).toBeTruthy();
     expect(screen.getByText("Continuing the selected recovery…")).toBeTruthy();
@@ -652,7 +668,7 @@ describe("KnowledgeStudioRoot", () => {
         ],
       },
     });
-    render(<KnowledgeStudioRoot controller={asController(controller)} />);
+    renderStudio(controller);
 
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("did not pass deterministic validation");

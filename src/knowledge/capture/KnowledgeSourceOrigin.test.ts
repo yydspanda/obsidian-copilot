@@ -23,7 +23,7 @@ function createEntry(patch: Partial<SourceManifestEntry> = {}): SourceManifestEn
 }
 
 describe("KnowledgeSourceOrigin", () => {
-  it("keeps legacy and Chat sources on ordinary ingest authority", () => {
+  it("keeps legacy, Chat, and folder-import sources on ordinary ingest authority", () => {
     expect(deriveKnowledgeSourceCompileAuthority(createEntry())).toEqual({
       operation: "ingest",
     });
@@ -35,6 +35,20 @@ describe("KnowledgeSourceOrigin", () => {
         })
       )
     ).toEqual({ operation: "ingest" });
+    expect(
+      deriveKnowledgeSourceCompileAuthority(
+        createEntry({
+          extensions: createKnowledgeSourceOriginExtensions("folder_import"),
+        })
+      )
+    ).toEqual({ operation: "ingest" });
+    expect(
+      parseKnowledgeSourceOrigin(
+        createKnowledgeSourceOriginExtensions("folder_import")[
+          KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY
+        ]
+      )
+    ).toEqual({ version: 1, operation: "folder_import" });
   });
 
   it("derives query writeback only from a strict managed capture origin", () => {

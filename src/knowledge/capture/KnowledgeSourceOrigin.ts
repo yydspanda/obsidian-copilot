@@ -10,12 +10,21 @@ export const KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY =
 export type KnowledgeSourceCompileOperation = "ingest" | "query_writeback";
 
 /** Operations allowed to create a first-party durable source registration. */
-export type KnowledgeSourceOriginOperation = "chat_add_to_knowledge" | "query_writeback";
+export type KnowledgeSourceOriginOperation =
+  | "chat_add_to_knowledge"
+  | "folder_import"
+  | "query_writeback";
 
 /** Registration provenance for a user-managed source selected from Chat. */
 export interface KnowledgeChatSourceOrigin {
   version: 1;
   operation: "chat_add_to_knowledge";
+}
+
+/** Registration provenance for a managed copy selected through folder import. */
+export interface KnowledgeFolderImportSourceOrigin {
+  version: 1;
+  operation: "folder_import";
 }
 
 /** Immutable capture identity required to authorize a query-writeback compile. */
@@ -27,7 +36,10 @@ export interface KnowledgeQueryWritebackSourceOrigin {
 }
 
 /** Versioned, data-only source provenance retained in the Manifest extension bag. */
-export type KnowledgeSourceOrigin = KnowledgeChatSourceOrigin | KnowledgeQueryWritebackSourceOrigin;
+export type KnowledgeSourceOrigin =
+  | KnowledgeChatSourceOrigin
+  | KnowledgeFolderImportSourceOrigin
+  | KnowledgeQueryWritebackSourceOrigin;
 
 /** Query-writeback identity supplied only after deterministic capture creation. */
 export interface KnowledgeQueryWritebackSourceOriginInput {
@@ -97,7 +109,7 @@ function assertExactKeys(value: object, expected: readonly string[]): void {
 export function parseKnowledgeSourceOrigin(value: unknown): KnowledgeSourceOrigin {
   if (!isPlainRecord(value)) throw new KnowledgeSourceOriginValidationError();
   const operation = readDataProperty(value, "operation");
-  if (operation === "chat_add_to_knowledge") {
+  if (operation === "chat_add_to_knowledge" || operation === "folder_import") {
     assertExactKeys(value, ["version", "operation"]);
     if (readDataProperty(value, "version") !== 1) {
       throw new KnowledgeSourceOriginValidationError();
@@ -141,7 +153,7 @@ export function deriveKnowledgeSourceCompileAuthority(
   const value = entry.extensions?.[KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY];
   if (value === undefined) return Object.freeze({ operation: "ingest" });
   const origin = parseKnowledgeSourceOrigin(value);
-  if (origin.operation === "chat_add_to_knowledge") {
+  if (origin.operation === "chat_add_to_knowledge" || origin.operation === "folder_import") {
     return Object.freeze({ operation: "ingest" });
   }
   if (entry.custody !== "managed_copy") {
@@ -164,7 +176,7 @@ export function deriveKnowledgeSourceCompileAuthority(
  * @returns Detached JSON-safe Manifest extension bag
  */
 export function createKnowledgeSourceOriginExtensions(
-  operation: "chat_add_to_knowledge"
+  operation: "chat_add_to_knowledge" | "folder_import"
 ): Record<string, JsonValue>;
 export function createKnowledgeSourceOriginExtensions(
   operation: "query_writeback",
@@ -175,7 +187,7 @@ export function createKnowledgeSourceOriginExtensions(
   input?: Readonly<KnowledgeQueryWritebackSourceOriginInput>
 ): Record<string, JsonValue> {
   const origin: KnowledgeSourceOrigin =
-    operation === "chat_add_to_knowledge"
+    operation === "chat_add_to_knowledge" || operation === "folder_import"
       ? { version: 1, operation }
       : {
           version: 1,

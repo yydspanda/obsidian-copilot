@@ -37,6 +37,11 @@ export interface KnowledgeSourceRegistrationResult {
   entry: SourceManifestEntry;
 }
 
+/** Read-only compatibility result returned before a caller-owned file mutation. */
+export interface KnowledgeSourceRegistrationPreflightResult {
+  status: "available" | "already_registered";
+}
+
 /** Narrow generation proof injected by the owning production adapter. */
 export interface KnowledgeSourceRegistrationGenerationPort {
   assertCurrent(): void;
@@ -320,6 +325,41 @@ export class KnowledgeSourceRegistrationCore {
     private readonly manifest: KnowledgeSourceRegistrationManifestPort,
     private readonly generation: KnowledgeSourceRegistrationGenerationPort
   ) {}
+
+  /**
+   * Proves whether one exact registration can be reused before a file is copied.
+   *
+   * This is an advisory read-set, not a reservation. {@link register} repeats the
+   * same proof after the caller-owned file operation and remains authoritative.
+   *
+   * @param request - Authorized Bundle, root, path, custody, and provenance
+   * @param signal - Caller and generation cancellation
+   * @returns Whether the path is absent or already carries compatible metadata
+   */
+  async preflight(
+    request: Readonly<KnowledgeSourceRegistrationRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeSourceRegistrationPreflightResult> {
+    const captured = captureRegistrationRequest(request);
+    assertCurrent(signal, this.generation);
+    if (!isPathWithinRoot(captured.sourcePath, captured.sourceRoot)) {
+      throw new TypeError("Knowledge source is outside its authorized root");
+    }
+
+    const snapshot = captureManifest(
+      await this.manifest.load(captured.bundleId),
+      captured.bundleId
+    );
+    assertCurrent(signal, this.generation);
+    const existing = snapshot.entries.find(
+      (entry) => entry.sourceKey === toWindowsPathKey(captured.sourcePath)
+    );
+    if (!existing) return Object.freeze({ status: "available" });
+    if (captured.existingPathPolicy === "exact" && !matchesExactRegistration(existing, captured)) {
+      throw new KnowledgeSourceRegistrationMetadataConflictError();
+    }
+    return Object.freeze({ status: "already_registered" });
+  }
 
   /**
    * Registers one source idempotently inside its exact authorized root.

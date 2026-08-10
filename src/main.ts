@@ -23,12 +23,16 @@ import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/c
 import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
 import { DelegatingKnowledgeChatCapturePort } from "@/knowledge/capture/DelegatingKnowledgeChatCapturePort";
+import { DelegatingKnowledgeFolderImportPort } from "@/knowledge/capture/DelegatingKnowledgeFolderImportPort";
 import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
 import { KnowledgeChatCaptureGenerationLease } from "@/knowledge/capture/KnowledgeChatCaptureGenerationLease";
+import { KnowledgeFolderImportGenerationLease } from "@/knowledge/capture/KnowledgeFolderImportGenerationLease";
+import { ObsidianKnowledgeFolderImportFileStore } from "@/knowledge/capture/ObsidianKnowledgeFolderImportFileStore";
 import {
   KnowledgeProductionChatCaptureCoordinator,
   ObsidianKnowledgeVaultSourcePresence,
 } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
+import { KnowledgeProductionFolderImportCoordinator } from "@/knowledge/capture/KnowledgeProductionFolderImportCoordinator";
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
@@ -206,6 +210,7 @@ export default class CopilotPlugin extends Plugin {
     });
   private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
   private readonly knowledgeChatCapturePort = new DelegatingKnowledgeChatCapturePort();
+  private readonly knowledgeFolderImportPort = new DelegatingKnowledgeFolderImportPort();
   private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
   private readonly knowledgeStudioStartupAvailability =
     new KnowledgeStudioStartupAvailabilityAdapter(
@@ -359,7 +364,12 @@ export default class CopilotPlugin extends Plugin {
       this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
         const port = this.knowledgeStudioPort;
         const controller = new KnowledgeStudioController(port, port, port, port);
-        return new KnowledgeStudioView(leaf, controller, this.knowledgeStudioSessionStore);
+        return new KnowledgeStudioView(
+          leaf,
+          controller,
+          this.knowledgeStudioSessionStore,
+          this.knowledgeFolderImportPort
+        );
       });
       this.addRibbonIcon("library-big", "Open Knowledge Studio", () => {
         void this.activateKnowledgeStudio();
@@ -659,6 +669,7 @@ export default class CopilotPlugin extends Plugin {
       | undefined;
     let studioReadGeneration: KnowledgeStudioReadGenerationLease | undefined;
     let captureGeneration: KnowledgeChatCaptureGenerationLease | undefined;
+    let folderImportGeneration: KnowledgeFolderImportGenerationLease | undefined;
     try {
       throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
       this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
@@ -783,6 +794,27 @@ export default class CopilotPlugin extends Plugin {
               revokeDelegate: (delegate) => this.knowledgeChatCapturePort.revokeDelegate(delegate),
               assertCurrent,
             });
+            const nextFolderImportDelegate = new KnowledgeProductionFolderImportCoordinator({
+              owners: admission.owners,
+              parserProfiles: admission.workflowLease
+                .getParsers()
+                .map((parser) => parser.getProfile()),
+              registration,
+              createFileStore: (sourceRoot) =>
+                new ObsidianKnowledgeFolderImportFileStore(this.app.vault.adapter, sourceRoot, {
+                  assertCurrent,
+                }),
+              assertCurrent,
+              onGenerationRefreshRequired: deferGenerationRefresh,
+            });
+            folderImportGeneration = new KnowledgeFolderImportGenerationLease({
+              delegate: nextFolderImportDelegate,
+              subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
+              replaceDelegate: (delegate) =>
+                this.knowledgeFolderImportPort.replaceDelegate(delegate),
+              revokeDelegate: (delegate) => this.knowledgeFolderImportPort.revokeDelegate(delegate),
+              assertCurrent,
+            });
             retainKnowledgeProductionDrain(this.app.vault, workerController.whenSettled());
             workerController.start();
             studioReadGeneration.assertCurrent();
@@ -796,6 +828,8 @@ export default class CopilotPlugin extends Plugin {
           released = false;
           captureGeneration?.close();
           captureGeneration = undefined;
+          folderImportGeneration?.close();
+          folderImportGeneration = undefined;
           studioReadGeneration?.close();
           studioReadGeneration = undefined;
           workerController?.close();
@@ -807,6 +841,8 @@ export default class CopilotPlugin extends Plugin {
         released = false;
         captureGeneration?.close();
         captureGeneration = undefined;
+        folderImportGeneration?.close();
+        folderImportGeneration = undefined;
         studioReadGeneration?.close();
         studioReadGeneration = undefined;
         workerController?.close();
@@ -928,6 +964,7 @@ export default class CopilotPlugin extends Plugin {
     this.knowledgeStudioSessionStore.dispose();
     this.knowledgeStudioPort.dispose();
     this.knowledgeChatCapturePort.dispose();
+    this.knowledgeFolderImportPort.dispose();
     this.knowledgeProjectRecordsUnsubscriber?.();
     this.knowledgeProjectRecordsUnsubscriber = undefined;
     // Unsubscribe ProjectManager before releasing project state. Reversing

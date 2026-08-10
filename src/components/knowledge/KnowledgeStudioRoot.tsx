@@ -11,12 +11,14 @@ import {
 } from "lucide-react";
 
 import { KnowledgeActivityPanel } from "@/components/knowledge/KnowledgeActivityPanel";
+import { KnowledgeFolderImportButton } from "@/components/knowledge/KnowledgeFolderImportButton";
 import { KnowledgeRecoveryPanel } from "@/components/knowledge/KnowledgeRecoveryPanel";
 import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
 import { KnowledgeQueryPanel } from "@/components/knowledge/KnowledgeQueryPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
+import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 import type { KnowledgeReviewPlan } from "@/knowledge/review/ReviewDecision";
 import type {
   KnowledgeStudioController,
@@ -29,6 +31,7 @@ import type {
 /** Props for the controller-backed Knowledge Studio React surface. */
 export interface KnowledgeStudioRootProps {
   controller: KnowledgeStudioController;
+  folderImportPort: KnowledgeFolderImportPort;
 }
 
 interface TabDefinition {
@@ -355,7 +358,10 @@ function openJobReview(controller: KnowledgeStudioController, jobId: string): vo
  * @param props - Knowledge Studio controller boundary
  * @returns Controller-backed Knowledge Studio surface
  */
-export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): React.ReactElement {
+export function KnowledgeStudioRoot({
+  controller,
+  folderImportPort,
+}: KnowledgeStudioRootProps): React.ReactElement {
   const state = useKnowledgeStudioState(controller);
   const activityTabId = React.useId();
   const queryTabId = React.useId();
@@ -445,40 +451,43 @@ export function KnowledgeStudioRoot({ controller }: KnowledgeStudioRootProps): R
             Bundle {snapshot.bundleId} · durable revision {snapshot.revisionToken}
           </p>
         </div>
-        <div aria-label="Knowledge Studio sections" className="tw-flex tw-gap-1" role="tablist">
-          {STUDIO_TABS.filter(
-            (tab) =>
-              (tab.id !== "query" || snapshot.queryAvailable === true) &&
-              (tab.id !== "recovery" || snapshot.recovery.items.length > 0)
-          ).map((tab) => {
-            const selected = state.activeTab === tab.id;
-            const TabIcon = tab.icon;
-            return (
-              <Button
-                key={tab.id}
-                aria-controls={`${tabIds[tab.id]}-panel`}
-                aria-selected={selected}
-                id={`${tabIds[tab.id]}-tab`}
-                role="tab"
-                size="sm"
-                variant={selected ? "default" : "ghost"}
-                onClick={() => controller.selectTab(tab.id)}
-              >
-                <TabIcon aria-hidden="true" className="tw-size-3" />
-                {tab.label}
-                {tab.id === "review" && snapshot.reviews.length > 0 ? (
-                  <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
-                    {snapshot.reviews.length}
-                  </Badge>
-                ) : null}
-                {tab.id === "recovery" && snapshot.recovery.items.length > 0 ? (
-                  <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
-                    {snapshot.recovery.items.length}
-                  </Badge>
-                ) : null}
-              </Button>
-            );
-          })}
+        <div className="tw-flex tw-flex-wrap tw-items-start tw-justify-end tw-gap-2">
+          <KnowledgeFolderImportButton port={folderImportPort} />
+          <div aria-label="Knowledge Studio sections" className="tw-flex tw-gap-1" role="tablist">
+            {STUDIO_TABS.filter(
+              (tab) =>
+                (tab.id !== "query" || snapshot.queryAvailable === true) &&
+                (tab.id !== "recovery" || snapshot.recovery.items.length > 0)
+            ).map((tab) => {
+              const selected = state.activeTab === tab.id;
+              const TabIcon = tab.icon;
+              return (
+                <Button
+                  key={tab.id}
+                  aria-controls={`${tabIds[tab.id]}-panel`}
+                  aria-selected={selected}
+                  id={`${tabIds[tab.id]}-tab`}
+                  role="tab"
+                  size="sm"
+                  variant={selected ? "default" : "ghost"}
+                  onClick={() => controller.selectTab(tab.id)}
+                >
+                  <TabIcon aria-hidden="true" className="tw-size-3" />
+                  {tab.label}
+                  {tab.id === "review" && snapshot.reviews.length > 0 ? (
+                    <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
+                      {snapshot.reviews.length}
+                    </Badge>
+                  ) : null}
+                  {tab.id === "recovery" && snapshot.recovery.items.length > 0 ? (
+                    <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
+                      {snapshot.recovery.items.length}
+                    </Badge>
+                  ) : null}
+                </Button>
+              );
+            })}
+          </div>
         </div>
       </header>
 

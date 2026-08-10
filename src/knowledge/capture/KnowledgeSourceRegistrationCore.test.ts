@@ -182,6 +182,38 @@ describe("KnowledgeSourceRegistrationCore", () => {
     expect(registerSource).not.toHaveBeenCalled();
   });
 
+  it("preflights absent and compatible paths without writing and rejects incompatible metadata", async () => {
+    const existing: SourceManifestEntry = {
+      ...createEntry("source-existing", "Sources/Imported.md", "managed_copy"),
+      extensions: { origin: { operation: "folder_import" } },
+    };
+    const manifest = createManifest([existing]);
+    const registerSource = jest.fn();
+    const core = new KnowledgeSourceRegistrationCore(
+      { load: async () => manifest, registerSource },
+      { assertCurrent: () => undefined }
+    );
+    const request = {
+      bundleId: "personal",
+      sourceRoot: "Sources",
+      sourcePath: "Sources/Imported.md",
+      custody: "managed_copy" as const,
+      extensions: { origin: { operation: "folder_import" } },
+      existingPathPolicy: "exact" as const,
+    };
+
+    await expect(core.preflight(request, new AbortController().signal)).resolves.toEqual({
+      status: "already_registered",
+    });
+    await expect(
+      core.preflight({ ...request, sourcePath: "Sources/New.md" }, new AbortController().signal)
+    ).resolves.toEqual({ status: "available" });
+    await expect(
+      core.preflight({ ...request, custody: "user_managed" }, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeSourceRegistrationMetadataConflictError" });
+    expect(registerSource).not.toHaveBeenCalled();
+  });
+
   it("notifies a durable commit before rejecting a stale post-write generation", async () => {
     let current = true;
     const onDurableRegistration = jest.fn();
