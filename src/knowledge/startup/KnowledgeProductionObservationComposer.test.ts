@@ -22,6 +22,7 @@ import {
 import type { KnowledgeProductionPreflightSettingsInput } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import { parseIngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
+import { KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY } from "@/knowledge/manifest/NoChangesManifestCommit";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import {
   KnowledgeRuntimeManifestStorage,
@@ -117,18 +118,20 @@ function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   );
 }
 
-/** Creates one strict DeepSeek response whose analysis produces no write targets. */
-function createNoChangesResponse(): KnowledgeDeepSeekHttpResponse {
-  const content = JSON.stringify({
-    version: 1,
-    summary: "No durable Wiki change is required.",
-    concepts: [],
-    entities: [],
-    claims: [],
-    relations: [],
-    citations: [],
-    targets: [],
-  });
+/** Creates one strict DeepSeek response with optional test-controlled model content. */
+function createNoChangesResponse(contentOverride?: string): KnowledgeDeepSeekHttpResponse {
+  const content =
+    contentOverride ??
+    JSON.stringify({
+      version: 1,
+      summary: "No durable Wiki change is required.",
+      concepts: [],
+      entities: [],
+      claims: [],
+      relations: [],
+      citations: [],
+      targets: [],
+    });
   const bytes = new TextEncoder().encode(
     JSON.stringify({
       id: "completion-observation-controller",
@@ -144,6 +147,7 @@ function createNoChangesResponse(): KnowledgeDeepSeekHttpResponse {
       usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
     })
   );
+  let consumed = false;
   return {
     status: 200,
     redirected: false,
@@ -157,9 +161,13 @@ function createNoChangesResponse(): KnowledgeDeepSeekHttpResponse {
       },
     },
     body: new ReadableStream<Uint8Array>({
-      start: (controller) => {
+      pull: (controller) => {
+        if (consumed) {
+          controller.close();
+          return;
+        }
+        consumed = true;
         controller.enqueue(bytes);
-        controller.close();
       },
     }),
   };
@@ -253,6 +261,26 @@ class ProductionVaultHarness {
   }
 }
 
+/** Memory Runtime file that loses one acknowledgement after a durable no-change commit. */
+class PostCommitThrowRuntimeFile extends KnowledgeExecutionMemoryRuntimeFile {
+  private armed = false;
+
+  /** Arms one post-commit transport failure without changing the committed bytes. */
+  arm(): void {
+    this.armed = true;
+  }
+
+  /** Commits through the base atomic file and then drops the matching acknowledgement once. */
+  override async process(transform: (currentContent: string) => string): Promise<string> {
+    const committed = await super.process(transform);
+    if (this.armed && committed.includes(KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY)) {
+      this.armed = false;
+      throw new Error("test-only post-commit acknowledgement loss");
+    }
+    return committed;
+  }
+}
+
 /** Mints one authentic same-snapshot workflow lease through production preflight. */
 async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
   lifecycle: KnowledgePluginProductionPreflightLifecycle;
@@ -281,8 +309,10 @@ async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
 }
 
 /** Creates an initialized Runtime whose Manifest registers the exact source. */
-async function createRuntime(): Promise<KnowledgeRuntimeStore> {
-  const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+async function createRuntime(
+  file: KnowledgeExecutionMemoryRuntimeFile = new KnowledgeExecutionMemoryRuntimeFile()
+): Promise<KnowledgeRuntimeStore> {
+  const runtime = new KnowledgeRuntimeStore(file);
   await runtime.initialize();
   const manifests = new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime));
   await manifests.registerSource("personal", {
@@ -419,7 +449,8 @@ describe("KnowledgeProductionObservationComposer", () => {
     const worker = composer.createCompileReviewWorkerController(
       admission.modelRouteLease,
       () => true,
-      createWorkerScheduler()
+      createWorkerScheduler(),
+      () => undefined
     );
     const onApplyGenerationRefreshRequired = jest.fn<void, []>();
     const adapter = composer.createKnowledgeStudioRuntimeReadAdapter(
@@ -687,7 +718,8 @@ describe("KnowledgeProductionObservationComposer", () => {
     const worker = composer.createCompileReviewWorkerController(
       admission.modelRouteLease,
       () => true,
-      createWorkerScheduler()
+      createWorkerScheduler(),
+      () => undefined
     );
 
     worker.start();
@@ -723,8 +755,11 @@ describe("KnowledgeProductionObservationComposer", () => {
       ReturnType<KnowledgeDeepSeekFetchPort>,
       Parameters<KnowledgeDeepSeekFetchPort>
     >(async () => {
-      if (fetchPort.mock.calls.length === 1) firstFetch.resolve();
-      if (fetchPort.mock.calls.length === 2) secondFetch.resolve();
+      if (fetchPort.mock.calls.length === 1) {
+        firstFetch.resolve();
+        return createNoChangesResponse("{}");
+      }
+      secondFetch.resolve();
       return createNoChangesResponse();
     });
     const { lifecycle, admission } = await createAdmission(fetchPort);
@@ -741,38 +776,115 @@ describe("KnowledgeProductionObservationComposer", () => {
     const worker = composer.createCompileReviewWorkerController(
       admission.modelRouteLease,
       () => true,
-      createWorkerScheduler()
+      createWorkerScheduler(),
+      () => undefined
     );
 
     worker.start();
     await firstFetch.promise;
+    let firstFailed = false;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
-      if (parsed.ok && parsed.value.jobs[0]?.status === "completed") break;
+      if (parsed.ok && parsed.value.jobs[0]?.status === "failed") {
+        firstFailed = true;
+        break;
+      }
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     }
-    expect(fetchPort).toHaveBeenCalledTimes(1);
+    expect(firstFailed).toBe(true);
 
     vault.updateFile(source, encodeText("# Source two\n"));
     vault.trigger("modify", source);
     await secondFetch.promise;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
-      if (
-        parsed.ok &&
-        parsed.value.jobs.some((job) => job.inputRevision === 2 && job.status === "completed")
-      ) {
-        composer.close();
-        await worker.whenSettled();
-        lifecycle.close();
-        expect(fetchPort).toHaveBeenCalledTimes(2);
-        return;
-      }
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-    }
+
+    expect(fetchPort).toHaveBeenCalledTimes(2);
     composer.close();
     await worker.whenSettled();
     lifecycle.close();
-    throw new Error("Expected the Queue event sink to wake the idle worker");
+  });
+
+  it("requests a generation refresh after the real no-change Manifest commit", async () => {
+    const firstFetch = createDeferred<void>();
+    const refreshRequired = createDeferred<void>();
+    const fetchPort = jest.fn<
+      ReturnType<KnowledgeDeepSeekFetchPort>,
+      Parameters<KnowledgeDeepSeekFetchPort>
+    >(async () => {
+      if (fetchPort.mock.calls.length === 1) firstFetch.resolve();
+      return createNoChangesResponse();
+    });
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+    await composer.start(new AbortController().signal);
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => refreshRequired.resolve()
+    );
+
+    worker.start();
+    await firstFetch.promise;
+    await refreshRequired.promise;
+    const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("Expected a strict no-change Queue snapshot");
+    expect(parsed.value.jobs[0]).toMatchObject({ status: "completed", stage: "completed" });
+    expect(fetchPort).toHaveBeenCalledTimes(1);
+    composer.close();
+    await worker.whenSettled();
+    lifecycle.close();
+  });
+
+  it("probes and refreshes after a no-change commit acknowledgement is lost", async () => {
+    const fetchStarted = createDeferred<void>();
+    const refreshRequired = createDeferred<void>();
+    const fetchPort = jest.fn<
+      ReturnType<KnowledgeDeepSeekFetchPort>,
+      Parameters<KnowledgeDeepSeekFetchPort>
+    >(async () => {
+      fetchStarted.resolve();
+      return createNoChangesResponse();
+    });
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const file = new PostCommitThrowRuntimeFile();
+    const runtime = await createRuntime(file);
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+    await composer.start(new AbortController().signal);
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => refreshRequired.resolve()
+    );
+
+    file.arm();
+    worker.start();
+    await fetchStarted.promise;
+    await refreshRequired.promise;
+
+    const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("Expected the committed no-change Queue snapshot");
+    expect(parsed.value.jobs[0]).toMatchObject({ status: "completed", stage: "completed" });
+    expect(fetchPort).toHaveBeenCalledTimes(1);
+    composer.close();
+    await worker.whenSettled();
+    lifecycle.close();
   });
 });

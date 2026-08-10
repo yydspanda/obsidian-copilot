@@ -12,6 +12,12 @@ import {
   SourceManifestRevisionConflictError,
   type SourceManifestStorage,
 } from "@/knowledge/manifest/SourceManifestStorage";
+import {
+  KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
+  createKnowledgeNoChangesCommitMarker,
+  createNoChangesManifestCommitPlan,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
+import { KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY } from "@/knowledge/manifest/KnowledgeRuntimeSourceCommit";
 import type {
   JsonValue,
   SourceCompileFailure,
@@ -142,6 +148,40 @@ function createFailure(overrides: Partial<SourceCompileFailure> = {}): SourceCom
     },
     ...overrides,
   };
+}
+
+/** Creates a JSON-safe explicit zero-page no-change marker. */
+function createNoChangesExtension(inputRevision = 1): Record<string, JsonValue> {
+  const plan = createNoChangesManifestCommitPlan({
+    bundleId: "personal",
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision,
+    compileContextDigest: HASH_A,
+    analysisDigest: HASH_B,
+    evidenceDigest: HASH_C,
+    reason: "analysis_no_targets",
+    expectedManifestRevision: 0,
+    expectedManifestDigest: HASH_A,
+    baseGeneratedPages: [],
+    sourceAuthority: { operation: "ingest" },
+  });
+  const marker = createKnowledgeNoChangesCommitMarker({
+    plan,
+    jobClaim: {
+      jobId: "job-no-changes",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision,
+      attempt: 1,
+      startedAt: 100,
+    },
+    completedAt: 101,
+    manifestAfterRevision: 1,
+  });
+  return { [KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]: marker as unknown as JsonValue };
 }
 
 /**
@@ -639,6 +679,148 @@ describe("SourceManifestRepository", () => {
     await expect(
       repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [])
     ).resolves.toEqual({ kind: "needs_ingest", reasons: ["output_missing"] });
+  });
+
+  it("recognizes an explicit durable zero-page no-change success", async () => {
+    const storage = new InMemorySourceManifestStorage();
+    const repository = new SourceManifestRepository(storage);
+    storage.seed(
+      "personal",
+      createManifest("personal", {
+        revision: 1,
+        entries: [
+          createEntry("source-1", "Sources/Note.md", {
+            extensions: createNoChangesExtension(),
+          }),
+        ],
+      })
+    );
+
+    await expect(
+      repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [])
+    ).resolves.toEqual({ kind: "up_to_date" });
+  });
+
+  it("uses a newer Runtime apply instead of a retained historical no-change marker", async () => {
+    const storage = new InMemorySourceManifestStorage();
+    const repository = new SourceManifestRepository(storage);
+    const applied = createSnapshot({
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_C,
+    });
+    storage.seed(
+      "personal",
+      createManifest("personal", {
+        revision: 3,
+        entries: [
+          createEntry("source-1", "Sources/Note.md", {
+            lastSuccessful: applied,
+            extensions: {
+              ...createNoChangesExtension(1),
+              [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: {
+                version: 1,
+                inputRevision: 2,
+                transactionId: "transaction-newer-apply",
+                manifestIntentDigest: HASH_A,
+              },
+            },
+          }),
+        ],
+      })
+    );
+
+    await expect(
+      repository.evaluateFreshness("personal", "source-1", HASH_C, HASH_C, [
+        { path: "Wiki/Concepts/Note.md", exists: true },
+      ])
+    ).resolves.toEqual({ kind: "up_to_date" });
+  });
+
+  it("fails closed when Apply and no-change claim the same source input revision", async () => {
+    const storage = new InMemorySourceManifestStorage();
+    const repository = new SourceManifestRepository(storage);
+    storage.seed(
+      "personal",
+      createManifest("personal", {
+        revision: 2,
+        entries: [
+          createEntry("source-1", "Sources/Note.md", {
+            lastSuccessful: createSnapshot(),
+            extensions: {
+              ...createNoChangesExtension(1),
+              [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: {
+                version: 1,
+                inputRevision: 1,
+                transactionId: "transaction-conflicting-apply",
+                manifestIntentDigest: HASH_A,
+              },
+            },
+          }),
+        ],
+      })
+    );
+
+    await expect(
+      repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [
+        { path: "Wiki/Concepts/Note.md", exists: true },
+      ])
+    ).rejects.toMatchObject({
+      name: "SourceManifestValidationError",
+      diagnostics: [expect.objectContaining({ code: "manifest_source_outcome_revision_conflict" })],
+    });
+  });
+
+  it("fails closed when Runtime apply metadata cannot establish outcome ordering", async () => {
+    const storage = new InMemorySourceManifestStorage();
+    const repository = new SourceManifestRepository(storage);
+    storage.seed(
+      "personal",
+      createManifest("personal", {
+        revision: 2,
+        entries: [
+          createEntry("source-1", "Sources/Note.md", {
+            lastSuccessful: createSnapshot(),
+            extensions: {
+              ...createNoChangesExtension(1),
+              [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: { version: 1 },
+            },
+          }),
+        ],
+      })
+    );
+
+    await expect(
+      repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [
+        { path: "Wiki/Concepts/Note.md", exists: true },
+      ])
+    ).rejects.toMatchObject({
+      name: "SourceManifestValidationError",
+      diagnostics: [expect.objectContaining({ code: "manifest_runtime_commit_invalid" })],
+    });
+  });
+
+  it("fails closed when the reserved no-change marker is malformed", async () => {
+    const storage = new InMemorySourceManifestStorage();
+    const repository = new SourceManifestRepository(storage);
+    storage.seed(
+      "personal",
+      createManifest("personal", {
+        entries: [
+          createEntry("source-1", "Sources/Note.md", {
+            extensions: {
+              [KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]: { version: 1 },
+            },
+          }),
+        ],
+      })
+    );
+
+    await expect(
+      repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [])
+    ).rejects.toMatchObject({
+      name: "SourceManifestValidationError",
+      diagnostics: [expect.objectContaining({ code: "manifest_no_changes_commit_invalid" })],
+    });
   });
 
   it("round-trips unknown extension metadata across repository mutations", async () => {

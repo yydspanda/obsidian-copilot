@@ -10,6 +10,13 @@ import {
 } from "@/knowledge/model/fingerprint";
 
 describe("Knowledge production pipeline resources", () => {
+  it("publishes the durable no-change compiler behavior generation", () => {
+    const resources = createKnowledgeProductionPipelineResources();
+
+    expect(KNOWLEDGE_PRODUCTION_COMPILER_VERSION).toBe("knowledge-compiler-v2");
+    expect(resources.profileOptions.compilerVersion).toBe("knowledge-compiler-v2");
+  });
+
   it("creates owned text/PDF parsers and a matching immutable production profile", () => {
     const resources = createKnowledgeProductionPipelineResources();
     const textParserProfile = resources.parsers[0].getProfile();

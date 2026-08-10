@@ -4,6 +4,13 @@ import {
   type IngestExecutionResult,
 } from "@/knowledge/ingest/queue/IngestQueue";
 import type { RetryPolicy } from "@/knowledge/ingest/queue/RetryPolicy";
+import { deriveKnowledgeSourceCompileAuthority } from "@/knowledge/capture/KnowledgeSourceOrigin";
+import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
+import {
+  createNoChangesManifestCommitPlan,
+  createNoChangesManifestCommitPlanDigest,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
+import { parseSourceManifest } from "@/knowledge/model/schemas";
 import type { SourceManifest } from "@/knowledge/model/types";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
@@ -19,6 +26,63 @@ import {
   KnowledgeExecutionOwner,
   createKnowledgeExecutionOwner,
 } from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import { sha256 } from "@/utils/hash";
+
+/**
+ * Creates an exact Runtime-authorized no-change result for a legacy test executor outcome.
+ *
+ * @param result - Bare no-change result returned by the test-specific executor
+ * @param context - Exact claimed Queue attempt that produced the result
+ * @param manifest - Detached current Manifest snapshot read after executor completion
+ * @returns No-change result carrying a strict Manifest commit plan and digest
+ */
+function createAuthorizedNoChangesResult(
+  result: Extract<IngestExecutionResult, { kind: "no_changes" }>,
+  context: IngestExecutionContext,
+  manifest: SourceManifest
+): Extract<IngestExecutionResult, { kind: "no_changes" }> {
+  const source = manifest.entries.find((entry) => entry.sourceId === context.job.sourceId);
+  if (!source) {
+    throw new Error("The test Runtime Manifest does not contain the claimed source");
+  }
+  const baseGeneratedPages = (source.lastSuccessful?.generatedPages ?? []).map((page) => {
+    if (page.contentHash === undefined) {
+      throw new Error("The test Runtime Manifest contains a generated page without a content hash");
+    }
+    return { ...page, contentHash: page.contentHash };
+  });
+  const identity = [
+    manifest.bundleId,
+    context.job.id,
+    context.job.sourceId,
+    context.job.sourceContentHash,
+    context.job.pipelineFingerprint,
+    String(context.job.inputRevision),
+    String(context.job.attempt),
+    result.changeSetId,
+  ].join("\n");
+  const plan = createNoChangesManifestCommitPlan({
+    bundleId: context.job.bundleId,
+    sourceId: context.job.sourceId,
+    sourceContentHash: context.job.sourceContentHash,
+    pipelineFingerprint: context.job.pipelineFingerprint,
+    inputRevision: context.job.inputRevision,
+    compileContextDigest: sha256(`knowledge-test-compile-context-v1\n${identity}`),
+    analysisDigest: sha256(`knowledge-test-analysis-v1\n${identity}`),
+    evidenceDigest: sha256(`knowledge-test-no-changes-evidence-v1\n${identity}`),
+    reason: "all_targets_unchanged",
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    baseGeneratedPages,
+    sourceAuthority: deriveKnowledgeSourceCompileAuthority(source),
+  });
+  return {
+    kind: "no_changes",
+    changeSetId: plan.noChangesId,
+    manifestCommitPlan: plan,
+    manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+  };
+}
 
 /** In-memory atomic boundary used by authentic execution-authority tests. */
 export class KnowledgeExecutionMemoryRuntimeFile implements AtomicRuntimeFile {
@@ -127,7 +191,25 @@ export async function createKnowledgeExecutionTestHarness(
 
   const queue = new IngestQueue(
     queueStorage,
-    { execute: (context) => options.execute(context) },
+    {
+      execute: async (context) => {
+        const result = await options.execute(context);
+        if (
+          result.kind !== "no_changes" ||
+          result.manifestCommitPlan !== undefined ||
+          result.manifestCommitPlanDigest !== undefined
+        ) {
+          return result;
+        }
+        const currentManifest = parseSourceManifest(
+          await manifestStorage.read(context.job.bundleId)
+        );
+        if (!currentManifest.ok) {
+          throw new Error("Expected the test Runtime to retain a strict Source Manifest");
+        }
+        return createAuthorizedNoChangesResult(result, context, currentManifest.value);
+      },
+    },
     {
       clock: () => options.clock ?? 100,
       jobIdFactory: () => options.jobId ?? "job-execution",

@@ -44,6 +44,10 @@ import type { ExactSourceArtifact } from "@/knowledge/ingest/ObsidianVaultSource
 import type { RunNextResult } from "@/knowledge/ingest/queue/IngestQueue";
 import type { IngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
+import {
+  KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
+  parseKnowledgeNoChangesCommitMarker,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
 import type { SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
@@ -55,6 +59,7 @@ import type {
 import {
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
+  type KnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import {
   KnowledgeProductionCompileReviewHandler,
@@ -626,6 +631,26 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
     expect(secondJob.changeSetId).toBe(firstJob.changeSetId);
     expect(first.reviewSnapshot.records).toEqual([]);
     expect(second.reviewSnapshot.records).toEqual([]);
+    const runtime = JSON.parse(first.runtimeContent) as KnowledgeRuntimeStoreSnapshot;
+    const manifest = runtime.manifests.find((slot) => slot.bundleId === BUNDLE_ID)
+      ?.value as SourceManifest;
+    const marker = parseKnowledgeNoChangesCommitMarker(
+      manifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    );
+    expect(manifest.revision).toBe(2);
+    expect(manifest.entries[0]?.lastSuccessful).toBeUndefined();
+    expect(marker).toMatchObject({
+      ok: true,
+      value: {
+        noChangesId: firstJob.changeSetId,
+        jobId: firstJob.id,
+        sourceContentHash: firstJob.sourceContentHash,
+        pipelineFingerprint: firstJob.pipelineFingerprint,
+        inputRevision: firstJob.inputRevision,
+      },
+    });
+    expect(runtime.applyCommits).toEqual([]);
+    expect(runtime.activeTransaction).toBeNull();
   });
 
   it("projects a controlled Compiler failure as a safe nonretryable Queue failure", async () => {

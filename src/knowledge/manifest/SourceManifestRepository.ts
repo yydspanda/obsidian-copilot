@@ -1,5 +1,14 @@
 import { decideSourceFreshness } from "@/knowledge/manifest/freshness";
 import {
+  KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
+  parseKnowledgeNoChangesCommitMarker,
+  validateNoChangesManifestCommitMarker,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
+import {
+  KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
+  parseKnowledgeRuntimeSourceCommitExtension,
+} from "@/knowledge/manifest/KnowledgeRuntimeSourceCommit";
+import {
   SourceManifestRevisionConflictError,
   type SourceManifestStorage,
 } from "@/knowledge/manifest/SourceManifestStorage";
@@ -562,8 +571,61 @@ export class SourceManifestRepository {
   ): Promise<SourceFreshnessDecision> {
     const manifest = await this.load(bundleId);
     const source = requireSource(manifest, sourceId);
+    const rawNoChanges = source.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
+    const rawApply = source.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY];
+    const parsedNoChanges =
+      rawNoChanges === undefined ? undefined : parseKnowledgeNoChangesCommitMarker(rawNoChanges);
+    const parsedApply =
+      rawApply === undefined ? undefined : parseKnowledgeRuntimeSourceCommitExtension(rawApply);
+    if (
+      parsedNoChanges !== undefined &&
+      (!parsedNoChanges.ok ||
+        !validateNoChangesManifestCommitMarker(parsedNoChanges.value).valid ||
+        parsedNoChanges.value.bundleId !== bundleId ||
+        parsedNoChanges.value.sourceId !== sourceId ||
+        parsedNoChanges.value.manifestAfterRevision > manifest.revision)
+    ) {
+      throw new SourceManifestValidationError(bundleId, [
+        {
+          code: "manifest_no_changes_commit_invalid",
+          severity: "error",
+          field: `entries.${sourceId}.extensions.${KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY}`,
+          message: "The durable no-change success marker is invalid",
+        },
+      ]);
+    }
+    if (parsedApply !== undefined && !parsedApply.ok) {
+      throw new SourceManifestValidationError(bundleId, [
+        {
+          code: "manifest_runtime_commit_invalid",
+          severity: "error",
+          field: `entries.${sourceId}.extensions.${KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY}`,
+          message: "The durable Runtime apply metadata is invalid",
+        },
+      ]);
+    }
+    if (
+      parsedNoChanges?.ok &&
+      parsedApply?.ok &&
+      parsedNoChanges.value.inputRevision === parsedApply.value.inputRevision
+    ) {
+      throw new SourceManifestValidationError(bundleId, [
+        {
+          code: "manifest_source_outcome_revision_conflict",
+          severity: "error",
+          field: `entries.${sourceId}.extensions`,
+          message: "Apply and no-change outcomes cannot share one input revision",
+        },
+      ]);
+    }
+    const latestNoChanges =
+      parsedNoChanges?.ok &&
+      (!parsedApply?.ok || parsedNoChanges.value.inputRevision > parsedApply.value.inputRevision)
+        ? parsedNoChanges.value
+        : undefined;
     return decideSourceFreshness({
       lastSuccessful: source.lastSuccessful,
+      ...(latestNoChanges ? { lastNoChanges: latestNoChanges } : {}),
       sourceContentHash,
       pipelineFingerprint,
       outputs,

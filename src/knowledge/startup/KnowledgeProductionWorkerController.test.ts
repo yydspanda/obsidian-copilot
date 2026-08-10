@@ -116,6 +116,238 @@ describe("KnowledgeProductionWorkerController", () => {
     controller.close();
   });
 
+  it("requests exactly one refresh after an explicit durable no-change generation effect", async () => {
+    const refreshed = createDeferred<void>();
+    const onGenerationRefreshRequired = jest.fn(() => refreshed.resolve());
+    const runNext = jest.fn<Promise<RunNextResult>, [string]>(async () => ({
+      kind: "executed",
+      jobId: "job-no-changes",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    }));
+    const scheduler = new TestScheduler();
+    const controller = new KnowledgeProductionWorkerController({
+      worker: createWorker(runNext),
+      scheduler,
+      onGenerationRefreshRequired,
+      probeGenerationCurrent: async () => true,
+    });
+
+    controller.start();
+    await refreshed.promise;
+    controller.notifyWorkAvailable();
+    controller.notifyWorkAvailable();
+    await Promise.resolve();
+
+    expect(onGenerationRefreshRequired).toHaveBeenCalledTimes(1);
+    expect(runNext).toHaveBeenCalledTimes(1);
+    expect(scheduler.scheduled.size).toBe(0);
+    controller.close();
+  });
+
+  it("refreshes without backoff when an ACK-lost rejection probes a changed Manifest", async () => {
+    const attempted = createDeferred<void>();
+    const refreshed = createDeferred<void>();
+    const runNext = jest.fn<Promise<RunNextResult>, [string]>(async () => {
+      attempted.resolve();
+      throw new Error("post-commit acknowledgement lost");
+    });
+    const probeGenerationCurrent = jest.fn(async () => false);
+    const onGenerationRefreshRequired = jest.fn(() => refreshed.resolve());
+    const scheduler = new TestScheduler();
+    const controller = new KnowledgeProductionWorkerController({
+      worker: createWorker(runNext),
+      scheduler,
+      probeGenerationCurrent,
+      onGenerationRefreshRequired,
+    });
+
+    controller.start();
+    await attempted.promise;
+    await refreshed.promise;
+    controller.notifyWorkAvailable();
+    await Promise.resolve();
+
+    expect(probeGenerationCurrent).toHaveBeenCalledTimes(1);
+    expect(onGenerationRefreshRequired).toHaveBeenCalledTimes(1);
+    expect(runNext).toHaveBeenCalledTimes(1);
+    expect(scheduler.scheduled.size).toBe(0);
+    controller.close();
+  });
+
+  it("keeps infrastructure backoff when an ambiguous rejection retains the Manifest generation", async () => {
+    const attempted = createDeferred<void>();
+    const runNext = jest.fn<Promise<RunNextResult>, [string]>(async () => {
+      attempted.resolve();
+      throw new Error("transient Queue infrastructure failure");
+    });
+    const probeGenerationCurrent = jest.fn(async () => true);
+    const onGenerationRefreshRequired = jest.fn();
+    const scheduler = new TestScheduler();
+    const controller = new KnowledgeProductionWorkerController({
+      worker: createWorker(runNext),
+      scheduler,
+      probeGenerationCurrent,
+      onGenerationRefreshRequired,
+    });
+
+    controller.start();
+    await attempted.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(probeGenerationCurrent).toHaveBeenCalledTimes(1);
+    expect(onGenerationRefreshRequired).not.toHaveBeenCalled();
+    expect([...scheduler.scheduled.values()]).toEqual([expect.objectContaining({ delayMs: 250 })]);
+    controller.close();
+  });
+
+  it("keeps infrastructure backoff when the Manifest generation probe rejects", async () => {
+    const attempted = createDeferred<void>();
+    const runNext = jest.fn<Promise<RunNextResult>, [string]>(async () => {
+      attempted.resolve();
+      throw new Error("transient Queue infrastructure failure");
+    });
+    const probeGenerationCurrent = jest.fn(async () => {
+      throw new Error("Manifest storage unavailable");
+    });
+    const onGenerationRefreshRequired = jest.fn();
+    const scheduler = new TestScheduler();
+    const controller = new KnowledgeProductionWorkerController({
+      worker: createWorker(runNext),
+      scheduler,
+      probeGenerationCurrent,
+      onGenerationRefreshRequired,
+    });
+
+    controller.start();
+    await attempted.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(probeGenerationCurrent).toHaveBeenCalledTimes(1);
+    expect(onGenerationRefreshRequired).not.toHaveBeenCalled();
+    expect([...scheduler.scheduled.values()]).toEqual([expect.objectContaining({ delayMs: 250 })]);
+    controller.close();
+  });
+
+  it("retries an unavailable ambiguous probe before Queue and refreshes when it later changed", async () => {
+    const attempted = createDeferred<void>();
+    const refreshed = createDeferred<void>();
+    const runNext = jest.fn<Promise<RunNextResult>, [string]>(async () => {
+      attempted.resolve();
+      if (runNext.mock.calls.length === 1) {
+        throw new Error("post-commit acknowledgement lost");
+      }
+      return { kind: "idle" };
+    });
+    const probeGenerationCurrent = jest.fn(async () => {
+      if (probeGenerationCurrent.mock.calls.length === 1) {
+        throw new Error("Manifest storage temporarily unavailable");
+      }
+      return false;
+    });
+    const onGenerationRefreshRequired = jest.fn(() => refreshed.resolve());
+    const scheduler = new TestScheduler();
+    const controller = new KnowledgeProductionWorkerController({
+      worker: createWorker(runNext),
+      scheduler,
+      probeGenerationCurrent,
+      onGenerationRefreshRequired,
+    });
+
+    controller.start();
+    await attempted.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(scheduler.scheduled.get(1)?.delayMs).toBe(250);
+
+    scheduler.run(1);
+    await refreshed.promise;
+
+    expect(probeGenerationCurrent).toHaveBeenCalledTimes(2);
+    expect(onGenerationRefreshRequired).toHaveBeenCalledTimes(1);
+    expect(runNext).toHaveBeenCalledTimes(1);
+    expect(scheduler.scheduled.size).toBe(0);
+    controller.close();
+  });
+
+  it("resumes Queue only after a retained ambiguous probe proves the generation current", async () => {
+    const firstAttempt = createDeferred<void>();
+    const secondAttempt = createDeferred<void>();
+    const runNext = jest.fn<Promise<RunNextResult>, [string]>(async () => {
+      if (runNext.mock.calls.length === 1) {
+        firstAttempt.resolve();
+        throw new Error("ambiguous Queue acknowledgement");
+      }
+      secondAttempt.resolve();
+      return { kind: "idle" };
+    });
+    const probeGenerationCurrent = jest.fn(async () => {
+      if (probeGenerationCurrent.mock.calls.length === 1) {
+        throw new Error("Manifest storage temporarily unavailable");
+      }
+      return true;
+    });
+    const onGenerationRefreshRequired = jest.fn();
+    const scheduler = new TestScheduler();
+    const controller = new KnowledgeProductionWorkerController({
+      worker: createWorker(runNext),
+      scheduler,
+      probeGenerationCurrent,
+      onGenerationRefreshRequired,
+    });
+
+    controller.start();
+    await firstAttempt.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(runNext).toHaveBeenCalledTimes(1);
+
+    scheduler.run(1);
+    await secondAttempt.promise;
+
+    expect(probeGenerationCurrent).toHaveBeenCalledTimes(2);
+    expect(runNext).toHaveBeenCalledTimes(2);
+    expect(onGenerationRefreshRequired).not.toHaveBeenCalled();
+    expect(scheduler.scheduled.size).toBe(0);
+    controller.close();
+  });
+
+  it("does not refresh or retry when closed during an ambiguous generation probe", async () => {
+    const attempted = createDeferred<void>();
+    const probeStarted = createDeferred<void>();
+    const probeResult = createDeferred<boolean>();
+    const runNext = jest.fn<Promise<RunNextResult>, [string]>(async () => {
+      attempted.resolve();
+      throw new Error("ambiguous Queue acknowledgement");
+    });
+    const probeGenerationCurrent = jest.fn(async () => {
+      probeStarted.resolve();
+      return probeResult.promise;
+    });
+    const onGenerationRefreshRequired = jest.fn();
+    const scheduler = new TestScheduler();
+    const controller = new KnowledgeProductionWorkerController({
+      worker: createWorker(runNext),
+      scheduler,
+      probeGenerationCurrent,
+      onGenerationRefreshRequired,
+    });
+
+    controller.start();
+    await attempted.promise;
+    await probeStarted.promise;
+    controller.close();
+    probeResult.resolve(false);
+    await controller.whenSettled();
+
+    expect(probeGenerationCurrent).toHaveBeenCalledTimes(1);
+    expect(onGenerationRefreshRequired).not.toHaveBeenCalled();
+    expect(runNext).toHaveBeenCalledTimes(1);
+    expect(scheduler.scheduled.size).toBe(0);
+  });
+
   it("uses the captured timer realm for the earliest durable retry", async () => {
     const firstPass = createDeferred<void>();
     const secondPass = createDeferred<void>();

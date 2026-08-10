@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { NoChangesManifestCommitPlan } from "@/knowledge/manifest/NoChangesManifestCommit";
 import { knowledgeIngestJobSchema } from "@/knowledge/model/schemas";
 import type {
   KnowledgeDiagnostic,
@@ -158,10 +159,22 @@ export interface IngestQueueSnapshot {
 }
 
 /** Narrow out-of-band capability authorizing one source-watermark advance. */
-export interface QueueWriteAuthority {
+export interface QueueSourceObservationWriteAuthority {
   kind: "source_observation";
   observationToken: string;
 }
+
+/** Exact compiler proof authorizing an atomic no-change Queue/Manifest commit. */
+export interface QueueNoChangesCommitWriteAuthority {
+  kind: "no_changes_commit";
+  plan: NoChangesManifestCommitPlan;
+  planDigest: string;
+}
+
+/** Out-of-band authority interpreted only by the owning persistence adapter. */
+export type QueueWriteAuthority =
+  | QueueSourceObservationWriteAuthority
+  | QueueNoChangesCommitWriteAuthority;
 
 /**
  * Signals that queue state changed after a read and before its full snapshot write.

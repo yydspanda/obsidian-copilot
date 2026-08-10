@@ -1,5 +1,6 @@
 import type { SourceArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
 import type { ManifestCommitPlan } from "@/knowledge/manifest/ManifestCommitIntent";
+import type { NoChangesManifestCommitPlan } from "@/knowledge/manifest/NoChangesManifestCommit";
 import type {
   ClaimCitation,
   GeneratedPageOwnership,
@@ -360,8 +361,14 @@ export interface KnowledgeCompileProposal {
 /** Valid analysis that produced no file mutation after exact target binding. */
 export interface KnowledgeCompileNoChanges {
   kind: "no_changes";
+  /** Content-addressed identity of this exact durable no-change conclusion. */
+  noChangesId: string;
   compileContextDigest: string;
   analysisDigest: string;
+  /** Exact Manifest read-set and retained output projection for durable success. */
+  manifestCommitPlan: NoChangesManifestCommitPlan;
+  /** Canonical digest re-proved before the no-change success may be committed. */
+  manifestCommitPlanDigest: string;
   analysis: CompilerAnalysis;
   diagnostics: KnowledgeDiagnostic[];
 }

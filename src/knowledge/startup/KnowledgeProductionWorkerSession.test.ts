@@ -50,6 +50,28 @@ describe("KnowledgeProductionWorkerSession", () => {
     await expect(session.runOnce()).rejects.toMatchObject({ code: "not_released" });
   });
 
+  it("stops a multi-Bundle pass after the first durable no-change generation effect", async () => {
+    const result: RunNextResult = {
+      kind: "executed",
+      jobId: "job-no-changes",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    };
+    const { queue, runNext } = createQueue(result);
+    const session = new KnowledgeProductionWorkerSession({
+      queue,
+      bundleIds: ["beta", "alpha"],
+      isReleased: () => true,
+      assertCurrent: () => undefined,
+    });
+
+    await expect(session.runOnce()).resolves.toEqual({
+      kind: "pass",
+      results: [{ bundleId: "alpha", result }],
+    });
+    expect(runNext.mock.calls).toEqual([["alpha"]]);
+  });
+
   it("rejects overlapping passes and closes stale sessions", async () => {
     let resolveRun!: (result: RunNextResult) => void;
     const deferred = new Promise<RunNextResult>((resolve) => {

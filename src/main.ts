@@ -706,6 +706,17 @@ export default class CopilotPlugin extends Plugin {
               candidate.assertHealthy();
             };
             const scheduler = createKnowledgeWorkerScheduler(this.app.workspace.containerEl.win);
+            const deferGenerationRefresh = (): void =>
+              this.deferKnowledgeProductionGenerationInvalidation(() => {
+                if (
+                  this.knowledgeLifecycleClosed ||
+                  this.knowledgeRuntime !== runtime ||
+                  this.knowledgeProductionObservation !== port
+                ) {
+                  throw new DOMException("The operation was aborted", "AbortError");
+                }
+                this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
+              });
             workerController = candidate.createCompileReviewWorkerController(
               admission.modelRouteLease,
               () => {
@@ -717,7 +728,8 @@ export default class CopilotPlugin extends Plugin {
                   return false;
                 }
               },
-              scheduler
+              scheduler,
+              deferGenerationRefresh
             );
             const studioAdapter = candidate.createKnowledgeStudioRuntimeReadAdapter(
               admission.modelRouteLease,

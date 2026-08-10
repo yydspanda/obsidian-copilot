@@ -23,6 +23,7 @@ import {
   type CompilerWritableTarget,
   type KnowledgeCompileFailure,
   type KnowledgeCompileInput,
+  type KnowledgeCompileNoChanges,
   type KnowledgeCompileResult,
   type KnowledgeCompilerDependencies,
   type KnowledgeCompilerLimits,
@@ -48,6 +49,11 @@ import {
   type ManifestCommitPlan,
   type ManifestCommitMutation,
 } from "@/knowledge/manifest/ManifestCommitIntent";
+import {
+  createNoChangesManifestCommitPlan,
+  createNoChangesManifestCommitPlanDigest,
+  type NoChangesManifestCommitReason,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
 import type { SourceArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
 import { validateSourceLocatorAgainstArtifact } from "@/knowledge/model/locatorMaterialValidation";
@@ -2251,6 +2257,135 @@ function createTargetSetDigest(
 }
 
 /**
+ * Creates the exact evidence identity for an analysis that approved no targets.
+ *
+ * @param compileContextDigest - Exact normalized Compiler input identity
+ * @param analysisDigest - Exact normalized first-stage result identity
+ * @returns Canonical no-change evidence digest
+ */
+function createAnalysisNoChangesEvidenceDigest(
+  compileContextDigest: string,
+  analysisDigest: string
+): string {
+  return digestJson("knowledge-no-changes-analysis-evidence-v1", {
+    compileContextDigest,
+    analysisDigest,
+  });
+}
+
+/**
+ * Creates an order-stable identity for strict target requests and observations.
+ *
+ * @param compileContextDigest - Exact normalized Compiler input identity
+ * @param analysisDigest - Exact normalized first-stage result identity
+ * @param requests - Canonical approved target requests
+ * @param observations - Strictly parsed runtime target observations
+ * @returns Canonical no-change evidence digest
+ */
+function createResolvedNoChangesEvidenceDigest(
+  compileContextDigest: string,
+  analysisDigest: string,
+  requests: readonly CompilerTargetRequest[],
+  observations: readonly CompilerTargetObservation[]
+): string {
+  const observationsById = new Map(
+    observations.map((observation) => [observation.targetId, observation])
+  );
+  return digestJson("knowledge-no-changes-resolved-evidence-v1", {
+    compileContextDigest,
+    analysisDigest,
+    targetRequests: requests,
+    targetObservations: requests.map((request) => observationsById.get(request.targetId)),
+  });
+}
+
+/**
+ * Creates the exact evidence identity for a valid generation with no file changes.
+ *
+ * @param compileContextDigest - Exact normalized Compiler input identity
+ * @param analysisDigest - Exact normalized first-stage result identity
+ * @param targetSetDigest - Exact bound target-set identity
+ * @param generationOutput - Strictly parsed second-stage result
+ * @param projection - Runtime-owned generation projection
+ * @returns Canonical no-change evidence digest
+ */
+function createGeneratedNoChangesEvidenceDigest(
+  compileContextDigest: string,
+  analysisDigest: string,
+  targetSetDigest: string,
+  generationOutput: CompilerGenerationModelOutput,
+  projection: Extract<GenerationProjectionResult, { ok: true }>
+): string {
+  return digestJson("knowledge-no-changes-generation-evidence-v1", {
+    compileContextDigest,
+    analysisDigest,
+    targetSetDigest,
+    generationOutput,
+    projection: {
+      changes: projection.changes,
+      diagnostics: projection.diagnostics,
+    },
+  });
+}
+
+/**
+ * Builds one immutable durable no-change result from an exact Compiler read-set.
+ *
+ * @param input - Validated normalized compile input
+ * @param compileContextDigest - Exact normalized Compiler input identity
+ * @param analysisDigest - Exact normalized first-stage result identity
+ * @param analysis - Normalized first-stage result
+ * @param diagnostics - Complete diagnostics for this successful conclusion
+ * @param reason - Stable stage-specific no-change reason
+ * @param evidenceDigest - Exact evidence identity for that reason
+ * @returns Complete no-change result and Manifest commit plan
+ */
+function createNoChangesResult(
+  input: KnowledgeCompileInput,
+  compileContextDigest: string,
+  analysisDigest: string,
+  analysis: CompilerAnalysis,
+  diagnostics: KnowledgeDiagnostic[],
+  reason: NoChangesManifestCommitReason,
+  evidenceDigest: string
+): KnowledgeCompileNoChanges {
+  const source = input.manifest.entries.find((entry) => entry.sourceId === input.source.sourceId);
+  if (!source) {
+    throw new TypeError("Validated Compiler input must retain its primary Manifest source");
+  }
+  const plan = createNoChangesManifestCommitPlan({
+    bundleId: input.bundle.id,
+    sourceId: input.source.sourceId,
+    sourceContentHash: input.source.sourceContentHash,
+    pipelineFingerprint: input.source.pipelineFingerprint,
+    inputRevision: input.source.inputRevision,
+    compileContextDigest,
+    analysisDigest,
+    evidenceDigest,
+    reason,
+    expectedManifestRevision: input.manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(input.manifest),
+    baseGeneratedPages: (source.lastSuccessful?.generatedPages ?? []).map((page) => {
+      if (page.contentHash === undefined) {
+        throw new TypeError("Validated Compiler output pages must retain exact content hashes");
+      }
+      return { ...page, contentHash: page.contentHash };
+    }),
+    sourceAuthority: deriveKnowledgeSourceCompileAuthority(source),
+  });
+  return {
+    kind: "no_changes",
+    noChangesId: plan.noChangesId,
+    compileContextDigest,
+    analysisDigest,
+    manifestCommitPlan: plan,
+    manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+    analysis,
+    diagnostics,
+  };
+}
+
+/**
  * Builds one runtime-owned file change from a writable target and model content.
  *
  * @param target - Exact create or update target
@@ -2591,13 +2726,15 @@ export class KnowledgeCompiler {
     }
     const { analysis, analysisDigest } = normalized;
     if (analysis.targets.length === 0) {
-      return {
-        kind: "no_changes",
+      return createNoChangesResult(
+        input,
         compileContextDigest,
         analysisDigest,
         analysis,
-        diagnostics: inputDiagnostics,
-      };
+        inputDiagnostics,
+        "analysis_no_targets",
+        createAnalysisNoChangesEvidenceDigest(compileContextDigest, analysisDigest)
+      );
     }
 
     const targetRequests = deepFreeze(
@@ -2627,13 +2764,20 @@ export class KnowledgeCompiler {
     }
     const targetDiagnostics = [...inputDiagnostics, ...binding.diagnostics];
     if (binding.targets.length === 0) {
-      return {
-        kind: "no_changes",
+      return createNoChangesResult(
+        input,
         compileContextDigest,
         analysisDigest,
         analysis,
-        diagnostics: targetDiagnostics,
-      };
+        targetDiagnostics,
+        "resolved_no_targets",
+        createResolvedNoChangesEvidenceDigest(
+          compileContextDigest,
+          analysisDigest,
+          targetRequests,
+          parsedObservations.data
+        )
+      );
     }
 
     const targetSetDigest = createTargetSetDigest(
@@ -2696,13 +2840,21 @@ export class KnowledgeCompiler {
     }
     const compileDiagnostics = [...targetDiagnostics, ...projection.diagnostics];
     if (projection.changes.length === 0) {
-      return {
-        kind: "no_changes",
+      return createNoChangesResult(
+        input,
         compileContextDigest,
         analysisDigest,
         analysis,
-        diagnostics: compileDiagnostics,
-      };
+        compileDiagnostics,
+        "all_targets_unchanged",
+        createGeneratedNoChangesEvidenceDigest(
+          compileContextDigest,
+          analysisDigest,
+          targetSetDigest,
+          generationOutput,
+          projection
+        )
+      );
     }
 
     const sourceRefs = collectSourceRefs(

@@ -19,19 +19,38 @@ export interface KnowledgeProductionWorkerScheduler {
   cancel(handle: unknown): void;
 }
 
-/** Dependencies for one event-driven, generation-owned worker controller. */
-export interface KnowledgeProductionWorkerControllerInput {
+interface KnowledgeProductionWorkerControllerBaseInput {
   worker: KnowledgeProductionWorkerSession;
   scheduler: KnowledgeProductionWorkerScheduler;
 }
 
+/** Dependencies for one event-driven, generation-owned worker controller. */
+export type KnowledgeProductionWorkerControllerInput =
+  KnowledgeProductionWorkerControllerBaseInput &
+    (
+      | {
+          /** Defers replacement after one durable result changes the Manifest-bound generation. */
+          onGenerationRefreshRequired: () => void;
+          /** Re-proves the exact Manifest generation after an ambiguous worker rejection. */
+          probeGenerationCurrent: () => Promise<boolean>;
+        }
+      | {
+          onGenerationRefreshRequired?: never;
+          probeGenerationCurrent?: never;
+        }
+    );
+
 interface WorkerControllerState {
   worker: KnowledgeProductionWorkerSession;
   scheduler: KnowledgeProductionWorkerScheduler;
+  onGenerationRefreshRequired?: () => void;
+  probeGenerationCurrent?: () => Promise<boolean>;
   closed: boolean;
   started: boolean;
   running: boolean;
   wakeRequested: boolean;
+  refreshPending: boolean;
+  ambiguousGenerationProbePending: boolean;
   consecutiveFailures: number;
   drainPromise?: Promise<void>;
   timer?: RetainedTimer;
@@ -46,6 +65,7 @@ interface RetainedTimer {
 
 interface PassProjection {
   madeProgress: boolean;
+  refreshRequired: boolean;
   nextAttemptAt?: number;
 }
 
@@ -72,6 +92,15 @@ function requireControllerState(value: unknown): WorkerControllerState {
 
 /** Projects one Queue result into progress and retry timing without retaining job ids. */
 function inspectQueueResult(result: RunNextResult, projection: PassProjection): void {
+  if (
+    result.kind === "executed" &&
+    result.status === "completed" &&
+    result.generationEffect === "manifest_no_changes_committed"
+  ) {
+    projection.madeProgress = true;
+    projection.refreshRequired = true;
+    return;
+  }
   if (result.kind === "executed" || result.kind === "stale") {
     projection.madeProgress = true;
     return;
@@ -93,7 +122,7 @@ function inspectQueueResult(result: RunNextResult, projection: PassProjection): 
 
 /** Reduces one bounded worker pass to scheduling facts only. */
 function inspectPass(result: KnowledgeProductionWorkerPassResult): PassProjection {
-  const projection: PassProjection = { madeProgress: false };
+  const projection: PassProjection = { madeProgress: false, refreshRequired: false };
   for (const item of result.results) {
     inspectQueueResult(item.result, projection);
   }
@@ -129,6 +158,20 @@ function consumeFailureRetryDelay(state: WorkerControllerState): number {
   return Math.min(FAILURE_RETRY_MAX_DELAY_MS, FAILURE_RETRY_BASE_DELAY_MS * 2 ** exponent);
 }
 
+/** Consumes generation refresh authority once and blocks every later wakeup. */
+function requestGenerationRefresh(state: WorkerControllerState): void {
+  if (state.refreshPending || state.closed) return;
+  state.refreshPending = true;
+  state.ambiguousGenerationProbePending = false;
+  state.wakeRequested = false;
+  cancelTimer(state);
+  try {
+    state.onGenerationRefreshRequired?.();
+  } catch {
+    // Refresh authority remains consumed even if the outer lifecycle has already closed.
+  }
+}
+
 /** Schedules one non-overlapping worker wakeup in the captured renderer realm. */
 function scheduleWake(state: WorkerControllerState, delayMs: number): void {
   if (state.closed) return;
@@ -159,7 +202,7 @@ function scheduleWake(state: WorkerControllerState, delayMs: number): void {
 
 /** Starts one detached bounded drain if another pass is not already active. */
 function requestRun(state: WorkerControllerState): void {
-  if (state.closed || !state.started) return;
+  if (state.closed || !state.started || state.refreshPending) return;
   state.wakeRequested = true;
   cancelTimer(state);
   if (state.running) return;
@@ -187,18 +230,53 @@ async function drain(state: WorkerControllerState): Promise<void> {
   try {
     while (!state.closed) {
       state.wakeRequested = false;
+      if (state.ambiguousGenerationProbePending && state.probeGenerationCurrent) {
+        try {
+          const generationCurrent = await state.probeGenerationCurrent();
+          if (state.closed) return;
+          if (!generationCurrent) {
+            requestGenerationRefresh(state);
+            return;
+          }
+          state.ambiguousGenerationProbePending = false;
+        } catch {
+          if (state.closed) return;
+          // Keep the ambiguity retained so the next wake probes before Queue.
+          scheduleWake(state, consumeFailureRetryDelay(state));
+          return;
+        }
+      }
+      if (state.closed) return;
       let pass: KnowledgeProductionWorkerPassResult;
       try {
         pass = await state.worker.runOnce();
       } catch {
-        if (!state.closed) {
-          scheduleWake(state, consumeFailureRetryDelay(state));
+        if (state.closed) return;
+        if (state.probeGenerationCurrent) {
+          state.ambiguousGenerationProbePending = true;
+          try {
+            const generationCurrent = await state.probeGenerationCurrent();
+            if (state.closed) return;
+            if (!generationCurrent) {
+              requestGenerationRefresh(state);
+              return;
+            }
+            state.ambiguousGenerationProbePending = false;
+          } catch {
+            if (state.closed) return;
+            // Keep the ambiguity retained so the next wake probes before Queue.
+          }
         }
+        scheduleWake(state, consumeFailureRetryDelay(state));
         return;
       }
       if (state.closed) return;
       state.consecutiveFailures = 0;
       const projection = inspectPass(pass);
+      if (projection.refreshRequired) {
+        requestGenerationRefresh(state);
+        return;
+      }
       immediatePasses += 1;
       if (projection.madeProgress && immediatePasses < MAX_IMMEDIATE_PASSES) {
         continue;
@@ -236,7 +314,13 @@ export class KnowledgeProductionWorkerController {
       !(input.worker instanceof KnowledgeProductionWorkerSession) ||
       typeof input.scheduler?.now !== "function" ||
       typeof input.scheduler?.schedule !== "function" ||
-      typeof input.scheduler?.cancel !== "function"
+      typeof input.scheduler?.cancel !== "function" ||
+      (input.onGenerationRefreshRequired !== undefined &&
+        typeof input.onGenerationRefreshRequired !== "function") ||
+      (input.probeGenerationCurrent !== undefined &&
+        typeof input.probeGenerationCurrent !== "function") ||
+      (input.onGenerationRefreshRequired === undefined) !==
+        (input.probeGenerationCurrent === undefined)
     ) {
       throw new KnowledgeProductionWorkerControllerError();
     }
@@ -251,10 +335,18 @@ export class KnowledgeProductionWorkerController {
       started: false,
       running: false,
       wakeRequested: false,
+      refreshPending: false,
+      ambiguousGenerationProbePending: false,
       consecutiveFailures: 0,
       settlement,
       resolveSettlement,
       settlementResolved: false,
+      ...(input.onGenerationRefreshRequired === undefined
+        ? {}
+        : { onGenerationRefreshRequired: input.onGenerationRefreshRequired }),
+      ...(input.probeGenerationCurrent === undefined
+        ? {}
+        : { probeGenerationCurrent: input.probeGenerationCurrent }),
     });
     Object.freeze(this);
   }

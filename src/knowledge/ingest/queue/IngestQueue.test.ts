@@ -40,8 +40,14 @@ import {
   type IngestRerunRequest,
   type IngestSourceHighWatermark,
   type QueueStorage,
+  type QueueWriteAuthority,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import { ExponentialRetryPolicy } from "@/knowledge/ingest/queue/RetryPolicy";
+import {
+  createNoChangesManifestCommitPlan,
+  createNoChangesManifestCommitPlanDigest,
+  type NoChangesManifestCommitPlan,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
 import type { KnowledgeIngestJob } from "@/knowledge/model/types";
 
 const HASH_A = "a".repeat(64);
@@ -173,6 +179,7 @@ class InMemoryQueueStorage implements QueueStorage {
   public readCount = 0;
   public writeAttempts = 0;
   public successfulWrites = 0;
+  public readonly writeAuthorities: Array<QueueWriteAuthority | undefined> = [];
   public readBarrier?: Promise<void>;
   public onRead?: () => void;
 
@@ -253,9 +260,11 @@ class InMemoryQueueStorage implements QueueStorage {
   async write(
     bundleId: string,
     snapshot: IngestQueueSnapshot,
-    expectedRevision: number | null
+    expectedRevision: number | null,
+    authority?: QueueWriteAuthority
   ): Promise<void> {
     this.writeAttempts += 1;
+    this.writeAuthorities.push(authority);
     const failure = this.failures.shift();
     if (failure && !failure.commitBeforeThrow) {
       failure.beforeThrow?.();
@@ -405,6 +414,25 @@ function createRequest(
     inputRevision: 1,
     ...overrides,
   };
+}
+
+/** Creates one production-shaped no-change Manifest plan for Queue contract tests. */
+function createProductionNoChangesPlan(): NoChangesManifestCommitPlan {
+  return createNoChangesManifestCommitPlan({
+    bundleId: "personal",
+    sourceId: "source-1",
+    sourceContentHash: HASH_A,
+    pipelineFingerprint: HASH_B,
+    inputRevision: 1,
+    compileContextDigest: HASH_A,
+    analysisDigest: HASH_B,
+    evidenceDigest: HASH_C,
+    reason: "all_targets_unchanged",
+    expectedManifestRevision: 7,
+    expectedManifestDigest: HASH_D,
+    baseGeneratedPages: [{ path: "Wiki/Page.md", ownership: "generated", contentHash: HASH_C }],
+    sourceAuthority: { operation: "ingest" },
+  });
 }
 
 /**
@@ -661,6 +689,59 @@ describe("IngestQueue persistence and enqueue", () => {
     });
     expect(storage.getSnapshot("personal").jobs).toHaveLength(1);
     expect(storage.successfulWrites).toBe(2);
+  });
+
+  it("re-enqueues a legacy completed no-change input after the compiler fingerprint changes", async () => {
+    const harness = createHarness();
+    const legacyNoChangesJob: KnowledgeIngestJob = {
+      ...createPendingJob({
+        id: "knowledge-no-changes-legacy",
+        pipelineFingerprint: HASH_B,
+        attempt: 1,
+      }),
+      status: "completed",
+      stage: "completed",
+      changeSetId: "knowledge-no-changes-legacy",
+      completedAt: 100,
+    };
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 1, jobs: [legacyNoChangesJob] })
+    );
+
+    await expect(
+      harness.queue.enqueue(createRequest({ pipelineFingerprint: HASH_C, inputRevision: 2 }))
+    ).resolves.toMatchObject({
+      kind: "enqueued",
+      job: {
+        id: "job-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_C,
+        inputRevision: 2,
+        status: "pending",
+      },
+    });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [
+        expect.objectContaining({
+          id: "knowledge-no-changes-legacy",
+          status: "completed",
+          pipelineFingerprint: HASH_B,
+        }),
+        expect.objectContaining({
+          id: "job-1",
+          status: "pending",
+          pipelineFingerprint: HASH_C,
+        }),
+      ],
+      sourceHighWatermarks: [
+        expect.objectContaining({
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_C,
+          inputRevision: 2,
+        }),
+      ],
+    });
   });
 
   it("isolates queues by Bundle when product context switches", async () => {
@@ -1003,6 +1084,146 @@ describe("IngestQueue execution and reruns", () => {
       status: "completed",
       changeSetId: "changeset-detached",
     });
+  });
+
+  it("deeply snapshots a production no-change plan before passing its storage authority", async () => {
+    const plan = createProductionNoChangesPlan();
+    const mutablePlan = cloneJson(plan);
+    const expectedPlan = cloneJson(plan);
+    const finalizationReadStarted = createDeferred<void>();
+    const releaseFinalizationRead = createDeferred<void>();
+    let harness: QueueHarness;
+    harness = createHarness(async () => {
+      harness.storage.onRead = () => finalizationReadStarted.resolve();
+      harness.storage.readBarrier = releaseFinalizationRead.promise;
+      return {
+        kind: "no_changes",
+        changeSetId: plan.noChangesId,
+        manifestCommitPlan: mutablePlan,
+        manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+      };
+    });
+    await harness.queue.enqueue(createRequest());
+
+    const running = harness.queue.runNext("personal");
+    await finalizationReadStarted.promise;
+    mutablePlan.baseGeneratedPages[0].path = "Wiki/Mutated-After-Execution.md";
+    releaseFinalizationRead.resolve();
+
+    await expect(running).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-1",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    });
+    const authority = harness.storage.writeAuthorities.at(-1);
+    expect(authority).toMatchObject({
+      kind: "no_changes_commit",
+      planDigest: createNoChangesManifestCommitPlanDigest(plan),
+      plan: expectedPlan,
+    });
+    if (authority?.kind !== "no_changes_commit") {
+      throw new Error("Expected a production no-change storage authority");
+    }
+    expect(authority.plan).not.toBe(mutablePlan);
+    expect(authority.plan.baseGeneratedPages).not.toBe(mutablePlan.baseGeneratedPages);
+    expect(authority.plan.baseGeneratedPages[0]?.path).toBe("Wiki/Page.md");
+    expect(Object.isFrozen(authority.plan)).toBe(true);
+    expect(Object.isFrozen(authority.plan.baseGeneratedPages)).toBe(true);
+    expect(Object.isFrozen(authority.plan.baseGeneratedPages[0])).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "missing plan",
+      mutate(result: Record<string, unknown>): void {
+        delete result.manifestCommitPlan;
+      },
+    },
+    {
+      name: "missing plan digest",
+      mutate(result: Record<string, unknown>): void {
+        delete result.manifestCommitPlanDigest;
+      },
+    },
+    {
+      name: "changed plan digest",
+      mutate(result: Record<string, unknown>): void {
+        result.manifestCommitPlanDigest = HASH_A;
+      },
+    },
+    {
+      name: "changed result id",
+      mutate(result: Record<string, unknown>): void {
+        result.changeSetId = `knowledge-no-changes-${HASH_D}`;
+      },
+    },
+    {
+      name: "changed embedded id",
+      mutate(result: Record<string, unknown>): void {
+        const plan = result.manifestCommitPlan as Record<string, unknown>;
+        plan.noChangesId = `knowledge-no-changes-${HASH_D}`;
+        result.changeSetId = plan.noChangesId;
+      },
+    },
+    {
+      name: "extra result field",
+      mutate(result: Record<string, unknown>): void {
+        result.unexpected = true;
+      },
+    },
+    {
+      name: "extra plan field",
+      mutate(result: Record<string, unknown>): void {
+        const plan = result.manifestCommitPlan as Record<string, unknown>;
+        plan.unexpected = true;
+      },
+    },
+  ])("rejects a production no-change result with $name before completion", async ({ mutate }) => {
+    const plan = createProductionNoChangesPlan();
+    const result: Record<string, unknown> = {
+      kind: "no_changes",
+      changeSetId: plan.noChangesId,
+      manifestCommitPlan: cloneJson(plan),
+      manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+    };
+    mutate(result);
+    const harness = createHarness(async () => result as unknown as IngestExecutionResult);
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      jobId: "job-1",
+      status: "failed",
+    });
+
+    expect(harness.storage.getSnapshot("personal").jobs[0]).toMatchObject({
+      status: "failed",
+      failure: { code: "unexpected_executor_failure" },
+    });
+    expect(harness.sink.events.map((event) => event.cause)).not.toContain("complete");
+    expect(
+      harness.storage.writeAuthorities.some((authority) => authority?.kind === "no_changes_commit")
+    ).toBe(false);
+  });
+
+  it("keeps queue-only no-change completion compatible with generic storage", async () => {
+    const harness = createHarness(async () => ({
+      kind: "no_changes",
+      changeSetId: "changeset-generic-no-changes",
+    }));
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-1",
+      status: "completed",
+    });
+    expect(harness.storage.getSnapshot("personal").jobs[0]).toMatchObject({
+      status: "completed",
+      changeSetId: "changeset-generic-no-changes",
+    });
+    expect(harness.storage.writeAuthorities.at(-1)).toBeUndefined();
   });
 
   it("returns a deeply detached commit receipt without reading Proxy properties", async () => {

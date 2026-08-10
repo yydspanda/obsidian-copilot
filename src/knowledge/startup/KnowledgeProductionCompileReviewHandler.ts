@@ -2,7 +2,6 @@ import type {
   CompilerCandidateValidator,
   CompilerTargetResolver,
   KnowledgeCompileFailure,
-  KnowledgeCompileNoChanges,
   KnowledgeCompileProposal,
   KnowledgeCompilerStage,
 } from "@/knowledge/compiler/CompilerModelPort";
@@ -35,7 +34,6 @@ import type {
 } from "@/knowledge/review/ReviewStorage";
 import { KnowledgeRuntimeReviewStorage } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import type { KnowledgePreparedIngestHandler } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
-import { sha256 } from "@/utils/hash";
 
 /** Exact generation-owned dependencies for compile-to-review production hand-off. */
 export interface KnowledgeProductionCompileReviewHandlerInput {
@@ -314,13 +312,6 @@ function matchesReviewJobClaim(
   );
 }
 
-/** Creates a stable Queue-visible identity for a deterministic no-change compilation. */
-function createNoChangesId(result: KnowledgeCompileNoChanges): string {
-  return `knowledge-no-changes-${sha256(
-    `knowledge-production-no-changes-v1\n${result.compileContextDigest}\n${result.analysisDigest}`
-  )}`;
-}
-
 /** Projects one deterministic Compiler rejection without persisting its diagnostics. */
 function projectControlledFailure(result: KnowledgeCompileFailure, signal: AbortSignal): never {
   throw createExecutorError(CONTROLLED_COMPILER_FAILURES[result.stage], signal);
@@ -459,7 +450,9 @@ export class KnowledgeProductionCompileReviewHandler implements KnowledgePrepare
     if (result.kind === "no_changes") {
       return Object.freeze({
         kind: "no_changes" as const,
-        changeSetId: createNoChangesId(result),
+        changeSetId: result.noChangesId,
+        manifestCommitPlan: result.manifestCommitPlan,
+        manifestCommitPlanDigest: result.manifestCommitPlanDigest,
       });
     }
     return persistProposal(state, result, capturedContext);

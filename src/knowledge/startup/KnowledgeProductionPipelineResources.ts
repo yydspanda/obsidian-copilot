@@ -11,7 +11,7 @@ import { PdfPageKnowledgeByteParser } from "@/knowledge/parser/PdfPageKnowledgeB
 import { Utf8TextKnowledgeByteParser } from "@/knowledge/parser/Utf8TextKnowledgeByteParser";
 
 /** Exact production compiler behavior version included in every pipeline fingerprint. */
-export const KNOWLEDGE_PRODUCTION_COMPILER_VERSION = "knowledge-compiler-v1" as const;
+export const KNOWLEDGE_PRODUCTION_COMPILER_VERSION = "knowledge-compiler-v2" as const;
 
 /** Current bounded UTF-8 source policy for the first Windows production generation. */
 export const KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS = Object.freeze({

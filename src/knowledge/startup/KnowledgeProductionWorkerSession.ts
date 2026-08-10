@@ -111,6 +111,13 @@ export class KnowledgeProductionWorkerSession {
           throw new KnowledgeProductionWorkerSessionError("not_released");
         }
         results.push(Object.freeze({ bundleId, result }));
+        if (
+          result.kind === "executed" &&
+          result.status === "completed" &&
+          result.generationEffect === "manifest_no_changes_committed"
+        ) {
+          return Object.freeze({ kind: "pass", results: Object.freeze(results) });
+        }
       }
       return Object.freeze({ kind: "pass", results: Object.freeze(results) });
     } finally {

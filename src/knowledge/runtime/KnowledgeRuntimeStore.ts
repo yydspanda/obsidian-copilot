@@ -13,6 +13,7 @@ import type {
   ApplyCommitManifestPort,
   CommittedChangeSetTransactionJournal,
 } from "@/knowledge/changeset/ApplyCommitCoordinator";
+import { deriveKnowledgeSourceCompileAuthority } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   TransactionStorageRevisionConflictError,
   TransactionStorageAuthorityError,
@@ -69,8 +70,24 @@ import {
   parseManifestCommitIntent,
   validateManifestCommitIntent,
   validateManifestCommitIntentForCommit,
+  type ManifestCommitPage,
   type ManifestCommitIntent,
 } from "@/knowledge/manifest/ManifestCommitIntent";
+import {
+  KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
+  createKnowledgeNoChangesCommitMarker,
+  createNoChangesManifestCommitPlanDigest,
+  parseKnowledgeNoChangesCommitMarker,
+  parseNoChangesManifestCommitPlan,
+  validateNoChangesManifestCommitMarker,
+  validateNoChangesManifestCommitPlan,
+  type NoChangesManifestCommitMarker,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
+import {
+  KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
+  parseKnowledgeRuntimeSourceCommitExtension,
+  type KnowledgeRuntimeSourceCommitExtension,
+} from "@/knowledge/manifest/KnowledgeRuntimeSourceCommit";
 import {
   SourceManifestRevisionConflictError,
   type SourceManifestStorage,
@@ -136,17 +153,18 @@ import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
-export const KNOWLEDGE_RUNTIME_STORE_VERSION = 3 as const;
+export const KNOWLEDGE_RUNTIME_STORE_VERSION = 4 as const;
 
-/** Previous runtime envelope with an allocator floor but no observation journal. */
-const PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION = 2 as const;
+export { KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY };
+
+/** Previous runtime envelope with the observation journal but no completion proof fence. */
+const PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION = 3 as const;
+
+/** Runtime envelope with an allocator floor but no observation journal. */
+const RUNTIME_V2_STORE_VERSION = 2 as const;
 
 /** Previous outer-envelope format eligible for one constrained startup migration. */
 const LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION = 1 as const;
-
-/** Reserved Source Manifest extension containing monotonic runtime commit metadata. */
-export const KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY =
-  "obsidianCopilotKnowledgeRuntimeCommit" as const;
 
 /** One per-Bundle snapshot stored inside the atomic runtime envelope. */
 interface KnowledgeRuntimeBundleSlot {
@@ -213,14 +231,6 @@ export interface KnowledgeRuntimeInputRevisionRecord {
 interface KnowledgeRuntimeInputRevisionBundle {
   bundleId: string;
   sources: KnowledgeRuntimeInputRevisionRecord[];
-}
-
-/** Runtime-owned monotonic source metadata stored through the Manifest extension bag. */
-interface KnowledgeRuntimeSourceCommitExtension {
-  version: 1;
-  inputRevision: number;
-  transactionId: string;
-  manifestIntentDigest: string;
 }
 
 /** Exact successful-commit identity reserved for the manifest ledger adapter. */
@@ -339,8 +349,8 @@ interface LegacyKnowledgeRuntimeStoreSnapshot {
 }
 
 /** Strict runtime-v2 envelope read only by the v2-to-v3 migration. */
-interface PreviousKnowledgeRuntimeStoreSnapshot {
-  version: typeof PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION;
+interface KnowledgeRuntimeStoreSnapshotV2 {
+  version: typeof RUNTIME_V2_STORE_VERSION;
   revision: number;
   queues: KnowledgeRuntimeBundleSlot[];
   reviews: KnowledgeRuntimeBundleSlot[];
@@ -349,6 +359,24 @@ interface PreviousKnowledgeRuntimeStoreSnapshot {
   inputRevisions: PreviousKnowledgeRuntimeInputRevisionBundle[];
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
+
+/** Strict runtime-v3 envelope read only by the v3-to-v4 migration. */
+interface PreviousKnowledgeRuntimeStoreSnapshot {
+  version: typeof PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION;
+  runtimeId: string;
+  revision: number;
+  queues: KnowledgeRuntimeBundleSlot[];
+  reviews: KnowledgeRuntimeBundleSlot[];
+  manifests: KnowledgeRuntimeBundleSlot[];
+  activeTransaction: object | null;
+  inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
+  applyCommits: KnowledgeApplyCommitLedgerRecord[];
+}
+
+/** Fields shared by runtime versions whose observation journal is authoritative. */
+type KnowledgeRuntimeSemanticSnapshot =
+  | KnowledgeRuntimeStoreSnapshot
+  | PreviousKnowledgeRuntimeStoreSnapshot;
 
 const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 0, {
   message: "Expected a non-empty string",
@@ -467,15 +495,6 @@ const runtimeInputRevisionBundleSchema: z.ZodType<KnowledgeRuntimeInputRevisionB
   })
   .strict();
 
-const runtimeSourceCommitExtensionSchema: z.ZodType<KnowledgeRuntimeSourceCommitExtension> = z
-  .object({
-    version: z.literal(1),
-    inputRevision: z.number().int().safe().nonnegative(),
-    transactionId: nonEmptyStringSchema,
-    manifestIntentDigest: sha256Schema,
-  })
-  .strict();
-
 const applyCommitLedgerRecordSchema: z.ZodType<KnowledgeApplyCommitLedgerRecord> = z
   .object({
     transactionId: nonEmptyStringSchema,
@@ -511,16 +530,30 @@ const legacyKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<LegacyKnowledgeRuntim
   })
   .strict();
 
+const runtimeV2StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV2> = z
+  .object({
+    version: z.literal(RUNTIME_V2_STORE_VERSION),
+    revision: nonNegativeSafeIntegerSchema,
+    queues: z.array(runtimeBundleSlotSchema),
+    reviews: z.array(runtimeBundleSlotSchema),
+    manifests: z.array(runtimeBundleSlotSchema),
+    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    inputRevisions: z.array(previousRuntimeInputRevisionBundleSchema),
+    applyCommits: z.array(applyCommitLedgerRecordSchema),
+  })
+  .strict();
+
 const previousKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<PreviousKnowledgeRuntimeStoreSnapshot> =
   z
     .object({
       version: z.literal(PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION),
+      runtimeId: opaqueIdSchema,
       revision: nonNegativeSafeIntegerSchema,
       queues: z.array(runtimeBundleSlotSchema),
       reviews: z.array(runtimeBundleSlotSchema),
       manifests: z.array(runtimeBundleSlotSchema),
       activeTransaction: z.union([z.record(z.unknown()), z.null()]),
-      inputRevisions: z.array(previousRuntimeInputRevisionBundleSchema),
+      inputRevisions: z.array(runtimeInputRevisionBundleSchema),
       applyCommits: z.array(applyCommitLedgerRecordSchema),
     })
     .strict();
@@ -595,6 +628,7 @@ export type KnowledgeRuntimeMigrationUnsafeReason =
   | "queue_review_state_present"
   | "queue_apply_state_present"
   | "queue_active_job_present"
+  | "queue_revision_overflow"
   | "manifest_success_present"
   | "manifest_reserved_commit_metadata_present"
   | "revision_overflow";
@@ -762,7 +796,8 @@ export class KnowledgeRuntimeManifestReservationError extends Error {
 /** Stable protected Manifest state that generic storage writes may never mutate. */
 export type KnowledgeRuntimeManifestProtectedState =
   | "last_successful"
-  | "reserved_commit_extension";
+  | "reserved_commit_extension"
+  | "reserved_no_changes_extension";
 
 /** Reports an attempt to bypass the atomic Manifest/ledger success path. */
 export class KnowledgeRuntimeManifestProtectedStateError extends Error {
@@ -798,6 +833,30 @@ export class KnowledgeRuntimeQueueObservationAuthorityError extends Error {
   constructor(public readonly bundleId: string) {
     super(`Queue '${bundleId}' contains an unallocated or regressing source observation`);
     this.name = "KnowledgeRuntimeQueueObservationAuthorityError";
+  }
+}
+
+/** Stable reasons an atomic no-change Queue/Manifest commit can fail closed. */
+export type KnowledgeRuntimeNoChangesCommitConflictReason =
+  | "authority_invalid"
+  | "queue_mismatch"
+  | "manifest_mismatch"
+  | "source_mismatch"
+  | "observation_mismatch"
+  | "input_revision_not_newer"
+  | "transaction_active"
+  | "revision_overflow";
+
+/** Reports stale or invalid no-change evidence without exposing persisted material. */
+export class KnowledgeRuntimeNoChangesCommitConflictError extends Error {
+  /** Creates one sanitized atomic no-change commit conflict. */
+  constructor(
+    public readonly bundleId: string,
+    public readonly sourceId: string,
+    public readonly reason: KnowledgeRuntimeNoChangesCommitConflictReason
+  ) {
+    super(`Source '${sourceId}' cannot commit no-change success in Bundle '${bundleId}'`);
+    this.name = "KnowledgeRuntimeNoChangesCommitConflictError";
   }
 }
 
@@ -919,7 +978,10 @@ export function parseKnowledgeRuntimeStoreSnapshot(value: unknown): KnowledgeRun
  *
  * @param snapshot - Structurally strict runtime envelope
  */
-function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): void {
+function assertRuntimeSlotSemantics(
+  snapshot: KnowledgeRuntimeSemanticSnapshot,
+  requireReusableCompletionProof = true
+): void {
   const manifests = new Map<string, SourceManifest>();
   const queues = new Map<string, IngestQueueSnapshot>();
   for (const slot of snapshot.queues) {
@@ -962,6 +1024,10 @@ function assertRuntimeSlotSemantics(snapshot: KnowledgeRuntimeStoreSnapshot): vo
   }
   assertManifestLedgerSemantics(snapshot.applyCommits, manifests);
   assertQueueApplyCommitLedgerSemantics(snapshot.applyCommits, queues);
+  assertNoChangesCommitSemantics(snapshot, manifests, queues);
+  if (requireReusableCompletionProof) {
+    assertReusableCompletionSemantics(snapshot, manifests, queues);
+  }
   assertObservationJournalSemantics(snapshot, queues);
 }
 
@@ -1014,7 +1080,7 @@ function assertUniqueInputRevisionRecords(
  * @param queues - Already parsed Queue slots indexed by Bundle
  */
 function assertObservationJournalSemantics(
-  snapshot: KnowledgeRuntimeStoreSnapshot,
+  snapshot: KnowledgeRuntimeSemanticSnapshot,
   queues: ReadonlyMap<string, IngestQueueSnapshot>
 ): void {
   const captureIds = new Set<string>();
@@ -1306,17 +1372,17 @@ function assertManifestLedgerSemantics(
         }
         existing.sourceIds.add(entry.sourceId);
       }
-      const extension = runtimeSourceCommitExtensionSchema.safeParse(rawExtension);
-      if (!extension.success || history.length === 0) {
+      const extension = parseKnowledgeRuntimeSourceCommitExtension(rawExtension);
+      if (!extension.ok || history.length === 0) {
         throw new KnowledgeRuntimeStoreCorruptError();
       }
       const latest = [...history].sort(
         (left, right) => right.manifestAfterRevision - left.manifestAfterRevision
       )[0];
       if (
-        extension.data.transactionId !== latest.transactionId ||
-        extension.data.inputRevision !== latest.inputRevision ||
-        extension.data.manifestIntentDigest !== latest.manifestIntentDigest ||
+        extension.value.transactionId !== latest.transactionId ||
+        extension.value.inputRevision !== latest.inputRevision ||
+        extension.value.manifestIntentDigest !== latest.manifestIntentDigest ||
         success.sourceContentHash !== latest.sourceContentHash ||
         success.pipelineFingerprint !== latest.pipelineFingerprint ||
         success.changeSetId !== latest.changeSetId ||
@@ -1370,6 +1436,251 @@ function assertQueueApplyCommitLedgerSemantics(
       record.recordedAt !== marker.committedAt
     ) {
       throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  }
+}
+
+/**
+ * Compares a no-change read-set with the current applied page projection.
+ *
+ * Page ordering is not semantic. A later co-owner Apply may legitimately
+ * advance the content hash of a shared page without invalidating another
+ * source's retained no-change marker.
+ *
+ * @param source - Current registered source entry
+ * @param basePages - Canonical pages captured by the no-change plan
+ * @param allowSharedHashDrift - Whether a later shared-page writer may have advanced the hash
+ * @returns Whether both projections identify the same authorized page set
+ */
+function noChangesBasePagesMatchSource(
+  source: SourceManifestEntry,
+  basePages: readonly ManifestCommitPage[],
+  allowSharedHashDrift: boolean
+): boolean {
+  const currentPages = source.lastSuccessful?.generatedPages ?? [];
+  if (basePages.length !== currentPages.length) return false;
+  const currentByPathKey = new Map(
+    currentPages.map((page) => [toWindowsPathKey(page.path), page] as const)
+  );
+  return basePages.every((page) => {
+    const current = currentByPathKey.get(toWindowsPathKey(page.path));
+    return (
+      current !== undefined &&
+      page.path === current.path &&
+      page.ownership === current.ownership &&
+      ((allowSharedHashDrift && page.ownership === "shared") ||
+        page.contentHash === current.contentHash)
+    );
+  });
+}
+
+/**
+ * Requires every retained no-change source marker to match one exact completed
+ * Queue attempt and its consumed observation from the same Runtime envelope.
+ */
+function assertNoChangesCommitSemantics(
+  snapshot: KnowledgeRuntimeSemanticSnapshot,
+  manifests: ReadonlyMap<string, SourceManifest>,
+  queues: ReadonlyMap<string, IngestQueueSnapshot>
+): void {
+  for (const [bundleId, manifest] of manifests) {
+    const queue = queues.get(bundleId);
+    for (const source of manifest.entries) {
+      const rawMarker = source.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
+      if (rawMarker === undefined) continue;
+      const parsed = parseKnowledgeNoChangesCommitMarker(rawMarker);
+      if (!parsed.ok || !validateNoChangesManifestCommitMarker(parsed.value).valid || !queue) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const marker = parsed.value;
+      const job = queue.jobs.find((candidate) => candidate.id === marker.jobId);
+      const highWatermark = queue.sourceHighWatermarks.find(
+        (candidate) => candidate.sourceId === source.sourceId
+      );
+      const observations =
+        snapshot.inputRevisions
+          .find((bundle) => bundle.bundleId === bundleId)
+          ?.sources.find((candidate) => candidate.sourceId === source.sourceId)
+          ?.observations.filter(
+            (observation) =>
+              observation.status === "consumed" &&
+              observation.inputRevision === marker.inputRevision &&
+              observation.sourceContentHash === marker.sourceContentHash &&
+              observation.pipelineFingerprint === marker.pipelineFingerprint
+          ) ?? [];
+      let sourceAuthority: ReturnType<typeof deriveKnowledgeSourceCompileAuthority>;
+      try {
+        sourceAuthority = deriveKnowledgeSourceCompileAuthority(source);
+      } catch {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const sourceAuthorityMatches =
+        marker.kind === "query_writeback_source_compile"
+          ? sourceAuthority.operation === "query_writeback" &&
+            sourceAuthority.sourceOriginDigest === marker.sourceOriginDigest &&
+            sourceAuthority.expectedSourceContentHash === marker.sourceContentHash
+          : sourceAuthority.operation === "ingest";
+      const basePagesMatch = noChangesBasePagesMatchSource(source, marker.baseGeneratedPages, true);
+      const applyExtension = readSourceCommitExtension(source, bundleId);
+      const applyInputRevision = applyExtension?.inputRevision ?? 0;
+      const markerIsHistorical = marker.inputRevision < applyInputRevision;
+      if (
+        marker.bundleId !== bundleId ||
+        marker.sourceId !== source.sourceId ||
+        marker.manifestAfterRevision > manifest.revision ||
+        !sourceAuthorityMatches ||
+        (!markerIsHistorical && !basePagesMatch) ||
+        marker.inputRevision === applyInputRevision ||
+        !job ||
+        job.status !== "completed" ||
+        job.sourceId !== marker.sourceId ||
+        job.sourceContentHash !== marker.sourceContentHash ||
+        job.pipelineFingerprint !== marker.pipelineFingerprint ||
+        job.inputRevision !== marker.inputRevision ||
+        job.attempt !== marker.attempt ||
+        job.changeSetId !== marker.noChangesId ||
+        job.completedAt !== marker.completedAt ||
+        highWatermark === undefined ||
+        highWatermark.inputRevision < marker.inputRevision ||
+        observations.length !== 1 ||
+        queue.pendingReviews.some((review) => review.jobId === marker.jobId) ||
+        queue.applyClaim?.jobId === marker.jobId ||
+        queue.applyCommit?.jobId === marker.jobId ||
+        snapshot.applyCommits.some(
+          (record) =>
+            record.bundleId === bundleId &&
+            record.sourceId === source.sourceId &&
+            record.inputRevision === marker.inputRevision
+        )
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+}
+
+/** Completed Queue job whose terminal success may be reused by exact deduplication. */
+type ReusableCompletedJob = Extract<KnowledgeIngestJob, { status: "completed" }>;
+
+/** Compares the behavior-defining payload retained by two source records. */
+function runtimeSourcePayloadMatches(
+  left: Pick<KnowledgeIngestJob, "sourceContentHash" | "pipelineFingerprint">,
+  right: Pick<KnowledgeIngestJob, "sourceContentHash" | "pipelineFingerprint">
+): boolean {
+  return (
+    left.sourceContentHash === right.sourceContentHash &&
+    left.pipelineFingerprint === right.pipelineFingerprint
+  );
+}
+
+/** Reports whether a Queue job can still absorb or schedule the latest source input. */
+function runtimeQueueJobIsActive(job: KnowledgeIngestJob): boolean {
+  return job.status !== "failed" && job.status !== "completed" && job.status !== "cancelled";
+}
+
+/** Current source outcome selected by the Queue's exact deduplication ordering. */
+type CurrentSourceTerminalOutcome =
+  | { kind: "covered" }
+  | { kind: "failed_or_cancelled" }
+  | { kind: "completed"; job: ReusableCompletedJob }
+  | { kind: "invalid" };
+
+/**
+ * Finds the terminal result that a current exact source observation may reuse.
+ *
+ * Queue enqueue returns its active job first. Without active work it returns
+ * the latest source job ordered by input revision, update time, then id. The
+ * Runtime repeats that exact choice rather than searching older successes.
+ */
+function findCurrentSourceTerminalOutcome(
+  queue: IngestQueueSnapshot,
+  highWatermark: IngestSourceHighWatermark
+): CurrentSourceTerminalOutcome {
+  const activeJob = queue.jobs.some(
+    (job) => job.sourceId === highWatermark.sourceId && runtimeQueueJobIsActive(job)
+  );
+  const rerun = queue.reruns.some((candidate) => candidate.sourceId === highWatermark.sourceId);
+  if (activeJob || rerun) return { kind: "covered" };
+
+  const latest = queue.jobs
+    .filter((job) => job.sourceId === highWatermark.sourceId)
+    .sort(
+      (left, right) =>
+        right.inputRevision - left.inputRevision ||
+        right.updatedAt - left.updatedAt ||
+        left.id.localeCompare(right.id)
+    )[0];
+  if (
+    !latest ||
+    latest.inputRevision > highWatermark.inputRevision ||
+    !runtimeSourcePayloadMatches(latest, highWatermark)
+  ) {
+    return { kind: "invalid" };
+  }
+  if (latest.status === "completed") return { kind: "completed", job: latest };
+  if (latest.status === "failed" || latest.status === "cancelled") {
+    return { kind: "failed_or_cancelled" };
+  }
+  return { kind: "invalid" };
+}
+
+/** Proves one exact reusable completion by no-change marker or Apply ledger. */
+function reusableCompletionHasProof(
+  snapshot: KnowledgeRuntimeSemanticSnapshot,
+  manifest: SourceManifest | undefined,
+  job: ReusableCompletedJob
+): boolean {
+  const source = manifest?.entries.find((entry) => entry.sourceId === job.sourceId);
+  const marker = parseKnowledgeNoChangesCommitMarker(
+    source?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+  );
+  const exactNoChangesMarker =
+    marker.ok &&
+    marker.value.bundleId === job.bundleId &&
+    marker.value.jobId === job.id &&
+    marker.value.sourceId === job.sourceId &&
+    marker.value.sourceContentHash === job.sourceContentHash &&
+    marker.value.pipelineFingerprint === job.pipelineFingerprint &&
+    marker.value.inputRevision === job.inputRevision &&
+    marker.value.attempt === job.attempt &&
+    marker.value.noChangesId === job.changeSetId &&
+    marker.value.completedAt === job.completedAt;
+  if (exactNoChangesMarker) return true;
+
+  return snapshot.applyCommits.some(
+    (record) =>
+      record.bundleId === job.bundleId &&
+      record.sourceId === job.sourceId &&
+      record.sourceContentHash === job.sourceContentHash &&
+      record.pipelineFingerprint === job.pipelineFingerprint &&
+      record.inputRevision === job.inputRevision &&
+      record.changeSetId === job.changeSetId
+  );
+}
+
+/**
+ * Reverse-validates every current exact-dedup completion.
+ *
+ * Runtime v4 never trusts Queue terminal shape alone: the newest reusable
+ * completion for the current source fingerprint must be backed by either the
+ * exact no-change marker or an Apply commit ledger from the same envelope.
+ */
+function assertReusableCompletionSemantics(
+  snapshot: KnowledgeRuntimeSemanticSnapshot,
+  manifests: ReadonlyMap<string, SourceManifest>,
+  queues: ReadonlyMap<string, IngestQueueSnapshot>
+): void {
+  for (const [bundleId, queue] of queues) {
+    const manifest = manifests.get(bundleId);
+    for (const highWatermark of queue.sourceHighWatermarks) {
+      const outcome = findCurrentSourceTerminalOutcome(queue, highWatermark);
+      if (
+        outcome.kind === "invalid" ||
+        (outcome.kind === "completed" &&
+          !reusableCompletionHasProof(snapshot, manifest, outcome.job))
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
     }
   }
 }
@@ -1849,21 +2160,21 @@ function ledgerMatchesCurrentManifestEntry(
   entry: SourceManifestEntry
 ): boolean {
   const success = entry.lastSuccessful;
-  const extension = runtimeSourceCommitExtensionSchema.safeParse(
+  const extension = parseKnowledgeRuntimeSourceCommitExtension(
     entry.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]
   );
   return (
     success !== undefined &&
-    extension.success &&
+    extension.ok &&
     ledger.bundleId === bundleId &&
     ledger.sourceId === entry.sourceId &&
     ledger.sourceContentHash === success.sourceContentHash &&
     ledger.pipelineFingerprint === success.pipelineFingerprint &&
     ledger.changeSetId === success.changeSetId &&
     ledger.recordedAt === success.completedAt &&
-    ledger.transactionId === extension.data.transactionId &&
-    ledger.inputRevision === extension.data.inputRevision &&
-    ledger.manifestIntentDigest === extension.data.manifestIntentDigest
+    ledger.transactionId === extension.value.transactionId &&
+    ledger.inputRevision === extension.value.inputRevision &&
+    ledger.manifestIntentDigest === extension.value.manifestIntentDigest
   );
 }
 
@@ -2311,15 +2622,28 @@ function readSourceCommitExtension(
   if (raw === undefined) {
     return null;
   }
-  const parsed = runtimeSourceCommitExtensionSchema.safeParse(raw);
-  if (!parsed.success) {
+  const parsed = parseKnowledgeRuntimeSourceCommitExtension(raw);
+  if (!parsed.ok) {
     throw new KnowledgeApplyCommitManifestConflictError(
       bundleId,
       entry.sourceId,
       "source_metadata_invalid"
     );
   }
-  return parsed.data;
+  return parsed.value;
+}
+
+/** Reads and validates the Runtime-owned no-change success marker from one source. */
+function readSourceNoChangesCommitMarker(
+  entry: SourceManifestEntry
+): NoChangesManifestCommitMarker | null {
+  const raw = entry.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
+  if (raw === undefined) return null;
+  const parsed = parseKnowledgeNoChangesCommitMarker(raw);
+  if (!parsed.ok || !validateNoChangesManifestCommitMarker(parsed.value).valid) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return parsed.value;
 }
 
 /**
@@ -2339,6 +2663,7 @@ function assertSourceInputRevisionCanCommit(
   ledger: readonly KnowledgeApplyCommitLedgerRecord[]
 ): void {
   const previous = readSourceCommitExtension(entry, bundleId);
+  const previousNoChanges = readSourceNoChangesCommitMarker(entry);
   if (entry.lastSuccessful !== undefined && previous === null) {
     throw new KnowledgeApplyCommitManifestConflictError(
       bundleId,
@@ -2376,7 +2701,11 @@ function assertSourceInputRevisionCanCommit(
       );
     }
   }
-  if (previous !== null && inputRevision <= previous.inputRevision) {
+  const latestInputRevision = Math.max(
+    previous?.inputRevision ?? 0,
+    previousNoChanges?.inputRevision ?? 0
+  );
+  if (inputRevision <= latestInputRevision) {
     throw new KnowledgeApplyCommitManifestConflictError(
       bundleId,
       entry.sourceId,
@@ -2422,13 +2751,15 @@ function createCommittedSourceManifest(
     transactionId: journal.transactionId,
     manifestIntentDigest: journal.manifestCommitIntentDigest,
   };
+  const extensions: Record<string, JsonValue> = {
+    ...source.extensions,
+    [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: extension as unknown as JsonValue,
+  };
+  delete extensions[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
   const nextEntry: SourceManifestEntry = {
     ...source,
     lastSuccessful: snapshot,
-    extensions: {
-      ...source.extensions,
-      [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: extension as unknown as JsonValue,
-    },
+    extensions,
   };
   if (
     nextEntry.lastFailure !== undefined &&
@@ -2525,6 +2856,18 @@ function assertGenericManifestPreservesCommitState(
         candidate.bundleId,
         sourceId,
         "reserved_commit_extension"
+      );
+    }
+    if (
+      !optionalJsonValuesEqual(
+        before?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY],
+        after?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+      )
+    ) {
+      throw new KnowledgeRuntimeManifestProtectedStateError(
+        candidate.bundleId,
+        sourceId,
+        "reserved_no_changes_extension"
       );
     }
   }
@@ -2697,11 +3040,11 @@ function assertLegacyQueueIsMigrationSafe(snapshot: IngestQueueSnapshot): void {
  * @param runtimeId - New stable runtime identity generated outside the transform
  * @returns Strict detached runtime-v3 snapshot
  */
-function migratePreviousRuntimeSnapshot(
+function migrateRuntimeV2ToV3Snapshot(
   value: unknown,
   runtimeId: string
-): KnowledgeRuntimeStoreSnapshot {
-  const parsed = previousKnowledgeRuntimeStoreSnapshotSchema.safeParse(value);
+): PreviousKnowledgeRuntimeStoreSnapshot {
+  const parsed = runtimeV2StoreSnapshotSchema.safeParse(value);
   if (!parsed.success) {
     throw new KnowledgeRuntimeStoreCorruptError();
   }
@@ -2711,7 +3054,7 @@ function migratePreviousRuntimeSnapshot(
   assertUniqueBundleSlots(previous.manifests);
   assertUniqueInputRevisionRecords(previous.inputRevisions);
   assertUniqueApplyCommits(previous.applyCommits);
-  if (previous.revision === Number.MAX_SAFE_INTEGER) {
+  if (previous.revision >= Number.MAX_SAFE_INTEGER - 1) {
     throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
   }
   const queues = new Map<string, IngestQueueSnapshot>();
@@ -2761,12 +3104,146 @@ function migratePreviousRuntimeSnapshot(
       };
     }
   );
-  return parseKnowledgeRuntimeStoreSnapshot({
+  const migrated: PreviousKnowledgeRuntimeStoreSnapshot = {
     ...previous,
-    version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+    version: PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION,
     runtimeId,
     revision: previous.revision + 1,
     inputRevisions,
+  };
+  const validated = previousKnowledgeRuntimeStoreSnapshotSchema.safeParse(migrated);
+  if (!validated.success) throw new KnowledgeRuntimeStoreCorruptError();
+  assertUniqueBundleSlots(validated.data.queues);
+  assertUniqueBundleSlots(validated.data.reviews);
+  assertUniqueBundleSlots(validated.data.manifests);
+  assertUniqueInputRevisionRecords(validated.data.inputRevisions);
+  assertUniqueApplyCommits(validated.data.applyCommits);
+  assertRuntimeSlotSemantics(validated.data, false);
+  return cloneJson(validated.data);
+}
+
+/** Creates the pending projection used to re-run one unproved legacy completion. */
+function demoteLegacyCompletedJob(job: ReusableCompletedJob): KnowledgeIngestJob {
+  return {
+    id: job.id,
+    bundleId: job.bundleId,
+    sourceId: job.sourceId,
+    sourceContentHash: job.sourceContentHash,
+    pipelineFingerprint: job.pipelineFingerprint,
+    inputRevision: job.inputRevision,
+    attempt: job.attempt,
+    rerunRequested: false,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    status: "pending",
+    stage: "queued",
+  };
+}
+
+/**
+ * Demotes current legacy completions that have no durable success proof.
+ *
+ * Queue history, attempts, observations, reruns, and source high-watermarks are
+ * retained byte-for-byte. Only the unsafe terminal projection changes, along
+ * with the startup execution gate when the Queue was running.
+ */
+function migrateRuntimeV3Queue(
+  previous: PreviousKnowledgeRuntimeStoreSnapshot,
+  queue: IngestQueueSnapshot,
+  manifest: SourceManifest | undefined
+): IngestQueueSnapshot {
+  const demotedJobIds = new Set<string>();
+  for (const highWatermark of queue.sourceHighWatermarks) {
+    const outcome = findCurrentSourceTerminalOutcome(queue, highWatermark);
+    if (outcome.kind === "invalid") {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    if (
+      outcome.kind === "completed" &&
+      !reusableCompletionHasProof(previous, manifest, outcome.job)
+    ) {
+      demotedJobIds.add(outcome.job.id);
+    }
+  }
+  if (demotedJobIds.size === 0) return cloneJson(queue);
+  if (queue.revision === Number.MAX_SAFE_INTEGER) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("queue_revision_overflow", queue.bundleId);
+  }
+  const jobs = queue.jobs.map((job) =>
+    job.status === "completed" && demotedJobIds.has(job.id) ? demoteLegacyCompletedJob(job) : job
+  );
+  const pausedAt = Math.max(
+    0,
+    ...jobs
+      .filter((job) => demotedJobIds.has(job.id))
+      .map((job) => Math.max(job.createdAt, job.updatedAt))
+  );
+  const candidate: IngestQueueSnapshot = {
+    ...queue,
+    revision: queue.revision + 1,
+    control:
+      queue.control.status === "running"
+        ? {
+            status: "paused",
+            reason: "startup_recovery",
+            pausedAt,
+            detail: "Legacy completion requires one proof-producing restart run",
+          }
+        : queue.control,
+    jobs,
+  };
+  const parsed = parseIngestQueueSnapshot(candidate);
+  if (!parsed.ok || !validateIngestQueueSnapshot(parsed.value).valid) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return cloneJson(parsed.value);
+}
+
+/** Strictly parses one runtime-v3 envelope without imposing v4-only semantics. */
+function parsePreviousKnowledgeRuntimeStoreSnapshot(
+  value: unknown
+): PreviousKnowledgeRuntimeStoreSnapshot {
+  const parsed = previousKnowledgeRuntimeStoreSnapshotSchema.safeParse(value);
+  if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
+  const snapshot = parsed.data;
+  assertUniqueBundleSlots(snapshot.queues);
+  assertUniqueBundleSlots(snapshot.reviews);
+  assertUniqueBundleSlots(snapshot.manifests);
+  assertUniqueInputRevisionRecords(snapshot.inputRevisions);
+  assertUniqueApplyCommits(snapshot.applyCommits);
+  assertRuntimeSlotSemantics(snapshot, false);
+  return cloneJson(snapshot);
+}
+
+/** Adds the v4 exact-completion proof fence through one atomic transform. */
+function migrateRuntimeV3ToV4Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+  const previous = parsePreviousKnowledgeRuntimeStoreSnapshot(value);
+  if (previous.revision === Number.MAX_SAFE_INTEGER) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
+  }
+  const manifests = new Map<string, SourceManifest>();
+  for (const slot of previous.manifests) {
+    const parsed = parseSourceManifest(slot.value);
+    if (!parsed.ok || !validateSourceManifest(parsed.value).valid) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    manifests.set(slot.bundleId, parsed.value);
+  }
+  const queues = previous.queues.map((slot) => {
+    const parsed = parseIngestQueueSnapshot(slot.value);
+    if (!parsed.ok || !validateIngestQueueSnapshot(parsed.value).valid) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    return {
+      bundleId: slot.bundleId,
+      value: migrateRuntimeV3Queue(previous, parsed.value, manifests.get(slot.bundleId)),
+    };
+  });
+  return parseKnowledgeRuntimeStoreSnapshot({
+    ...previous,
+    version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+    revision: previous.revision + 1,
+    queues,
   });
 }
 
@@ -2784,7 +3261,7 @@ function migratePreviousRuntimeSnapshot(
 function migrateLegacyRuntimeSnapshot(
   value: unknown,
   runtimeId: string
-): KnowledgeRuntimeStoreSnapshot {
+): PreviousKnowledgeRuntimeStoreSnapshot {
   const parsed = legacyKnowledgeRuntimeStoreSnapshotSchema.safeParse(value);
   if (!parsed.success) {
     throw new KnowledgeRuntimeStoreCorruptError();
@@ -2812,8 +3289,8 @@ function migrateLegacyRuntimeSnapshot(
     assertLegacyManifestSlot(slot);
   }
   const reviews = legacy.reviews.map(migrateLegacyReviewSlot);
-  const previous: PreviousKnowledgeRuntimeStoreSnapshot = {
-    version: PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION,
+  const previous: KnowledgeRuntimeStoreSnapshotV2 = {
+    version: RUNTIME_V2_STORE_VERSION,
     revision: legacy.revision,
     queues: legacy.queues,
     reviews,
@@ -2822,7 +3299,7 @@ function migrateLegacyRuntimeSnapshot(
     inputRevisions: legacy.inputRevisions,
     applyCommits: [],
   };
-  return migratePreviousRuntimeSnapshot(previous, runtimeId);
+  return migrateRuntimeV2ToV3Snapshot(previous, runtimeId);
 }
 
 /**
@@ -2919,6 +3396,260 @@ function replaceRuntimeQueueJob(
     ...snapshot,
     jobs: snapshot.jobs.map((job) => (job.id === replacement.id ? replacement : job)),
   };
+}
+
+/** Exact non-applying Queue transition that may publish no-change success. */
+interface RuntimeNoChangesQueueTransition {
+  processing: Extract<KnowledgeIngestJob, { status: "processing" }>;
+  completed: Extract<KnowledgeIngestJob, { status: "completed" }>;
+}
+
+/** Reports whether a candidate attempts any non-applying Queue completion. */
+function hasProtectedNoChangesCompletion(
+  current: IngestQueueSnapshot | null,
+  candidate: IngestQueueSnapshot
+): boolean {
+  if (!current) return false;
+  return current.jobs.some((job) => {
+    if (job.status !== "processing" || job.stage === "applying") return false;
+    const next = candidate.jobs.find((candidateJob) => candidateJob.id === job.id);
+    return next?.status === "completed";
+  });
+}
+
+/** Reconstructs the only Queue projection accepted for a no-change commit. */
+function projectRuntimeNoChangesQueueTransition(
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot
+): RuntimeNoChangesQueueTransition | null {
+  const processing = current.jobs.find(
+    (job): job is Extract<KnowledgeIngestJob, { status: "processing" }> =>
+      job.status === "processing" && job.stage !== "applying"
+  );
+  if (!processing) return null;
+  const completed = candidate.jobs.find(
+    (job): job is Extract<KnowledgeIngestJob, { status: "completed" }> =>
+      job.id === processing.id && job.status === "completed"
+  );
+  if (!completed || completed.completedAt < Math.max(processing.updatedAt, processing.startedAt)) {
+    return null;
+  }
+  const expectedCompleted: KnowledgeIngestJob = {
+    id: processing.id,
+    bundleId: processing.bundleId,
+    sourceId: processing.sourceId,
+    sourceContentHash: processing.sourceContentHash,
+    pipelineFingerprint: processing.pipelineFingerprint,
+    inputRevision: processing.inputRevision,
+    attempt: processing.attempt,
+    rerunRequested: false,
+    createdAt: processing.createdAt,
+    updatedAt: completed.completedAt,
+    status: "completed",
+    stage: "completed",
+    changeSetId: completed.changeSetId,
+    completedAt: completed.completedAt,
+  };
+  const expected = {
+    ...promoteNoJournalRerun(
+      replaceRuntimeQueueJob(current, expectedCompleted),
+      processing.sourceId,
+      completed.completedAt
+    ),
+    revision: current.revision + 1,
+  };
+  return exactJsonValuesEqual(expected, candidate) ? { processing, completed } : null;
+}
+
+/** Creates the exact Manifest revision published with a no-change Queue terminal. */
+function createNoChangesCommittedManifest(
+  manifest: SourceManifest,
+  source: SourceManifestEntry,
+  marker: NoChangesManifestCommitMarker
+): SourceManifest {
+  if (manifest.revision === Number.MAX_SAFE_INTEGER) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      manifest.bundleId,
+      source.sourceId,
+      "revision_overflow"
+    );
+  }
+  const nextEntry: SourceManifestEntry = {
+    ...source,
+    extensions: {
+      ...source.extensions,
+      [KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]: marker as unknown as JsonValue,
+    },
+  };
+  if (
+    nextEntry.lastFailure !== undefined &&
+    nextEntry.lastFailure.failure.occurredAt <= marker.completedAt
+  ) {
+    delete nextEntry.lastFailure;
+  }
+  return {
+    ...manifest,
+    revision: manifest.revision + 1,
+    entries: manifest.entries.map((entry) =>
+      entry.sourceId === source.sourceId ? nextEntry : entry
+    ),
+  };
+}
+
+/** Validates and projects one atomic no-change Manifest mutation. */
+function projectRuntimeNoChangesManifestCommit(
+  state: KnowledgeRuntimeStoreSnapshot,
+  current: IngestQueueSnapshot,
+  candidate: IngestQueueSnapshot,
+  authority: Extract<QueueWriteAuthority, { kind: "no_changes_commit" }>
+): SourceManifest {
+  const transition = projectRuntimeNoChangesQueueTransition(current, candidate);
+  const parsedPlan = parseNoChangesManifestCommitPlan(authority.plan);
+  const fallbackSourceId = transition?.processing.sourceId ?? "unknown-source";
+  if (
+    !transition ||
+    !parsedPlan.ok ||
+    !validateNoChangesManifestCommitPlan(parsedPlan.ok ? parsedPlan.value : authority.plan).valid ||
+    typeof authority.planDigest !== "string" ||
+    createNoChangesManifestCommitPlanDigest(parsedPlan.value) !== authority.planDigest
+  ) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      fallbackSourceId,
+      transition ? "authority_invalid" : "queue_mismatch"
+    );
+  }
+  const { processing, completed } = transition;
+  const plan = parsedPlan.value;
+  if (
+    plan.bundleId !== current.bundleId ||
+    plan.sourceId !== processing.sourceId ||
+    plan.sourceContentHash !== processing.sourceContentHash ||
+    plan.pipelineFingerprint !== processing.pipelineFingerprint ||
+    plan.inputRevision !== processing.inputRevision ||
+    plan.noChangesId !== completed.changeSetId
+  ) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "queue_mismatch"
+    );
+  }
+  if (state.activeTransaction !== null) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "transaction_active"
+    );
+  }
+  const manifestRaw = findBundleSlot(state, "manifests", current.bundleId);
+  if (manifestRaw === null) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "manifest_mismatch"
+    );
+  }
+  const manifest = parseSourceManifest(manifestRaw);
+  if (
+    !manifest.ok ||
+    manifest.value.revision !== plan.expectedManifestRevision ||
+    createSourceManifestDigest(manifest.value) !== plan.expectedManifestDigest
+  ) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "manifest_mismatch"
+    );
+  }
+  const source = manifest.value.entries.find((entry) => entry.sourceId === processing.sourceId);
+  if (!source) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "source_mismatch"
+    );
+  }
+  let sourceAuthority: ReturnType<typeof deriveKnowledgeSourceCompileAuthority>;
+  try {
+    sourceAuthority = deriveKnowledgeSourceCompileAuthority(source);
+  } catch {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "source_mismatch"
+    );
+  }
+  const sourceAuthorityMatches =
+    plan.kind === "query_writeback_source_compile"
+      ? sourceAuthority.operation === "query_writeback" &&
+        sourceAuthority.sourceOriginDigest === plan.sourceOriginDigest &&
+        sourceAuthority.expectedSourceContentHash === plan.sourceContentHash
+      : sourceAuthority.operation === "ingest";
+  if (
+    !sourceAuthorityMatches ||
+    !noChangesBasePagesMatchSource(source, plan.baseGeneratedPages, false)
+  ) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "source_mismatch"
+    );
+  }
+  const previousApply = readSourceCommitExtension(source, current.bundleId);
+  const previousNoChanges = readSourceNoChangesCommitMarker(source);
+  if (
+    processing.inputRevision <=
+    Math.max(previousApply?.inputRevision ?? 0, previousNoChanges?.inputRevision ?? 0)
+  ) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "input_revision_not_newer"
+    );
+  }
+  const observations =
+    state.inputRevisions
+      .find((bundle) => bundle.bundleId === current.bundleId)
+      ?.sources.find((candidateSource) => candidateSource.sourceId === processing.sourceId)
+      ?.observations.filter(
+        (observation) =>
+          observation.status === "consumed" &&
+          observation.inputRevision === processing.inputRevision &&
+          observation.sourceContentHash === processing.sourceContentHash &&
+          observation.pipelineFingerprint === processing.pipelineFingerprint
+      ) ?? [];
+  if (observations.length !== 1) {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "observation_mismatch"
+    );
+  }
+  let marker: NoChangesManifestCommitMarker;
+  try {
+    marker = createKnowledgeNoChangesCommitMarker({
+      plan,
+      jobClaim: {
+        jobId: processing.id,
+        sourceId: processing.sourceId,
+        sourceContentHash: processing.sourceContentHash,
+        pipelineFingerprint: processing.pipelineFingerprint,
+        inputRevision: processing.inputRevision,
+        attempt: processing.attempt,
+        startedAt: processing.startedAt,
+      },
+      completedAt: completed.completedAt,
+      manifestAfterRevision: manifest.value.revision + 1,
+    });
+  } catch {
+    throw new KnowledgeRuntimeNoChangesCommitConflictError(
+      current.bundleId,
+      processing.sourceId,
+      "authority_invalid"
+    );
+  }
+  return createNoChangesCommittedManifest(manifest.value, source, marker);
 }
 
 /**
@@ -3744,6 +4475,41 @@ export class KnowledgeRuntimeStore {
       if (!protectedQueueControlTransitionIsAllowed(state, current, candidate)) {
         throw new KnowledgeRuntimeQueueRecoveryGateProtectedError(bundleId);
       }
+      const noChangesAuthority = authority?.kind === "no_changes_commit" ? authority : undefined;
+      const protectedNoChangesCompletion = hasProtectedNoChangesCompletion(current, candidate);
+      if (protectedNoChangesCompletion && noChangesAuthority === undefined) {
+        const sourceId =
+          current?.jobs.find((job) => {
+            const next = candidate.jobs.find((candidateJob) => candidateJob.id === job.id);
+            return (
+              job.status === "processing" &&
+              job.stage !== "applying" &&
+              next?.status === "completed"
+            );
+          })?.sourceId ?? "unknown-source";
+        throw new KnowledgeRuntimeNoChangesCommitConflictError(
+          bundleId,
+          sourceId,
+          "authority_invalid"
+        );
+      }
+      let manifests = state.manifests;
+      if (noChangesAuthority !== undefined) {
+        if (current === null) {
+          throw new KnowledgeRuntimeNoChangesCommitConflictError(
+            bundleId,
+            noChangesAuthority.plan.sourceId,
+            "queue_mismatch"
+          );
+        }
+        const nextManifest = projectRuntimeNoChangesManifestCommit(
+          state,
+          current,
+          candidate,
+          noChangesAuthority
+        );
+        manifests = replaceBundleSlot(state.manifests, bundleId, nextManifest);
+      }
       const inputRevisions = consumeQueueSourceObservations(
         state,
         current,
@@ -3759,6 +4525,7 @@ export class KnowledgeRuntimeStore {
           ...state,
           revision: nextStoreRevision(state),
           queues: replaceBundleSlot(state.queues, bundleId, candidate),
+          manifests,
           inputRevisions,
         },
         value: undefined,
@@ -5205,7 +5972,7 @@ export class KnowledgeRuntimeStore {
     return proof;
   }
 
-  /** Migrates a supported v1/v2 envelope through one atomic transform. */
+  /** Migrates a supported v1/v2/v3 envelope through one atomic transform. */
   private async migrateLegacyStore(): Promise<void> {
     let callbackCalled = false;
     let expectedText: string | undefined;
@@ -5224,15 +5991,23 @@ export class KnowledgeRuntimeStore {
         return currentText;
       }
       if (value.version === PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION) {
+        expectedText = JSON.stringify(migrateRuntimeV3ToV4Snapshot(value));
+        return expectedText;
+      }
+      if (value.version === RUNTIME_V2_STORE_VERSION) {
         const runtimeId = this.nextOpaqueId("runtimeId");
-        expectedText = JSON.stringify(migratePreviousRuntimeSnapshot(value, runtimeId));
+        expectedText = JSON.stringify(
+          migrateRuntimeV3ToV4Snapshot(migrateRuntimeV2ToV3Snapshot(value, runtimeId))
+        );
         return expectedText;
       }
       if (value.version !== LEGACY_KNOWLEDGE_RUNTIME_STORE_VERSION) {
         throw new KnowledgeRuntimeStoreCorruptError();
       }
       const runtimeId = this.nextOpaqueId("runtimeId");
-      expectedText = JSON.stringify(migrateLegacyRuntimeSnapshot(value, runtimeId));
+      expectedText = JSON.stringify(
+        migrateRuntimeV3ToV4Snapshot(migrateLegacyRuntimeSnapshot(value, runtimeId))
+      );
       return expectedText;
     });
     if (!callbackCalled || expectedText === undefined || committedText !== expectedText) {

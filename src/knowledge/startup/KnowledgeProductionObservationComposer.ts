@@ -23,6 +23,7 @@ import {
 } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
+import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import { isPathWithinRoot } from "@/knowledge/paths/vaultPath";
 import { KnowledgeStudioScopedQueryAdapter } from "@/knowledge/query/KnowledgeStudioScopedQueryAdapter";
 import { KnowledgeProductionQueryWritebackCoordinator } from "@/knowledge/query/KnowledgeProductionQueryWritebackCoordinator";
@@ -628,7 +629,8 @@ export class KnowledgeProductionObservationComposer {
   createCompileReviewWorkerController(
     routeLease: KnowledgeProductionModelRouteLease,
     isReleased: () => boolean,
-    scheduler: KnowledgeProductionWorkerScheduler
+    scheduler: KnowledgeProductionWorkerScheduler,
+    onGenerationRefreshRequired: () => void
   ): KnowledgeProductionWorkerController {
     const state = requireComposerState(this);
     const composition = state.composition;
@@ -637,7 +639,41 @@ export class KnowledgeProductionObservationComposer {
     }
     try {
       const worker = this.createCompileReviewWorkerSession(routeLease, isReleased);
-      const controller = new KnowledgeProductionWorkerController({ worker, scheduler });
+      if (typeof onGenerationRefreshRequired !== "function") {
+        throw createAbortError();
+      }
+      const watchPlan = state.plan?.getWatchPlan();
+      if (!watchPlan) throw createAbortError();
+      const expectedManifestAuthorities = composition.owners.map(({ config }) => {
+        const authority = watchPlan.getBundleAuthority(config.id);
+        if (!authority) throw createAbortError();
+        return Object.freeze({
+          bundleId: config.id,
+          revision: authority.manifestRevision,
+          digest: authority.manifestDigest,
+        });
+      });
+      const manifests = new SourceManifestRepository(
+        new KnowledgeRuntimeManifestStorage(composition.runtime)
+      );
+      const controller = new KnowledgeProductionWorkerController({
+        worker,
+        scheduler,
+        onGenerationRefreshRequired,
+        probeGenerationCurrent: async () => {
+          assertCompositionCurrent(state, state.generation, composition);
+          for (const expected of expectedManifestAuthorities) {
+            const manifest = await manifests.load(expected.bundleId);
+            if (
+              manifest.revision !== expected.revision ||
+              createSourceManifestDigest(manifest) !== expected.digest
+            ) {
+              return false;
+            }
+          }
+          return true;
+        },
+      });
       composition.eventSink.setController(controller);
       state.workerController = controller;
       return controller;

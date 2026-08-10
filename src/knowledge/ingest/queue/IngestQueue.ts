@@ -1,6 +1,11 @@
 import { Mutex } from "async-mutex";
 
 import type { TransactionCommitReceipt } from "@/knowledge/changeset/ChangeSetTransaction";
+import {
+  createNoChangesManifestCommitPlanDigest,
+  parseNoChangesManifestCommitPlan,
+  type NoChangesManifestCommitPlan,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import type {
   JsonValue,
@@ -265,7 +270,14 @@ export type IngestExecutionResult =
       reviewDecision: IngestPendingReviewDecisionReceipt;
     }
   /** Terminal compile outcome that intentionally produced no file mutation. */
-  | { kind: "no_changes"; changeSetId: string }
+  | {
+      kind: "no_changes";
+      changeSetId: string;
+      /** Production-only exact Manifest read-set committed with Queue completion. */
+      manifestCommitPlan?: NoChangesManifestCommitPlan;
+      /** Canonical identity of the exact no-change commit plan. */
+      manifestCommitPlanDigest?: string;
+    }
   | {
       kind: "completed";
       changeSetId: string;
@@ -415,7 +427,13 @@ export type RunNextResult =
   | {
       kind: "executed";
       jobId: string;
-      status: "pending" | "paused" | "awaiting_review" | "failed" | "completed" | "cancelled";
+      status: "pending" | "paused" | "awaiting_review" | "failed" | "cancelled";
+    }
+  | {
+      kind: "executed";
+      jobId: string;
+      status: "completed";
+      generationEffect?: "manifest_no_changes_committed";
     };
 
 /** Reports persisted queue JSON that cannot satisfy the current contract. */
@@ -2168,7 +2186,16 @@ export class IngestQueue {
       if (finalized === "stale") {
         return { kind: "stale", jobId: executionJob.id };
       }
-      return { kind: "executed", jobId: executionJob.id, status: finalized };
+      return {
+        kind: "executed",
+        jobId: executionJob.id,
+        status: finalized,
+        ...(result.kind === "no_changes" &&
+        result.manifestCommitPlan !== undefined &&
+        result.manifestCommitPlanDigest !== undefined
+          ? { generationEffect: "manifest_no_changes_committed" as const }
+          : {}),
+      };
     } catch (error) {
       await this.recoverAfterInfrastructureFailure(bundleId, executionJob);
       throw error;
@@ -3476,48 +3503,93 @@ export class IngestQueue {
       }
       commitMarker = createApplyCommitMarker(result.commitReceipt);
     }
+    const noChangesAuthority: QueueWriteAuthority | undefined =
+      result.kind === "no_changes" &&
+      result.manifestCommitPlan !== undefined &&
+      result.manifestCommitPlanDigest !== undefined
+        ? {
+            kind: "no_changes_commit",
+            plan: result.manifestCommitPlan,
+            planDigest: result.manifestCommitPlanDigest,
+          }
+        : undefined;
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
-      return this.mutate<SuccessMutationValue>(bundleId, (current) => {
-        const job = requireJob(current, jobId);
-        if (job.status !== "processing") {
-          return { value: "stale" };
-        }
-        if (!isSameClaim(job, attempt, startedAt)) {
-          return { value: "stale" };
-        }
-        if (job.stage === "applying") {
-          if (
-            result.kind !== "completed" ||
-            !commitMarker ||
-            !jobMatchesApplyMarker(job, commitMarker) ||
-            commitMarker.startedAt !== job.startedAt
-          ) {
+      return this.mutate<SuccessMutationValue>(
+        bundleId,
+        (current) => {
+          const job = requireJob(current, jobId);
+          if (job.status !== "processing") {
+            return { value: "stale" };
+          }
+          if (!isSameClaim(job, attempt, startedAt)) {
+            return { value: "stale" };
+          }
+          if (job.stage === "applying") {
+            if (
+              result.kind !== "completed" ||
+              !commitMarker ||
+              !jobMatchesApplyMarker(job, commitMarker) ||
+              commitMarker.startedAt !== job.startedAt
+            ) {
+              throw new IngestQueueApplyReceiptRequiredError(bundleId, jobId);
+            }
+            return { value: "commit_ready" };
+          }
+          if (result.kind === "completed" || commitMarker) {
             throw new IngestQueueApplyReceiptRequiredError(bundleId, jobId);
           }
-          return { value: "commit_ready" };
-        }
-        if (result.kind === "completed" || commitMarker) {
-          throw new IngestQueueApplyReceiptRequiredError(bundleId, jobId);
-        }
-        if (result.kind === "awaiting_review") {
-          if (
-            !pendingReviewDecision ||
-            !jobMatchesReviewDecisionClaim(job, pendingReviewDecision.jobClaim) ||
-            pendingReviewDecision.recordedAt < job.createdAt ||
-            current.pendingReviews.some(
-              (review) =>
-                review.jobId === job.id || review.changeSetId === pendingReviewDecision.changeSetId
-            )
-          ) {
-            throw new IngestQueueTransitionError(
-              job.id,
-              jobState(job),
-              "persist an invalid pending review hand-off"
-            );
+          if (result.kind === "awaiting_review") {
+            if (
+              !pendingReviewDecision ||
+              !jobMatchesReviewDecisionClaim(job, pendingReviewDecision.jobClaim) ||
+              pendingReviewDecision.recordedAt < job.createdAt ||
+              current.pendingReviews.some(
+                (review) =>
+                  review.jobId === job.id ||
+                  review.changeSetId === pendingReviewDecision.changeSetId
+              )
+            ) {
+              throw new IngestQueueTransitionError(
+                job.id,
+                jobState(job),
+                "persist an invalid pending review hand-off"
+              );
+            }
+            const updatedAt = Math.max(timestamp, job.updatedAt, pendingReviewDecision.recordedAt);
+            const awaitingReview: KnowledgeIngestJob = {
+              id: job.id,
+              bundleId: job.bundleId,
+              sourceId: job.sourceId,
+              sourceContentHash: job.sourceContentHash,
+              pipelineFingerprint: job.pipelineFingerprint,
+              inputRevision: job.inputRevision,
+              attempt: job.attempt,
+              rerunRequested: job.rerunRequested,
+              createdAt: job.createdAt,
+              updatedAt,
+              status: "awaiting_review",
+              stage: "review",
+              changeSetId: result.changeSetId,
+            };
+            const anchor: IngestDurablePendingReview = {
+              kind: "durable",
+              jobId: job.id,
+              changeSetId: pendingReviewDecision.changeSetId,
+              proposalDigest: pendingReviewDecision.proposalDigest,
+              reviewRecordRevision: pendingReviewDecision.recordRevision,
+              recordedAt: pendingReviewDecision.recordedAt,
+            };
+            return {
+              next: {
+                ...replaceJob(current, awaitingReview),
+                pendingReviews: [...current.pendingReviews, anchor],
+              },
+              value: "changed",
+            };
           }
-          const updatedAt = Math.max(timestamp, job.updatedAt, pendingReviewDecision.recordedAt);
-          const awaitingReview: KnowledgeIngestJob = {
+          const completedAt = Math.max(timestamp, job.updatedAt);
+          const completed: KnowledgeIngestJob = {
             id: job.id,
             bundleId: job.bundleId,
             sourceId: job.sourceId,
@@ -3525,51 +3597,21 @@ export class IngestQueue {
             pipelineFingerprint: job.pipelineFingerprint,
             inputRevision: job.inputRevision,
             attempt: job.attempt,
-            rerunRequested: job.rerunRequested,
+            rerunRequested: false,
             createdAt: job.createdAt,
-            updatedAt,
-            status: "awaiting_review",
-            stage: "review",
+            updatedAt: completedAt,
+            status: "completed",
+            stage: "completed",
             changeSetId: result.changeSetId,
-          };
-          const anchor: IngestDurablePendingReview = {
-            kind: "durable",
-            jobId: job.id,
-            changeSetId: pendingReviewDecision.changeSetId,
-            proposalDigest: pendingReviewDecision.proposalDigest,
-            reviewRecordRevision: pendingReviewDecision.recordRevision,
-            recordedAt: pendingReviewDecision.recordedAt,
+            completedAt,
           };
           return {
-            next: {
-              ...replaceJob(current, awaitingReview),
-              pendingReviews: [...current.pendingReviews, anchor],
-            },
+            next: promoteRerun(replaceJob(current, completed), job.sourceId, completedAt),
             value: "changed",
           };
-        }
-        const completedAt = Math.max(timestamp, job.updatedAt);
-        const completed: KnowledgeIngestJob = {
-          id: job.id,
-          bundleId: job.bundleId,
-          sourceId: job.sourceId,
-          sourceContentHash: job.sourceContentHash,
-          pipelineFingerprint: job.pipelineFingerprint,
-          inputRevision: job.inputRevision,
-          attempt: job.attempt,
-          rerunRequested: false,
-          createdAt: job.createdAt,
-          updatedAt: completedAt,
-          status: "completed",
-          stage: "completed",
-          changeSetId: result.changeSetId,
-          completedAt,
-        };
-        return {
-          next: promoteRerun(replaceJob(current, completed), job.sourceId, completedAt),
-          value: "changed",
-        };
-      });
+        },
+        noChangesAuthority
+      );
     });
     if (mutation.value === "stale") {
       return "stale";
@@ -3885,10 +3927,36 @@ export class IngestQueue {
       throw new TypeError("executor result does not satisfy the ingest outcome contract");
     }
     if (result.kind === "no_changes") {
-      if (!hasExactDataKeys(result, ["kind", "changeSetId"])) {
+      const isQueueOnlyResult = hasExactDataKeys(result, ["kind", "changeSetId"]);
+      const isManifestCommitResult = hasExactDataKeys(result, [
+        "kind",
+        "changeSetId",
+        "manifestCommitPlan",
+        "manifestCommitPlanDigest",
+      ]);
+      if (!isQueueOnlyResult && !isManifestCommitResult) {
         throw new TypeError("no-changes executor result has unexpected fields");
       }
       assertIdentifier(result.changeSetId, "changeSetId");
+      if (isManifestCommitResult) {
+        const parsedPlan = parseNoChangesManifestCommitPlan(result.manifestCommitPlan);
+        if (
+          !parsedPlan.ok ||
+          typeof result.manifestCommitPlanDigest !== "string" ||
+          !HASH_PATTERN.test(result.manifestCommitPlanDigest) ||
+          parsedPlan.value.noChangesId !== result.changeSetId ||
+          createNoChangesManifestCommitPlanDigest(parsedPlan.value) !==
+            result.manifestCommitPlanDigest
+        ) {
+          throw new TypeError("no-changes executor result has an invalid Manifest commit plan");
+        }
+        return Object.freeze({
+          kind: "no_changes",
+          changeSetId: result.changeSetId,
+          manifestCommitPlan: parsedPlan.value,
+          manifestCommitPlanDigest: result.manifestCommitPlanDigest,
+        });
+      }
       return Object.freeze({ kind: "no_changes", changeSetId: result.changeSetId });
     }
     if (result.kind === "awaiting_review") {

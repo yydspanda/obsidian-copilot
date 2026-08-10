@@ -34,13 +34,16 @@ import {
   createManifestCommitPlanDigest,
   createSourceManifestDigest,
 } from "@/knowledge/manifest/ManifestCommitIntent";
+import { createNoChangesManifestCommitPlanDigest } from "@/knowledge/manifest/NoChangesManifestCommit";
 import {
+  canonicalizeJson,
   createFileContentHash,
   createQuoteHash,
   createSourceContentHash,
 } from "@/knowledge/model/fingerprint";
 import type { SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import { sha256 } from "@/utils/hash";
 
 const SOURCE_TEXT = "The source says deterministic compilation is safer.";
 const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_TEXT);
@@ -643,13 +646,117 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
 
   it("returns no_changes without resolving or generating when analysis approves no targets", async () => {
     const harness = createHarness({ analyze: async () => createAnalysisOutput([]) });
+    const input = createCompileInput();
 
     const result = requireNoChanges(
-      await harness.compiler.compile(createCompileInput(), new AbortController().signal)
+      await harness.compiler.compile(input, new AbortController().signal)
     );
 
     expect(result.analysis.targets).toEqual([]);
+    expect(result.noChangesId).toBe(result.manifestCommitPlan.noChangesId);
+    expect(result.noChangesId).toMatch(/[a-f0-9]{64}$/);
+    expect(result.manifestCommitPlanDigest).toBe(
+      createNoChangesManifestCommitPlanDigest(result.manifestCommitPlan)
+    );
+    expect(result.manifestCommitPlan).toMatchObject({
+      bundleId: input.bundle.id,
+      sourceId: input.source.sourceId,
+      sourceContentHash: input.source.sourceContentHash,
+      pipelineFingerprint: input.source.pipelineFingerprint,
+      inputRevision: input.source.inputRevision,
+      compileContextDigest: result.compileContextDigest,
+      analysisDigest: result.analysisDigest,
+      reason: "analysis_no_targets",
+      expectedManifestRevision: input.manifest.revision,
+      expectedManifestDigest: createSourceManifestDigest(input.manifest),
+      baseGeneratedPages: [],
+    });
     expect(harness.resolver.requests).toHaveLength(0);
+    expect(harness.model.generationRequests).toHaveLength(0);
+    expect(harness.validator.inputs).toHaveLength(0);
+
+    const changedAnalysis = requireNoChanges(
+      await createHarness({
+        analyze: async () =>
+          createAnalysisOutput([], { summary: "A different valid no-target analysis" }),
+      }).compiler.compile(input, new AbortController().signal)
+    );
+    expect(changedAnalysis.compileContextDigest).toBe(result.compileContextDigest);
+    expect(changedAnalysis.analysisDigest).not.toBe(result.analysisDigest);
+    expect(changedAnalysis.manifestCommitPlan.evidenceDigest).not.toBe(
+      result.manifestCommitPlan.evidenceDigest
+    );
+    expect(changedAnalysis.noChangesId).not.toBe(result.noChangesId);
+  });
+
+  it("binds a resolved no-target conclusion to strict observations and retained pages", async () => {
+    const existing = "---\ntype: concept\n---\n\nObsolete\n";
+    const authorization = createTargetAuthorization("Wiki/Obsolete.md", {
+      allowedIntents: ["delete"],
+      contentPolicy: "structural",
+      expectedContentHash: createFileContentHash(existing),
+    });
+    const harness = createHarness({
+      analyze: async () =>
+        createAnalysisOutput([
+          {
+            ref: "target-delete",
+            path: authorization.path,
+            intent: "delete",
+            reason: "Remove an already absent generated page",
+            claimRefs: ["claim-main"],
+          },
+        ]),
+      resolve: async (targets) => [
+        {
+          targetId: targets[0].targetId,
+          kind: "missing" as const,
+          windowsPathKey: toWindowsPathKey(targets[0].path),
+        },
+      ],
+    });
+    const input = createCompileInput({ targetAuthorizations: [authorization] });
+
+    const result = requireNoChanges(
+      await harness.compiler.compile(input, new AbortController().signal)
+    );
+
+    expect(result.manifestCommitPlan).toMatchObject({
+      reason: "resolved_no_targets",
+      compileContextDigest: result.compileContextDigest,
+      analysisDigest: result.analysisDigest,
+      expectedManifestRevision: input.manifest.revision,
+      expectedManifestDigest: createSourceManifestDigest(input.manifest),
+      baseGeneratedPages: [
+        {
+          path: authorization.path,
+          ownership: authorization.ownership,
+          contentHash: authorization.expectedContentHash,
+        },
+      ],
+    });
+    expect(result.manifestCommitPlan.evidenceDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.manifestCommitPlan.evidenceDigest).toBe(
+      sha256(
+        `knowledge-no-changes-resolved-evidence-v1\n${canonicalizeJson({
+          compileContextDigest: result.compileContextDigest,
+          analysisDigest: result.analysisDigest,
+          targetRequests: harness.resolver.requests[0].map((request) => ({ ...request })),
+          targetObservations: [
+            {
+              targetId: harness.resolver.requests[0][0].targetId,
+              kind: "missing",
+              windowsPathKey: toWindowsPathKey(harness.resolver.requests[0][0].path),
+            },
+          ],
+        })}`
+      )
+    );
+    expect(result.manifestCommitPlanDigest).toBe(
+      createNoChangesManifestCommitPlanDigest(result.manifestCommitPlan)
+    );
+    expect(diagnosticCodes(result)).toContain("compiler_delete_target_missing");
+    expect(harness.resolver.requests).toHaveLength(1);
     expect(harness.model.generationRequests).toHaveLength(0);
     expect(harness.validator.inputs).toHaveLength(0);
   });
@@ -683,7 +790,53 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     );
 
     expect(diagnosticCodes(result)).toContain("compiler_update_content_unchanged");
+    expect(result.manifestCommitPlan).toMatchObject({
+      reason: "all_targets_unchanged",
+      compileContextDigest: result.compileContextDigest,
+      analysisDigest: result.analysisDigest,
+      baseGeneratedPages: [
+        {
+          path: "Wiki/Page.md",
+          ownership: "generated",
+          contentHash: createFileContentHash(existing),
+        },
+      ],
+    });
+    expect(result.manifestCommitPlanDigest).toBe(
+      createNoChangesManifestCommitPlanDigest(result.manifestCommitPlan)
+    );
     expect(harness.validator.inputs).toHaveLength(0);
+
+    const explicitUnchanged = requireNoChanges(
+      await createHarness({
+        resolve: async (targets) => [
+          { targetId: targets[0].targetId, kind: "file", path: targets[0].path, content: existing },
+        ],
+        generate: async (request) => ({
+          version: 1,
+          targetSetDigest: request.targetSetDigest,
+          files: request.targets.map((target) => ({
+            targetId: target.targetId,
+            outcome: "unchanged" as const,
+          })),
+        }),
+      }).compiler.compile(
+        createCompileInput({
+          targetAuthorizations: [
+            createTargetAuthorization("Wiki/Page.md", {
+              expectedContentHash: createFileContentHash(existing),
+            }),
+          ],
+        }),
+        new AbortController().signal
+      )
+    );
+    expect(explicitUnchanged.compileContextDigest).toBe(result.compileContextDigest);
+    expect(explicitUnchanged.analysisDigest).toBe(result.analysisDigest);
+    expect(explicitUnchanged.manifestCommitPlan.evidenceDigest).not.toBe(
+      result.manifestCommitPlan.evidenceDigest
+    );
+    expect(explicitUnchanged.noChangesId).not.toBe(result.noChangesId);
   });
 });
 

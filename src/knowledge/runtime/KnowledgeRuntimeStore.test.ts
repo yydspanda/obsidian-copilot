@@ -26,6 +26,7 @@ import {
 import {
   INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
+  validateIngestQueueSnapshot,
   type IngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import {
@@ -35,10 +36,18 @@ import {
   type ManifestCommitIntent,
   type ManifestCommitPlan,
 } from "@/knowledge/manifest/ManifestCommitIntent";
+import {
+  KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
+  createKnowledgeNoChangesCommitMarker,
+  createNoChangesManifestCommitPlan,
+  createNoChangesManifestCommitPlanDigest,
+  parseKnowledgeNoChangesCommitMarker,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { SourceManifestRevisionConflictError } from "@/knowledge/manifest/SourceManifestStorage";
 import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
 import type {
+  JsonValue,
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   SourceManifest,
@@ -74,6 +83,7 @@ import {
   KnowledgeRuntimeManifestProtectedStateError,
   KnowledgeRuntimeManifestReservationError,
   KnowledgeRuntimeMigrationUnsafeError,
+  KnowledgeRuntimeNoChangesCommitConflictError,
   KnowledgeRuntimeNoJournalApplyRecoveryPort,
   KnowledgeRuntimeQueueObservationAuthorityError,
   KnowledgeRuntimeQueueRecoveryGateProtectedError,
@@ -263,6 +273,80 @@ function createLegacyRuntimeSnapshot(): Record<string, unknown> {
     activeTransaction: null,
     inputRevisions: [
       { bundleId: "personal", sources: [{ sourceId: "source-1", inputRevision: 9 }] },
+    ],
+    applyCommits: [],
+  };
+}
+
+/** Creates one outer runtime whose current fingerprint has only shape-level completion. */
+function createMarkerlessCompletionRuntimeSnapshot(
+  version: 3 | typeof KNOWLEDGE_RUNTIME_STORE_VERSION,
+  control: IngestQueueSnapshot["control"] = { status: "running" }
+): Record<string, unknown> {
+  const queue: IngestQueueSnapshot = {
+    ...createQueueSnapshot(1),
+    control,
+    jobs: [
+      {
+        id: "job-markerless-completion",
+        bundleId: "personal",
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 1,
+        attempt: 1,
+        rerunRequested: false,
+        createdAt: 90,
+        updatedAt: 120,
+        status: "completed",
+        stage: "completed",
+        changeSetId: "markerless-completion",
+        completedAt: 120,
+      },
+    ],
+    sourceHighWatermarks: [
+      {
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 1,
+        observedAt: 100,
+      },
+    ],
+  };
+  return {
+    version,
+    runtimeId: "1".repeat(32),
+    revision: 7,
+    queues: [{ bundleId: "personal", value: queue }],
+    reviews: [],
+    manifests: [{ bundleId: "personal", value: createRegisteredManifest() }],
+    activeTransaction: null,
+    inputRevisions: [
+      {
+        bundleId: "personal",
+        sources: [
+          {
+            sourceId: "source-1",
+            inputRevision: 1,
+            managedAfterRevision: 0,
+            observations: [
+              {
+                observationToken: "2".repeat(32),
+                captureId: "markerless-completion-capture",
+                inputRevision: 1,
+                allocatedAt: 80,
+                status: "consumed",
+                sourceContentHash: HASH_A,
+                pipelineFingerprint: HASH_B,
+                boundAt: 90,
+                settledAt: 100,
+                queueRevision: 1,
+              },
+            ],
+          },
+        ],
+      },
     ],
     applyCommits: [],
   };
@@ -506,6 +590,37 @@ function createRegisteredManifest(
       },
     ],
   };
+}
+
+/** Creates one strict zero-page no-change plan over an exact Manifest read-set. */
+function createRuntimeNoChangesPlan(
+  manifest: SourceManifest,
+  inputRevision = 1,
+  sourceContentHash = HASH_A,
+  pipelineFingerprint = HASH_B
+) {
+  const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
+  const baseGeneratedPages = (source?.lastSuccessful?.generatedPages ?? []).map((page) => {
+    if (page.contentHash === undefined) {
+      throw new Error("Runtime no-change fixture requires exact generated-page hashes");
+    }
+    return { ...page, contentHash: page.contentHash };
+  });
+  return createNoChangesManifestCommitPlan({
+    bundleId: manifest.bundleId,
+    sourceId: "source-1",
+    sourceContentHash,
+    pipelineFingerprint,
+    inputRevision,
+    compileContextDigest: HASH_A,
+    analysisDigest: HASH_B,
+    evidenceDigest: HASH_C,
+    reason: "analysis_no_targets",
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    baseGeneratedPages,
+    sourceAuthority: { operation: "ingest" },
+  });
 }
 
 /**
@@ -1910,7 +2025,7 @@ describe("KnowledgeRuntimeStore", () => {
       ...legacy,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: migrated.runtimeId,
-      revision: 8,
+      revision: 9,
       reviews: [
         {
           bundleId: "personal",
@@ -1992,7 +2107,7 @@ describe("KnowledgeRuntimeStore", () => {
     const authorityQueue = authority.queues[0].value as IngestQueueSnapshot;
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 8,
+      revision: 9,
       activeTransaction: { transactionId: proof.journal.transactionId },
       inputRevisions: [
         {
@@ -2041,9 +2156,411 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await file.read()).toBe(committed);
     expect(JSON.parse(committed)).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 8,
+      revision: 9,
     });
   });
+
+  it("rejects a direct runtime-v4 whose current completion has no durable proof", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(
+      JSON.stringify(createMarkerlessCompletionRuntimeSnapshot(KNOWLEDGE_RUNTIME_STORE_VERSION))
+    );
+    const before = await file.read();
+
+    await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
+      KnowledgeRuntimeStoreCorruptError
+    );
+    expect(await file.read()).toBe(before);
+  });
+
+  it("atomically demotes one markerless runtime-v3 completion and replays idempotently", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(JSON.stringify(createMarkerlessCompletionRuntimeSnapshot(3)));
+    const runtime = new KnowledgeRuntimeStore(file);
+
+    await runtime.initialize();
+
+    const migratedText = await file.read();
+    const migrated = JSON.parse(migratedText) as KnowledgeRuntimeStoreSnapshot;
+    expect(migrated).toMatchObject({
+      version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+      runtimeId: "1".repeat(32),
+      revision: 8,
+      queues: [
+        {
+          bundleId: "personal",
+          value: {
+            revision: 2,
+            control: {
+              status: "paused",
+              reason: "startup_recovery",
+              pausedAt: 120,
+            },
+            jobs: [
+              {
+                id: "job-markerless-completion",
+                status: "pending",
+                stage: "queued",
+                attempt: 1,
+                inputRevision: 1,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect((migrated.queues[0].value as IngestQueueSnapshot).jobs[0]).not.toHaveProperty(
+      "changeSetId"
+    );
+    expect((migrated.queues[0].value as IngestQueueSnapshot).jobs[0]).not.toHaveProperty(
+      "completedAt"
+    );
+    expect(migrated.inputRevisions).toEqual(
+      createMarkerlessCompletionRuntimeSnapshot(3).inputRevisions
+    );
+
+    await runtime.initialize();
+    expect(await file.read()).toBe(migratedText);
+  });
+
+  it("re-runs a migrated current fingerprint and writes its exact no-change marker", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(
+      JSON.stringify(
+        createMarkerlessCompletionRuntimeSnapshot(3, {
+          status: "paused",
+          reason: "user",
+          pausedAt: 120,
+        })
+      )
+    );
+    const runtime = new KnowledgeRuntimeStore(file);
+    await runtime.initialize();
+    const manifest = createRegisteredManifest();
+    const plan = createRuntimeNoChangesPlan(manifest);
+    const queue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(runtime),
+      {
+        /** Produces the proof that the legacy completion did not retain. */
+        execute: async () => ({
+          kind: "no_changes",
+          changeSetId: plan.noChangesId,
+          manifestCommitPlan: plan,
+          manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+        }),
+      },
+      { clock: () => 200 }
+    );
+    await queue.resume("personal");
+
+    await expect(queue.runNext("personal")).resolves.toMatchObject({
+      kind: "executed",
+      jobId: "job-markerless-completion",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    });
+
+    const state = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const persistedQueue = state.queues[0].value as IngestQueueSnapshot;
+    const persistedManifest = state.manifests[0].value as SourceManifest;
+    expect(persistedQueue.jobs[0]).toMatchObject({
+      id: "job-markerless-completion",
+      attempt: 2,
+      status: "completed",
+      changeSetId: plan.noChangesId,
+    });
+    expect(
+      persistedManifest.entries[0].extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    ).toMatchObject({
+      jobId: "job-markerless-completion",
+      attempt: 2,
+      noChangesId: plan.noChangesId,
+    });
+    await expect(new KnowledgeRuntimeStore(file).initialize()).resolves.toBeUndefined();
+  });
+
+  it("keeps an exact Apply-ledger completion terminal during runtime-v3 migration", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest, "transaction-v3-proven-apply");
+    const harness = await createApplyHarness(manifest, proof);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const previous = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = previous.queues[0].value as IngestQueueSnapshot;
+    const applying = queue.jobs[0];
+    if (applying.status !== "processing") throw new Error("Expected applying Queue fixture");
+    const completedAt = harness.receipt.committedAt;
+    const completed: IngestQueueSnapshot["jobs"][number] = {
+      id: applying.id,
+      bundleId: applying.bundleId,
+      sourceId: applying.sourceId,
+      sourceContentHash: applying.sourceContentHash,
+      pipelineFingerprint: applying.pipelineFingerprint,
+      inputRevision: applying.inputRevision,
+      attempt: applying.attempt,
+      rerunRequested: false,
+      createdAt: applying.createdAt,
+      updatedAt: completedAt,
+      status: "completed",
+      stage: "completed",
+      changeSetId: harness.receipt.changeSetId,
+      completedAt,
+    };
+    const completedQueue: IngestQueueSnapshot = {
+      ...queue,
+      revision: queue.revision + 1,
+      control: { status: "running" },
+      jobs: [completed],
+    };
+    delete completedQueue.applyClaim;
+    const previousV3 = {
+      ...previous,
+      version: 3,
+      activeTransaction: null,
+      queues: [{ bundleId: "personal", value: completedQueue }],
+    };
+    harness.file.replaceContent(JSON.stringify(previousV3));
+    const beforeQueue = JSON.stringify(completedQueue);
+
+    await expect(new KnowledgeRuntimeStore(harness.file).initialize()).resolves.toBeUndefined();
+
+    const migrated = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(migrated.version).toBe(KNOWLEDGE_RUNTIME_STORE_VERSION);
+    expect(JSON.stringify(migrated.queues[0].value)).toBe(beforeQueue);
+    expect((migrated.queues[0].value as IngestQueueSnapshot).jobs[0]).toMatchObject({
+      status: "completed",
+      changeSetId: harness.receipt.changeSetId,
+    });
+
+    const covered = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const coveredQueue = covered.queues[0].value as IngestQueueSnapshot;
+    coveredQueue.jobs.unshift({
+      id: "job-older-unproved-completion",
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 0,
+      attempt: 1,
+      rerunRequested: false,
+      createdAt: 1,
+      updatedAt: 2,
+      status: "completed",
+      stage: "completed",
+      changeSetId: "older-unproved-completion",
+      completedAt: 2,
+    });
+    harness.file.replaceContent(JSON.stringify(covered));
+    await expect(new KnowledgeRuntimeStore(harness.file).initialize()).resolves.toBeUndefined();
+  });
+
+  it("accepts an older unproved completion covered by a newer divergent active rerun", async () => {
+    const state = createMarkerlessCompletionRuntimeSnapshot(
+      KNOWLEDGE_RUNTIME_STORE_VERSION
+    ) as unknown as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    queue.revision = 2;
+    queue.jobs[0].rerunRequested = false;
+    queue.jobs.push({
+      id: "job-divergent-active",
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 2,
+      attempt: 0,
+      rerunRequested: true,
+      createdAt: 130,
+      updatedAt: 150,
+      status: "pending",
+      stage: "queued",
+    });
+    queue.reruns = [
+      {
+        jobId: "job-current-rerun",
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 3,
+        requestedAt: 140,
+        updatedAt: 150,
+      },
+    ];
+    queue.sourceHighWatermarks[0] = {
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 3,
+      observedAt: 150,
+    };
+    state.inputRevisions = [
+      {
+        bundleId: "personal",
+        sources: [
+          {
+            sourceId: "source-1",
+            inputRevision: 3,
+            managedAfterRevision: 2,
+            observations: [
+              {
+                observationToken: "3".repeat(32),
+                captureId: "current-divergent-rerun-capture",
+                inputRevision: 3,
+                allocatedAt: 140,
+                status: "consumed",
+                sourceContentHash: HASH_A,
+                pipelineFingerprint: HASH_B,
+                boundAt: 145,
+                settledAt: 150,
+                queueRevision: 2,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const file = new MemoryAtomicRuntimeFile();
+    expect(validateIngestQueueSnapshot(queue)).toEqual({ valid: true, diagnostics: [] });
+    await file.initialize(JSON.stringify(state));
+
+    await expect(new KnowledgeRuntimeStore(file).initialize()).resolves.toBeUndefined();
+  });
+
+  it("accepts an older unproved success behind a newer same-payload failure", async () => {
+    const state = createMarkerlessCompletionRuntimeSnapshot(
+      KNOWLEDGE_RUNTIME_STORE_VERSION
+    ) as unknown as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    queue.revision = 2;
+    queue.jobs.push({
+      id: "job-newer-failure",
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 2,
+      attempt: 1,
+      rerunRequested: false,
+      createdAt: 130,
+      updatedAt: 150,
+      status: "failed",
+      stage: "generating",
+      failure: {
+        code: "model_failure",
+        message: "The latest attempt failed",
+        retryable: true,
+        occurredAt: 150,
+      },
+    });
+    queue.sourceHighWatermarks[0] = {
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 2,
+      observedAt: 140,
+    };
+    state.inputRevisions = [
+      {
+        bundleId: "personal",
+        sources: [
+          {
+            sourceId: "source-1",
+            inputRevision: 2,
+            managedAfterRevision: 1,
+            observations: [
+              {
+                observationToken: "4".repeat(32),
+                captureId: "newer-failed-observation",
+                inputRevision: 2,
+                allocatedAt: 130,
+                status: "consumed",
+                sourceContentHash: HASH_A,
+                pipelineFingerprint: HASH_B,
+                boundAt: 135,
+                settledAt: 140,
+                queueRevision: 2,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const file = new MemoryAtomicRuntimeFile();
+    await file.initialize(JSON.stringify(state));
+
+    await expect(new KnowledgeRuntimeStore(file).initialize()).resolves.toBeUndefined();
+  });
+
+  it.each([3, KNOWLEDGE_RUNTIME_STORE_VERSION] as const)(
+    "rejects runtime-v%s when its latest terminal payload diverges from the high-watermark",
+    async (version) => {
+      const state = createMarkerlessCompletionRuntimeSnapshot(version) as unknown as {
+        queues: Array<{ value: IngestQueueSnapshot }>;
+        inputRevisions: KnowledgeRuntimeStoreSnapshot["inputRevisions"];
+      };
+      const queue = state.queues[0].value;
+      queue.jobs[0] = {
+        id: "job-divergent-terminal",
+        bundleId: "personal",
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 1,
+        attempt: 1,
+        rerunRequested: false,
+        createdAt: 90,
+        updatedAt: 120,
+        status: "failed",
+        stage: "generating",
+        failure: {
+          code: "model_failure",
+          message: "The retained terminal belongs to an older payload",
+          retryable: true,
+          occurredAt: 120,
+        },
+      };
+      queue.sourceHighWatermarks[0] = {
+        sourceId: "source-1",
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 2,
+        observedAt: 130,
+      };
+      state.inputRevisions = [
+        {
+          bundleId: "personal",
+          sources: [
+            {
+              sourceId: "source-1",
+              inputRevision: 2,
+              managedAfterRevision: 1,
+              observations: [
+                {
+                  observationToken: "5".repeat(32),
+                  captureId: `divergent-terminal-${version}`,
+                  inputRevision: 2,
+                  allocatedAt: 121,
+                  status: "consumed",
+                  sourceContentHash: HASH_C,
+                  pipelineFingerprint: HASH_B,
+                  boundAt: 125,
+                  settledAt: 130,
+                  queueRevision: 1,
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(JSON.stringify(state));
+      const before = await file.read();
+
+      await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
+        KnowledgeRuntimeStoreCorruptError
+      );
+      expect(await file.read()).toBe(before);
+    }
+  );
 
   it("fails v2 migration when a Queue watermark has no allocator floor", async () => {
     const manifest = createRegisteredManifest();
@@ -4036,6 +4553,42 @@ describe("KnowledgeRuntimeStore", () => {
         },
       ],
     };
+    const coOwnerNoChangesPlan = createNoChangesManifestCommitPlan({
+      bundleId: "personal",
+      sourceId: "source-2",
+      sourceContentHash: HASH_B,
+      pipelineFingerprint: HASH_A,
+      inputRevision: 2,
+      compileContextDigest: HASH_A,
+      analysisDigest: HASH_B,
+      evidenceDigest: HASH_C,
+      reason: "all_targets_unchanged",
+      expectedManifestRevision: manifest.revision,
+      expectedManifestDigest: createSourceManifestDigest(manifest),
+      baseGeneratedPages: [
+        { path: "Wiki/Shared.md", ownership: "shared", contentHash: beforeHash },
+      ],
+      sourceAuthority: { operation: "ingest" },
+    });
+    const coOwnerNoChangesMarker = createKnowledgeNoChangesCommitMarker({
+      plan: coOwnerNoChangesPlan,
+      jobClaim: {
+        jobId: "job-coowner-no-changes",
+        sourceId: "source-2",
+        sourceContentHash: HASH_B,
+        pipelineFingerprint: HASH_A,
+        inputRevision: 2,
+        attempt: 1,
+        startedAt: 210,
+      },
+      completedAt: 220,
+      manifestAfterRevision: manifest.revision + 1,
+    });
+    manifest.revision += 1;
+    manifest.entries[1].extensions = {
+      ...manifest.entries[1].extensions,
+      [KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]: coOwnerNoChangesMarker as unknown as JsonValue,
+    };
     const proof = createSharedUpdateProof(manifest);
     const harness = await createApplyHarness(manifest, proof);
     const stateBefore = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
@@ -4064,6 +4617,49 @@ describe("KnowledgeRuntimeStore", () => {
         HASH_B
       ),
     ].sort((left, right) => left.transactionId.localeCompare(right.transactionId));
+    const queueBefore = stateBefore.queues[0].value as IngestQueueSnapshot;
+    queueBefore.jobs.push({
+      id: "job-coowner-no-changes",
+      bundleId: "personal",
+      sourceId: "source-2",
+      sourceContentHash: HASH_B,
+      pipelineFingerprint: HASH_A,
+      inputRevision: 2,
+      attempt: 1,
+      rerunRequested: false,
+      createdAt: 200,
+      updatedAt: 220,
+      status: "completed",
+      stage: "completed",
+      changeSetId: coOwnerNoChangesPlan.noChangesId,
+      completedAt: 220,
+    });
+    queueBefore.sourceHighWatermarks.push({
+      sourceId: "source-2",
+      sourceContentHash: HASH_B,
+      pipelineFingerprint: HASH_A,
+      inputRevision: 2,
+      observedAt: 200,
+    });
+    stateBefore.inputRevisions[0].sources.push({
+      sourceId: "source-2",
+      inputRevision: 2,
+      managedAfterRevision: 1,
+      observations: [
+        {
+          observationToken: "c".repeat(32),
+          captureId: "coowner-no-changes",
+          inputRevision: 2,
+          allocatedAt: 200,
+          status: "consumed",
+          sourceContentHash: HASH_B,
+          pipelineFingerprint: HASH_A,
+          boundAt: 205,
+          settledAt: 220,
+          queueRevision: queueBefore.revision,
+        },
+      ],
+    });
     harness.file.replaceContent(JSON.stringify(stateBefore));
 
     await harness.port.recordCommitted(harness.journal, harness.receipt);
@@ -4071,7 +4667,7 @@ describe("KnowledgeRuntimeStore", () => {
     const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
     const committedManifest = state.manifests[0].value as SourceManifest;
     const afterHash = createFileContentHash("# Shared after\n");
-    expect(committedManifest.revision).toBe(4);
+    expect(committedManifest.revision).toBe(5);
     expect(
       committedManifest.entries.map((entry) => ({
         sourceId: entry.sourceId,
@@ -4086,9 +4682,13 @@ describe("KnowledgeRuntimeStore", () => {
     expect(
       state.applyCommits.find((record) => record.transactionId === proof.journal.transactionId)
     ).toMatchObject({
-      manifestAfterRevision: 4,
+      manifestAfterRevision: 5,
       manifestAfterDigest: createSourceManifestDigest(committedManifest),
     });
+    expect(
+      committedManifest.entries[1].extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    ).toEqual(coOwnerNoChangesMarker);
+    await expect(new KnowledgeRuntimeStore(harness.file).initialize()).resolves.toBeUndefined();
 
     const tornState = JSON.parse(JSON.stringify(state)) as KnowledgeRuntimeStoreSnapshot;
     const tornManifest = tornState.manifests[0].value as SourceManifest;
@@ -4851,6 +5451,610 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await harness.file.read()).toBe(before);
   });
 
+  it("atomically commits first-source no-change success with Queue completion", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "atomic-no-changes",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") throw new Error("Expected a bound no-change observation");
+    const plan = createRuntimeNoChangesPlan(manifest);
+    let executions = 0;
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Returns one production-shaped no-change result with exact Manifest authority. */
+        execute: async () => {
+          executions += 1;
+          return {
+            kind: "no_changes",
+            changeSetId: plan.noChangesId,
+            manifestCommitPlan: plan,
+            manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+          };
+        },
+      },
+      { clock: () => 100, jobIdFactory: () => "job-atomic-no-changes" }
+    );
+
+    await queue.enqueue(bound.observation);
+    await expect(queue.runNext("personal")).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-atomic-no-changes",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    });
+
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queueState = state.queues.find((slot) => slot.bundleId === "personal")
+      ?.value as IngestQueueSnapshot;
+    const manifestState = state.manifests.find((slot) => slot.bundleId === "personal")
+      ?.value as SourceManifest;
+    const markerValue =
+      manifestState.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
+    const marker = parseKnowledgeNoChangesCommitMarker(markerValue);
+    expect(queueState.jobs).toEqual([
+      expect.objectContaining({
+        id: "job-atomic-no-changes",
+        status: "completed",
+        changeSetId: plan.noChangesId,
+      }),
+    ]);
+    expect(manifestState).toMatchObject({ revision: 2 });
+    expect(manifestState.entries[0]?.lastSuccessful).toBeUndefined();
+    expect(marker).toMatchObject({
+      ok: true,
+      value: {
+        noChangesId: plan.noChangesId,
+        jobId: "job-atomic-no-changes",
+        inputRevision: 1,
+        baseGeneratedPages: [],
+        manifestAfterRevision: 2,
+      },
+    });
+    expect(state.reviews).toEqual([]);
+    expect(state.applyCommits).toEqual([]);
+    expect(state.activeTransaction).toBeNull();
+    expect(executions).toBe(1);
+
+    const duplicateAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "atomic-no-changes-duplicate",
+    });
+    const duplicate = await harness.observations.bind({
+      observationToken: duplicateAllocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (duplicate.kind !== "ready") throw new Error("Expected a duplicate observation");
+    await expect(queue.enqueue(duplicate.observation)).resolves.toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-atomic-no-changes" },
+    });
+    expect(executions).toBe(1);
+    const unchangedManifest = (
+      JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot
+    ).manifests.find((slot) => slot.bundleId === "personal")?.value as SourceManifest;
+    expect(unchangedManifest).toEqual(manifestState);
+
+    const bypassEntry = { ...manifestState.entries[0] };
+    const bypassExtensions = { ...bypassEntry.extensions };
+    delete bypassExtensions[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
+    bypassEntry.extensions = bypassExtensions;
+    await expect(
+      harness.manifest.write(
+        "personal",
+        { ...manifestState, revision: 3, entries: [bypassEntry] },
+        2
+      )
+    ).rejects.toMatchObject({
+      name: KnowledgeRuntimeManifestProtectedStateError.name,
+      state: "reserved_no_changes_extension",
+    });
+
+    const corrupted = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const corruptedManifest = corrupted.manifests[0]?.value as SourceManifest;
+    const corruptedMarker = corruptedManifest.entries[0]?.extensions?.[
+      KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY
+    ] as Record<string, JsonValue>;
+    corruptedMarker.jobId = "job-forged-no-changes";
+    harness.file.replaceContent(JSON.stringify(corrupted));
+    await expect(new KnowledgeRuntimeStore(harness.file).initialize()).rejects.toBeInstanceOf(
+      KnowledgeRuntimeStoreCorruptError
+    );
+  });
+
+  it("atomically records a newer no-change observation without replacing applied success provenance", async () => {
+    const manifest = createRegisteredManifest();
+    const citation = createSourceCitation();
+    const proof = createCommittedApplyProof(manifest, "transaction-apply-then-no-changes", 1, [
+      citation,
+    ]);
+    const harness = await createApplyHarness(manifest, proof);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+
+    const recoveryQueue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(harness.runtime),
+      {
+        /** Recovery does not execute new source work. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 250, jobIdFactory: () => "job-unused-after-apply" }
+    );
+    await recoveryQueue.resolveApplyRecovery(harness.receipt);
+    await new KnowledgeRuntimeTransactionStorage(harness.runtime).clearActive({
+      transactionId: harness.journal.transactionId,
+      revision: harness.journal.revision,
+    });
+    await recoveryQueue.finalizeApplyRecovery("personal", harness.receipt.transactionId);
+    await expect(
+      new KnowledgeRuntimeStartupReleasePort(harness.runtime).release(
+        await createStartupReleaseRequest(harness)
+      )
+    ).resolves.toMatchObject({ kind: "released", bundleId: "personal" });
+
+    const before = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const manifestBefore = before.manifests[0]?.value as SourceManifest;
+    const sourceBefore = manifestBefore.entries[0];
+    if (!sourceBefore?.lastSuccessful) {
+      throw new Error("Expected one real applied source success before no-change completion");
+    }
+    const provenanceBefore = await harness.runtime.readAppliedProvenance("personal");
+    expect(provenanceBefore.pages).toHaveLength(1);
+    expect(before.activeTransaction).toBeNull();
+
+    const revisions = new KnowledgeRuntimeInputRevisionAllocator(harness.runtime);
+    const observations = new KnowledgeRuntimeInputObservationBinder(harness.runtime);
+    const allocation = await revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "apply-then-no-changes-revision-2",
+    });
+    expect(allocation.inputRevision).toBe(2);
+    const bound = await observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") {
+      throw new Error("Expected a newer bound source observation after applied success");
+    }
+    const plan = createRuntimeNoChangesPlan(
+      manifestBefore,
+      allocation.inputRevision,
+      HASH_C,
+      HASH_B
+    );
+    const noChangesQueue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(harness.runtime),
+      {
+        /** Returns an exact no-change plan over the post-Apply Manifest read-set. */
+        execute: async () => ({
+          kind: "no_changes",
+          changeSetId: plan.noChangesId,
+          manifestCommitPlan: plan,
+          manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+        }),
+      },
+      { clock: () => 300, jobIdFactory: () => "job-no-changes-after-apply" }
+    );
+    await noChangesQueue.enqueue(bound.observation);
+
+    await expect(noChangesQueue.runNext("personal")).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-no-changes-after-apply",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    });
+
+    const after = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const manifestAfter = after.manifests[0]?.value as SourceManifest;
+    const sourceAfter = manifestAfter.entries[0];
+    const parsedMarker = parseKnowledgeNoChangesCommitMarker(
+      sourceAfter?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    );
+    expect(manifestAfter.revision).toBe(manifestBefore.revision + 1);
+    expect(sourceAfter?.lastSuccessful).toEqual(sourceBefore.lastSuccessful);
+    expect(after.applyCommits).toEqual(before.applyCommits);
+    expect(after.reviews).toEqual(before.reviews);
+    expect(after.activeTransaction).toBeNull();
+    expect(parsedMarker).toMatchObject({
+      ok: true,
+      value: {
+        noChangesId: plan.noChangesId,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 2,
+        jobId: "job-no-changes-after-apply",
+        manifestAfterRevision: manifestAfter.revision,
+        baseGeneratedPages: sourceBefore.lastSuccessful.generatedPages,
+      },
+    });
+
+    const provenanceAfter = await harness.runtime.readAppliedProvenance("personal");
+    expect(provenanceAfter).toEqual({
+      ...provenanceBefore,
+      runtimeRevision: after.revision,
+      manifestRevision: manifestAfter.revision,
+    });
+    expect(provenanceAfter.pages).toEqual(provenanceBefore.pages);
+  });
+
+  it("atomically commits an older no-change attempt and promotes its exact newer rerun", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const firstAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "no-changes-rerun-first",
+    });
+    const firstBound = await harness.observations.bind({
+      observationToken: firstAllocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (firstBound.kind !== "ready") throw new Error("Expected the first no-change observation");
+    const plan = createRuntimeNoChangesPlan(manifest);
+    let signalStarted: (() => void) | undefined;
+    let releaseExecution: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const executionGate = new Promise<void>((resolve) => {
+      releaseExecution = resolve;
+    });
+    let jobNumber = 0;
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Holds the exact first result while a newer source observation schedules a rerun. */
+        execute: async () => {
+          signalStarted?.();
+          await executionGate;
+          return {
+            kind: "no_changes",
+            changeSetId: plan.noChangesId,
+            manifestCommitPlan: plan,
+            manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+          };
+        },
+      },
+      {
+        clock: () => 100,
+        jobIdFactory: () => `job-no-changes-rerun-${(jobNumber += 1)}`,
+      }
+    );
+    await queue.enqueue(firstBound.observation);
+    const running = queue.runNext("personal");
+    await started;
+
+    const newerAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "no-changes-rerun-newer",
+    });
+    const newerBound = await harness.observations.bind({
+      observationToken: newerAllocation.observationToken,
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_B,
+    });
+    if (newerBound.kind !== "ready") throw new Error("Expected the newer rerun observation");
+    await expect(queue.enqueue(newerBound.observation)).resolves.toMatchObject({
+      kind: "rerun_scheduled",
+    });
+    if (!releaseExecution) throw new Error("Expected an active no-change execution gate");
+    releaseExecution();
+
+    await expect(running).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-no-changes-rerun-1",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    });
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queueState = state.queues[0]?.value as IngestQueueSnapshot;
+    const manifestState = state.manifests[0]?.value as SourceManifest;
+    expect(queueState).toMatchObject({
+      reruns: [],
+      jobs: [
+        {
+          id: "job-no-changes-rerun-1",
+          status: "completed",
+          inputRevision: 1,
+          changeSetId: plan.noChangesId,
+        },
+        {
+          id: "job-no-changes-rerun-2",
+          status: "pending",
+          inputRevision: 2,
+          sourceContentHash: HASH_C,
+        },
+      ],
+    });
+    expect(
+      manifestState.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    ).toMatchObject({
+      jobId: "job-no-changes-rerun-1",
+      inputRevision: 1,
+      noChangesId: plan.noChangesId,
+    });
+    await expect(new KnowledgeRuntimeStore(harness.file).initialize()).resolves.toBeUndefined();
+  });
+
+  it("rejects a production no-change Queue completion without its exact plan authority", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "missing-no-changes-authority",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") throw new Error("Expected a bound no-change observation");
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Omits the production Manifest plan and also avoids its reserved id namespace. */
+        execute: async () => ({
+          kind: "no_changes",
+          changeSetId: "untrusted-queue-only-no-changes",
+        }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-missing-no-changes-authority" }
+    );
+    await queue.enqueue(bound.observation);
+
+    await expect(queue.runNext("personal")).rejects.toBeInstanceOf(
+      KnowledgeRuntimeNoChangesCommitConflictError
+    );
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const persistedManifest = state.manifests[0]?.value as SourceManifest;
+    expect(
+      persistedManifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    ).toBeUndefined();
+    expect((state.queues[0]?.value as IngestQueueSnapshot).jobs[0]?.status).not.toBe("completed");
+  });
+
+  it("keeps Queue and no-change marker uncommitted when the Manifest read-set drifts", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "no-changes-manifest-drift",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") throw new Error("Expected a bound no-change observation");
+    const plan = createRuntimeNoChangesPlan(manifest);
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Advances unrelated Manifest metadata after compile captured its exact read-set. */
+        execute: async () => {
+          const source = manifest.entries[0];
+          await harness.manifest.write(
+            "personal",
+            {
+              ...manifest,
+              revision: manifest.revision + 1,
+              entries: [
+                {
+                  ...source,
+                  extensions: { ...source.extensions, concurrentObservation: true },
+                },
+              ],
+            },
+            manifest.revision
+          );
+          return {
+            kind: "no_changes",
+            changeSetId: plan.noChangesId,
+            manifestCommitPlan: plan,
+            manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+          };
+        },
+      },
+      { clock: () => 100, jobIdFactory: () => "job-no-changes-manifest-drift" }
+    );
+    await queue.enqueue(bound.observation);
+
+    await expect(queue.runNext("personal")).rejects.toMatchObject({
+      name: KnowledgeRuntimeNoChangesCommitConflictError.name,
+      reason: "manifest_mismatch",
+    });
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const persistedManifest = state.manifests[0]?.value as SourceManifest;
+    expect(persistedManifest).toMatchObject({
+      revision: 2,
+      entries: [{ extensions: { concurrentObservation: true } }],
+    });
+    expect(
+      persistedManifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    ).toBeUndefined();
+    expect((state.queues[0]?.value as IngestQueueSnapshot).jobs[0]?.status).not.toBe("completed");
+  });
+
+  it("keeps atomic no-change success after commit acknowledgement is lost", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "no-changes-post-commit",
+    });
+    const bound = await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (bound.kind !== "ready") throw new Error("Expected a bound no-change observation");
+    const plan = createRuntimeNoChangesPlan(manifest);
+    const queue = new IngestQueue(
+      harness.queue,
+      {
+        /** Arms an acknowledgement loss immediately before the atomic final write. */
+        execute: async () => {
+          harness.file.throwAfterCommitOnNextWrite();
+          return {
+            kind: "no_changes",
+            changeSetId: plan.noChangesId,
+            manifestCommitPlan: plan,
+            manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+          };
+        },
+      },
+      { clock: () => 100, jobIdFactory: () => "job-no-changes-post-commit" }
+    );
+    await queue.enqueue(bound.observation);
+
+    await expect(queue.runNext("personal")).rejects.toThrow(
+      "Simulated post-commit transport failure"
+    );
+    const committed = await harness.file.read();
+    const state = JSON.parse(committed) as KnowledgeRuntimeStoreSnapshot;
+    expect((state.queues[0]?.value as IngestQueueSnapshot).jobs[0]).toMatchObject({
+      id: "job-no-changes-post-commit",
+      status: "completed",
+      changeSetId: plan.noChangesId,
+    });
+    expect(
+      (state.manifests[0]?.value as SourceManifest).entries[0]?.extensions?.[
+        KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY
+      ]
+    ).toBeDefined();
+
+    const reconstructed = new KnowledgeRuntimeStore(harness.file);
+    await expect(reconstructed.initialize()).resolves.toBeUndefined();
+    expect(await harness.file.read()).toBe(committed);
+    let replayExecutions = 0;
+    const replayQueue = new IngestQueue(new KnowledgeRuntimeQueueStorage(reconstructed), {
+      /** Must remain unreachable because the committed attempt is already terminal. */
+      execute: async () => {
+        replayExecutions += 1;
+        return { kind: "no_changes", changeSetId: "unexpected-replay" };
+      },
+    });
+    await expect(replayQueue.runNext("personal")).resolves.toEqual({ kind: "idle" });
+    expect(replayExecutions).toBe(0);
+    expect(await harness.file.read()).toBe(committed);
+  });
+
+  it("accepts an old Runtime's retained no-change marker after a newer Apply", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const firstAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "downgrade-no-change",
+    });
+    const firstBound = await harness.observations.bind({
+      observationToken: firstAllocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (firstBound.kind !== "ready") throw new Error("Expected the no-change observation");
+    const noChangesPlan = createRuntimeNoChangesPlan(manifest);
+    const noChangesQueue = new IngestQueue(
+      harness.queue,
+      {
+        /** Commits one exact marker that an older Runtime will later retain. */
+        execute: async () => ({
+          kind: "no_changes",
+          changeSetId: noChangesPlan.noChangesId,
+          manifestCommitPlan: noChangesPlan,
+          manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(noChangesPlan),
+        }),
+      },
+      { clock: () => 100, jobIdFactory: () => "job-downgrade-no-change" }
+    );
+    await noChangesQueue.enqueue(firstBound.observation);
+    await noChangesQueue.runNext("personal");
+
+    const afterNoChanges = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const manifestBeforeApply = afterNoChanges.manifests[0].value as SourceManifest;
+    const retainedMarker =
+      manifestBeforeApply.entries[0].extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
+    if (retainedMarker === undefined) throw new Error("Expected a durable no-change marker");
+
+    const secondAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "downgrade-newer-apply",
+    });
+    const secondBound = await harness.observations.bind({
+      observationToken: secondAllocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    if (secondBound.kind !== "ready") throw new Error("Expected the newer Apply observation");
+    const applyTransactionId = "transaction-downgrade-newer-apply";
+    const pendingQueue = new IngestQueue(
+      harness.queue,
+      {
+        /** The executor is not invoked while this fixture creates Apply authority. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "unused" }),
+      },
+      { jobIdFactory: () => `job-${applyTransactionId}` }
+    );
+    await pendingQueue.enqueue(secondBound.observation);
+
+    const proof = createCommittedApplyProof(manifestBeforeApply, applyTransactionId, 2);
+    const authority = createApplyAuthoritySlots(manifestBeforeApply, proof.journal);
+    const stateBeforeApply = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const currentQueue = stateBeforeApply.queues[0].value as IngestQueueSnapshot;
+    const applyingQueue = authority.queues[0].value as IngestQueueSnapshot;
+    applyingQueue.revision = currentQueue.revision + 1;
+    applyingQueue.jobs = [
+      ...currentQueue.jobs.filter((job) => job.id === "job-downgrade-no-change"),
+      ...applyingQueue.jobs,
+    ];
+    applyingQueue.sourceHighWatermarks = currentQueue.sourceHighWatermarks;
+    stateBeforeApply.revision += 1;
+    stateBeforeApply.queues = [{ bundleId: "personal", value: applyingQueue }];
+    stateBeforeApply.reviews = authority.reviews;
+    stateBeforeApply.activeTransaction = proof.journal;
+    harness.file.replaceContent(JSON.stringify(stateBeforeApply));
+    await expect(new KnowledgeRuntimeStore(harness.file).initialize()).resolves.toBeUndefined();
+
+    const applyPort = new KnowledgeRuntimeApplyCommitManifestPort(harness.runtime);
+    await applyPort.recordCommitted(proof.journal, proof.receipt);
+    const downgraded = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const downgradedManifest = downgraded.manifests[0].value as SourceManifest;
+    downgradedManifest.entries[0].extensions = {
+      ...downgradedManifest.entries[0].extensions,
+      [KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]: retainedMarker,
+    };
+    const applyLedger = downgraded.applyCommits.find(
+      (record) => record.transactionId === applyTransactionId
+    );
+    if (!applyLedger) throw new Error("Expected the newer Apply ledger");
+    applyLedger.manifestAfterDigest = createSourceManifestDigest(downgradedManifest);
+    harness.file.replaceContent(JSON.stringify(downgraded));
+
+    await expect(new KnowledgeRuntimeStore(harness.file).initialize()).resolves.toBeUndefined();
+  });
+
   it("allocates every captured observation monotonically before asynchronous source reads", async () => {
     const harness = await createHarness();
     for (const inputRevision of [1, 2, 3, 4]) {
@@ -5040,7 +6244,9 @@ describe("KnowledgeRuntimeStore", () => {
 
   it("proves a claimed Queue job, consumed observation, and Manifest without changing bytes", async () => {
     const harness = await createHarness();
-    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const noChangesPlan = createRuntimeNoChangesPlan(manifest);
     const allocation = await harness.revisions.allocate({
       bundleId: "personal",
       sourceId: "source-1",
@@ -5085,7 +6291,12 @@ describe("KnowledgeRuntimeStore", () => {
           await authority.reprove("parsing");
           await context.reportStage("analyzing");
           await authority.reprove("analyzing");
-          return { kind: "no_changes", changeSetId: "changeset-proof" };
+          return {
+            kind: "no_changes",
+            changeSetId: noChangesPlan.noChangesId,
+            manifestCommitPlan: noChangesPlan,
+            manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(noChangesPlan),
+          };
         },
       },
       { clock: () => 100, jobIdFactory: () => "job-execution-proof" }
@@ -5185,10 +6396,9 @@ describe("KnowledgeRuntimeStore", () => {
     );
 
     await expect(queue.enqueue(bound.observation)).resolves.toMatchObject({ kind: "enqueued" });
-    await expect(queue.runNext("personal")).resolves.toMatchObject({
-      kind: "executed",
-      status: "completed",
-    });
+    await expect(queue.runNext("personal")).rejects.toBeInstanceOf(
+      KnowledgeRuntimeNoChangesCommitConflictError
+    );
     expect(proofRejected).toBe(true);
   });
 
