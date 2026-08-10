@@ -7,6 +7,7 @@ import type {
 } from "@/knowledge/ingest/InputRevisionAllocator";
 import {
   KnowledgeSourceWatchPlan,
+  type WatchedKnowledgeGeneratedOutput,
   type WatchedKnowledgeSource,
 } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import type { CommitSourceInputObservationResult } from "@/knowledge/ingest/SourceObservationHandoff";
@@ -38,7 +39,14 @@ export interface ExactSourceArtifact {
 }
 
 /** Supported Vault causes that may produce a source observation. */
-export type VaultSourceCaptureCause = "initial_scan" | "create" | "modify";
+export type VaultSourceCaptureCause =
+  | "initial_scan"
+  | "create"
+  | "modify"
+  | "generated_output_create"
+  | "generated_output_modify"
+  | "generated_output_delete"
+  | "generated_output_rename";
 
 /** Capture pipeline stage used by sanitized watcher failures. */
 export type VaultSourceCaptureStage = "prepare" | "allocate" | "read" | "commit";
@@ -177,6 +185,7 @@ export class VaultSourceObservationContractError extends Error {
 }
 
 type ImmutableWatchedKnowledgeSource = Readonly<WatchedKnowledgeSource>;
+type ImmutableWatchedKnowledgeGeneratedOutput = Readonly<WatchedKnowledgeGeneratedOutput>;
 
 interface CaptureAuthority {
   lifecycleGeneration: number;
@@ -191,6 +200,12 @@ interface SourceCaptureWork extends CaptureAuthority {
   captureId: string;
   cause: VaultSourceCaptureCause;
   handoff: VaultSourceObservationHandoffPort;
+}
+
+interface GeneratedOutputEventMatch {
+  output: ImmutableWatchedKnowledgeGeneratedOutput;
+  owners: readonly ImmutableWatchedKnowledgeSource[];
+  caseMismatch: boolean;
 }
 
 /**
@@ -631,9 +646,10 @@ export class ObsidianExactSourceArtifactReader {
  * Watches an immutable set of already-registered Vault sources.
  *
  * This adapter deliberately does not discover source identities, mutate a
- * Manifest, run startup recovery, or claim Queue work. It observes create,
- * modify, and explicit full-scan inputs only. Rename and delete remain
- * fail-closed until their source-lifecycle contract exists.
+ * Manifest, write Wiki pages, run startup recovery, or claim Queue work. In
+ * addition to source events, committed Manifest outputs are read-only drift
+ * signals: their events can only re-observe their original source owners.
+ * Rename and delete remain fail-closed for source-lifecycle changes.
  */
 export class ObsidianVaultSourceWatcher {
   private readonly app: App;
@@ -859,6 +875,33 @@ export class ObsidianVaultSourceWatcher {
         });
       }
     }
+    for (const output of watchPlan.getGeneratedOutputs()) {
+      if (
+        lifecycleGeneration !== this.lifecycleGeneration ||
+        watchPlanGeneration !== this.watchPlanGeneration
+      ) {
+        return scheduled;
+      }
+      const matchingPaths = filesByPathKey.get(output.outputKey);
+      if (!matchingPaths || matchingPaths.size === 0) {
+        continue;
+      }
+      let reason: "case_mismatch" | "windows_collision" | undefined;
+      if (matchingPaths.size > 1) {
+        reason = "windows_collision";
+      } else if (!matchingPaths.has(output.outputPath)) {
+        reason = "case_mismatch";
+      }
+      if (!reason) {
+        continue;
+      }
+      this.blockGeneratedOutputOwners(
+        watchPlan.getSourcesForGeneratedOutputPathKey(output.outputKey),
+        reason,
+        lifecycleGeneration,
+        watchPlanGeneration
+      );
+    }
     if (
       lifecycleGeneration !== this.lifecycleGeneration ||
       watchPlanGeneration !== this.watchPlanGeneration
@@ -931,20 +974,24 @@ export class ObsidianVaultSourceWatcher {
   /** Handles a Vault create event without awaiting inside the callback. */
   private readonly handleCreate = (file: TAbstractFile): void => {
     this.scheduleFile(file, "create");
+    this.scheduleGeneratedOutputFile(file, "generated_output_create");
   };
 
   /** Handles a Vault modify event without awaiting inside the callback. */
   private readonly handleModify = (file: TAbstractFile): void => {
     this.scheduleFile(file, "modify");
+    this.scheduleGeneratedOutputFile(file, "generated_output_modify");
   };
 
-  /** Reports registered source deletion without manufacturing empty bytes. */
+  /** Re-observes output owners and reports source deletion without manufacturing empty bytes. */
   private readonly handleDelete = (file: TAbstractFile): void => {
+    this.scheduleGeneratedOutputPaths([file.path], "generated_output_delete");
     this.reportUnsupportedChange("delete", [file.path]);
   };
 
-  /** Reports registered source rename without mutating durable source identity. */
+  /** Re-observes output owners and reports source rename without changing source identity. */
   private readonly handleRename = (file: TAbstractFile, oldPath: string): void => {
+    this.scheduleGeneratedOutputPaths([oldPath, file.path], "generated_output_rename");
     this.reportUnsupportedChange("rename", [oldPath, file.path]);
   };
 
@@ -971,87 +1018,392 @@ export class ObsidianVaultSourceWatcher {
     const matching = matchingByKey.filter((source) => source.sourcePath === capturedPath);
     for (const source of matchingByKey) {
       if (source.sourcePath === capturedPath) continue;
-      const sourceAuthorityKey = createBundleSourceKey(source);
-      if (this.quarantinedSourceKeys.has(sourceAuthorityKey)) continue;
-      this.blockSource(source, {
-        kind: "source_path_invalid",
-        reason: "case_mismatch",
-        bundleId: source.bundleId,
-        sourceId: source.sourceId,
-      });
-      this.emit({
-        kind: "source_path_invalid",
-        reason: "case_mismatch",
-        bundleId: source.bundleId,
-        sourceId: source.sourceId,
-      });
+      this.blockSourceForPathReason(
+        source,
+        "case_mismatch",
+        lifecycleGeneration,
+        watchPlanGeneration
+      );
     }
     let scheduled = 0;
 
     for (const source of matching) {
-      const sourceAuthorityKey = createBundleSourceKey(source);
-      if (this.quarantinedSourceKeys.has(sourceAuthorityKey)) {
-        continue;
-      }
-      const authority: CaptureAuthority = Object.freeze({
-        lifecycleGeneration,
-        watchPlanGeneration,
-        sourceAuthorityKey,
-        sourceGeneration: this.sourceGenerations.get(sourceAuthorityKey) ?? 0,
-      });
-      if (!this.isAuthorityCurrent(authority)) {
-        continue;
-      }
-      const handoff = this.handoffs.get(source.bundleId);
-      let captureId: string;
-      try {
-        if (!handoff) {
-          throw new VaultSourceWatchPlanError();
-        }
-        captureId = this.captureIdFactory();
-        assertCaptureIdentifier(captureId);
-        if (this.usedCaptureIds.has(captureId)) {
-          throw new VaultSourceObservationContractError();
-        }
-        this.usedCaptureIds.add(captureId);
-      } catch {
-        if (!this.isAuthorityCurrent(authority)) {
-          continue;
-        }
-        this.blockSource(source, {
-          kind: "capture_failed",
-          stage: "prepare",
-          bundleId: source.bundleId,
-          sourceId: source.sourceId,
-        });
-        this.emit({
-          kind: "capture_failed",
-          cause,
-          bundleId: source.bundleId,
-          sourceId: source.sourceId,
-          captureId: "",
-          stage: "prepare",
-        });
-        continue;
-      }
-      if (!this.isAuthorityCurrent(authority)) {
-        continue;
-      }
-
-      const work: SourceCaptureWork = Object.freeze({
-        ...authority,
+      scheduled += this.scheduleSourceCapture(
         source,
         capturedPath,
-        captureId,
         cause,
-        handoff,
-      });
-      const task = this.executeCapture(work);
-      this.pendingCaptures.add(task);
-      void task.finally(() => this.pendingCaptures.delete(task));
-      scheduled += 1;
+        lifecycleGeneration,
+        watchPlanGeneration
+      );
     }
     return scheduled;
+  }
+
+  /**
+   * Creates one source-authority capture without granting authority to its trigger path.
+   *
+   * @param source - Immutable source owner from the active plan
+   * @param capturedPath - Exact original source path to read
+   * @param cause - Event cause retained only for sanitized diagnostics
+   * @param lifecycleGeneration - Synchronously captured watcher lifecycle
+   * @param watchPlanGeneration - Synchronously captured plan generation
+   * @returns One when a capture task was scheduled, otherwise zero
+   */
+  private scheduleSourceCapture(
+    source: ImmutableWatchedKnowledgeSource,
+    capturedPath: string,
+    cause: VaultSourceCaptureCause,
+    lifecycleGeneration: number,
+    watchPlanGeneration: number
+  ): number {
+    const sourceAuthorityKey = createBundleSourceKey(source);
+    if (this.quarantinedSourceKeys.has(sourceAuthorityKey)) {
+      return 0;
+    }
+    const authority: CaptureAuthority = Object.freeze({
+      lifecycleGeneration,
+      watchPlanGeneration,
+      sourceAuthorityKey,
+      sourceGeneration: this.sourceGenerations.get(sourceAuthorityKey) ?? 0,
+    });
+    if (!this.isAuthorityCurrent(authority)) {
+      return 0;
+    }
+    const handoff = this.handoffs.get(source.bundleId);
+    let captureId: string;
+    try {
+      if (!handoff) {
+        throw new VaultSourceWatchPlanError();
+      }
+      captureId = this.captureIdFactory();
+      assertCaptureIdentifier(captureId);
+      if (this.usedCaptureIds.has(captureId)) {
+        throw new VaultSourceObservationContractError();
+      }
+      this.usedCaptureIds.add(captureId);
+    } catch {
+      if (!this.isAuthorityCurrent(authority)) {
+        return 0;
+      }
+      this.blockSource(source, {
+        kind: "capture_failed",
+        stage: "prepare",
+        bundleId: source.bundleId,
+        sourceId: source.sourceId,
+      });
+      this.emit({
+        kind: "capture_failed",
+        cause,
+        bundleId: source.bundleId,
+        sourceId: source.sourceId,
+        captureId: "",
+        stage: "prepare",
+      });
+      return 0;
+    }
+    if (!this.isAuthorityCurrent(authority)) {
+      return 0;
+    }
+
+    const work: SourceCaptureWork = Object.freeze({
+      ...authority,
+      source,
+      capturedPath,
+      captureId,
+      cause,
+      handoff,
+    });
+    const task = this.executeCapture(work);
+    this.pendingCaptures.add(task);
+    void task.finally(() => this.pendingCaptures.delete(task));
+    return 1;
+  }
+
+  /**
+   * Treats one exact committed output file event as a read-only source-drift signal.
+   *
+   * The output file is never read. Every task is bound to an original Manifest
+   * source path selected by the validated reverse index.
+   *
+   * @param file - Vault event target
+   * @param cause - Generated-output observation cause
+   * @returns Number of original-source captures scheduled
+   */
+  private scheduleGeneratedOutputFile(file: TAbstractFile, cause: VaultSourceCaptureCause): number {
+    if (!this.started || this.closed || !(file instanceof TFile)) {
+      return 0;
+    }
+    const parsed = parseVaultPath(file.path);
+    if (!parsed.ok) {
+      return 0;
+    }
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const watchPlanGeneration = this.watchPlanGeneration;
+    const watchPlan = this.watchPlan;
+    const output = watchPlan.getGeneratedOutputForPathKey(toWindowsPathKey(parsed.path));
+    if (!output) {
+      return 0;
+    }
+    const owners = watchPlan.getSourcesForGeneratedOutputPathKey(output.outputKey);
+    if (parsed.path !== output.outputPath) {
+      this.blockGeneratedOutputOwners(
+        owners,
+        "case_mismatch",
+        lifecycleGeneration,
+        watchPlanGeneration
+      );
+      return 0;
+    }
+
+    const livePathState = this.inspectLiveGeneratedOutputPath(
+      output,
+      lifecycleGeneration,
+      watchPlanGeneration
+    );
+    if (livePathState === "stale") {
+      return 0;
+    }
+    if (livePathState !== "valid") {
+      this.blockGeneratedOutputOwners(
+        owners,
+        livePathState,
+        lifecycleGeneration,
+        watchPlanGeneration
+      );
+      return 0;
+    }
+
+    let scheduled = 0;
+    for (const source of owners) {
+      scheduled += this.scheduleSourceCapture(
+        source,
+        source.sourcePath,
+        cause,
+        lifecycleGeneration,
+        watchPlanGeneration
+      );
+    }
+    return scheduled;
+  }
+
+  /**
+   * Re-observes original sources affected by a generated-output delete or rename.
+   *
+   * Folder events include every committed output below the event path. Owners
+   * are de-duplicated so one Vault event produces at most one fresh observation
+   * per source even when that source owns several affected pages.
+   *
+   * @param paths - Old/current destructive event paths
+   * @param cause - Generated-output delete or rename cause
+   * @returns Number of original-source captures scheduled
+   */
+  private scheduleGeneratedOutputPaths(
+    paths: readonly string[],
+    cause: VaultSourceCaptureCause
+  ): number {
+    if (!this.started || this.closed) {
+      return 0;
+    }
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const watchPlanGeneration = this.watchPlanGeneration;
+    const watchPlan = this.watchPlan;
+    const matches = new Map<string, GeneratedOutputEventMatch>();
+
+    for (const eventPath of paths) {
+      const parsed = parseVaultPath(eventPath);
+      if (!parsed.ok) continue;
+      const eventKey = toWindowsPathKey(parsed.path);
+      for (const output of watchPlan.getGeneratedOutputs()) {
+        if (output.outputKey !== eventKey && !output.outputKey.startsWith(`${eventKey}/`)) {
+          continue;
+        }
+        const exactCase =
+          output.outputPath === parsed.path || output.outputPath.startsWith(`${parsed.path}/`);
+        const existing = matches.get(output.outputKey);
+        if (existing) {
+          matches.set(
+            output.outputKey,
+            Object.freeze({
+              ...existing,
+              caseMismatch: existing.caseMismatch || !exactCase,
+            })
+          );
+        } else {
+          matches.set(
+            output.outputKey,
+            Object.freeze({
+              output,
+              owners: watchPlan.getSourcesForGeneratedOutputPathKey(output.outputKey),
+              caseMismatch: !exactCase,
+            })
+          );
+        }
+      }
+    }
+    if (
+      matches.size === 0 ||
+      !this.isPlanGenerationCurrent(lifecycleGeneration, watchPlanGeneration)
+    ) {
+      return 0;
+    }
+
+    const ownersToCapture = new Map<string, ImmutableWatchedKnowledgeSource>();
+    for (const match of matches.values()) {
+      if (!this.isPlanGenerationCurrent(lifecycleGeneration, watchPlanGeneration)) {
+        return 0;
+      }
+      let invalidReason: "case_mismatch" | "windows_collision" | undefined;
+      if (match.caseMismatch) {
+        invalidReason = "case_mismatch";
+      } else {
+        const livePathState = this.inspectLiveGeneratedOutputPath(
+          match.output,
+          lifecycleGeneration,
+          watchPlanGeneration
+        );
+        if (livePathState === "stale") {
+          return 0;
+        }
+        if (livePathState !== "valid") {
+          invalidReason = livePathState;
+        }
+      }
+      if (invalidReason) {
+        this.blockGeneratedOutputOwners(
+          match.owners,
+          invalidReason,
+          lifecycleGeneration,
+          watchPlanGeneration
+        );
+        continue;
+      }
+      for (const source of match.owners) {
+        ownersToCapture.set(createBundleSourceKey(source), source);
+      }
+    }
+
+    let scheduled = 0;
+    const owners = [...ownersToCapture.values()].sort(
+      (left, right) =>
+        compareText(left.bundleId, right.bundleId) || compareText(left.sourceId, right.sourceId)
+    );
+    for (const source of owners) {
+      scheduled += this.scheduleSourceCapture(
+        source,
+        source.sourcePath,
+        cause,
+        lifecycleGeneration,
+        watchPlanGeneration
+      );
+    }
+    return scheduled;
+  }
+
+  /**
+   * Checks the current Vault for a case alias or Windows-key collision.
+   *
+   * An absent loaded file is accepted because create callbacks can precede a
+   * refreshed snapshot and destructive events normally remove or move the page.
+   * Adapter failure maps to a collision blocker so drift never gains authority.
+   *
+   * @param output - Committed generated-output projection
+   * @param lifecycleGeneration - Captured watcher lifecycle
+   * @param watchPlanGeneration - Captured plan generation
+   * @returns Valid, stale, or one fail-closed path reason
+   */
+  private inspectLiveGeneratedOutputPath(
+    output: ImmutableWatchedKnowledgeGeneratedOutput,
+    lifecycleGeneration: number,
+    watchPlanGeneration: number
+  ): "valid" | "stale" | "case_mismatch" | "windows_collision" {
+    let files: TFile[];
+    try {
+      files = this.vault.getFiles();
+    } catch {
+      return this.isPlanGenerationCurrent(lifecycleGeneration, watchPlanGeneration)
+        ? "windows_collision"
+        : "stale";
+    }
+    if (!this.isPlanGenerationCurrent(lifecycleGeneration, watchPlanGeneration)) {
+      return "stale";
+    }
+    const matchingPaths = new Set<string>();
+    for (const file of files) {
+      const parsed = parseVaultPath(file.path);
+      if (parsed.ok && toWindowsPathKey(parsed.path) === output.outputKey) {
+        matchingPaths.add(parsed.path);
+      }
+    }
+    if (!this.isPlanGenerationCurrent(lifecycleGeneration, watchPlanGeneration)) {
+      return "stale";
+    }
+    if (matchingPaths.size > 1) {
+      return "windows_collision";
+    }
+    if (matchingPaths.size === 1 && !matchingPaths.has(output.outputPath)) {
+      return "case_mismatch";
+    }
+    return "valid";
+  }
+
+  /**
+   * Quarantines every owner of an invalid generated-output path projection.
+   *
+   * @param owners - Exact Manifest source owners
+   * @param reason - Case alias or Windows-key collision
+   * @param lifecycleGeneration - Captured watcher lifecycle
+   * @param watchPlanGeneration - Captured plan generation
+   */
+  private blockGeneratedOutputOwners(
+    owners: readonly ImmutableWatchedKnowledgeSource[],
+    reason: "case_mismatch" | "windows_collision",
+    lifecycleGeneration: number,
+    watchPlanGeneration: number
+  ): void {
+    for (const source of owners) {
+      this.blockSourceForPathReason(source, reason, lifecycleGeneration, watchPlanGeneration);
+    }
+  }
+
+  /**
+   * Records one path blocker only while its exact source and plan remain current.
+   *
+   * @param source - Immutable source authority to quarantine
+   * @param reason - Stable path validation reason
+   * @param lifecycleGeneration - Captured watcher lifecycle
+   * @param watchPlanGeneration - Captured plan generation
+   */
+  private blockSourceForPathReason(
+    source: ImmutableWatchedKnowledgeSource,
+    reason: "case_mismatch" | "windows_collision",
+    lifecycleGeneration: number,
+    watchPlanGeneration: number
+  ): void {
+    const sourceAuthorityKey = createBundleSourceKey(source);
+    if (this.quarantinedSourceKeys.has(sourceAuthorityKey)) {
+      return;
+    }
+    const authority: CaptureAuthority = {
+      lifecycleGeneration,
+      watchPlanGeneration,
+      sourceAuthorityKey,
+      sourceGeneration: this.sourceGenerations.get(sourceAuthorityKey) ?? 0,
+    };
+    if (!this.isAuthorityCurrent(authority)) {
+      return;
+    }
+    this.blockSource(source, {
+      kind: "source_path_invalid",
+      reason,
+      bundleId: source.bundleId,
+      sourceId: source.sourceId,
+    });
+    this.emit({
+      kind: "source_path_invalid",
+      reason,
+      bundleId: source.bundleId,
+      sourceId: source.sourceId,
+    });
   }
 
   /**
@@ -1252,6 +1604,25 @@ export class ObsidianVaultSourceWatcher {
         sourceId: source.sourceId,
       });
     }
+  }
+
+  /**
+   * Checks exact lifecycle and watch-plan identity without selecting a source.
+   *
+   * @param lifecycleGeneration - Captured watcher lifecycle
+   * @param watchPlanGeneration - Captured watch-plan generation
+   * @returns Whether current synchronous routing may continue
+   */
+  private isPlanGenerationCurrent(
+    lifecycleGeneration: number,
+    watchPlanGeneration: number
+  ): boolean {
+    return (
+      !this.closed &&
+      this.started &&
+      lifecycleGeneration === this.lifecycleGeneration &&
+      watchPlanGeneration === this.watchPlanGeneration
+    );
   }
 
   /**

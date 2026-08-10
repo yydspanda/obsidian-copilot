@@ -844,6 +844,104 @@ describe("KnowledgeProductionObservationComposer", () => {
     lifecycle.close();
   });
 
+  it("admits an unchanged cold observation from a real zero-page no-change authority", async () => {
+    const refreshRequired = createDeferred<void>();
+    const fetchPort = jest.fn<
+      ReturnType<KnowledgeDeepSeekFetchPort>,
+      Parameters<KnowledgeDeepSeekFetchPort>
+    >(async () => createNoChangesResponse());
+    const firstAdmission = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
+    const firstComposer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: firstAdmission.admission.workflowLease,
+    });
+    await expect(firstComposer.start(new AbortController().signal)).resolves.toEqual({
+      kind: "observation_converged",
+      scheduledCaptureCount: 1,
+    });
+    const firstWorker = firstComposer.createCompileReviewWorkerController(
+      firstAdmission.admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => refreshRequired.resolve()
+    );
+
+    firstWorker.start();
+    await refreshRequired.promise;
+
+    const queueBeforeRestart = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+    expect(queueBeforeRestart.ok).toBe(true);
+    if (!queueBeforeRestart.ok) throw new Error("Expected a strict no-change Queue snapshot");
+    expect(queueBeforeRestart.value.jobs).toHaveLength(1);
+    expect(queueBeforeRestart.value.jobs[0]).toMatchObject({
+      sourceId: "source-1",
+      inputRevision: 1,
+      attempt: 1,
+      status: "completed",
+      stage: "completed",
+    });
+    expect(queueBeforeRestart.value.sourceHighWatermarks).toEqual([
+      expect.objectContaining({ sourceId: "source-1", inputRevision: 1 }),
+    ]);
+    const jobBeforeRestart = queueBeforeRestart.value.jobs[0];
+    const manifestBeforeRestart = await new SourceManifestRepository(
+      new KnowledgeRuntimeManifestStorage(runtime)
+    ).load("personal");
+    const markerBeforeRestart =
+      manifestBeforeRestart.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
+    expect(markerBeforeRestart).toBeDefined();
+    expect(fetchPort).toHaveBeenCalledTimes(1);
+
+    firstComposer.close();
+    await firstWorker.whenSettled();
+    firstAdmission.lifecycle.close();
+
+    const secondAdmission = await createAdmission(fetchPort);
+    const secondComposer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: secondAdmission.admission.workflowLease,
+    });
+    await expect(secondComposer.start(new AbortController().signal)).resolves.toEqual({
+      kind: "observation_converged",
+      scheduledCaptureCount: 1,
+    });
+
+    const queueAfterRestart = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+    expect(queueAfterRestart.ok).toBe(true);
+    if (!queueAfterRestart.ok) throw new Error("Expected a strict admitted Queue snapshot");
+    expect(queueAfterRestart.value.revision).toBeGreaterThan(queueBeforeRestart.value.revision);
+    expect(queueAfterRestart.value.jobs).toEqual([jobBeforeRestart]);
+    expect(queueAfterRestart.value.reruns).toEqual([]);
+    const highWatermarkAfterRestart = queueAfterRestart.value.sourceHighWatermarks[0];
+    expect(queueAfterRestart.value.sourceHighWatermarks).toEqual([
+      {
+        ...queueBeforeRestart.value.sourceHighWatermarks[0],
+        inputRevision: 2,
+        observedAt: highWatermarkAfterRestart.observedAt,
+      },
+    ]);
+    expect(highWatermarkAfterRestart.observedAt).toBeGreaterThanOrEqual(
+      queueBeforeRestart.value.sourceHighWatermarks[0].observedAt
+    );
+    const manifestAfterRestart = await new SourceManifestRepository(
+      new KnowledgeRuntimeManifestStorage(runtime)
+    ).load("personal");
+    expect(manifestAfterRestart).toEqual(manifestBeforeRestart);
+    expect(
+      manifestAfterRestart.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    ).toEqual(markerBeforeRestart);
+    expect(fetchPort).toHaveBeenCalledTimes(1);
+
+    secondComposer.close();
+    secondAdmission.lifecycle.close();
+  });
+
   it("probes and refreshes after a no-change commit acknowledgement is lost", async () => {
     const fetchStarted = createDeferred<void>();
     const refreshRequired = createDeferred<void>();

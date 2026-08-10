@@ -32,7 +32,13 @@ export type IngestQueueControl =
       resumeAt?: number;
     };
 
-/** Latest source input retained while an older input is still in flight. */
+/**
+ * Latest source observation retained while older work is still in flight.
+ *
+ * Content and pipeline identity may deliberately match the active job when a
+ * strictly newer observation has proven generated-output drift. The newer
+ * input revision then preserves one repair execution without parallel work.
+ */
 export interface IngestRerunRequest {
   jobId: string;
   sourceId: string;
@@ -1732,17 +1738,6 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
         "queue_rerun_observation_order_invalid",
         `${field}.inputRevision`,
         "A rerun input revision must follow its predecessor input revision"
-      );
-    }
-    if (
-      active.sourceContentHash === rerun.sourceContentHash &&
-      active.pipelineFingerprint === rerun.pipelineFingerprint
-    ) {
-      addError(
-        diagnostics,
-        "queue_rerun_redundant",
-        field,
-        "A rerun must describe a different source or pipeline version"
       );
     }
     const highWatermark = snapshot.sourceHighWatermarks.find(

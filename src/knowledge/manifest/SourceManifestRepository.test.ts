@@ -627,7 +627,7 @@ describe("SourceManifestRepository", () => {
 
     await expect(
       repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [
-        { path: "wiki/concepts/NOTE.md", exists: true },
+        { path: "wiki/concepts/NOTE.md", kind: "file", contentHash: HASH_C },
       ])
     ).resolves.toEqual({ kind: "up_to_date" });
   });
@@ -644,7 +644,7 @@ describe("SourceManifestRepository", () => {
 
     await expect(
       repository.evaluateFreshness("personal", "source-1", HASH_C, HASH_B, [
-        { path: "Wiki/Concepts/Note.md", exists: true },
+        { path: "Wiki/Concepts/Note.md", kind: "file", contentHash: HASH_C },
       ])
     ).resolves.toEqual({ kind: "needs_ingest", reasons: ["source_changed"] });
   });
@@ -661,7 +661,7 @@ describe("SourceManifestRepository", () => {
 
     await expect(
       repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_C, [
-        { path: "Wiki/Concepts/Note.md", exists: true },
+        { path: "Wiki/Concepts/Note.md", kind: "file", contentHash: HASH_C },
       ])
     ).resolves.toEqual({ kind: "needs_ingest", reasons: ["pipeline_changed"] });
   });
@@ -731,7 +731,7 @@ describe("SourceManifestRepository", () => {
 
     await expect(
       repository.evaluateFreshness("personal", "source-1", HASH_C, HASH_C, [
-        { path: "Wiki/Concepts/Note.md", exists: true },
+        { path: "Wiki/Concepts/Note.md", kind: "file", contentHash: HASH_C },
       ])
     ).resolves.toEqual({ kind: "up_to_date" });
   });
@@ -762,7 +762,7 @@ describe("SourceManifestRepository", () => {
 
     await expect(
       repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [
-        { path: "Wiki/Concepts/Note.md", exists: true },
+        { path: "Wiki/Concepts/Note.md", kind: "file", contentHash: HASH_C },
       ])
     ).rejects.toMatchObject({
       name: "SourceManifestValidationError",
@@ -791,7 +791,7 @@ describe("SourceManifestRepository", () => {
 
     await expect(
       repository.evaluateFreshness("personal", "source-1", HASH_A, HASH_B, [
-        { path: "Wiki/Concepts/Note.md", exists: true },
+        { path: "Wiki/Concepts/Note.md", kind: "file", contentHash: HASH_C },
       ])
     ).rejects.toMatchObject({
       name: "SourceManifestValidationError",

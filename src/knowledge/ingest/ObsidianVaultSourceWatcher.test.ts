@@ -46,7 +46,7 @@ import {
   createPipelineFingerprint,
   createSourceContentHash,
 } from "@/knowledge/model/fingerprint";
-import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
+import type { GeneratedPageOwnership, KnowledgeBundleConfig } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
@@ -236,6 +236,15 @@ function createSource(patch: Partial<WatchedKnowledgeSource> = {}): WatchedKnowl
   };
 }
 
+/** One committed generated page owned by a watcher source fixture. */
+interface GeneratedOutputFixture {
+  bundleId?: string;
+  sourceId: string;
+  path: string;
+  ownership: GeneratedPageOwnership;
+  contentHash: string;
+}
+
 /**
  * Builds an opaque plan through the same strict authority boundary as production.
  *
@@ -243,9 +252,13 @@ function createSource(patch: Partial<WatchedKnowledgeSource> = {}): WatchedKnowl
  * the builder independently recomputes every actual source fingerprint.
  *
  * @param sources - Durable source specifications grouped by Bundle
+ * @param generatedOutputs - Successful Manifest pages used by the reverse index
  * @returns Strict immutable plan accepted by the watcher
  */
-function createWatchPlan(sources: readonly WatchedKnowledgeSource[]): KnowledgeSourceWatchPlan {
+function createWatchPlan(
+  sources: readonly WatchedKnowledgeSource[],
+  generatedOutputs: readonly GeneratedOutputFixture[] = []
+): KnowledgeSourceWatchPlan {
   const byBundle = new Map<string, WatchedKnowledgeSource[]>();
   for (const source of sources) {
     const matching = byBundle.get(source.bundleId);
@@ -276,12 +289,36 @@ function createWatchPlan(sources: readonly WatchedKnowledgeSource[]): KnowledgeS
             version: 1 as const,
             bundleId,
             revision: 0,
-            entries: bundleSources.map((source) => ({
-              sourceId: source.sourceId,
-              sourceKey: source.sourceKey,
-              sourcePath: source.sourcePath,
-              custody: "user_managed" as const,
-            })),
+            entries: bundleSources.map((source) => {
+              const pages = generatedOutputs
+                .filter(
+                  (output) =>
+                    (output.bundleId ?? source.bundleId) === source.bundleId &&
+                    output.sourceId === source.sourceId
+                )
+                .map((output) => ({
+                  path: output.path,
+                  ownership: output.ownership,
+                  contentHash: output.contentHash,
+                }));
+              return {
+                sourceId: source.sourceId,
+                sourceKey: source.sourceKey,
+                sourcePath: source.sourcePath,
+                custody: "user_managed" as const,
+                ...(pages.length > 0
+                  ? {
+                      lastSuccessful: {
+                        sourceContentHash: "a".repeat(64),
+                        pipelineFingerprint: source.pipelineFingerprint,
+                        generatedPages: pages,
+                        changeSetId: `changeset-${source.sourceId}`,
+                        completedAt: 100,
+                      },
+                    }
+                  : {}),
+              };
+            }),
           },
           schema: { path: bundle.schemaRef, bytes: SCHEMA_BYTES.slice() },
           pipeline: createPipelineProfile(bundleId, variant),
@@ -686,6 +723,290 @@ describe("ObsidianVaultSourceWatcher", () => {
         captureId: "split-start-capture",
       },
     ]);
+  });
+
+  it("turns every generated-output lifecycle event into one original-source observation", async () => {
+    const harness = new VaultHarness();
+    const sourcePath = "Sources/研究.md";
+    const outputPath = "Wiki/personal/Page.md";
+    harness.addFile(sourcePath, encodeText("authoritative source"));
+    const output = harness.addFile(outputPath, encodeText("generated output"));
+    const handoff = new RecordingHandoff();
+    const sink = new RecordingSink();
+    let captureSequence = 0;
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan(
+        [createSource()],
+        [
+          {
+            sourceId: "source-1",
+            path: outputPath,
+            ownership: "generated",
+            contentHash: "c".repeat(64),
+          },
+        ]
+      ),
+      new Map([["personal", handoff]]),
+      {
+        captureIdFactory: () => `output-lifecycle-${++captureSequence}`,
+        notificationSink: sink,
+      }
+    );
+    watcher.startListening();
+
+    harness.trigger("create", output);
+    await watcher.waitForIdle();
+    harness.trigger("modify", output);
+    await watcher.waitForIdle();
+    harness.loadedFiles.delete(outputPath);
+    harness.files.delete(outputPath);
+    harness.trigger("delete", output);
+    await watcher.waitForIdle();
+    const renamed = harness.addFile("Wiki/personal/Renamed.md", encodeText("renamed output"));
+    harness.trigger("rename", renamed, outputPath);
+    await watcher.waitForIdle();
+
+    expect(harness.readCalls).toEqual([sourcePath, sourcePath, sourcePath, sourcePath]);
+    expect(harness.readCalls).not.toContain(outputPath);
+    expect(handoff.allocateCalls.map((call) => call.sourceId)).toEqual([
+      "source-1",
+      "source-1",
+      "source-1",
+      "source-1",
+    ]);
+    expect(handoff.commitCalls).toHaveLength(4);
+    expect(
+      sink.notifications
+        .filter((notification) => notification.kind === "capture_settled")
+        .map((notification) => notification.cause)
+    ).toEqual([
+      "generated_output_create",
+      "generated_output_modify",
+      "generated_output_delete",
+      "generated_output_rename",
+    ]);
+  });
+
+  it("re-observes every shared-page owner and ignores unrelated Wiki events", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/A.md", encodeText("source a"));
+    harness.addFile("Sources/B.md", encodeText("source b"));
+    const sharedPath = "Wiki/personal/Shared.md";
+    const shared = harness.addFile(sharedPath, encodeText("shared output"));
+    const unrelated = harness.addFile("Wiki/personal/Unrelated.md", encodeText("unrelated"));
+    const sources = [
+      createSource({ sourceId: "source-a", sourcePath: "Sources/A.md" }),
+      createSource({ sourceId: "source-b", sourcePath: "Sources/B.md" }),
+    ];
+    const sharedHash = "d".repeat(64);
+    const outputs: GeneratedOutputFixture[] = sources.map((source) => ({
+      sourceId: source.sourceId,
+      path: sharedPath,
+      ownership: "shared",
+      contentHash: sharedHash,
+    }));
+    const handoff = new RecordingHandoff();
+    let captureSequence = 0;
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan(sources, outputs),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => `shared-output-${++captureSequence}` }
+    );
+    watcher.startListening();
+
+    harness.trigger("modify", shared);
+    await watcher.waitForIdle();
+    harness.trigger("modify", unrelated);
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls.map((call) => call.sourceId)).toEqual(["source-a", "source-b"]);
+    expect(harness.readCalls).toEqual(["Sources/A.md", "Sources/B.md"]);
+    expect(handoff.commitCalls).toHaveLength(2);
+  });
+
+  it("deduplicates one folder-output event to one observation per source", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", encodeText("source"));
+    const handoff = new RecordingHandoff();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan(
+        [createSource()],
+        [
+          {
+            sourceId: "source-1",
+            path: "Wiki/personal/A.md",
+            ownership: "generated",
+            contentHash: "e".repeat(64),
+          },
+          {
+            sourceId: "source-1",
+            path: "Wiki/personal/B.md",
+            ownership: "generated",
+            contentHash: "f".repeat(64),
+          },
+        ]
+      ),
+      new Map([["personal", handoff]]),
+      { captureIdFactory: () => "folder-output-capture" }
+    );
+    watcher.startListening();
+
+    harness.trigger("delete", createFolder("Wiki/personal"));
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls).toHaveLength(1);
+    expect(harness.readCalls).toEqual(["Sources/研究.md"]);
+    expect(handoff.commitCalls).toHaveLength(1);
+  });
+
+  it("fails closed on generated-output case aliases and live Windows collisions", async () => {
+    const outputPath = "Wiki/personal/Page.md";
+    const createPlan = () =>
+      createWatchPlan(
+        [createSource()],
+        [
+          {
+            sourceId: "source-1",
+            path: outputPath,
+            ownership: "generated",
+            contentHash: "c".repeat(64),
+          },
+        ]
+      );
+
+    const caseHarness = new VaultHarness();
+    caseHarness.addFile("Sources/研究.md", encodeText("source"));
+    const caseAlias = caseHarness.addFile("wiki/personal/page.md", encodeText("alias"));
+    const caseHandoff = new RecordingHandoff();
+    const caseWatcher = new ObsidianVaultSourceWatcher(
+      caseHarness.createApp(),
+      createPlan(),
+      new Map([["personal", caseHandoff]])
+    );
+    caseWatcher.startListening();
+    caseHarness.trigger("modify", caseAlias);
+    await caseWatcher.waitForIdle();
+
+    expect(caseHandoff.allocateCalls).toHaveLength(0);
+    expect(caseHarness.readCalls).toEqual([]);
+    expect(caseWatcher.getStartupBlockers()).toEqual([
+      {
+        kind: "source_path_invalid",
+        reason: "case_mismatch",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+
+    const collisionHarness = new VaultHarness();
+    collisionHarness.addFile("Sources/研究.md", encodeText("source"));
+    const canonical = collisionHarness.addFile(outputPath, encodeText("canonical"));
+    collisionHarness.addFile("wiki/personal/page.md", encodeText("alias"));
+    const collisionHandoff = new RecordingHandoff();
+    const collisionWatcher = new ObsidianVaultSourceWatcher(
+      collisionHarness.createApp(),
+      createPlan(),
+      new Map([["personal", collisionHandoff]])
+    );
+    collisionWatcher.startListening();
+    collisionHarness.trigger("modify", canonical);
+    await collisionWatcher.waitForIdle();
+
+    expect(collisionHandoff.allocateCalls).toHaveLength(0);
+    expect(collisionHarness.readCalls).toEqual([]);
+    expect(collisionWatcher.getStartupBlockers()).toEqual([
+      {
+        kind: "source_path_invalid",
+        reason: "windows_collision",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+  });
+
+  it("quarantines a loaded generated-output alias before the startup source crawl", () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", encodeText("source"));
+    harness.addFile("wiki/personal/page.md", encodeText("case alias"));
+    const handoff = new RecordingHandoff();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan(
+        [createSource()],
+        [
+          {
+            sourceId: "source-1",
+            path: "Wiki/personal/Page.md",
+            ownership: "generated",
+            contentHash: "c".repeat(64),
+          },
+        ]
+      ),
+      new Map([["personal", handoff]])
+    );
+
+    watcher.start();
+
+    expect(handoff.allocateCalls).toHaveLength(0);
+    expect(harness.readCalls).toEqual([]);
+    expect(watcher.getStartupBlockers()).toEqual([
+      {
+        kind: "source_path_invalid",
+        reason: "case_mismatch",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+  });
+
+  it("invalidates output-triggered work when its watch-plan generation changes", async () => {
+    const harness = new VaultHarness();
+    harness.addFile("Sources/研究.md", encodeText("source"));
+    const outputPath = "Wiki/personal/Page.md";
+    const output = harness.addFile(outputPath, encodeText("output"));
+    const allocation = createDeferred<SourceInputRevisionAllocation>();
+    const handoff = new RecordingHandoff();
+    handoff.allocateImplementation = async () => allocation.promise;
+    const sink = new RecordingSink();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan(
+        [createSource()],
+        [
+          {
+            sourceId: "source-1",
+            path: outputPath,
+            ownership: "generated",
+            contentHash: "c".repeat(64),
+          },
+        ]
+      ),
+      new Map([["personal", handoff]]),
+      {
+        captureIdFactory: () => "obsolete-output-capture",
+        notificationSink: sink,
+      }
+    );
+    watcher.startListening();
+
+    harness.trigger("modify", output);
+    await waitUntil(() => handoff.allocateCalls.length === 1);
+    watcher.replaceWatchPlan(createWatchPlan([createSource()]));
+    allocation.resolve({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "obsolete-output-capture",
+      inputRevision: 1,
+      observationToken: "obsolete-output-token",
+    });
+    await watcher.waitForIdle();
+
+    expect(harness.readCalls).toEqual([]);
+    expect(handoff.commitCalls).toEqual([]);
+    expect(sink.notifications).toEqual([]);
   });
 
   it("keeps start idempotent after the initial crawl has been activated", async () => {

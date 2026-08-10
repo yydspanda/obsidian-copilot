@@ -295,18 +295,19 @@ export interface PipelineFingerprintInput {
   citationContractVersion: number;
 }
 
-/** One observed generated output used to decide whether a source is fresh. */
-export interface OutputObservation {
-  path: string;
-  exists: boolean;
-}
+/** One exact generated-output observation used to decide whether a source is fresh. */
+export type OutputObservation =
+  | { path: string; kind: "file"; contentHash: string }
+  | { path: string; kind: "missing" | "directory" };
 
 /** Stable reasons a source must be ingested again. */
 export type SourceStaleReason =
   | "never_ingested"
   | "source_changed"
   | "pipeline_changed"
-  | "output_missing";
+  | "output_missing"
+  | "output_changed"
+  | "output_unverifiable";
 
 /** Deterministic freshness result for a source and its generated pages. */
 export type SourceFreshnessDecision =

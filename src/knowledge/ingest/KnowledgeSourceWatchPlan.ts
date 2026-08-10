@@ -13,6 +13,7 @@ import {
 } from "@/knowledge/model/fingerprint";
 import { parseKnowledgeBundleConfig, parseSourceManifest } from "@/knowledge/model/schemas";
 import type {
+  GeneratedPageOwnership,
   JsonValue,
   KnowledgeBundleConfig,
   PipelineFingerprintInput,
@@ -94,6 +95,16 @@ export type WatchedKnowledgeSource =
   | WatchedKnowledgeIngestSource
   | WatchedKnowledgeQueryWritebackSource;
 
+/** One committed Manifest output projected without granting source or write authority. */
+export interface WatchedKnowledgeGeneratedOutput {
+  bundleId: string;
+  outputPath: string;
+  outputKey: string;
+  ownership: GeneratedPageOwnership;
+  contentHash: string;
+  sourceIds: readonly string[];
+}
+
 /** Config-free parser routing authority retained for one durable source. */
 export interface KnowledgeSourceParserAuthority {
   bundleId: string;
@@ -126,6 +137,8 @@ export type KnowledgeSourceWatchPlanBuildErrorCode =
   | "source_parser_missing"
   | "source_parser_ambiguous"
   | "source_origin_invalid"
+  | "generated_output_invalid"
+  | "generated_output_collision"
   | "bundle_id_duplicate"
   | "bundle_boundary_conflict"
   | "schema_snapshot_conflict"
@@ -157,6 +170,7 @@ export class KnowledgeSourceWatchPlanBuildError extends TypeError {
 }
 
 type ImmutableWatchedKnowledgeSource = Readonly<WatchedKnowledgeSource>;
+type ImmutableWatchedKnowledgeGeneratedOutput = Readonly<WatchedKnowledgeGeneratedOutput>;
 type ImmutableBundleWatchAuthority = Readonly<KnowledgeBundleWatchAuthority>;
 type ImmutableSourceParserAuthority = Readonly<KnowledgeSourceParserAuthority>;
 
@@ -199,6 +213,9 @@ interface KnowledgeSourceWatchPlanState {
   sources: readonly ImmutableWatchedKnowledgeSource[];
   sourcesByPathKey: ReadonlyMap<string, readonly ImmutableWatchedKnowledgeSource[]>;
   sourcesByIdentity: ReadonlyMap<string, ImmutableWatchedKnowledgeSource>;
+  generatedOutputs: readonly ImmutableWatchedKnowledgeGeneratedOutput[];
+  generatedOutputsByPathKey: ReadonlyMap<string, ImmutableWatchedKnowledgeGeneratedOutput>;
+  generatedOutputSourcesByPathKey: ReadonlyMap<string, readonly ImmutableWatchedKnowledgeSource[]>;
   parserAuthorities: readonly ImmutableSourceParserAuthority[];
   parserAuthoritiesBySource: ReadonlyMap<string, ImmutableSourceParserAuthority>;
   authorities: readonly ImmutableBundleWatchAuthority[];
@@ -209,6 +226,7 @@ interface KnowledgeSourceWatchPlanState {
 const PLAN_CONSTRUCTOR_TOKEN = Symbol("KnowledgeSourceWatchPlan.constructor");
 const planStates = new WeakMap<object, KnowledgeSourceWatchPlanState>();
 const EMPTY_SOURCES: readonly ImmutableWatchedKnowledgeSource[] = Object.freeze([]);
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 /**
  * Compares text by code unit so plan identity never depends on host locale.
@@ -822,6 +840,93 @@ function selectSourceParser(
   return matches[0];
 }
 
+interface MutableGeneratedOutputProjection {
+  bundleId: string;
+  outputPath: string;
+  outputKey: string;
+  ownership: GeneratedPageOwnership;
+  contentHash: string;
+  sourceIds: Set<string>;
+}
+
+/**
+ * Compiles committed Manifest pages into one Windows-keyed read-only projection.
+ *
+ * The generic Source Manifest contract permits an absent historical page hash,
+ * but live output drift is authoritative only for a current committed page with
+ * exact bytes. Co-owners must agree on spelling, ownership, and content hash.
+ *
+ * @param input - Strict validated Bundle and Manifest input
+ * @param bundleIndex - Stable Bundle position used by sanitized errors
+ * @returns Deterministically ordered immutable generated outputs
+ */
+function projectGeneratedOutputs(
+  input: ParsedBundleWatchInput,
+  bundleIndex: number
+): readonly ImmutableWatchedKnowledgeGeneratedOutput[] {
+  const outputsByKey = new Map<string, MutableGeneratedOutputProjection>();
+  const entries = [...input.manifest.entries].sort(
+    (left, right) =>
+      compareText(left.sourceKey, right.sourceKey) || compareText(left.sourceId, right.sourceId)
+  );
+
+  entries.forEach((entry, sourceIndex) => {
+    for (const page of entry.lastSuccessful?.generatedPages ?? []) {
+      if (page.contentHash === undefined || !SHA256_PATTERN.test(page.contentHash)) {
+        throw new KnowledgeSourceWatchPlanBuildError("generated_output_invalid", {
+          bundleIndex,
+          sourceIndex,
+        });
+      }
+      const outputKey = toWindowsPathKey(page.path);
+      const existing = outputsByKey.get(outputKey);
+      if (!existing) {
+        outputsByKey.set(outputKey, {
+          bundleId: input.bundle.id,
+          outputPath: page.path,
+          outputKey,
+          ownership: page.ownership,
+          contentHash: page.contentHash,
+          sourceIds: new Set([entry.sourceId]),
+        });
+        continue;
+      }
+      if (
+        existing.sourceIds.has(entry.sourceId) ||
+        existing.outputPath !== page.path ||
+        existing.ownership !== page.ownership ||
+        existing.contentHash !== page.contentHash
+      ) {
+        throw new KnowledgeSourceWatchPlanBuildError("generated_output_collision", {
+          bundleIndex,
+          sourceIndex,
+        });
+      }
+      existing.sourceIds.add(entry.sourceId);
+    }
+  });
+
+  const outputs = [...outputsByKey.values()]
+    .sort((left, right) => compareText(left.outputKey, right.outputKey))
+    .map((output) => {
+      const sourceIds = [...output.sourceIds].sort(compareText);
+      if (sourceIds.length > 1 && output.ownership !== "shared") {
+        throw new KnowledgeSourceWatchPlanBuildError("generated_output_invalid", {
+          bundleIndex,
+        });
+      }
+      return Object.freeze({
+        bundleId: output.bundleId,
+        outputPath: output.outputPath,
+        outputKey: output.outputKey,
+        ownership: output.ownership,
+        contentHash: output.contentHash,
+        sourceIds: Object.freeze(sourceIds),
+      });
+    });
+  return Object.freeze(outputs);
+}
+
 /**
  * Creates immutable source and Bundle authority projections for one input.
  *
@@ -834,6 +939,7 @@ function projectBundleWatchInput(
   bundleIndex: number
 ): {
   sources: readonly ImmutableWatchedKnowledgeSource[];
+  generatedOutputs: readonly ImmutableWatchedKnowledgeGeneratedOutput[];
   parserAuthorities: readonly ImmutableSourceParserAuthority[];
   authority: ImmutableBundleWatchAuthority;
 } {
@@ -903,6 +1009,7 @@ function projectBundleWatchInput(
   });
   return {
     sources: Object.freeze(sources),
+    generatedOutputs: projectGeneratedOutputs(input, bundleIndex),
     parserAuthorities: Object.freeze(parserAuthorities),
     authority,
   };
@@ -963,11 +1070,14 @@ export function createKnowledgeSourceParserProfileDigest(
  * Computes one digest over the exact immutable watch projection.
  *
  * @param sources - Deterministically ordered watched sources
+ * @param generatedOutputs - Deterministically ordered committed output reverse index
+ * @param parserAuthorities - Deterministically ordered parser bindings
  * @param authorities - Deterministically ordered Bundle authorities
  * @returns Domain-separated watch-plan digest
  */
 function createWatchPlanDigest(
   sources: readonly ImmutableWatchedKnowledgeSource[],
+  generatedOutputs: readonly ImmutableWatchedKnowledgeGeneratedOutput[],
   parserAuthorities: readonly ImmutableSourceParserAuthority[],
   authorities: readonly ImmutableBundleWatchAuthority[]
 ): string {
@@ -975,6 +1085,10 @@ function createWatchPlanDigest(
     version: KNOWLEDGE_PIPELINE_PROFILE_VERSION,
     authorities: authorities.map((authority) => ({ ...authority })),
     sources: sources.map((source) => ({ ...source })),
+    generatedOutputs: generatedOutputs.map((output) => ({
+      ...output,
+      sourceIds: [...output.sourceIds],
+    })),
     parserAuthorities: parserAuthorities.map((authority) => ({ ...authority })),
   };
   return sha256(`knowledge-source-watch-plan-v1\n${canonicalizeJson(value)}`);
@@ -1009,6 +1123,7 @@ export class KnowledgeSourceWatchPlan {
   private constructor(
     token: symbol,
     sources: readonly ImmutableWatchedKnowledgeSource[],
+    generatedOutputs: readonly ImmutableWatchedKnowledgeGeneratedOutput[],
     parserAuthorities: readonly ImmutableSourceParserAuthority[],
     authorities: readonly ImmutableBundleWatchAuthority[]
   ) {
@@ -1029,10 +1144,32 @@ export class KnowledgeSourceWatchPlan {
     for (const matching of sourcesByPathKey.values()) {
       Object.freeze(matching);
     }
+    const generatedOutputsByPathKey = new Map<string, ImmutableWatchedKnowledgeGeneratedOutput>();
+    const generatedOutputSourcesByPathKey = new Map<
+      string,
+      readonly ImmutableWatchedKnowledgeSource[]
+    >();
+    for (const output of generatedOutputs) {
+      if (generatedOutputsByPathKey.has(output.outputKey)) {
+        throw new KnowledgeSourceWatchPlanBuildError("generated_output_collision");
+      }
+      const owners = output.sourceIds.map((sourceId) => {
+        const source = sourcesByIdentity.get(createBundleSourceKey(output.bundleId, sourceId));
+        if (!source) {
+          throw new KnowledgeSourceWatchPlanBuildError("generated_output_invalid");
+        }
+        return source;
+      });
+      generatedOutputsByPathKey.set(output.outputKey, output);
+      generatedOutputSourcesByPathKey.set(output.outputKey, Object.freeze(owners));
+    }
     const state: KnowledgeSourceWatchPlanState = Object.freeze({
       sources,
       sourcesByPathKey,
       sourcesByIdentity,
+      generatedOutputs,
+      generatedOutputsByPathKey,
+      generatedOutputSourcesByPathKey,
       parserAuthorities,
       parserAuthoritiesBySource: new Map(
         parserAuthorities.map((authority) => [
@@ -1042,7 +1179,7 @@ export class KnowledgeSourceWatchPlan {
       ),
       authorities,
       authoritiesByBundle: new Map(authorities.map((authority) => [authority.bundleId, authority])),
-      digest: createWatchPlanDigest(sources, parserAuthorities, authorities),
+      digest: createWatchPlanDigest(sources, generatedOutputs, parserAuthorities, authorities),
     });
     planStates.set(this, state);
     Object.freeze(this);
@@ -1076,11 +1213,13 @@ export class KnowledgeSourceWatchPlan {
       validateCrossBundleBoundaries(inputs);
 
       const sources: ImmutableWatchedKnowledgeSource[] = [];
+      const generatedOutputs: ImmutableWatchedKnowledgeGeneratedOutput[] = [];
       const parserAuthorities: ImmutableSourceParserAuthority[] = [];
       const authorities: ImmutableBundleWatchAuthority[] = [];
       inputs.forEach((input, bundleIndex) => {
         const projection = projectBundleWatchInput(input, bundleIndex);
         sources.push(...projection.sources);
+        generatedOutputs.push(...projection.generatedOutputs);
         parserAuthorities.push(...projection.parserAuthorities);
         authorities.push(projection.authority);
       });
@@ -1096,9 +1235,15 @@ export class KnowledgeSourceWatchPlan {
           compareText(left.bundleId, right.bundleId) || compareText(left.sourceId, right.sourceId)
       );
 
+      generatedOutputs.sort(
+        (left, right) =>
+          compareText(left.outputKey, right.outputKey) || compareText(left.bundleId, right.bundleId)
+      );
+
       return new KnowledgeSourceWatchPlan(
         PLAN_CONSTRUCTOR_TOKEN,
         Object.freeze(sources),
+        Object.freeze(generatedOutputs),
         Object.freeze(parserAuthorities),
         Object.freeze(authorities)
       );
@@ -1143,6 +1288,36 @@ export class KnowledgeSourceWatchPlan {
    */
   getSource(bundleId: string, sourceId: string): ImmutableWatchedKnowledgeSource | undefined {
     return requirePlanState(this).sourcesByIdentity.get(createBundleSourceKey(bundleId, sourceId));
+  }
+
+  /** Returns every committed generated output in deterministic Windows-path order. */
+  getGeneratedOutputs(): readonly ImmutableWatchedKnowledgeGeneratedOutput[] {
+    return requirePlanState(this).generatedOutputs;
+  }
+
+  /**
+   * Resolves one committed generated-output authority by a pre-normalized Windows key.
+   *
+   * @param pathKey - Windows-normalized output path key
+   * @returns Immutable output projection when the Manifest tracks that path
+   */
+  getGeneratedOutputForPathKey(
+    pathKey: string
+  ): ImmutableWatchedKnowledgeGeneratedOutput | undefined {
+    return requirePlanState(this).generatedOutputsByPathKey.get(pathKey);
+  }
+
+  /**
+   * Returns all Manifest sources that own one committed output path.
+   *
+   * Returned values remain source authorities. The output path is never
+   * upgraded into a source path or parser input.
+   *
+   * @param pathKey - Windows-normalized output path key
+   * @returns Frozen deterministic owner list
+   */
+  getSourcesForGeneratedOutputPathKey(pathKey: string): readonly ImmutableWatchedKnowledgeSource[] {
+    return requirePlanState(this).generatedOutputSourcesByPathKey.get(pathKey) ?? EMPTY_SOURCES;
   }
 
   /**

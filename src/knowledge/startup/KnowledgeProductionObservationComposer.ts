@@ -10,6 +10,8 @@ import {
   KnowledgeSourceWorkflowPlanLoader,
   type KnowledgeSourceExecutionPlan,
 } from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
+import { KnowledgeSourceFreshnessAdmission } from "@/knowledge/ingest/KnowledgeSourceFreshnessAdmission";
+import { ObsidianKnowledgeOutputObservationReader } from "@/knowledge/ingest/ObsidianKnowledgeOutputObservationReader";
 import {
   IngestQueue,
   type EnqueueIngestRequest,
@@ -153,6 +155,7 @@ interface KnowledgeProductionObservationComposition {
   artifactReader: ObsidianExactSourceArtifactReader;
   handoffs: ReadonlyMap<string, SourceObservationHandoff>;
   queue: IngestQueue;
+  freshnessAdmission: KnowledgeSourceFreshnessAdmission;
   heldExecutor: StartupHeldObservationIngestExecutor;
   eventSink: StartupHeldObservationEventSink;
   proofPort: KnowledgeRuntimeIngestExecutionProofPort;
@@ -267,7 +270,28 @@ function composeObservation(
   const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queueStorage);
   const heldExecutor = new StartupHeldObservationIngestExecutor();
   const eventSink = new StartupHeldObservationEventSink();
-  const queue = new IngestQueue(queueStorage, heldExecutor, { eventSink });
+  let composition!: KnowledgeProductionObservationComposition;
+  const freshnessAdmission = new KnowledgeSourceFreshnessAdmission({
+    authority: runtime,
+    outputs: new ObsidianKnowledgeOutputObservationReader(
+      new ObsidianKnowledgeCompilerTargetResolver(app as App)
+    ),
+    generation: {
+      assertCurrent: () => {
+        if (
+          composition === undefined ||
+          !isCompositionCurrent(requireComposerState(owner), state.generation, composition)
+        ) {
+          throw createAbortError();
+        }
+        composition.workflowLease.assertCurrent();
+      },
+    },
+  });
+  const queue = new IngestQueue(queueStorage, heldExecutor, {
+    eventSink,
+    sourceFreshnessAdmission: freshnessAdmission,
+  });
   const enqueueOnly = Object.freeze({
     enqueue: (request: EnqueueIngestRequest) => queue.enqueue(request),
   });
@@ -283,7 +307,6 @@ function composeObservation(
 
   const artifactReader = new ObsidianExactSourceArtifactReader(app as App);
   const manifest = new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime));
-  let composition!: KnowledgeProductionObservationComposition;
   const loader = new KnowledgeSourceWorkflowPlanLoader({
     executionOwner,
     manifest,
@@ -306,6 +329,7 @@ function composeObservation(
     artifactReader,
     handoffs,
     queue,
+    freshnessAdmission,
     heldExecutor,
     eventSink,
     proofPort,
@@ -843,6 +867,11 @@ export class KnowledgeProductionObservationComposer {
       worker?.close();
     } catch {
       // The generation is already revoked; worker cleanup cannot revive it.
+    }
+    try {
+      composition?.freshnessAdmission.close();
+    } catch {
+      // Freshness output reads are already revoked by generation closure.
     }
     try {
       composition?.queue.close();

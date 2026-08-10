@@ -15,8 +15,8 @@ function createSnapshot(): SourceCompileSnapshot {
     sourceContentHash: SOURCE_HASH,
     pipelineFingerprint: PIPELINE_HASH,
     generatedPages: [
-      { path: "Wiki/主题.md", ownership: "generated" },
-      { path: "Wiki/共享.md", ownership: "shared" },
+      { path: "Wiki/主题.md", ownership: "generated", contentHash: "1".repeat(64) },
+      { path: "Wiki/共享.md", ownership: "shared", contentHash: "2".repeat(64) },
     ],
     changeSetId: "changeset-1",
     completedAt: 100,
@@ -76,8 +76,8 @@ describe("decideSourceFreshness", () => {
         sourceContentHash: SOURCE_HASH,
         pipelineFingerprint: PIPELINE_HASH,
         outputs: [
-          { path: "wiki/主题.md", exists: true },
-          { path: "WIKI/共享.md", exists: true },
+          { path: "wiki/主题.md", kind: "file", contentHash: "1".repeat(64) },
+          { path: "WIKI/共享.md", kind: "file", contentHash: "2".repeat(64) },
         ],
       })
     ).toEqual({ kind: "up_to_date" });
@@ -89,7 +89,7 @@ describe("decideSourceFreshness", () => {
         lastSuccessful: createSnapshot(),
         sourceContentHash: "c".repeat(64),
         pipelineFingerprint: "d".repeat(64),
-        outputs: [{ path: "Wiki/主题.md", exists: true }],
+        outputs: [{ path: "Wiki/主题.md", kind: "file", contentHash: "1".repeat(64) }],
       })
     ).toEqual({
       kind: "needs_ingest",
@@ -97,19 +97,48 @@ describe("decideSourceFreshness", () => {
     });
   });
 
-  it("does not treat an explicitly missing or unrelated output as complete", () => {
+  it("does not treat an explicitly missing output as complete", () => {
     expect(
       decideSourceFreshness({
         lastSuccessful: createSnapshot(),
         sourceContentHash: SOURCE_HASH,
         pipelineFingerprint: PIPELINE_HASH,
         outputs: [
-          { path: "Wiki/主题.md", exists: true },
-          { path: "Wiki/共享.md", exists: false },
-          { path: "Wiki/其他.md", exists: true },
+          { path: "Wiki/主题.md", kind: "file", contentHash: "1".repeat(64) },
+          { path: "Wiki/共享.md", kind: "missing" },
         ],
       })
     ).toEqual({ kind: "needs_ingest", reasons: ["output_missing"] });
+  });
+
+  it("requires ingest when an output hash changed", () => {
+    expect(
+      decideSourceFreshness({
+        lastSuccessful: createSnapshot(),
+        sourceContentHash: SOURCE_HASH,
+        pipelineFingerprint: PIPELINE_HASH,
+        outputs: [
+          { path: "Wiki/主题.md", kind: "file", contentHash: "9".repeat(64) },
+          { path: "Wiki/共享.md", kind: "file", contentHash: "2".repeat(64) },
+        ],
+      })
+    ).toEqual({ kind: "needs_ingest", reasons: ["output_changed"] });
+  });
+
+  it("fails closed for unrelated or duplicate output observations", () => {
+    expect(
+      decideSourceFreshness({
+        lastSuccessful: createSnapshot(),
+        sourceContentHash: SOURCE_HASH,
+        pipelineFingerprint: PIPELINE_HASH,
+        outputs: [
+          { path: "Wiki/主题.md", kind: "file", contentHash: "1".repeat(64) },
+          { path: "wiki/主题.md", kind: "file", contentHash: "1".repeat(64) },
+          { path: "Wiki/共享.md", kind: "file", contentHash: "2".repeat(64) },
+          { path: "Wiki/其他.md", kind: "file", contentHash: "3".repeat(64) },
+        ],
+      })
+    ).toEqual({ kind: "needs_ingest", reasons: ["output_unverifiable"] });
   });
 
   it("treats a malformed legacy snapshot with no outputs as stale", () => {
@@ -149,7 +178,7 @@ describe("decideSourceFreshness", () => {
         lastNoChanges: marker,
         sourceContentHash: SOURCE_HASH,
         pipelineFingerprint: PIPELINE_HASH,
-        outputs: [{ path: "Wiki/主题.md", exists: true }],
+        outputs: [{ path: "Wiki/主题.md", kind: "file", contentHash: "1".repeat(64) }],
       })
     ).toEqual({ kind: "needs_ingest", reasons: ["output_missing"] });
   });

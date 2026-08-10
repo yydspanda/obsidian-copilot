@@ -8,6 +8,7 @@ import {
   IngestQueueApplyReceiptRequiredError,
   IngestQueueBundleMismatchError,
   IngestQueueClosedError,
+  IngestQueueFreshnessAdmissionError,
   IngestQueueIncompatibleVersionError,
   IngestQueueInfrastructureError,
   IngestQueueJobIdConflictError,
@@ -21,6 +22,7 @@ import {
   IngestQueueValidationError,
   IngestQueueWriteConflictExhaustedError,
   type EventSink,
+  type EnqueueIngestRequest,
   type IngestExecutionContext,
   type IngestExecutionResult,
   type IngestExecutor,
@@ -29,6 +31,8 @@ import {
   type IngestQueueEvent,
   type IngestRejectedReviewDecisionReceipt,
   type IngestReviewDecisionJobClaim,
+  type IngestSourceFreshnessAdmissionPort,
+  type IngestSourceFreshnessAdmissionRequest,
 } from "@/knowledge/ingest/queue/IngestQueue";
 import type { TransactionCommitReceipt } from "@/knowledge/changeset/ChangeSetTransaction";
 import {
@@ -167,6 +171,41 @@ function createPendingJob(overrides: Partial<KnowledgeIngestJob> = {}): Knowledg
     updatedAt: 100,
     status: "pending",
     stage: "queued",
+    ...overrides,
+  } as KnowledgeIngestJob;
+}
+
+/**
+ * Creates one valid terminal job that owns a source high-watermark.
+ *
+ * @param overrides - Optional job fields to replace
+ * @returns Completed ingest history
+ */
+function createCompletedJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
+  return {
+    ...createPendingJob(),
+    attempt: 1,
+    status: "completed",
+    stage: "completed",
+    changeSetId: "changeset-completed",
+    completedAt: 100,
+    ...overrides,
+  } as KnowledgeIngestJob;
+}
+
+/**
+ * Creates one valid non-applying processing job for active freshness tests.
+ *
+ * @param overrides - Optional job fields to replace
+ * @returns Claimed ingest work
+ */
+function createProcessingJob(overrides: Partial<KnowledgeIngestJob> = {}): KnowledgeIngestJob {
+  return {
+    ...createPendingJob({ id: "job-history" }),
+    attempt: 1,
+    status: "processing",
+    stage: "analyzing",
+    startedAt: 100,
     ...overrides,
   } as KnowledgeIngestJob;
 }
@@ -352,11 +391,37 @@ interface QueueHarness {
   setNow(value: number): void;
 }
 
+/** Mutable freshness admission port that records every detached Queue request. */
+class TestSourceFreshnessAdmission implements IngestSourceFreshnessAdmissionPort {
+  public readonly calls: Readonly<IngestSourceFreshnessAdmissionRequest>[] = [];
+
+  /**
+   * Creates one scripted admission boundary.
+   *
+   * @param handler - Unknown result or failure returned for one exact observation
+   */
+  constructor(
+    private readonly handler: (request: Readonly<IngestSourceFreshnessAdmissionRequest>) => unknown
+  ) {}
+
+  /**
+   * Records and delegates one admission evaluation.
+   *
+   * @param request - Frozen Queue-owned source identity
+   * @returns Scripted unknown adapter result
+   */
+  async evaluate(request: Readonly<IngestSourceFreshnessAdmissionRequest>): Promise<unknown> {
+    this.calls.push(request);
+    return this.handler(request);
+  }
+}
+
 /**
  * Creates a queue with deterministic ids, time, retry delays, and executor.
  *
  * @param handler - Optional scripted execution behavior
  * @param maxAttempts - Total execution bound
+ * @param sourceFreshnessAdmission - Optional terminal-output admission evaluator
  * @returns Mutable queue test harness
  */
 function createHarness(
@@ -364,7 +429,8 @@ function createHarness(
     kind: "no_changes",
     changeSetId: "changeset-1",
   }),
-  maxAttempts = 3
+  maxAttempts = 3,
+  sourceFreshnessAdmission?: IngestSourceFreshnessAdmissionPort
 ): QueueHarness {
   const storage = new InMemoryQueueStorage();
   const executor = new TestExecutor(handler);
@@ -379,6 +445,7 @@ function createHarness(
       () => 0.5
     ),
     eventSink: sink,
+    ...(sourceFreshnessAdmission ? { sourceFreshnessAdmission } : {}),
   });
   return {
     storage,
@@ -404,6 +471,7 @@ function createRequest(
     sourceContentHash: string;
     pipelineFingerprint: string;
     inputRevision: number;
+    observationToken: string;
   }> = {}
 ) {
   return {
@@ -416,14 +484,40 @@ function createRequest(
   };
 }
 
-/** Creates one production-shaped no-change Manifest plan for Queue contract tests. */
-function createProductionNoChangesPlan(): NoChangesManifestCommitPlan {
+/**
+ * Creates one exact echoed freshness admission result.
+ *
+ * @param request - Queue admission identity to echo
+ * @param decision - Unknown decision payload used by boundary tests
+ * @returns Plain adapter result
+ */
+function createFreshnessAdmission(
+  request: Readonly<IngestSourceFreshnessAdmissionRequest>,
+  decision: unknown = { kind: "up_to_date" }
+): unknown {
+  return {
+    bundleId: request.bundleId,
+    sourceId: request.sourceId,
+    sourceContentHash: request.sourceContentHash,
+    pipelineFingerprint: request.pipelineFingerprint,
+    inputRevision: request.inputRevision,
+    decision,
+  };
+}
+
+/**
+ * Creates one production-shaped no-change Manifest plan for Queue contract tests.
+ *
+ * @param inputRevision - Exact source revision bound to the plan
+ * @returns Strict no-change Manifest commit plan
+ */
+function createProductionNoChangesPlan(inputRevision = 1): NoChangesManifestCommitPlan {
   return createNoChangesManifestCommitPlan({
     bundleId: "personal",
     sourceId: "source-1",
     sourceContentHash: HASH_A,
     pipelineFingerprint: HASH_B,
-    inputRevision: 1,
+    inputRevision,
     compileContextDigest: HASH_A,
     analysisDigest: HASH_B,
     evidenceDigest: HASH_C,
@@ -689,6 +783,540 @@ describe("IngestQueue persistence and enqueue", () => {
     });
     expect(storage.getSnapshot("personal").jobs).toHaveLength(1);
     expect(storage.successfulWrites).toBe(2);
+  });
+
+  it("admits an exact newer terminal observation only when current output is up to date", async () => {
+    const admission = new TestSourceFreshnessAdmission((request) => {
+      expect(Object.isFrozen(request)).toBe(true);
+      expect(() => {
+        (request as { sourceId: string }).sourceId = "mutated";
+      }).toThrow(TypeError);
+      return createFreshnessAdmission(request);
+    });
+    const harness = createHarness(undefined, 3, admission);
+    const completed = createCompletedJob({ id: "job-history" });
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 4, jobs: [completed] })
+    );
+
+    const result = await harness.queue.enqueue(createRequest({ inputRevision: 2 }));
+
+    expect(result).toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-history", status: "completed", inputRevision: 1 },
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.job)).toBe(true);
+    expect(admission.calls).toEqual([
+      {
+        bundleId: "personal",
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 2,
+      },
+    ]);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      revision: 5,
+      jobs: [expect.objectContaining({ id: "job-history", inputRevision: 1 })],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 2 })],
+    });
+    expect(harness.storage.successfulWrites).toBe(1);
+  });
+
+  it("accepts but discards the Runtime handoff capture id without widening enqueue data", async () => {
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(request)
+    );
+    const harness = createHarness(undefined, 3, admission);
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [createCompletedJob({ id: "job-history" })],
+      })
+    );
+    const handoffRequest = {
+      ...createRequest({ inputRevision: 2 }),
+      captureId: "capture-runtime-2",
+      observationToken: "observation-runtime-2",
+    };
+
+    await expect(harness.queue.enqueue(handoffRequest)).resolves.toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-history" },
+    });
+
+    expect(admission.calls).toEqual([
+      {
+        bundleId: "personal",
+        sourceId: "source-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 2,
+      },
+    ]);
+    expect(harness.storage.writeAuthorities).toEqual([
+      { kind: "source_observation", observationToken: "observation-runtime-2" },
+    ]);
+    expect(harness.storage.getSnapshot("personal").jobs[0]).not.toHaveProperty("captureId");
+
+    const unsupportedRequest = {
+      ...createRequest({ inputRevision: 3 }),
+      arbitraryCapability: "must-not-cross-queue-boundary",
+    } as EnqueueIngestRequest;
+    await expect(harness.queue.enqueue(unsupportedRequest)).rejects.toThrow(TypeError);
+    expect(harness.storage.successfulWrites).toBe(1);
+    expect(admission.calls).toHaveLength(1);
+  });
+
+  it("creates a repair job for exact terminal input when newer output is not reusable", async () => {
+    const responseReasons = ["output_changed", "output_unverifiable"];
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(request, {
+        kind: "needs_ingest",
+        reasons: responseReasons,
+      })
+    );
+    const harness = createHarness(undefined, 3, admission);
+    const completed = createCompletedJob({ id: "job-history" });
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 7, jobs: [completed] })
+    );
+
+    const result = await harness.queue.enqueue(createRequest({ inputRevision: 2 }));
+    responseReasons[0] = "source_changed";
+
+    expect(result).toMatchObject({
+      kind: "enqueued",
+      job: {
+        id: "job-1",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 2,
+        status: "pending",
+        stage: "queued",
+      },
+    });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      revision: 8,
+      jobs: [
+        expect.objectContaining({ id: "job-history", status: "completed" }),
+        expect.objectContaining({ id: "job-1", status: "pending", inputRevision: 2 }),
+      ],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 2 })],
+    });
+  });
+
+  it("never invokes freshness admission to force equal or older observations into new jobs", async () => {
+    const admission = new TestSourceFreshnessAdmission(() => {
+      throw new Error("admission must not run");
+    });
+    const harness = createHarness(undefined, 3, admission);
+    const completed = createCompletedJob({ id: "job-history", inputRevision: 3 });
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 5, jobs: [completed] })
+    );
+
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 3 }))).resolves.toMatchObject(
+      { kind: "deduplicated", job: { id: "job-history" } }
+    );
+    await expect(
+      harness.queue.enqueue(createRequest({ sourceContentHash: HASH_C, inputRevision: 2 }))
+    ).resolves.toMatchObject({ kind: "deduplicated", job: { id: "job-history" } });
+
+    expect(admission.calls).toEqual([]);
+    expect(harness.storage.successfulWrites).toBe(0);
+    expect(harness.storage.getSnapshot("personal").jobs).toHaveLength(1);
+  });
+
+  it("preserves active rerun scheduling without consulting terminal freshness", async () => {
+    const admission = new TestSourceFreshnessAdmission(() => {
+      throw new Error("admission must not run");
+    });
+    const harness = createHarness(undefined, 3, admission);
+    const processing: KnowledgeIngestJob = {
+      ...createPendingJob({ id: "job-history" }),
+      attempt: 1,
+      status: "processing",
+      stage: "analyzing",
+      startedAt: 100,
+    };
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 3, jobs: [processing] })
+    );
+
+    await expect(
+      harness.queue.enqueue(
+        createRequest({ sourceContentHash: HASH_C, pipelineFingerprint: HASH_D, inputRevision: 2 })
+      )
+    ).resolves.toMatchObject({
+      kind: "rerun_scheduled",
+      job: { id: "job-history", status: "processing", rerunRequested: true },
+    });
+
+    expect(admission.calls).toEqual([]);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ id: "job-history", rerunRequested: true })],
+      reruns: [
+        expect.objectContaining({
+          sourceContentHash: HASH_C,
+          pipelineFingerprint: HASH_D,
+          inputRevision: 2,
+        }),
+      ],
+    });
+  });
+
+  it("schedules and updates one repair rerun for repeated output drift during processing", async () => {
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(request, {
+        kind: "needs_ingest",
+        reasons: ["output_changed"],
+      })
+    );
+    const harness = createHarness(undefined, 3, admission);
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 3, jobs: [createProcessingJob()] })
+    );
+
+    harness.setNow(110);
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 2 }))).resolves.toMatchObject(
+      {
+        kind: "rerun_scheduled",
+        job: { id: "job-history", status: "processing", rerunRequested: true },
+      }
+    );
+    harness.setNow(120);
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 3 }))).resolves.toMatchObject(
+      {
+        kind: "rerun_scheduled",
+        job: { id: "job-history", status: "processing", rerunRequested: true },
+      }
+    );
+
+    expect(admission.calls.map(({ inputRevision }) => inputRevision)).toEqual([2, 3]);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [
+        expect.objectContaining({
+          id: "job-history",
+          inputRevision: 1,
+          status: "processing",
+          rerunRequested: true,
+        }),
+      ],
+      reruns: [
+        expect.objectContaining({
+          jobId: "job-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 3,
+          requestedAt: 110,
+          updatedAt: 120,
+        }),
+      ],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 3 })],
+    });
+  });
+
+  it("deduplicates proven current output without a processing repair rerun", async () => {
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(request)
+    );
+    const harness = createHarness(undefined, 3, admission);
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 3, jobs: [createProcessingJob()] })
+    );
+
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 2 }))).resolves.toMatchObject(
+      {
+        kind: "deduplicated",
+        job: { id: "job-history", inputRevision: 1, rerunRequested: false },
+      }
+    );
+
+    expect(admission.calls).toHaveLength(1);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ inputRevision: 1, rerunRequested: false })],
+      reruns: [],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 2 })],
+    });
+  });
+
+  it("removes an older repair rerun when a newer observation proves output current", async () => {
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(
+        request,
+        request.inputRevision === 2
+          ? { kind: "needs_ingest", reasons: ["output_changed"] }
+          : { kind: "up_to_date" }
+      )
+    );
+    const harness = createHarness(undefined, 3, admission);
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", { revision: 3, jobs: [createProcessingJob()] })
+    );
+
+    await harness.queue.enqueue(createRequest({ inputRevision: 2 }));
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 3 }))).resolves.toMatchObject(
+      {
+        kind: "deduplicated",
+        job: { id: "job-history", inputRevision: 1, rerunRequested: false },
+      }
+    );
+
+    expect(admission.calls.map(({ inputRevision }) => inputRevision)).toEqual([2, 3]);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ rerunRequested: false })],
+      reruns: [],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 3 })],
+    });
+  });
+
+  it("does not evaluate or schedule output repair while an apply is in progress", async () => {
+    const admission = new TestSourceFreshnessAdmission(() => {
+      throw new Error("applying output is refreshed after commit");
+    });
+    const harness = createHarness(undefined, 3, admission);
+    const applying = createProcessingJob({ stage: "applying" });
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [applying],
+        applyClaim: createApplyClaimMarker({ jobId: "job-history", startedAt: 100 }),
+      })
+    );
+
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 2 }))).resolves.toMatchObject(
+      {
+        kind: "deduplicated",
+        job: { id: "job-history", stage: "applying", rerunRequested: false },
+      }
+    );
+
+    expect(admission.calls).toEqual([]);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ stage: "applying", rerunRequested: false })],
+      reruns: [],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 2 })],
+    });
+  });
+
+  it("defers another source's same-input output check until the applying generation refreshes", async () => {
+    const admission = new TestSourceFreshnessAdmission(() => {
+      throw new Error("shared output is rechecked by the post-Apply generation");
+    });
+    const harness = createHarness(undefined, 3, admission);
+    const applying = createProcessingJob({
+      id: "job-applying",
+      sourceId: "source-1",
+      stage: "applying",
+    });
+    const coOwnerHistory = createCompletedJob({
+      id: "job-co-owner",
+      sourceId: "source-2",
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_D,
+      changeSetId: "changeset-co-owner",
+    });
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [applying, coOwnerHistory],
+        applyClaim: createApplyClaimMarker({
+          jobId: applying.id,
+          sourceId: applying.sourceId,
+          startedAt: 100,
+        }),
+      })
+    );
+
+    await expect(
+      harness.queue.enqueue(
+        createRequest({
+          sourceId: "source-2",
+          sourceContentHash: HASH_C,
+          pipelineFingerprint: HASH_D,
+          inputRevision: 2,
+        })
+      )
+    ).resolves.toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-co-owner", status: "completed", inputRevision: 1 },
+    });
+
+    expect(admission.calls).toEqual([]);
+    const snapshot = harness.storage.getSnapshot("personal");
+    expect(snapshot).toMatchObject({
+      jobs: [
+        expect.objectContaining({ id: "job-applying", stage: "applying" }),
+        expect.objectContaining({ id: "job-co-owner", inputRevision: 1 }),
+      ],
+      reruns: [],
+    });
+    expect(
+      snapshot.sourceHighWatermarks.find((watermark) => watermark.sourceId === "source-2")
+    ).toMatchObject({ inputRevision: 2 });
+  });
+
+  it("retains one output-repair rerun while the active job awaits review", async () => {
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(request, {
+        kind: "needs_ingest",
+        reasons: ["output_missing"],
+      })
+    );
+    const harness = createHarness(async () => createAwaitingReviewResult(), 3, admission);
+    await harness.queue.enqueue(createRequest());
+    harness.setNow(110);
+    await harness.queue.runNext("personal");
+    harness.setNow(120);
+
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 2 }))).resolves.toMatchObject(
+      {
+        kind: "rerun_scheduled",
+        job: { id: "job-1", status: "awaiting_review", rerunRequested: true },
+      }
+    );
+
+    expect(admission.calls).toHaveLength(1);
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ id: "job-1", status: "awaiting_review" })],
+      reruns: [
+        expect.objectContaining({
+          jobId: "job-2",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 2,
+        }),
+      ],
+    });
+  });
+
+  it("discards a same-input output-repair rerun after Apply rebuilds the output", async () => {
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(request, {
+        kind: "needs_ingest",
+        reasons: ["output_missing"],
+      })
+    );
+    const harness = createHarness(async () => createAwaitingReviewResult(), 3, admission);
+    await harness.queue.enqueue(createRequest());
+    harness.setNow(110);
+    await harness.queue.runNext("personal");
+    harness.setNow(120);
+    await harness.queue.enqueue(createRequest({ inputRevision: 2 }));
+
+    const applying = await harness.queue.beginReviewApply(
+      "personal",
+      createAcceptedReviewDecision({ acceptedAt: 130 })
+    );
+    const receipt = createCommitReceipt({
+      changeSetId: "changeset-review",
+      jobClaim: {
+        jobId: applying.id,
+        sourceId: applying.sourceId,
+        sourceContentHash: applying.sourceContentHash,
+        pipelineFingerprint: applying.pipelineFingerprint,
+        inputRevision: applying.inputRevision,
+        attempt: applying.attempt,
+        startedAt: applying.startedAt,
+      },
+      committedAt: 140,
+    });
+
+    await harness.queue.resolveApplyRecovery(receipt);
+    await harness.queue.finalizeApplyRecovery("personal", receipt.transactionId);
+
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.objectContaining({ id: "job-1", status: "completed" })],
+      reruns: [],
+    });
+  });
+
+  it("keeps active Queue bytes unchanged when output-drift admission fails", async () => {
+    const failure = new Error("output freshness unavailable");
+    const admission = new TestSourceFreshnessAdmission(() => {
+      throw failure;
+    });
+    const harness = createHarness(undefined, 3, admission);
+    const snapshot = createSnapshot("personal", {
+      revision: 3,
+      jobs: [createProcessingJob()],
+    });
+    harness.storage.seed("personal", snapshot);
+
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 2 }))).rejects.toBe(failure);
+
+    expect(harness.storage.successfulWrites).toBe(0);
+    expect(harness.storage.getSnapshot("personal")).toEqual(snapshot);
+  });
+
+  it("fails closed without writes for freshness identity mismatch and adapter failure", async () => {
+    const mismatch = new TestSourceFreshnessAdmission((request) => ({
+      ...(createFreshnessAdmission(request) as Record<string, unknown>),
+      sourceId: "other-source",
+    }));
+    const mismatchHarness = createHarness(undefined, 3, mismatch);
+    mismatchHarness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 2,
+        jobs: [createCompletedJob({ id: "job-history" })],
+      })
+    );
+    const beforeMismatch = mismatchHarness.storage.getSnapshot("personal");
+
+    await expect(
+      mismatchHarness.queue.enqueue(createRequest({ inputRevision: 2 }))
+    ).rejects.toBeInstanceOf(IngestQueueFreshnessAdmissionError);
+    expect(mismatchHarness.storage.successfulWrites).toBe(0);
+    expect(mismatchHarness.storage.getSnapshot("personal")).toEqual(beforeMismatch);
+
+    const failure = new Error("freshness evidence unavailable");
+    const unavailable = new TestSourceFreshnessAdmission(() => {
+      throw failure;
+    });
+    const unavailableHarness = createHarness(undefined, 3, unavailable);
+    unavailableHarness.storage.seed("personal", beforeMismatch);
+
+    await expect(
+      unavailableHarness.queue.enqueue(createRequest({ inputRevision: 2 }))
+    ).rejects.toBe(failure);
+    expect(unavailableHarness.storage.successfulWrites).toBe(0);
+    expect(unavailableHarness.storage.getSnapshot("personal")).toEqual(beforeMismatch);
+  });
+
+  it("rejects exotic or malformed freshness data before any durable mutation", async () => {
+    const exotic = new TestSourceFreshnessAdmission((request) => {
+      const result = createFreshnessAdmission(request) as Record<string, unknown>;
+      Object.defineProperty(result, "decision", {
+        get: () => ({ kind: "up_to_date" }),
+        enumerable: true,
+      });
+      return result;
+    });
+    const harness = createHarness(undefined, 3, exotic);
+    const snapshot = createSnapshot("personal", {
+      revision: 9,
+      jobs: [createCompletedJob({ id: "job-history" })],
+    });
+    harness.storage.seed("personal", snapshot);
+
+    await expect(harness.queue.enqueue(createRequest({ inputRevision: 2 }))).rejects.toBeInstanceOf(
+      IngestQueueFreshnessAdmissionError
+    );
+    expect(harness.storage.successfulWrites).toBe(0);
+    expect(harness.storage.getSnapshot("personal")).toEqual(snapshot);
   });
 
   it("re-enqueues a legacy completed no-change input after the compiler fingerprint changes", async () => {
@@ -1131,6 +1759,327 @@ describe("IngestQueue execution and reruns", () => {
     expect(Object.isFrozen(authority.plan)).toBe(true);
     expect(Object.isFrozen(authority.plan.baseGeneratedPages)).toBe(true);
     expect(Object.isFrozen(authority.plan.baseGeneratedPages[0])).toBe(true);
+  });
+
+  it("terminally blocks a no-target repair that leaves output stale without promoting its identical rerun", async () => {
+    let outputRestored = false;
+    const executionStarted = createDeferred<void>();
+    const completion = createDeferred<IngestExecutionResult>();
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(
+        request,
+        outputRestored
+          ? { kind: "up_to_date" }
+          : { kind: "needs_ingest", reasons: ["output_missing"] }
+      )
+    );
+    const harness = createHarness(
+      async () => {
+        executionStarted.resolve();
+        return completion.promise;
+      },
+      3,
+      admission
+    );
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [createCompletedJob({ id: "job-history" })],
+      })
+    );
+    await harness.queue.enqueue(createRequest({ inputRevision: 2 }));
+
+    const running = harness.queue.runNext("personal");
+    await executionStarted.promise;
+    await harness.queue.enqueue(createRequest({ inputRevision: 3 }));
+    const plan = createProductionNoChangesPlan(2);
+    completion.resolve({
+      kind: "no_changes",
+      changeSetId: plan.noChangesId,
+      manifestCommitPlan: plan,
+      manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+    });
+
+    const result = await running;
+
+    expect(result).toEqual({ kind: "executed", jobId: "job-1", status: "failed" });
+    expect(result).not.toHaveProperty("generationEffect");
+    const blocked = harness.storage.getSnapshot("personal");
+    expect(blocked.jobs).toHaveLength(2);
+    expect(blocked.jobs[0]).toMatchObject({ id: "job-history", status: "completed" });
+    expect(blocked.jobs[1]).toMatchObject({
+      id: "job-1",
+      inputRevision: 3,
+      status: "failed",
+      failure: {
+        code: "output_repair_unresolved",
+        message: "Generated output remains stale after a no-change repair attempt",
+        retryable: false,
+      },
+    });
+    expect(blocked.reruns).toEqual([]);
+    expect(blocked.sourceHighWatermarks).toEqual([expect.objectContaining({ inputRevision: 3 })]);
+    expect(
+      harness.storage.writeAuthorities.some((authority) => authority?.kind === "no_changes_commit")
+    ).toBe(false);
+
+    const writesAfterFailure = harness.storage.successfulWrites;
+    await expect(
+      harness.queue.enqueue(
+        createRequest({ inputRevision: 4, observationToken: "observation-restart-4" })
+      )
+    ).resolves.toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-1", status: "failed", inputRevision: 4 },
+    });
+    expect(harness.storage.successfulWrites).toBe(writesAfterFailure + 1);
+    expect(harness.storage.writeAuthorities.at(-1)).toEqual({
+      kind: "source_observation",
+      observationToken: "observation-restart-4",
+    });
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [expect.anything(), expect.objectContaining({ id: "job-1", inputRevision: 4 })],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 4 })],
+    });
+
+    await expect(
+      harness.queue.enqueue(
+        createRequest({ inputRevision: 5, observationToken: "observation-restart-5" })
+      )
+    ).resolves.toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-1", status: "failed", inputRevision: 5 },
+    });
+    expect(harness.storage.successfulWrites).toBe(writesAfterFailure + 2);
+    expect(harness.storage.writeAuthorities.at(-1)).toEqual({
+      kind: "source_observation",
+      observationToken: "observation-restart-5",
+    });
+    expect(harness.executor.calls).toHaveLength(1);
+
+    outputRestored = true;
+    await expect(
+      harness.queue.enqueue(
+        createRequest({ inputRevision: 6, observationToken: "observation-restored-6" })
+      )
+    ).resolves.toMatchObject({
+      kind: "deduplicated",
+      job: { id: "job-1", inputRevision: 5 },
+    });
+    expect(harness.storage.getSnapshot("personal").sourceHighWatermarks).toEqual([
+      expect.objectContaining({ inputRevision: 6 }),
+    ]);
+    expect(harness.storage.writeAuthorities.at(-1)).toEqual({
+      kind: "source_observation",
+      observationToken: "observation-restored-6",
+    });
+
+    outputRestored = false;
+    await expect(
+      harness.queue.enqueue(
+        createRequest({ inputRevision: 7, observationToken: "observation-new-drift-7" })
+      )
+    ).resolves.toMatchObject({ kind: "enqueued", job: { status: "pending", inputRevision: 7 } });
+    expect(harness.executor.calls).toHaveLength(1);
+  });
+
+  it("promotes a divergent rerun when a stale-output no-change result cannot repair it", async () => {
+    const executionStarted = createDeferred<void>();
+    const completion = createDeferred<IngestExecutionResult>();
+    const admission = new TestSourceFreshnessAdmission((request) =>
+      createFreshnessAdmission(request, {
+        kind: "needs_ingest",
+        reasons: ["output_changed"],
+      })
+    );
+    const harness = createHarness(
+      async () => {
+        executionStarted.resolve();
+        return completion.promise;
+      },
+      3,
+      admission
+    );
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [createCompletedJob({ id: "job-history" })],
+      })
+    );
+    await harness.queue.enqueue(createRequest({ inputRevision: 2 }));
+
+    const running = harness.queue.runNext("personal");
+    await executionStarted.promise;
+    await harness.queue.enqueue(
+      createRequest({
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: HASH_D,
+        inputRevision: 3,
+      })
+    );
+    const plan = createProductionNoChangesPlan(2);
+    completion.resolve({
+      kind: "no_changes",
+      changeSetId: plan.noChangesId,
+      manifestCommitPlan: plan,
+      manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+    });
+
+    await expect(running).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-1",
+      status: "failed",
+    });
+
+    const snapshot = harness.storage.getSnapshot("personal");
+    expect(snapshot.jobs).toHaveLength(3);
+    expect(snapshot.jobs[0]).toMatchObject({ id: "job-history", status: "completed" });
+    expect(snapshot.jobs[1]).toMatchObject({
+      id: "job-1",
+      inputRevision: 2,
+      status: "failed",
+      failure: { code: "output_repair_unresolved" },
+    });
+    expect(snapshot.jobs[2]).toMatchObject({
+      id: "job-2",
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_D,
+      inputRevision: 3,
+      status: "pending",
+    });
+    expect(snapshot.reruns).toEqual([]);
+    expect(snapshot.sourceHighWatermarks).toEqual([
+      expect.objectContaining({
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: HASH_D,
+        inputRevision: 3,
+      }),
+    ]);
+    expect(
+      harness.storage.writeAuthorities.some((authority) => authority?.kind === "no_changes_commit")
+    ).toBe(false);
+  });
+
+  it("allows a no-change repair when external restoration makes exact output current", async () => {
+    let admissionCall = 0;
+    const admission = new TestSourceFreshnessAdmission((request) => {
+      admissionCall += 1;
+      return createFreshnessAdmission(
+        request,
+        admissionCall === 1
+          ? { kind: "needs_ingest", reasons: ["output_missing"] }
+          : { kind: "up_to_date" }
+      );
+    });
+    const plan = createProductionNoChangesPlan(2);
+    const harness = createHarness(
+      async () => ({
+        kind: "no_changes",
+        changeSetId: plan.noChangesId,
+        manifestCommitPlan: plan,
+        manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+      }),
+      3,
+      admission
+    );
+    harness.storage.seed(
+      "personal",
+      createSnapshot("personal", {
+        revision: 4,
+        jobs: [createCompletedJob({ id: "job-history" })],
+      })
+    );
+    await harness.queue.enqueue(createRequest({ inputRevision: 2 }));
+
+    await expect(harness.queue.runNext("personal")).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-1",
+      status: "completed",
+      generationEffect: "manifest_no_changes_committed",
+    });
+
+    expect(admission.calls.map(({ inputRevision }) => inputRevision)).toEqual([2, 2]);
+    expect(harness.storage.writeAuthorities.at(-1)).toMatchObject({ kind: "no_changes_commit" });
+    expect(harness.storage.getSnapshot("personal").jobs.at(-1)).toMatchObject({
+      id: "job-1",
+      status: "completed",
+    });
+  });
+
+  it.each(["never_ingested", "source_changed", "pipeline_changed"])(
+    "allows an initial no-change completion when freshness reports %s",
+    async (reason) => {
+      const admission = new TestSourceFreshnessAdmission((request) =>
+        createFreshnessAdmission(request, { kind: "needs_ingest", reasons: [reason] })
+      );
+      const plan = createProductionNoChangesPlan();
+      const harness = createHarness(
+        async () => ({
+          kind: "no_changes",
+          changeSetId: plan.noChangesId,
+          manifestCommitPlan: plan,
+          manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+        }),
+        3,
+        admission
+      );
+      await harness.queue.enqueue(createRequest());
+
+      await expect(harness.queue.runNext("personal")).resolves.toEqual({
+        kind: "executed",
+        jobId: "job-1",
+        status: "completed",
+        generationEffect: "manifest_no_changes_committed",
+      });
+
+      expect(admission.calls).toEqual([
+        {
+          bundleId: "personal",
+          sourceId: "source-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 1,
+        },
+      ]);
+    }
+  );
+
+  it("treats no-change freshness admission failure as infrastructure without a terminal conclusion", async () => {
+    const failure = new Error("freshness generation unavailable");
+    const admission = new TestSourceFreshnessAdmission(() => {
+      throw failure;
+    });
+    const plan = createProductionNoChangesPlan();
+    const harness = createHarness(
+      async () => ({
+        kind: "no_changes",
+        changeSetId: plan.noChangesId,
+        manifestCommitPlan: plan,
+        manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(plan),
+      }),
+      3,
+      admission
+    );
+    await harness.queue.enqueue(createRequest());
+
+    await expect(harness.queue.runNext("personal")).rejects.toBe(failure);
+
+    expect(harness.storage.getSnapshot("personal")).toMatchObject({
+      jobs: [
+        expect.objectContaining({
+          id: "job-1",
+          status: "pending",
+          stage: "queued",
+          attempt: 1,
+        }),
+      ],
+    });
+    expect(harness.storage.getSnapshot("personal").jobs[0]).not.toHaveProperty("failure");
+    expect(
+      harness.storage.writeAuthorities.some((authority) => authority?.kind === "no_changes_commit")
+    ).toBe(false);
   });
 
   it.each([
@@ -2729,7 +3678,7 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     });
   });
 
-  it("leaves a latest rerun with its existing successor during old-apply recovery", async () => {
+  it("retires a same-input successor chain during old-apply recovery", async () => {
     const harness = createHarness();
     const failedApply: KnowledgeIngestJob = {
       ...createPendingJob(),
@@ -2793,10 +3742,19 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     const snapshot = await harness.queue.load("personal");
     expect(
       snapshot.jobs.filter((job) => !["failed", "completed", "cancelled"].includes(job.status))
-    ).toEqual([expect.objectContaining({ id: "job-2", inputRevision: 2 })]);
-    expect(snapshot.reruns).toEqual([
-      expect.objectContaining({ jobId: "job-3", inputRevision: 3 }),
-    ]);
+    ).toEqual([]);
+    expect(snapshot.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "job-1", status: "completed" }),
+        expect.objectContaining({
+          id: "job-2",
+          status: "cancelled",
+          sourceContentHash: HASH_A,
+          inputRevision: 3,
+        }),
+      ])
+    );
+    expect(snapshot.reruns).toEqual([]);
   });
 });
 

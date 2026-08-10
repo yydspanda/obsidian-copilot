@@ -13,6 +13,7 @@ import type {
   KnowledgeFailure,
   KnowledgeIngestJob,
   KnowledgeIngestWorkStage,
+  SourceFreshnessDecision,
 } from "@/knowledge/model/types";
 import {
   ExponentialRetryPolicy,
@@ -40,6 +41,22 @@ import {
 const DEFAULT_MAX_WRITE_ATTEMPTS = 3;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 const FAILURE_CODE_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,127}$/i;
+const SOURCE_STALE_REASONS = new Set<string>([
+  "never_ingested",
+  "source_changed",
+  "pipeline_changed",
+  "output_missing",
+  "output_changed",
+  "output_unverifiable",
+]);
+const OUTPUT_REPAIR_STALE_REASONS = new Set<string>([
+  "output_missing",
+  "output_changed",
+  "output_unverifiable",
+]);
+const OUTPUT_REPAIR_UNRESOLVED_FAILURE_CODE = "output_repair_unresolved";
+const OUTPUT_REPAIR_UNRESOLVED_FAILURE_MESSAGE =
+  "Generated output remains stale after a no-change repair attempt";
 const SENSITIVE_FAILURE_PATTERN =
   /(?:\bbearer\s+[a-z0-9._~-]{8,}|\bsk-[a-z0-9_-]{8,}|(?:api[_ -]?key|token|secret|password)\s*[:=]\s*\S+)/i;
 const WORK_STAGE_ORDER: readonly KnowledgeIngestWorkStage[] = [
@@ -215,6 +232,34 @@ export interface EnqueueIngestRequest {
 export interface EnqueueIngestResult {
   kind: "enqueued" | "deduplicated" | "updated" | "rerun_scheduled";
   job: KnowledgeIngestJob;
+}
+
+/** Exact source observation submitted to the freshness admission boundary. */
+export interface IngestSourceFreshnessAdmissionRequest {
+  bundleId: string;
+  sourceId: string;
+  sourceContentHash: string;
+  pipelineFingerprint: string;
+  inputRevision: number;
+}
+
+/** Identity-bound freshness result returned by the production admission adapter. */
+export interface IngestSourceFreshnessAdmission extends IngestSourceFreshnessAdmissionRequest {
+  decision: SourceFreshnessDecision;
+}
+
+/** Read-only admission port that reproves whether terminal source output may be reused. */
+export interface IngestSourceFreshnessAdmissionPort {
+  /**
+   * Evaluates one detached exact observation against current durable output evidence.
+   *
+   * The return type is deliberately unknown: Queue owns descriptor-safe parsing,
+   * identity correlation, and fail-closed validation before any durable write.
+   *
+   * @param request - Frozen exact source observation being considered for reuse
+   * @returns Unknown adapter result to validate at the Queue trust boundary
+   */
+  evaluate(request: Readonly<IngestSourceFreshnessAdmissionRequest>): Promise<unknown>;
 }
 
 /** Exact queue attempt retained by a durable terminal review record. */
@@ -413,6 +458,8 @@ export interface IngestQueueOptions {
   jobIdFactory?: () => string;
   retryPolicy?: RetryPolicy;
   eventSink?: EventSink;
+  /** Optional compatibility seam; production enqueue composition injects this port. */
+  sourceFreshnessAdmission?: IngestSourceFreshnessAdmissionPort;
   maxWriteAttempts?: number;
 }
 
@@ -609,6 +656,23 @@ export class IngestQueueObservationConflictError extends Error {
   ) {
     super(`Source '${sourceId}' has conflicting queue inputs at revision ${inputRevision}`);
     this.name = "IngestQueueObservationConflictError";
+  }
+}
+
+/** Reports malformed or identity-conflicting source freshness admission data. */
+export class IngestQueueFreshnessAdmissionError extends Error {
+  /**
+   * Creates a freshness admission boundary failure without retaining raw adapter data.
+   *
+   * @param bundleId - Bundle whose source reuse could not be authorized
+   * @param sourceId - Source whose exact output freshness was being evaluated
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly sourceId: string
+  ) {
+    super(`Freshness admission for source '${sourceId}' in Bundle '${bundleId}' is invalid`);
+    this.name = "IngestQueueFreshnessAdmissionError";
   }
 }
 
@@ -1023,6 +1087,46 @@ function rerunMatchesRequest(rerun: IngestRerunRequest, request: EnqueueIngestRe
 }
 
 /**
+ * Checks whether a freshness decision still reports generated-output drift.
+ *
+ * Source or pipeline reasons may legitimately compile to no target changes;
+ * only output evidence makes a no-change repair result self-contradictory.
+ *
+ * @param decision - Strictly parsed freshness decision
+ * @returns Whether at least one generated output remains stale or unverifiable
+ */
+function hasOutputRepairStaleReason(decision: SourceFreshnessDecision): boolean {
+  return (
+    decision.kind === "needs_ingest" &&
+    decision.reasons.some((reason) => OUTPUT_REPAIR_STALE_REASONS.has(reason))
+  );
+}
+
+/**
+ * Checks whether one terminal failure is the unresolved repair blocker for a high-watermark.
+ *
+ * Keeping the blocker bound to the exact high-watermark suppresses automatic
+ * restart loops. A later up-to-date observation advances the high-watermark,
+ * settling this blocker without rewriting terminal history.
+ *
+ * @param job - Latest durable source job
+ * @param highWatermark - Current exact source observation
+ * @returns Whether the same input already terminated as an unresolved output repair
+ */
+function isCurrentOutputRepairBlocker(
+  job: KnowledgeIngestJob,
+  highWatermark: IngestSourceHighWatermark
+): boolean {
+  return (
+    job.status === "failed" &&
+    job.failure.code === OUTPUT_REPAIR_UNRESOLVED_FAILURE_CODE &&
+    job.sourceContentHash === highWatermark.sourceContentHash &&
+    job.pipelineFingerprint === highWatermark.pipelineFingerprint &&
+    job.inputRevision === highWatermark.inputRevision
+  );
+}
+
+/**
  * Checks whether a source high-watermark represents the requested compile input.
  *
  * @param highWatermark - Latest durable observation for one source
@@ -1161,6 +1265,71 @@ function promoteRerun(
 }
 
 /**
+ * Retires output-repair work already satisfied by a successful Apply.
+ *
+ * When the latest source high-watermark still names the committed source bytes
+ * and pipeline, an unstarted successor and its rerun only exist to repair the
+ * output that Apply has just rebuilt. They become cancelled/removed together.
+ * A divergent latest source or pipeline remains new compile work and follows
+ * the ordinary promotion rules.
+ *
+ * @param snapshot - Snapshot already containing the completed Apply job
+ * @param appliedJob - Exact job whose transaction committed successfully
+ * @param timestamp - Non-regressing promotion timestamp
+ * @returns Queue with a divergent rerun promoted or a satisfied repair removed
+ */
+function settleRerunAfterSuccessfulApply(
+  snapshot: IngestQueueSnapshot,
+  appliedJob: KnowledgeIngestJob,
+  timestamp: number
+): IngestQueueSnapshot {
+  const highWatermark = snapshot.sourceHighWatermarks.find(
+    (candidate) => candidate.sourceId === appliedJob.sourceId
+  );
+  const activeSuccessors = snapshot.jobs.filter(
+    (job) => job.sourceId === appliedJob.sourceId && isActiveJob(job)
+  );
+  const latestInputWasApplied =
+    highWatermark !== undefined &&
+    highWatermark.sourceContentHash === appliedJob.sourceContentHash &&
+    highWatermark.pipelineFingerprint === appliedJob.pipelineFingerprint;
+  const canRetireSuccessors = activeSuccessors.every(
+    (job) => (job.status === "pending" || job.status === "paused") && job.attempt === 0
+  );
+  if (highWatermark && latestInputWasApplied && canRetireSuccessors) {
+    return {
+      ...snapshot,
+      jobs: snapshot.jobs.map((job): KnowledgeIngestJob => {
+        if (
+          job.sourceId !== appliedJob.sourceId ||
+          (job.status !== "pending" && job.status !== "paused")
+        ) {
+          return job;
+        }
+        const cancelledAt = Math.max(timestamp, job.updatedAt, highWatermark.observedAt);
+        return {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: highWatermark.sourceContentHash,
+          pipelineFingerprint: highWatermark.pipelineFingerprint,
+          inputRevision: highWatermark.inputRevision,
+          attempt: job.attempt,
+          rerunRequested: false,
+          createdAt: job.createdAt,
+          updatedAt: cancelledAt,
+          status: "cancelled",
+          stage: "cancelled",
+          cancelledAt,
+        };
+      }),
+      reruns: snapshot.reruns.filter((candidate) => candidate.sourceId !== appliedJob.sourceId),
+    };
+  }
+  return promoteRerun(snapshot, appliedJob.sourceId, timestamp);
+}
+
+/**
  * Requires a non-whitespace identifier at the queue boundary.
  *
  * @param value - Identifier supplied by orchestration
@@ -1257,6 +1426,167 @@ function assertHash(value: unknown, field: string): asserts value is string {
   if (typeof value !== "string" || !HASH_PATTERN.test(value)) {
     throw new TypeError(`${field} must be a lowercase SHA-256 hex digest`);
   }
+}
+
+/**
+ * Detaches an enqueue request before any asynchronous storage or admission work.
+ *
+ * @param value - Source observation supplied by orchestration
+ * @returns Frozen exact request with no accessor or caller-mutation authority
+ */
+function snapshotEnqueueIngestRequest(value: unknown): Readonly<EnqueueIngestRequest> {
+  const request = snapshotDataRecord(value);
+  const keys = request ? Object.keys(request) : [];
+  const expectedKeys = [
+    "bundleId",
+    "sourceId",
+    "sourceContentHash",
+    "pipelineFingerprint",
+    "inputRevision",
+  ];
+  const handoffKeys = ["observationToken", "captureId"];
+  if (
+    !request ||
+    keys.some((key) => ![...expectedKeys, ...handoffKeys].includes(key)) ||
+    expectedKeys.some((key) => !keys.includes(key))
+  ) {
+    throw new TypeError("enqueue request must contain only the supported data fields");
+  }
+  assertIdentifier(request.bundleId, "bundleId");
+  assertIdentifier(request.sourceId, "sourceId");
+  assertHash(request.sourceContentHash, "sourceContentHash");
+  assertHash(request.pipelineFingerprint, "pipelineFingerprint");
+  assertQueueRevision(request.inputRevision, "inputRevision");
+  if (request.observationToken !== undefined) {
+    assertIdentifier(request.observationToken, "observationToken");
+  }
+  if (request.captureId !== undefined) {
+    assertIdentifier(request.captureId, "captureId");
+  }
+  return Object.freeze({
+    bundleId: request.bundleId,
+    sourceId: request.sourceId,
+    sourceContentHash: request.sourceContentHash,
+    pipelineFingerprint: request.pipelineFingerprint,
+    inputRevision: request.inputRevision,
+    ...(request.observationToken === undefined
+      ? {}
+      : { observationToken: request.observationToken }),
+  });
+}
+
+/**
+ * Builds the frozen identity sent to a freshness admission adapter.
+ *
+ * @param request - Detached enqueue observation
+ * @returns Exact identity without the Queue storage capability
+ */
+function createSourceFreshnessAdmissionRequest(
+  request: Readonly<EnqueueIngestRequest>
+): Readonly<IngestSourceFreshnessAdmissionRequest> {
+  return Object.freeze({
+    bundleId: request.bundleId,
+    sourceId: request.sourceId,
+    sourceContentHash: request.sourceContentHash,
+    pipelineFingerprint: request.pipelineFingerprint,
+    inputRevision: request.inputRevision,
+  });
+}
+
+/**
+ * Parses and correlates unknown freshness admission data without invoking getters.
+ *
+ * @param value - Unknown adapter result
+ * @param request - Exact identity the Queue submitted for evaluation
+ * @returns Frozen, detached, identity-bound admission
+ */
+function snapshotSourceFreshnessAdmission(
+  value: unknown,
+  request: Readonly<IngestSourceFreshnessAdmissionRequest>
+): Readonly<IngestSourceFreshnessAdmission> {
+  const fail = (): never => {
+    throw new IngestQueueFreshnessAdmissionError(request.bundleId, request.sourceId);
+  };
+  const admission = snapshotDataRecord(value);
+  if (
+    !admission ||
+    !hasExactDataKeys(admission, [
+      "bundleId",
+      "sourceId",
+      "sourceContentHash",
+      "pipelineFingerprint",
+      "inputRevision",
+      "decision",
+    ]) ||
+    admission.bundleId !== request.bundleId ||
+    admission.sourceId !== request.sourceId ||
+    admission.sourceContentHash !== request.sourceContentHash ||
+    admission.pipelineFingerprint !== request.pipelineFingerprint ||
+    admission.inputRevision !== request.inputRevision
+  ) {
+    return fail();
+  }
+  const rawDecision = snapshotDataRecord(admission.decision);
+  if (!rawDecision) {
+    return fail();
+  }
+  let decision: SourceFreshnessDecision;
+  if (rawDecision.kind === "up_to_date") {
+    if (!hasExactDataKeys(rawDecision, ["kind"])) {
+      return fail();
+    }
+    decision = Object.freeze({ kind: "up_to_date" });
+  } else if (rawDecision.kind === "needs_ingest") {
+    if (!hasExactDataKeys(rawDecision, ["kind", "reasons"])) {
+      return fail();
+    }
+    const rawReasons = snapshotDenseDataArray(rawDecision.reasons);
+    if (
+      !rawReasons ||
+      rawReasons.length === 0 ||
+      rawReasons.some(
+        (reason) => typeof reason !== "string" || !SOURCE_STALE_REASONS.has(reason)
+      ) ||
+      new Set(rawReasons).size !== rawReasons.length
+    ) {
+      return fail();
+    }
+    const reasons = Object.freeze([...rawReasons]) as Extract<
+      SourceFreshnessDecision,
+      { kind: "needs_ingest" }
+    >["reasons"];
+    decision = Object.freeze({ kind: "needs_ingest", reasons });
+  } else {
+    return fail();
+  }
+  return Object.freeze({ ...request, decision });
+}
+
+/**
+ * Recursively freezes one detached JSON-compatible Queue result.
+ *
+ * @param value - Detached data node to freeze in place
+ */
+function freezeDetachedData(value: unknown): void {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return;
+  }
+  for (const child of Object.values(value)) {
+    freezeDetachedData(child);
+  }
+  Object.freeze(value);
+}
+
+/**
+ * Clones and freezes a validated durable job before exposing it to a caller.
+ *
+ * @param job - Job selected from a detached validated Queue snapshot
+ * @returns Deeply frozen JSON clone
+ */
+function snapshotEnqueueResultJob(job: KnowledgeIngestJob): KnowledgeIngestJob {
+  const detached = JSON.parse(canonicalizeJson(job as unknown as JsonValue)) as KnowledgeIngestJob;
+  freezeDetachedData(detached);
+  return detached;
 }
 
 /**
@@ -1767,6 +2097,7 @@ export class IngestQueue {
   private readonly jobIdFactory: () => string;
   private readonly retryPolicy: RetryPolicy;
   private readonly eventSink?: EventSink;
+  private readonly sourceFreshnessAdmission?: IngestSourceFreshnessAdmissionPort;
   private readonly maxWriteAttempts: number;
   private readonly bundleMutexes = new Map<string, Mutex>();
   private readonly activeControllers = new Map<string, ActiveController>();
@@ -1802,6 +2133,7 @@ export class IngestQueue {
         Math.random
       );
     this.eventSink = options.eventSink;
+    this.sourceFreshnessAdmission = options.sourceFreshnessAdmission;
     this.maxWriteAttempts = options.maxWriteAttempts ?? DEFAULT_MAX_WRITE_ATTEMPTS;
     if (!Number.isSafeInteger(this.maxWriteAttempts) || this.maxWriteAttempts < 1) {
       throw new TypeError("maxWriteAttempts must be a positive safe integer");
@@ -1848,14 +2180,14 @@ export class IngestQueue {
    * @param request - Exact source and pipeline input to schedule
    * @returns Durable enqueue, update, rerun, or deduplication result
    */
-  async enqueue(request: EnqueueIngestRequest): Promise<EnqueueIngestResult> {
+  async enqueue(candidateRequest: EnqueueIngestRequest): Promise<EnqueueIngestResult> {
     this.assertExecutionOpen();
-    this.assertEnqueueRequest(request);
+    const request = snapshotEnqueueIngestRequest(candidateRequest);
     const timestamp = this.now();
     const reservedJobId = this.nextJobId();
     const mutation = await this.getBundleMutex(request.bundleId).runExclusive(async () => {
       this.assertExecutionOpen();
-      return this.mutateSourceObservation<EnqueueMutationValue>(request, (current) => {
+      return this.mutateSourceObservation<EnqueueMutationValue>(request, async (current) => {
         const active = current.jobs.find(
           (job) => isActiveJob(job) && job.sourceId === request.sourceId
         );
@@ -1876,12 +2208,54 @@ export class IngestQueue {
           }
           return { value: { kind: "deduplicated" as const, jobId: deduplicatedJob.id } };
         }
-        if (!active && highWatermark && highWatermarkMatchesRequest(highWatermark, request)) {
-          const deduplicatedJob = requireLatestSourceJob(current, request.sourceId);
+        const bundleApplyInProgress = current.jobs.some(
+          (job) => job.status === "processing" && job.stage === "applying"
+        );
+        const currentInputMatchesRequest = active
+          ? jobMatchesRequest(active, request)
+          : highWatermark !== undefined && highWatermarkMatchesRequest(highWatermark, request);
+        // Apply may publish shared-page bytes before its atomic Manifest hash.
+        // The required generation refresh will recheck every source afterward.
+        if (!active && bundleApplyInProgress && currentInputMatchesRequest) {
+          const deduplicatedJob = active ?? requireLatestSourceJob(current, request.sourceId);
           return {
             next: recordSourceHighWatermark(current, request, timestamp),
             value: { kind: "deduplicated" as const, jobId: deduplicatedJob.id },
           };
+        }
+        if (!active && highWatermark && highWatermarkMatchesRequest(highWatermark, request)) {
+          const deduplicatedJob = requireLatestSourceJob(current, request.sourceId);
+          if (!this.sourceFreshnessAdmission) {
+            return {
+              next: recordSourceHighWatermark(current, request, timestamp),
+              value: { kind: "deduplicated" as const, jobId: deduplicatedJob.id },
+            };
+          }
+          const admission = await this.evaluateSourceFreshness(request);
+          if (admission.decision.kind === "up_to_date") {
+            return {
+              next: recordSourceHighWatermark(current, request, timestamp),
+              value: { kind: "deduplicated" as const, jobId: deduplicatedJob.id },
+            };
+          }
+          if (
+            hasOutputRepairStaleReason(admission.decision) &&
+            isCurrentOutputRepairBlocker(deduplicatedJob, highWatermark)
+          ) {
+            const projectedBlocker: KnowledgeIngestJob = {
+              ...deduplicatedJob,
+              inputRevision: request.inputRevision,
+              updatedAt: Math.max(timestamp, deduplicatedJob.updatedAt),
+            };
+            return {
+              next: recordSourceHighWatermark(
+                replaceJob(current, projectedBlocker),
+                request,
+                timestamp
+              ),
+              value: { kind: "deduplicated" as const, jobId: projectedBlocker.id },
+            };
+          }
         }
         if (!active) {
           this.assertJobIdAvailable(current, reservedJobId);
@@ -1910,6 +2284,61 @@ export class IngestQueue {
         }
 
         const existingRerun = current.reruns.find((rerun) => rerun.sourceId === request.sourceId);
+        const activeOutputMayDrift =
+          !bundleApplyInProgress &&
+          this.sourceFreshnessAdmission !== undefined &&
+          jobMatchesRequest(active, request) &&
+          (active.status === "awaiting_review" ||
+            (active.status === "processing" && active.stage !== "applying"));
+        if (activeOutputMayDrift) {
+          const admission = await this.evaluateSourceFreshness(request);
+          if (admission.decision.kind === "up_to_date") {
+            const withoutObsoleteRerun = existingRerun
+              ? {
+                  ...replaceJob(current, {
+                    ...active,
+                    rerunRequested: false,
+                    updatedAt: Math.max(timestamp, active.updatedAt),
+                  }),
+                  reruns: current.reruns.filter((rerun) => rerun.sourceId !== active.sourceId),
+                }
+              : current;
+            return {
+              next: recordSourceHighWatermark(withoutObsoleteRerun, request, timestamp),
+              value: { kind: "deduplicated" as const, jobId: active.id },
+            };
+          }
+
+          const rerunJobId = existingRerun?.jobId ?? reservedJobId;
+          if (!existingRerun) {
+            this.assertJobIdAvailable(current, rerunJobId);
+          }
+          const repairRerun: IngestRerunRequest = {
+            jobId: rerunJobId,
+            sourceId: request.sourceId,
+            sourceContentHash: request.sourceContentHash,
+            pipelineFingerprint: request.pipelineFingerprint,
+            inputRevision: request.inputRevision,
+            requestedAt: existingRerun?.requestedAt ?? Math.max(timestamp, active.updatedAt),
+            updatedAt: Math.max(timestamp, existingRerun?.updatedAt ?? active.updatedAt),
+          };
+          const repairPending = {
+            ...replaceJob(current, {
+              ...active,
+              rerunRequested: true,
+              updatedAt: Math.max(timestamp, active.updatedAt),
+            }),
+            reruns: existingRerun
+              ? current.reruns.map((candidate) =>
+                  candidate.sourceId === repairRerun.sourceId ? repairRerun : candidate
+                )
+              : [...current.reruns, repairRerun],
+          };
+          return {
+            next: recordSourceHighWatermark(repairPending, request, timestamp),
+            value: { kind: "rerun_scheduled" as const, jobId: active.id },
+          };
+        }
         if (existingRerun !== undefined && rerunMatchesRequest(existingRerun, request)) {
           const next = {
             ...replaceJob(current, {
@@ -2028,7 +2457,7 @@ export class IngestQueue {
       });
     });
 
-    const job = requireJob(mutation.snapshot, mutation.value.jobId);
+    const job = snapshotEnqueueResultJob(requireJob(mutation.snapshot, mutation.value.jobId));
     const cause: IngestQueueEventCause =
       mutation.value.kind === "enqueued"
         ? "enqueue"
@@ -2038,7 +2467,7 @@ export class IngestQueue {
             ? "rerun_scheduled"
             : "deduplicate";
     this.emit(mutation.snapshot, cause, job.id);
-    return { kind: mutation.value.kind, job };
+    return Object.freeze({ kind: mutation.value.kind, job });
   }
 
   /**
@@ -2171,6 +2600,41 @@ export class IngestQueue {
       if (result.kind !== "awaiting_review") {
         const recovered = await this.recoverLifecycleAbort(bundleId, executionJob, active);
         if (recovered) return recovered;
+      }
+
+      if (result.kind === "no_changes" && this.sourceFreshnessAdmission) {
+        const admission = await this.evaluateSourceFreshness({
+          bundleId: executionJob.bundleId,
+          sourceId: executionJob.sourceId,
+          sourceContentHash: executionJob.sourceContentHash,
+          pipelineFingerprint: executionJob.pipelineFingerprint,
+          inputRevision: executionJob.inputRevision,
+        });
+        const recovered = await this.recoverLifecycleAbort(bundleId, executionJob, active);
+        if (recovered) return recovered;
+        if (hasOutputRepairStaleReason(admission.decision)) {
+          const finalized = await this.finalizeFailure(
+            bundleId,
+            executionJob.id,
+            executionJob.attempt,
+            executionJob.startedAt,
+            new IngestExecutorError(
+              {
+                code: OUTPUT_REPAIR_UNRESOLVED_FAILURE_CODE,
+                message: OUTPUT_REPAIR_UNRESOLVED_FAILURE_MESSAGE,
+                retryable: false,
+                rateLimited: false,
+              },
+              active.controller.signal
+            ),
+            active.controller.signal,
+            true
+          );
+          if (finalized === "stale") {
+            return { kind: "stale", jobId: executionJob.id };
+          }
+          return { kind: "executed", jobId: executionJob.id, status: finalized };
+        }
       }
 
       const finalized = await this.finalizeSuccess(
@@ -3159,7 +3623,11 @@ export class IngestQueue {
           changeSetId: marker.changeSetId,
           completedAt,
         };
-        const next = promoteRerun(replaceJob(current, completed), job.sourceId, completedAt);
+        const next = settleRerunAfterSuccessfulApply(
+          replaceJob(current, completed),
+          completed,
+          completedAt
+        );
         const withoutApplyClaim: IngestQueueSnapshot = { ...next };
         delete withoutApplyClaim.applyClaim;
         return {
@@ -3638,6 +4106,7 @@ export class IngestQueue {
    * @param jobId - Claimed job identifier
    * @param error - Unknown executor rejection
    * @param signal - Controller signal paired with the claim
+   * @param discardSameInputRerun - Whether an unresolved repair folds its identical successor
    * @returns Final durable job status
    */
   private async finalizeFailure(
@@ -3646,7 +4115,8 @@ export class IngestQueue {
     attempt: number,
     startedAt: number,
     error: unknown,
-    signal: AbortSignal
+    signal: AbortSignal,
+    discardSameInputRerun = false
   ): Promise<ExecutedJobStatus | "stale"> {
     const timestamp = this.now();
     const normalized = this.normalizeExecutorFailure(error, timestamp, signal);
@@ -3686,9 +4156,36 @@ export class IngestQueue {
           stage: job.stage,
           failure,
         };
+        const sameInputHighWatermark = current.sourceHighWatermarks.find(
+          (highWatermark) =>
+            highWatermark.sourceId === job.sourceId &&
+            highWatermark.sourceContentHash === job.sourceContentHash &&
+            highWatermark.pipelineFingerprint === job.pipelineFingerprint
+        );
+        const persistedTerminalFailure: KnowledgeIngestJob =
+          discardSameInputRerun && sameInputHighWatermark
+            ? {
+                ...terminalFailure,
+                inputRevision: sameInputHighWatermark.inputRevision,
+                updatedAt: Math.max(terminalFailure.updatedAt, sameInputHighWatermark.observedAt),
+              }
+            : terminalFailure;
+        const sameInputRerun = current.reruns.find(
+          (rerun) =>
+            rerun.sourceId === job.sourceId &&
+            rerun.sourceContentHash === job.sourceContentHash &&
+            rerun.pipelineFingerprint === job.pipelineFingerprint
+        );
+        const failedSnapshot =
+          discardSameInputRerun && sameInputRerun
+            ? {
+                ...replaceJob(current, persistedTerminalFailure),
+                reruns: current.reruns.filter((rerun) => rerun !== sameInputRerun),
+              }
+            : replaceJob(current, persistedTerminalFailure);
         if (job.stage === "applying") {
           const recoveryFailure: KnowledgeIngestJob = {
-            ...terminalFailure,
+            ...persistedTerminalFailure,
             failure: {
               code: "apply_failure_requires_recovery",
               message: "Apply failure requires transaction recovery before retry",
@@ -3696,7 +4193,11 @@ export class IngestQueue {
               occurredAt: failedAt,
             },
           };
-          const next = promoteRerun(replaceJob(current, recoveryFailure), job.sourceId, failedAt);
+          const next = promoteRerun(
+            replaceJob(failedSnapshot, recoveryFailure),
+            job.sourceId,
+            failedAt
+          );
           return {
             next: {
               ...next,
@@ -3710,13 +4211,9 @@ export class IngestQueue {
             value: { changed: true, cause: "failure" },
           };
         }
-        const hasRerun = current.reruns.some((rerun) => rerun.sourceId === job.sourceId);
+        const hasRerun = failedSnapshot.reruns.some((rerun) => rerun.sourceId === job.sourceId);
         if (hasRerun) {
-          let next = promoteRerun(
-            replaceJob(current, terminalFailure),
-            job.sourceId,
-            Math.max(timestamp, job.updatedAt)
-          );
+          let next = promoteRerun(failedSnapshot, job.sourceId, Math.max(timestamp, job.updatedAt));
           if (decision.kind === "pause") {
             next = {
               ...next,
@@ -3797,7 +4294,7 @@ export class IngestQueue {
         }
 
         return {
-          next: replaceJob(current, terminalFailure),
+          next: failedSnapshot,
           value: { changed: true, cause: "failure" },
         };
       });
@@ -4009,21 +4506,21 @@ export class IngestQueue {
   }
 
   /**
-   * Validates exact enqueue identity and hashes before any storage access.
+   * Evaluates and strictly correlates one source-output freshness admission.
    *
-   * @param request - Candidate enqueue request
+   * @param request - Detached exact Queue observation
+   * @returns Frozen identity-bound admission decision
    */
-  private assertEnqueueRequest(request: EnqueueIngestRequest): void {
-    assertIdentifier(request.bundleId, "bundleId");
-    assertIdentifier(request.sourceId, "sourceId");
-    assertHash(request.sourceContentHash, "sourceContentHash");
-    assertHash(request.pipelineFingerprint, "pipelineFingerprint");
-    if (!Number.isSafeInteger(request.inputRevision) || request.inputRevision < 0) {
-      throw new TypeError("inputRevision must be a non-negative safe integer");
+  private async evaluateSourceFreshness(
+    request: Readonly<EnqueueIngestRequest>
+  ): Promise<Readonly<IngestSourceFreshnessAdmission>> {
+    const admissionPort = this.sourceFreshnessAdmission;
+    if (!admissionPort) {
+      throw new IngestQueueFreshnessAdmissionError(request.bundleId, request.sourceId);
     }
-    if (request.observationToken !== undefined) {
-      assertIdentifier(request.observationToken, "observationToken");
-    }
+    const admissionRequest = createSourceFreshnessAdmissionRequest(request);
+    const rawAdmission = await admissionPort.evaluate(admissionRequest);
+    return snapshotSourceFreshnessAdmission(rawAdmission, admissionRequest);
   }
 
   /**
@@ -4146,7 +4643,7 @@ export class IngestQueue {
    */
   private mutateSourceObservation<T>(
     request: Pick<EnqueueIngestRequest, "bundleId" | "observationToken">,
-    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T>
+    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T> | Promise<QueueMutation<T>>
   ): Promise<MutationResult<T>> {
     const authority: QueueWriteAuthority | undefined =
       request.observationToken === undefined
@@ -4431,14 +4928,14 @@ export class IngestQueue {
    */
   private async mutate<T>(
     bundleId: string,
-    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T>,
+    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T> | Promise<QueueMutation<T>>,
     authority?: QueueWriteAuthority
   ): Promise<MutationResult<T>> {
     assertIdentifier(bundleId, "bundleId");
     let lastConflict: IngestQueueRevisionConflictError | undefined;
     for (let attempt = 0; attempt < this.maxWriteAttempts; attempt += 1) {
       const loaded = await this.loadForMutation(bundleId);
-      const proposal = transform(loaded.snapshot);
+      const proposal = await transform(loaded.snapshot);
       if (!proposal.next) {
         return {
           snapshot: this.cloneValidatedSnapshot(bundleId, loaded.snapshot),

@@ -20,6 +20,7 @@ import {
   ObsidianKnowledgeCompilerTargetResolverError,
   type ObsidianKnowledgeCompilerTargetResolverErrorCode,
 } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
+import { ObsidianKnowledgeOutputObservationReader } from "@/knowledge/ingest/ObsidianKnowledgeOutputObservationReader";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 /** Creates one fake TFile despite Obsidian's opaque public constructors. */
@@ -47,6 +48,7 @@ function createRequest(
 class ResolverHarness {
   loaded: Array<TFile | TFolder> = [];
   readonly contents = new Map<string, string>();
+  readonly fileStats = new Map<string, { ctime: number; mtime: number; size: number }>();
   readonly directories = new Set<string>();
   onStat?: (path: string) => void;
   onRead?: (path: string) => void;
@@ -57,9 +59,15 @@ class ResolverHarness {
       return { type: "folder" as const, ctime: 0, mtime: 0, size: 0 };
     }
     const content = this.contents.get(path);
+    const stat = this.fileStats.get(path);
     return content === undefined
       ? null
-      : { type: "file" as const, ctime: 0, mtime: 0, size: content.length };
+      : {
+          type: "file" as const,
+          ctime: stat?.ctime ?? 0,
+          mtime: stat?.mtime ?? 0,
+          size: stat?.size ?? new TextEncoder().encode(content).byteLength,
+        };
   });
 
   readonly read = jest.fn(async (path: string) => {
@@ -98,6 +106,11 @@ class ResolverHarness {
     const file = createTestFile(path);
     this.loaded.push(file);
     this.contents.set(path, content);
+    this.fileStats.set(path, {
+      ctime: 1,
+      mtime: 1,
+      size: new TextEncoder().encode(content).byteLength,
+    });
     return file;
   }
 
@@ -180,6 +193,149 @@ describe("ObsidianKnowledgeCompilerTargetResolver", () => {
     expect(harness.read).toHaveBeenCalledWith("Wiki/Canonical.md");
     expect(harness.stat).toHaveBeenNthCalledWith(1, "Wiki/Canonical.md");
     expect(harness.stat).toHaveBeenNthCalledWith(2, "Wiki/Canonical.md");
+  });
+
+  it("rejects an oversized freshness file from stat before any content read", async () => {
+    const harness = new ResolverHarness();
+    harness.addFile("Wiki/Large.md", "1234");
+    const reader = new ObsidianKnowledgeOutputObservationReader(harness.createResolver(), {
+      maxBytesPerOutput: 3,
+    });
+
+    await expect(
+      reader.observe(
+        [{ path: "Wiki/Large.md", contentHash: "a".repeat(64) }],
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ code: "output_too_large" });
+
+    expect(harness.stat).toHaveBeenCalledTimes(1);
+    expect(harness.read).not.toHaveBeenCalled();
+  });
+
+  it("enforces a smaller aggregate byte cap before the first content read", async () => {
+    const harness = new ResolverHarness();
+    harness.addFile("Wiki/Large.md", "1234");
+    const reader = new ObsidianKnowledgeOutputObservationReader(harness.createResolver(), {
+      maxBytesPerOutput: 10,
+      maxTotalBytes: 3,
+    });
+
+    await expect(
+      reader.observe(
+        [{ path: "Wiki/Large.md", contentHash: "a".repeat(64) }],
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ code: "output_too_large" });
+
+    expect(harness.stat).toHaveBeenCalledTimes(1);
+    expect(harness.read).not.toHaveBeenCalled();
+  });
+
+  it("stops aggregate freshness reads immediately without reading later outputs", async () => {
+    const harness = new ResolverHarness();
+    harness.addFile("Wiki/A.md", "123");
+    harness.addFile("Wiki/B.md", "456");
+    harness.addFile("Wiki/C.md", "789");
+    const reader = new ObsidianKnowledgeOutputObservationReader(harness.createResolver(), {
+      maxBytesPerOutput: 3,
+      maxTotalBytes: 5,
+    });
+
+    await expect(
+      reader.observe(
+        [
+          { path: "Wiki/A.md", contentHash: "a".repeat(64) },
+          { path: "Wiki/B.md", contentHash: "b".repeat(64) },
+          { path: "Wiki/C.md", contentHash: "c".repeat(64) },
+        ],
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ code: "output_too_large" });
+
+    expect(harness.read.mock.calls).toEqual([["Wiki/A.md"], ["Wiki/B.md"]]);
+    expect(harness.stat.mock.calls).toEqual([
+      ["Wiki/A.md"],
+      ["Wiki/A.md"],
+      ["Wiki/B.md"],
+      ["Wiki/B.md"],
+    ]);
+  });
+
+  it("rejects size, mtime, or ctime drift across one bounded content read", async () => {
+    for (const field of ["size", "mtime", "ctime"] as const) {
+      const harness = new ResolverHarness();
+      harness.addFile("Wiki/Drift.md", "123");
+      harness.onRead = (path) => {
+        const current = harness.fileStats.get(path);
+        if (!current) throw new Error("missing test stat");
+        harness.fileStats.set(path, { ...current, [field]: current[field] + 1 });
+      };
+      const visitor = jest.fn();
+
+      await expectResolverCode(
+        harness
+          .createResolver()
+          .visit(
+            [createRequest("Wiki/Drift.md")],
+            new AbortController().signal,
+            { maxFileBytes: 10 },
+            visitor
+          ),
+        "state_changed"
+      );
+
+      expect(harness.read).toHaveBeenCalledTimes(1);
+      expect(visitor).not.toHaveBeenCalled();
+    }
+  });
+
+  it("aborts bounded visitation before reading a later file", async () => {
+    const harness = new ResolverHarness();
+    harness.addFile("Wiki/A.md", "first");
+    harness.addFile("Wiki/B.md", "second");
+    const controller = new AbortController();
+    harness.onRead = () => controller.abort("private cancellation material");
+
+    const error = await expectResolverCode(
+      harness
+        .createResolver()
+        .visit(
+          [createRequest("Wiki/A.md", "authorized", "target-a"), createRequest("Wiki/B.md")],
+          controller.signal,
+          { maxFileBytes: 10 },
+          jest.fn()
+        ),
+      "aborted"
+    );
+
+    expect(error.message).not.toContain("private cancellation material");
+    expect(harness.read.mock.calls).toEqual([["Wiki/A.md"]]);
+  });
+
+  it("uses one initial and one final loaded index for a successful bounded batch", async () => {
+    const harness = new ResolverHarness();
+    harness.addFile("Wiki/A.md", "first");
+    harness.addFile("Wiki/B.md", "second");
+    const visited: string[] = [];
+
+    await harness
+      .createResolver()
+      .visit(
+        [
+          createRequest("Wiki/A.md", "authorized", "target-a"),
+          createRequest("Wiki/B.md", "authorized", "target-b"),
+        ],
+        new AbortController().signal,
+        { maxFileBytes: 10 },
+        (observation) => {
+          visited.push(observation.targetId);
+        }
+      );
+
+    expect(visited).toEqual(["target-a", "target-b"]);
+    expect(harness.getAllLoadedFiles).toHaveBeenCalledTimes(2);
+    expect(harness.read).toHaveBeenCalledTimes(2);
   });
 
   it("reports folders without reading and hides their kind from create-only requests", async () => {

@@ -1146,7 +1146,7 @@ describe("validateIngestQueueSnapshot", () => {
     ).toContain("queue_rerun_orphaned");
   });
 
-  it("rejects duplicate, redundant, colliding, and backwards-time rerun payloads", () => {
+  it("rejects duplicate, colliding, and backwards-time rerun payloads", () => {
     const rerun = {
       jobId: "job-rerun",
       sourceId: "source-1",
@@ -1166,9 +1166,27 @@ describe("validateIngestQueueSnapshot", () => {
         "queue_rerun_source_duplicate",
         "queue_rerun_job_id_duplicate",
         "queue_rerun_timestamp_order_invalid",
-        "queue_rerun_redundant",
       ])
     );
+  });
+
+  it("accepts a newer same-identity rerun reserved for admitted output repair", () => {
+    const snapshot = createSnapshot({
+      jobs: [createProcessingJob({ rerunRequested: true, updatedAt: 120 })],
+      reruns: [
+        {
+          jobId: "job-rerun",
+          sourceId: "source-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 2,
+          requestedAt: 120,
+          updatedAt: 120,
+        },
+      ],
+    });
+
+    expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
   });
 
   it("requires every retained rerun to equal the latest source observation", () => {

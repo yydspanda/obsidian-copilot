@@ -20,8 +20,38 @@ export type ObsidianKnowledgeCompilerTargetResolverErrorCode =
   | "windows_collision"
   | "state_changed"
   | "adapter_payload_invalid"
+  | "resource_limit"
   | "vault_unavailable"
   | "aborted";
+
+/** Read-before-content limits for one sequential target visit. */
+export interface ObsidianKnowledgeCompilerTargetVisitOptions {
+  maxFileBytes: number;
+}
+
+/** Callback that consumes one exact observation before the next target is read. */
+export type ObsidianKnowledgeCompilerTargetVisitor = (
+  observation: Readonly<CompilerTargetObservation>,
+  fileByteSize: number | undefined
+) => void | Promise<void>;
+
+/** Bounded sequential read port used by production output freshness verification. */
+export interface ObsidianKnowledgeCompilerTargetVisitPort {
+  /**
+   * Visits authorized targets one at a time without retaining prior file content.
+   *
+   * @param targets - Strict authorized target requests
+   * @param signal - Cancellation signal for the captured workflow generation
+   * @param options - Pre-read byte hard limit for every file
+   * @param visitor - Consumer invoked and awaited before the next target read
+   */
+  visit(
+    targets: readonly CompilerTargetRequest[],
+    signal: AbortSignal,
+    options: Readonly<ObsidianKnowledgeCompilerTargetVisitOptions>,
+    visitor: ObsidianKnowledgeCompilerTargetVisitor
+  ): Promise<void>;
+}
 
 const resolverErrorCodes = new WeakMap<object, ObsidianKnowledgeCompilerTargetResolverErrorCode>();
 
@@ -79,6 +109,29 @@ interface LoadedTargetEntry {
 
 interface LoadedTargetIndex {
   byWindowsPathKey: ReadonlyMap<string, readonly LoadedTargetEntry[]>;
+}
+
+/** Strict adapter stat material retained only around one exact content read. */
+interface AdapterStatSnapshot {
+  type: "file" | "folder";
+  ctime: number;
+  mtime: number;
+  size: number;
+}
+
+/** One sequentially resolved target and its optional pre-read byte size. */
+interface VisitedTarget {
+  observation: Readonly<CompilerTargetObservation>;
+  fileByteSize?: number;
+}
+
+/** Private wrapper that keeps visitor failures separate from Vault failures. */
+class TargetVisitorFailure extends Error {
+  /** Captures one callback failure only until the public visit boundary rethrows it. */
+  constructor(public readonly error: unknown) {
+    super("The bounded target visitor failed");
+    this.name = "TargetVisitorFailure";
+  }
 }
 
 type UnknownDataMethod = (this: unknown, ...args: unknown[]) => unknown;
@@ -289,6 +342,20 @@ function snapshotTargetRequests(value: unknown): readonly Readonly<CompilerTarge
   return Object.freeze(requests);
 }
 
+/** Strictly snapshots the one bounded-visit resource option. */
+function snapshotVisitOptions(
+  value: unknown
+): Readonly<ObsidianKnowledgeCompilerTargetVisitOptions> {
+  if (!hasExactOwnKeys(value, ["maxFileBytes"])) {
+    throw createResolverError("request_invalid");
+  }
+  const maxFileBytes = readDataProperty(value, "maxFileBytes");
+  if (!Number.isSafeInteger(maxFileBytes) || (maxFileBytes as number) < 1) {
+    throw createResolverError("request_invalid");
+  }
+  return Object.freeze({ maxFileBytes: maxFileBytes as number });
+}
+
 /** Reads a loaded node path as an own enumerable data property. */
 function readLoadedPath(node: TFile | TFolder): string {
   try {
@@ -400,6 +467,111 @@ function assertLoadedEntryCurrent(
     current.kind !== expected.kind
   ) {
     throw createResolverError("state_changed");
+  }
+}
+
+/** Reads one required non-negative safe-integer adapter stat field. */
+function readAdapterStatInteger(value: unknown, key: "ctime" | "mtime" | "size"): number {
+  if (typeof value !== "object" || value === null) {
+    throw createResolverError("adapter_payload_invalid");
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      !descriptor ||
+      !("value" in descriptor) ||
+      !descriptor.enumerable ||
+      !Number.isSafeInteger(descriptor.value) ||
+      descriptor.value < 0
+    ) {
+      throw createResolverError("adapter_payload_invalid");
+    }
+    return descriptor.value as number;
+  } catch (error) {
+    if (ObsidianKnowledgeCompilerTargetResolverError.inspect(error)) throw error;
+    throw createResolverError("adapter_payload_invalid");
+  }
+}
+
+/** Strictly detaches required adapter stat fields while tolerating platform extensions. */
+function snapshotAdapterStat(value: unknown): Readonly<AdapterStatSnapshot> | null {
+  if (value === null) return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw createResolverError("adapter_payload_invalid");
+  }
+  let type: unknown;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, "type");
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      throw createResolverError("adapter_payload_invalid");
+    }
+    type = descriptor.value;
+  } catch (error) {
+    if (ObsidianKnowledgeCompilerTargetResolverError.inspect(error)) throw error;
+    throw createResolverError("adapter_payload_invalid");
+  }
+  if (type !== "file" && type !== "folder") {
+    throw createResolverError("adapter_payload_invalid");
+  }
+  return Object.freeze({
+    type,
+    ctime: readAdapterStatInteger(value, "ctime"),
+    mtime: readAdapterStatInteger(value, "mtime"),
+    size: readAdapterStatInteger(value, "size"),
+  });
+}
+
+/** Reads one full adapter stat snapshot under owner and cancellation checks. */
+async function readStatSnapshot(
+  state: Readonly<CapturedResolverDependencies>,
+  path: string,
+  signal: AbortSignal
+): Promise<Readonly<AdapterStatSnapshot> | null> {
+  throwIfAborted(signal);
+  assertOwnerCurrent(state);
+  let raw: unknown;
+  try {
+    raw = await state.stat(path);
+  } catch {
+    if (signal.aborted) throw createResolverError("aborted");
+    throw createResolverError("vault_unavailable");
+  }
+  throwIfAborted(signal);
+  assertOwnerCurrent(state);
+  return snapshotAdapterStat(raw);
+}
+
+/** Reports whether two full stat snapshots describe the same exact file generation. */
+function sameAdapterStat(
+  left: Readonly<AdapterStatSnapshot>,
+  right: Readonly<AdapterStatSnapshot>
+): boolean {
+  return (
+    left.type === right.type &&
+    left.ctime === right.ctime &&
+    left.mtime === right.mtime &&
+    left.size === right.size
+  );
+}
+
+/** Re-proves every requested loaded identity with one final whole-Vault index. */
+function assertBatchLoadedIndexCurrent(
+  state: Readonly<CapturedResolverDependencies>,
+  initial: LoadedTargetIndex,
+  requests: readonly Readonly<CompilerTargetRequest>[]
+): void {
+  const current = captureLoadedIndex(state);
+  for (const request of requests) {
+    const pathKey = toWindowsPathKey(request.path);
+    const before = findLoadedEntry(initial, pathKey);
+    const after = findLoadedEntry(current, pathKey);
+    if (
+      before?.node !== after?.node ||
+      before?.path !== after?.path ||
+      before?.kind !== after?.kind
+    ) {
+      throw createResolverError("state_changed");
+    }
   }
 }
 
@@ -524,8 +696,84 @@ async function resolveTarget(
   return resolveAuthorizedFile(state, request, entry, signal);
 }
 
+/** Resolves one target for sequential visitation without retaining prior content. */
+async function resolveVisitedTarget(
+  state: Readonly<CapturedResolverDependencies>,
+  index: LoadedTargetIndex,
+  request: Readonly<CompilerTargetRequest>,
+  signal: AbortSignal,
+  maxFileBytes: number
+): Promise<Readonly<VisitedTarget>> {
+  throwIfAborted(signal);
+  assertOwnerCurrent(state);
+  const windowsPathKey = toWindowsPathKey(request.path);
+  const entry = findLoadedEntry(index, windowsPathKey);
+  if (!entry) {
+    const stat = await readStatSnapshot(state, request.path, signal);
+    if (stat !== null) throw createResolverError("state_changed");
+    return Object.freeze({
+      observation: Object.freeze({
+        targetId: request.targetId,
+        kind: "missing" as const,
+        windowsPathKey,
+      }),
+    });
+  }
+  if (request.access === "create_only") {
+    return Object.freeze({
+      observation: Object.freeze({
+        targetId: request.targetId,
+        kind: "occupied" as const,
+        path: entry.path,
+      }),
+    });
+  }
+  if (entry.kind === "directory") {
+    const stat = await readStatSnapshot(state, entry.path, signal);
+    if (stat?.type !== "folder") throw createResolverError("state_changed");
+    return Object.freeze({
+      observation: Object.freeze({
+        targetId: request.targetId,
+        kind: "directory" as const,
+        path: entry.path,
+      }),
+    });
+  }
+
+  const before = await readStatSnapshot(state, entry.path, signal);
+  if (before?.type !== "file") throw createResolverError("state_changed");
+  if (before.size > maxFileBytes) throw createResolverError("resource_limit");
+  let content: unknown;
+  try {
+    content = await state.read(entry.path);
+  } catch {
+    if (signal.aborted) throw createResolverError("aborted");
+    throw createResolverError("vault_unavailable");
+  }
+  throwIfAborted(signal);
+  assertOwnerCurrent(state);
+  if (typeof content !== "string") {
+    throw createResolverError("adapter_payload_invalid");
+  }
+  const after = await readStatSnapshot(state, entry.path, signal);
+  if (!after || !sameAdapterStat(before, after)) {
+    throw createResolverError("state_changed");
+  }
+  return Object.freeze({
+    observation: Object.freeze({
+      targetId: request.targetId,
+      kind: "file" as const,
+      path: entry.path,
+      content,
+    }),
+    fileByteSize: before.size,
+  });
+}
+
 /** Read-only Obsidian adapter for exact compiler target observations. */
-export class ObsidianKnowledgeCompilerTargetResolver implements CompilerTargetResolver {
+export class ObsidianKnowledgeCompilerTargetResolver
+  implements CompilerTargetResolver, ObsidianKnowledgeCompilerTargetVisitPort
+{
   /** Captures the exact App, Vault, adapter, and method receivers for this lifecycle. */
   constructor(app: App) {
     resolverStates.set(this, captureDependencies(app));
@@ -551,6 +799,52 @@ export class ObsidianKnowledgeCompilerTargetResolver implements CompilerTargetRe
       assertOwnerCurrent(state);
       return Object.freeze(observations);
     } catch (error) {
+      if (ObsidianKnowledgeCompilerTargetResolverError.inspect(error)) throw error;
+      if (signal?.aborted) throw createResolverError("aborted");
+      throw createResolverError("vault_unavailable");
+    }
+  }
+
+  /** Visits one bounded target at a time and releases its content before continuing. */
+  async visit(
+    targets: readonly CompilerTargetRequest[],
+    signal: AbortSignal,
+    options: Readonly<ObsidianKnowledgeCompilerTargetVisitOptions>,
+    visitor: ObsidianKnowledgeCompilerTargetVisitor
+  ): Promise<void> {
+    const state = resolverStates.get(this);
+    if (!state) throw createResolverError("dependency_invalid");
+    try {
+      if (typeof signal !== "object" || signal === null || typeof visitor !== "function") {
+        throw createResolverError("request_invalid");
+      }
+      throwIfAborted(signal);
+      const requests = snapshotTargetRequests(targets);
+      const visitOptions = snapshotVisitOptions(options);
+      const index = captureLoadedIndex(state);
+      for (const request of requests) {
+        const visited = await resolveVisitedTarget(
+          state,
+          index,
+          request,
+          signal,
+          visitOptions.maxFileBytes
+        );
+        try {
+          await visitor(visited.observation, visited.fileByteSize);
+        } catch (error) {
+          throw new TargetVisitorFailure(error);
+        }
+        throwIfAborted(signal);
+      }
+      assertBatchLoadedIndexCurrent(state, index, requests);
+      throwIfAborted(signal);
+      assertOwnerCurrent(state);
+    } catch (error) {
+      if (error instanceof TargetVisitorFailure) {
+        if (error.error instanceof Error) throw error.error;
+        throw createResolverError("adapter_payload_invalid");
+      }
       if (ObsidianKnowledgeCompilerTargetResolverError.inspect(error)) throw error;
       if (signal?.aborted) throw createResolverError("aborted");
       throw createResolverError("vault_unavailable");

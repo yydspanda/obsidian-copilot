@@ -150,6 +150,14 @@ import {
   type KnowledgeReviewRejectTransitionReceipt,
 } from "@/knowledge/review/ReviewRejectTransition";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
+import {
+  KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION,
+  type KnowledgeRuntimeAppliedFreshnessAuthority,
+  type KnowledgeRuntimeFreshnessGeneratedPage,
+  type KnowledgeRuntimeNoChangesFreshnessAuthority,
+  type KnowledgeRuntimeSourceFreshnessAuthority,
+  type KnowledgeRuntimeSourceFreshnessAuthorityPort,
+} from "@/knowledge/runtime/KnowledgeRuntimeSourceFreshness";
 import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
@@ -2217,6 +2225,153 @@ function freezeAppliedProvenanceSnapshot(
   });
 }
 
+/** Creates one detached deeply frozen current generated-page projection. */
+function freezeRuntimeFreshnessGeneratedPages(
+  entry: SourceManifestEntry
+): readonly Readonly<KnowledgeRuntimeFreshnessGeneratedPage>[] {
+  const pages = (entry.lastSuccessful?.generatedPages ?? []).map((page) => {
+    if (page.contentHash === undefined) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    return Object.freeze({
+      path: page.path,
+      windowsPathKey: toWindowsPathKey(page.path),
+      ownership: page.ownership,
+      contentHash: page.contentHash,
+    });
+  });
+  pages.sort(
+    (left, right) =>
+      compareIdentifiers(left.windowsPathKey, right.windowsPathKey) ||
+      compareIdentifiers(left.path, right.path)
+  );
+  return Object.freeze(pages);
+}
+
+/** Creates one detached deeply frozen source freshness authority. */
+function freezeRuntimeSourceFreshnessAuthority(
+  authority: KnowledgeRuntimeSourceFreshnessAuthority
+): KnowledgeRuntimeSourceFreshnessAuthority {
+  return Object.freeze({
+    ...authority,
+    generatedPages: Object.freeze([...authority.generatedPages]),
+  });
+}
+
+/**
+ * Re-proves that one selected no-changes marker owns an exact completed Queue job.
+ *
+ * Complete marker/Queue/observation cross-semantics were already required while
+ * parsing the Runtime envelope. This local check prevents the read projection
+ * from accidentally selecting a historical or unrelated marker.
+ */
+function selectedNoChangesMarkerHasRuntimeProof(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  entry: SourceManifestEntry,
+  marker: NoChangesManifestCommitMarker
+): boolean {
+  const queueRaw = findBundleSlot(state, "queues", manifest.bundleId);
+  if (queueRaw === null) return false;
+  const parsedQueue = parseIngestQueueSnapshot(queueRaw);
+  if (!parsedQueue.ok || !validateIngestQueueSnapshot(parsedQueue.value).valid) return false;
+  const job = parsedQueue.value.jobs.find(
+    (candidate): candidate is ReusableCompletedJob =>
+      candidate.id === marker.jobId && candidate.status === "completed"
+  );
+  return (
+    marker.bundleId === manifest.bundleId &&
+    marker.sourceId === entry.sourceId &&
+    marker.manifestAfterRevision <= manifest.revision &&
+    job !== undefined &&
+    reusableCompletionHasProof(state, manifest, job)
+  );
+}
+
+/**
+ * Projects the latest exact Apply or no-changes outcome for one current source.
+ *
+ * Apply and no-changes histories are ordered only by their Runtime-owned input
+ * revisions. Missing, tied, legacy, or cross-subsystem-unproven state yields no
+ * authority; structurally corrupt Runtime state is rejected by the outer read.
+ */
+function projectRuntimeSourceFreshnessAuthority(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  entry: SourceManifestEntry
+): KnowledgeRuntimeSourceFreshnessAuthority | null {
+  const rawApply = entry.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY];
+  const parsedApply =
+    rawApply === undefined ? undefined : parseKnowledgeRuntimeSourceCommitExtension(rawApply);
+  if (parsedApply !== undefined && !parsedApply.ok) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  const noChanges = readSourceNoChangesCommitMarker(entry);
+  const apply = parsedApply?.ok ? parsedApply.value : undefined;
+  if (apply && noChanges && apply.inputRevision === noChanges.inputRevision) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+
+  const runtimeDigest = sha256(canonicalizeJson(state as unknown as JsonValue));
+  const manifestDigest = createSourceManifestDigest(manifest);
+  const generatedPages = freezeRuntimeFreshnessGeneratedPages(entry);
+  const common = {
+    version: KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION,
+    runtimeId: state.runtimeId,
+    runtimeRevision: state.revision,
+    runtimeDigest,
+    bundleId: manifest.bundleId,
+    sourceId: entry.sourceId,
+    manifestRevision: manifest.revision,
+    manifestDigest,
+    generatedPages,
+  } as const;
+
+  if (noChanges && (!apply || noChanges.inputRevision > apply.inputRevision)) {
+    if (!selectedNoChangesMarkerHasRuntimeProof(state, manifest, entry, noChanges)) return null;
+    const authority: KnowledgeRuntimeNoChangesFreshnessAuthority = {
+      ...common,
+      kind: "no_changes",
+      sourceContentHash: noChanges.sourceContentHash,
+      pipelineFingerprint: noChanges.pipelineFingerprint,
+      inputRevision: noChanges.inputRevision,
+      noChangesId: noChanges.noChangesId,
+      reason: noChanges.reason,
+      planDigest: noChanges.planDigest,
+      jobId: noChanges.jobId,
+      attempt: noChanges.attempt,
+      committedManifestRevision: noChanges.manifestAfterRevision,
+      completedAt: noChanges.completedAt,
+    };
+    return freezeRuntimeSourceFreshnessAuthority(authority);
+  }
+
+  if (!apply || !entry.lastSuccessful) return null;
+  const ledger = findLatestSourceApplyLedger(state.applyCommits, manifest.bundleId, entry.sourceId);
+  if (
+    !ledger ||
+    ledger.transactionId !== apply.transactionId ||
+    !ledgerMatchesCurrentManifestEntry(ledger, manifest.bundleId, entry)
+  ) {
+    return null;
+  }
+  const authority: KnowledgeRuntimeAppliedFreshnessAuthority = {
+    ...common,
+    kind: "applied",
+    sourceContentHash: ledger.sourceContentHash,
+    pipelineFingerprint: ledger.pipelineFingerprint,
+    inputRevision: ledger.inputRevision,
+    transactionId: ledger.transactionId,
+    changeSetId: ledger.changeSetId,
+    changeSetDigest: ledger.changeSetDigest,
+    manifestIntentDigest: ledger.manifestIntentDigest,
+    committedManifestRevision: ledger.manifestAfterRevision,
+    committedManifestDigest: ledger.manifestAfterDigest,
+    completedAt: ledger.recordedAt,
+  };
+  return freezeRuntimeSourceFreshnessAuthority(authority);
+}
+
 /**
  * Resolves one current source to exactly one latest ledger and accepted Review.
  *
@@ -2453,6 +2608,70 @@ function promoteNoJournalRerun(
     jobs: [...snapshot.jobs, successor],
     reruns: snapshot.reruns.filter((candidate) => candidate.sourceId !== sourceId),
   };
+}
+
+/**
+ * Reconstructs successful Apply settlement of same-input repair work.
+ *
+ * This mirrors the Queue's durable transition: when the latest observed source
+ * bytes and pipeline equal the committed Apply input, pending/paused successors
+ * are obsolete output-repair work and become cancelled. Divergent work remains
+ * eligible for ordinary rerun promotion.
+ *
+ * @param snapshot - Queue already containing the completed Apply job
+ * @param appliedJob - Exact job bound to the committed transaction
+ * @param timestamp - Non-regressing settlement timestamp
+ * @returns Exact Queue projection accepted by the Runtime CAS boundary
+ */
+function settleNoJournalRerunAfterSuccessfulApply(
+  snapshot: IngestQueueSnapshot,
+  appliedJob: KnowledgeIngestJob,
+  timestamp: number
+): IngestQueueSnapshot {
+  const highWatermark = snapshot.sourceHighWatermarks.find(
+    (candidate) => candidate.sourceId === appliedJob.sourceId
+  );
+  const activeSuccessors = snapshot.jobs.filter(
+    (job) => job.sourceId === appliedJob.sourceId && isActiveNoJournalQueueJob(job)
+  );
+  const latestInputWasApplied =
+    highWatermark !== undefined &&
+    highWatermark.sourceContentHash === appliedJob.sourceContentHash &&
+    highWatermark.pipelineFingerprint === appliedJob.pipelineFingerprint;
+  const canRetireSuccessors = activeSuccessors.every(
+    (job) => (job.status === "pending" || job.status === "paused") && job.attempt === 0
+  );
+  if (highWatermark && latestInputWasApplied && canRetireSuccessors) {
+    return {
+      ...snapshot,
+      jobs: snapshot.jobs.map((job): KnowledgeIngestJob => {
+        if (
+          job.sourceId !== appliedJob.sourceId ||
+          (job.status !== "pending" && job.status !== "paused")
+        ) {
+          return job;
+        }
+        const cancelledAt = Math.max(timestamp, job.updatedAt, highWatermark.observedAt);
+        return {
+          id: job.id,
+          bundleId: job.bundleId,
+          sourceId: job.sourceId,
+          sourceContentHash: highWatermark.sourceContentHash,
+          pipelineFingerprint: highWatermark.pipelineFingerprint,
+          inputRevision: highWatermark.inputRevision,
+          attempt: job.attempt,
+          rerunRequested: false,
+          createdAt: job.createdAt,
+          updatedAt: cancelledAt,
+          status: "cancelled",
+          stage: "cancelled",
+          cancelledAt,
+        };
+      }),
+      reruns: snapshot.reruns.filter((candidate) => candidate.sourceId !== appliedJob.sourceId),
+    };
+  }
+  return promoteNoJournalRerun(snapshot, appliedJob.sourceId, timestamp);
 }
 
 /**
@@ -4102,9 +4321,9 @@ function applyCommitProjectionMatches(
     changeSetId: marker.changeSetId,
     completedAt,
   };
-  const promoted = promoteNoJournalRerun(
+  const promoted = settleNoJournalRerunAfterSuccessfulApply(
     replaceRuntimeQueueJob(current, completed),
-    applying.sourceId,
+    completed,
     completedAt
   );
   const expectedWithoutClaim: IngestQueueSnapshot = { ...promoted };
@@ -4408,7 +4627,7 @@ function nextStoreRevision(state: KnowledgeRuntimeStoreSnapshot): number {
 /**
  * Owns one Vault-private atomic envelope and exposes strict subsystem operations.
  */
-export class KnowledgeRuntimeStore {
+export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAuthorityPort {
   private readonly clock: () => number;
   private readonly opaqueIdFactory: () => string;
   private readonly studioListeners = new Map<string, Set<() => void>>();
@@ -4599,6 +4818,32 @@ export class KnowledgeRuntimeStore {
       manifestRevision: manifest.revision,
       pages: projectAppliedManifestPages(state, manifest, review),
     });
+  }
+
+  /**
+   * Reads the latest exact Runtime-proven source outcome from one envelope.
+   *
+   * The result remains only a read authority: production admission must still
+   * re-read every projected Vault page and compare its exact SHA-256 before it
+   * skips a new source observation.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param sourceId - Stable registered source identifier
+   * @returns Detached deeply frozen authority, or null when proof is absent
+   */
+  async readSourceFreshnessAuthority(
+    bundleId: string,
+    sourceId: string
+  ): Promise<KnowledgeRuntimeSourceFreshnessAuthority | null> {
+    assertIdentifier(bundleId, "bundleId");
+    assertIdentifier(sourceId, "sourceId");
+    const state = await this.readState();
+    const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+    if (manifestRaw === null) return null;
+    const manifest = this.requireManifest(bundleId, manifestRaw);
+    const entry = manifest.entries.find((candidate) => candidate.sourceId === sourceId);
+    if (!entry) return null;
+    return projectRuntimeSourceFreshnessAuthority(state, manifest, entry);
   }
 
   /**

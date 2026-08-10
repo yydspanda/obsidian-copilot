@@ -14,7 +14,11 @@ import {
   createChangeSetTransactionDigest,
   type ChangeSetTransactionJournal,
 } from "@/knowledge/changeset/TransactionStorage";
-import { IngestQueue, type IngestExecutor } from "@/knowledge/ingest/queue/IngestQueue";
+import {
+  IngestQueue,
+  type IngestExecutor,
+  type IngestSourceFreshnessAdmissionPort,
+} from "@/knowledge/ingest/queue/IngestQueue";
 import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import {
   KnowledgeIngestExecutionAuthorityBinder,
@@ -1885,6 +1889,71 @@ describe("KnowledgeRuntimeStore", () => {
     expect(projectedCitation.locator).not.toBe(citation.locator);
   });
 
+  it("projects one exact latest Apply as detached frozen source freshness authority", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest, "transaction-applied-freshness", 1, [
+      createSourceCitation(),
+    ]);
+    const harness = await createApplyHarness(manifest, proof);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const committedManifest = state.manifests[0].value as SourceManifest;
+    const readsBefore = harness.file.getReadCallCount();
+
+    const authority = await harness.runtime.readSourceFreshnessAuthority("personal", "source-1");
+
+    expect(harness.file.getReadCallCount()).toBe(readsBefore + 1);
+    if (!authority) throw new Error("Expected applied source freshness authority");
+    expect(authority.runtimeDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(authority).toEqual({
+      version: 1,
+      kind: "applied",
+      runtimeId: state.runtimeId,
+      runtimeRevision: state.revision,
+      runtimeDigest: authority.runtimeDigest,
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      manifestRevision: committedManifest.revision,
+      manifestDigest: createSourceManifestDigest(committedManifest),
+      generatedPages: [
+        {
+          path: "Wiki/transaction-applied-freshness.md",
+          windowsPathKey: "wiki/transaction-applied-freshness.md",
+          ownership: "generated",
+          contentHash: createFileContentHash("# transaction-applied-freshness\n"),
+        },
+      ],
+      transactionId: "transaction-applied-freshness",
+      changeSetId: "changeset-transaction-applied-freshness",
+      changeSetDigest: proof.journal.changeSetDigest,
+      manifestIntentDigest: proof.journal.manifestCommitIntentDigest,
+      committedManifestRevision: committedManifest.revision,
+      committedManifestDigest: createSourceManifestDigest(committedManifest),
+      completedAt: proof.receipt.committedAt,
+    });
+    expect(Object.isFrozen(authority)).toBe(true);
+    expect(Object.isFrozen(authority?.generatedPages)).toBe(true);
+    expect(Object.isFrozen(authority?.generatedPages[0])).toBe(true);
+  });
+
+  it("returns no source freshness authority without exact Runtime outcome proof", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+
+    await expect(
+      harness.runtime.readSourceFreshnessAuthority("personal", "source-1")
+    ).resolves.toBeNull();
+    await expect(
+      harness.runtime.readSourceFreshnessAuthority("personal", "missing-source")
+    ).resolves.toBeNull();
+    await expect(
+      harness.runtime.readSourceFreshnessAuthority("missing-bundle", "source-1")
+    ).resolves.toBeNull();
+  });
+
   it("excludes accepted work until its exact Manifest success and ledger commit exist", async () => {
     const manifest = createRegisteredManifest();
     const proof = createCommittedApplyProof(manifest, "transaction-uncommitted", 1, [
@@ -2218,6 +2287,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(migrated.inputRevisions).toEqual(
       createMarkerlessCompletionRuntimeSnapshot(3).inputRevisions
     );
+    await expect(runtime.readSourceFreshnessAuthority("personal", "source-1")).resolves.toBeNull();
 
     await runtime.initialize();
     expect(await file.read()).toBe(migratedText);
@@ -4359,6 +4429,98 @@ describe("KnowledgeRuntimeStore", () => {
     ]);
   });
 
+  it("atomically retires a recovered successor when Apply satisfies the latest input", async () => {
+    const harness = await createApplyHarness(createRegisteredManifest());
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const queue = state.queues[0].value as IngestQueueSnapshot;
+    const oldApply = queue.jobs[0];
+    queue.control = {
+      status: "paused",
+      reason: "recovery_required",
+      pausedAt: 170,
+    };
+    queue.jobs = [
+      {
+        ...oldApply,
+        rerunRequested: false,
+        updatedAt: 170,
+        status: "failed",
+        stage: "applying",
+        failure: {
+          code: "interrupted_apply_requires_recovery",
+          message: "Interrupted apply requires transaction recovery",
+          retryable: false,
+          occurredAt: 170,
+        },
+      },
+      {
+        id: "job-obsolete-successor",
+        bundleId: oldApply.bundleId,
+        sourceId: oldApply.sourceId,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: oldApply.pipelineFingerprint,
+        inputRevision: 2,
+        attempt: 0,
+        rerunRequested: true,
+        createdAt: 155,
+        updatedAt: 170,
+        status: "pending",
+        stage: "queued",
+      },
+    ];
+    delete (queue.jobs[0] as unknown as { startedAt?: number }).startedAt;
+    queue.reruns = [
+      {
+        jobId: "job-satisfied-repair",
+        sourceId: oldApply.sourceId,
+        sourceContentHash: oldApply.sourceContentHash,
+        pipelineFingerprint: oldApply.pipelineFingerprint,
+        inputRevision: 3,
+        requestedAt: 160,
+        updatedAt: 170,
+      },
+    ];
+    queue.sourceHighWatermarks[0] = {
+      sourceId: oldApply.sourceId,
+      sourceContentHash: oldApply.sourceContentHash,
+      pipelineFingerprint: oldApply.pipelineFingerprint,
+      inputRevision: 3,
+      observedAt: 170,
+    };
+    state.inputRevisions[0].sources[0].inputRevision = 3;
+    recordFixtureWatermarkAsConsumed(state);
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const runtimeQueue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(harness.runtime),
+      {
+        /** Recovery does not execute new source work. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 250, jobIdFactory: () => "job-unused" }
+    );
+    await runtimeQueue.resolveApplyRecovery(harness.receipt);
+    const recovered = await runtimeQueue.load("personal");
+
+    expect(
+      recovered.jobs.filter((job) => !["failed", "completed", "cancelled"].includes(job.status))
+    ).toEqual([]);
+    expect(recovered.jobs.find((job) => job.id === "job-obsolete-successor")).toMatchObject({
+      status: "cancelled",
+      rerunRequested: false,
+      sourceContentHash: oldApply.sourceContentHash,
+      pipelineFingerprint: oldApply.pipelineFingerprint,
+      inputRevision: 3,
+    });
+    expect(recovered.reruns).toEqual([]);
+    expect(recovered.sourceHighWatermarks[0]).toMatchObject({
+      sourceContentHash: oldApply.sourceContentHash,
+      pipelineFingerprint: oldApply.pipelineFingerprint,
+      inputRevision: 3,
+    });
+  });
+
   it("rejects torn Manifest, reserved metadata, and ledger relationships at startup", async () => {
     const harness = await createApplyHarness(createRegisteredManifest());
     await harness.port.recordCommitted(harness.journal, harness.receipt);
@@ -5525,6 +5687,37 @@ describe("KnowledgeRuntimeStore", () => {
     expect(state.activeTransaction).toBeNull();
     expect(executions).toBe(1);
 
+    const freshnessAuthority = await harness.runtime.readSourceFreshnessAuthority(
+      "personal",
+      "source-1"
+    );
+    if (!freshnessAuthority) throw new Error("Expected no-change source freshness authority");
+    expect(freshnessAuthority.runtimeDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(freshnessAuthority).toEqual({
+      version: 1,
+      kind: "no_changes",
+      runtimeId: state.runtimeId,
+      runtimeRevision: state.revision,
+      runtimeDigest: freshnessAuthority.runtimeDigest,
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 1,
+      manifestRevision: manifestState.revision,
+      manifestDigest: createSourceManifestDigest(manifestState),
+      generatedPages: [],
+      noChangesId: plan.noChangesId,
+      reason: plan.reason,
+      planDigest: createNoChangesManifestCommitPlanDigest(plan),
+      jobId: "job-atomic-no-changes",
+      attempt: 1,
+      committedManifestRevision: manifestState.revision,
+      completedAt: 100,
+    });
+    expect(Object.isFrozen(freshnessAuthority)).toBe(true);
+    expect(Object.isFrozen(freshnessAuthority?.generatedPages)).toBe(true);
+
     const duplicateAllocation = await harness.revisions.allocate({
       bundleId: "personal",
       sourceId: "source-1",
@@ -5568,6 +5761,9 @@ describe("KnowledgeRuntimeStore", () => {
     ] as Record<string, JsonValue>;
     corruptedMarker.jobId = "job-forged-no-changes";
     harness.file.replaceContent(JSON.stringify(corrupted));
+    await expect(
+      harness.runtime.readSourceFreshnessAuthority("personal", "source-1")
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
     await expect(new KnowledgeRuntimeStore(harness.file).initialize()).rejects.toBeInstanceOf(
       KnowledgeRuntimeStoreCorruptError
     );
@@ -5678,6 +5874,23 @@ describe("KnowledgeRuntimeStore", () => {
         manifestAfterRevision: manifestAfter.revision,
         baseGeneratedPages: sourceBefore.lastSuccessful.generatedPages,
       },
+    });
+
+    await expect(
+      harness.runtime.readSourceFreshnessAuthority("personal", "source-1")
+    ).resolves.toMatchObject({
+      kind: "no_changes",
+      sourceContentHash: HASH_C,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 2,
+      noChangesId: plan.noChangesId,
+      committedManifestRevision: manifestAfter.revision,
+      manifestRevision: manifestAfter.revision,
+      manifestDigest: createSourceManifestDigest(manifestAfter),
+      generatedPages: sourceBefore.lastSuccessful.generatedPages.map((page) => ({
+        ...page,
+        windowsPathKey: toWindowsPathKey(page.path),
+      })),
     });
 
     const provenanceAfter = await harness.runtime.readAppliedProvenance("personal");
@@ -6053,6 +6266,17 @@ describe("KnowledgeRuntimeStore", () => {
     harness.file.replaceContent(JSON.stringify(downgraded));
 
     await expect(new KnowledgeRuntimeStore(harness.file).initialize()).resolves.toBeUndefined();
+    await expect(
+      harness.runtime.readSourceFreshnessAuthority("personal", "source-1")
+    ).resolves.toMatchObject({
+      kind: "applied",
+      transactionId: applyTransactionId,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 2,
+      manifestRevision: downgradedManifest.revision,
+      manifestDigest: createSourceManifestDigest(downgradedManifest),
+    });
   });
 
   it("allocates every captured observation monotonically before asynchronous source reads", async () => {
@@ -6761,6 +6985,188 @@ describe("KnowledgeRuntimeStore", () => {
     await expect(handoff.loadRecoveryWork("personal")).resolves.toEqual([
       { kind: "allocated", allocation: allocated },
     ]);
+  });
+
+  it("consumes repeated stale-output observations behind a durable blocker and rearms after restoration", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    await harness.manifest.write("personal", manifest, null);
+    const noChangesPlan = createRuntimeNoChangesPlan(manifest);
+    let outputCurrent = false;
+    let executions = 0;
+    const freshnessAdmission: IngestSourceFreshnessAdmissionPort = {
+      /** Returns identity-bound output freshness controlled by this cross-layer fixture. */
+      async evaluate(request) {
+        return Object.freeze({
+          ...request,
+          decision: outputCurrent
+            ? Object.freeze({ kind: "up_to_date" as const })
+            : Object.freeze({
+                kind: "needs_ingest" as const,
+                reasons: Object.freeze(["output_missing" as const]),
+              }),
+        });
+      },
+    };
+    const executor: IngestExecutor = {
+      /** Simulates a model that cannot produce targets for the missing output. */
+      async execute() {
+        executions += 1;
+        return {
+          kind: "no_changes",
+          changeSetId: noChangesPlan.noChangesId,
+          manifestCommitPlan: noChangesPlan,
+          manifestCommitPlanDigest: createNoChangesManifestCommitPlanDigest(noChangesPlan),
+        };
+      },
+    };
+    const queue = new IngestQueue(harness.queue, executor, {
+      clock: () => 100,
+      jobIdFactory: () => "job-output-repair-blocker",
+      sourceFreshnessAdmission: freshnessAdmission,
+    });
+    const handoff = new SourceObservationHandoff(harness.revisions, harness.observations, queue);
+    const first = await handoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "output-repair-first",
+    });
+
+    await expect(
+      handoff.commit({
+        observationToken: first.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      })
+    ).resolves.toMatchObject({ kind: "committed", queueRevision: 1 });
+    await expect(queue.runNext("personal")).resolves.toEqual({
+      kind: "executed",
+      jobId: "job-output-repair-blocker",
+      status: "failed",
+    });
+    expect(executions).toBe(1);
+
+    const repeated = await handoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "output-repair-repeated-stale",
+    });
+    const queueBeforeRepeatedCommit = await queue.load("personal");
+    const repeatedSettlement = await handoff.commit({
+      observationToken: repeated.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    const queueAfterRepeatedCommit = await queue.load("personal");
+
+    expect(repeatedSettlement).toMatchObject({
+      kind: "committed",
+      observation: { inputRevision: 2 },
+      queueRevision: queueBeforeRepeatedCommit.revision + 1,
+    });
+    expect(queueAfterRepeatedCommit).toMatchObject({
+      revision: queueBeforeRepeatedCommit.revision + 1,
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 2 })],
+    });
+    expect(queueAfterRepeatedCommit.jobs).toHaveLength(1);
+    const repeatedBlocker = queueAfterRepeatedCommit.jobs[0];
+    expect(repeatedBlocker).toMatchObject({
+      id: "job-output-repair-blocker",
+      inputRevision: 2,
+      status: "failed",
+    });
+    if (repeatedBlocker.status !== "failed") {
+      throw new Error("Expected the output repair blocker to remain failed");
+    }
+    expect(repeatedBlocker.failure).toEqual({
+      code: "output_repair_unresolved",
+      message: "Generated output remains stale after a no-change repair attempt",
+      occurredAt: 100,
+      retryable: false,
+    });
+    expect(executions).toBe(1);
+    await expect(handoff.loadRecoveryWork("personal")).resolves.toEqual([]);
+
+    const reconstructed = new KnowledgeRuntimeStore(harness.file);
+    await reconstructed.initialize();
+    const restartQueue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(reconstructed),
+      executor,
+      {
+        clock: () => 200,
+        jobIdFactory: () => "job-output-repair-rearmed",
+        sourceFreshnessAdmission: freshnessAdmission,
+      }
+    );
+    const restartHandoff = new SourceObservationHandoff(
+      new KnowledgeRuntimeInputRevisionAllocator(reconstructed),
+      new KnowledgeRuntimeInputObservationBinder(reconstructed),
+      restartQueue
+    );
+
+    await expect(restartHandoff.loadRecoveryWork("personal")).resolves.toEqual([]);
+    await expect(restartQueue.load("personal")).resolves.toMatchObject({
+      jobs: [
+        expect.objectContaining({
+          id: "job-output-repair-blocker",
+          inputRevision: 2,
+          status: "failed",
+        }),
+      ],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 2 })],
+    });
+    expect(executions).toBe(1);
+
+    outputCurrent = true;
+    const restored = await restartHandoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "output-repair-restored",
+    });
+    await expect(
+      restartHandoff.commit({
+        observationToken: restored.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      observation: { inputRevision: 3 },
+    });
+    await expect(restartQueue.load("personal")).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ inputRevision: 2, status: "failed" })],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 3 })],
+    });
+
+    outputCurrent = false;
+    const driftedAgain = await restartHandoff.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "output-repair-drifted-again",
+    });
+    await expect(
+      restartHandoff.commit({
+        observationToken: driftedAgain.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      })
+    ).resolves.toMatchObject({
+      kind: "committed",
+      observation: { inputRevision: 4 },
+    });
+    await expect(restartQueue.load("personal")).resolves.toMatchObject({
+      jobs: [
+        expect.objectContaining({ id: "job-output-repair-blocker", status: "failed" }),
+        expect.objectContaining({
+          id: "job-output-repair-rearmed",
+          inputRevision: 4,
+          status: "pending",
+        }),
+      ],
+      sourceHighWatermarks: [expect.objectContaining({ inputRevision: 4 })],
+    });
+    expect(executions).toBe(1);
+    await expect(restartHandoff.loadRecoveryWork("personal")).resolves.toEqual([]);
   });
 
   it("blocks startup release while a bound observation still needs Queue settlement", async () => {

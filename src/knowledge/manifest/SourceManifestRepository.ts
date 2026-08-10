@@ -559,7 +559,7 @@ export class SourceManifestRepository {
    * @param sourceId - Stable source identifier
    * @param sourceContentHash - Current exact source byte hash
    * @param pipelineFingerprint - Current behavior fingerprint
-   * @param outputs - Current generated output existence observations
+   * @param outputs - Current generated output path and exact hash observations
    * @returns Deterministic freshness decision
    */
   async evaluateFreshness(

@@ -20,6 +20,7 @@ import {
   createSourceContentHash,
 } from "@/knowledge/model/fingerprint";
 import type {
+  GeneratedPageReference,
   JsonValue,
   PipelineFingerprintInput,
   SourceManifestEntry,
@@ -58,6 +59,23 @@ function createEntry(sourcePath: string, sourceId = "source-1"): SourceManifestE
     sourcePath,
     sourceKey: toWindowsPathKey(sourcePath),
     custody: "user_managed",
+  };
+}
+
+/** Adds one exact successful compile snapshot to a durable source fixture. */
+function withGeneratedPages(
+  entry: SourceManifestEntry,
+  generatedPages: GeneratedPageReference[]
+): SourceManifestEntry {
+  return {
+    ...entry,
+    lastSuccessful: {
+      sourceContentHash: "a".repeat(64),
+      pipelineFingerprint: "b".repeat(64),
+      generatedPages,
+      changeSetId: `changeset-${entry.sourceId}`,
+      completedAt: 100,
+    },
   };
 }
 
@@ -303,6 +321,58 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
     expect(plan.getBundleAuthority("missing")).toBeUndefined();
     expect(plan.getDigest()).toMatch(SHA256_PATTERN);
     expect(plan.getDigest()).not.toBe(authority.manifestDigest);
+  });
+
+  it("builds a frozen Windows-keyed reverse index only from committed Manifest pages", () => {
+    const sharedHash = "c".repeat(64);
+    const first = withGeneratedPages(createEntry("Sources/A.md", "source-a"), [
+      {
+        path: "Wiki/personal/Shared.md",
+        ownership: "shared",
+        contentHash: sharedHash,
+      },
+    ]);
+    const second = withGeneratedPages(createEntry("Sources/B.md", "source-b"), [
+      {
+        path: "Wiki/personal/Shared.md",
+        ownership: "shared",
+        contentHash: sharedHash,
+      },
+    ]);
+    const input = createFixture({ entries: [second, first] });
+    const plan = buildKnowledgeSourceWatchPlan([input]);
+    const outputKey = toWindowsPathKey("Wiki/personal/Shared.md");
+
+    expect(plan.getGeneratedOutputs()).toEqual([
+      {
+        bundleId: "personal",
+        outputPath: "Wiki/personal/Shared.md",
+        outputKey,
+        ownership: "shared",
+        contentHash: sharedHash,
+        sourceIds: ["source-a", "source-b"],
+      },
+    ]);
+    expect(plan.getGeneratedOutputForPathKey(outputKey)).toBe(plan.getGeneratedOutputs()[0]);
+    expect(plan.getGeneratedOutputForPathKey("WIKI/PERSONAL/SHARED.MD")).toBeUndefined();
+    expect(
+      plan.getSourcesForGeneratedOutputPathKey(outputKey).map((source) => source.sourceId)
+    ).toEqual(["source-a", "source-b"]);
+    expect(plan.getSourcesForGeneratedOutputPathKey("wiki/personal/unrelated.md")).toEqual([]);
+    expect(Object.isFrozen(plan.getGeneratedOutputs())).toBe(true);
+    expect(Object.isFrozen(plan.getGeneratedOutputs()[0])).toBe(true);
+    expect(Object.isFrozen(plan.getGeneratedOutputs()[0]?.sourceIds)).toBe(true);
+
+    first.lastSuccessful!.generatedPages[0].path = "Wiki/personal/Mutated.md";
+    second.lastSuccessful!.generatedPages[0].contentHash = "d".repeat(64);
+    expect(plan.getGeneratedOutputForPathKey(outputKey)).toEqual({
+      bundleId: "personal",
+      outputPath: "Wiki/personal/Shared.md",
+      outputKey,
+      ownership: "shared",
+      contentHash: sharedHash,
+      sourceIds: ["source-a", "source-b"],
+    });
   });
 
   it("binds managed query origin into an additive operation-specific fingerprint", () => {
@@ -646,6 +716,86 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
 });
 
 describe("KnowledgeSourceWatchPlan strict rejection", () => {
+  it("fails closed when a committed generated page has no exact content hash", () => {
+    const entry = withGeneratedPages(createEntry("Sources/A.md"), [
+      { path: "Wiki/personal/Page.md", ownership: "generated" },
+    ]);
+
+    expectBuildError(
+      () => buildKnowledgeSourceWatchPlan([createFixture({ entries: [entry] })]),
+      "generated_output_invalid"
+    );
+  });
+
+  it.each([
+    {
+      name: "case-only path spelling",
+      first: {
+        path: "Wiki/personal/Shared.md",
+        ownership: "shared" as const,
+        contentHash: "c".repeat(64),
+      },
+      second: {
+        path: "wiki/personal/shared.md",
+        ownership: "shared" as const,
+        contentHash: "c".repeat(64),
+      },
+    },
+    {
+      name: "divergent committed hashes",
+      first: {
+        path: "Wiki/personal/Shared.md",
+        ownership: "shared" as const,
+        contentHash: "c".repeat(64),
+      },
+      second: {
+        path: "Wiki/personal/Shared.md",
+        ownership: "shared" as const,
+        contentHash: "d".repeat(64),
+      },
+    },
+    {
+      name: "divergent ownership",
+      first: {
+        path: "Wiki/personal/Shared.md",
+        ownership: "shared" as const,
+        contentHash: "c".repeat(64),
+      },
+      second: {
+        path: "Wiki/personal/Shared.md",
+        ownership: "generated" as const,
+        contentHash: "c".repeat(64),
+      },
+    },
+  ])("rejects generated-output collision from $name", ({ first, second }) => {
+    const entries = [
+      withGeneratedPages(createEntry("Sources/A.md", "source-a"), [first]),
+      withGeneratedPages(createEntry("Sources/B.md", "source-b"), [second]),
+    ];
+
+    expectBuildError(
+      () => buildKnowledgeSourceWatchPlan([createFixture({ entries })]),
+      "generated_output_collision"
+    );
+  });
+
+  it("rejects a non-shared page claimed by multiple sources", () => {
+    const page: GeneratedPageReference = {
+      path: "Wiki/personal/Owned.md",
+      ownership: "generated",
+      contentHash: "e".repeat(64),
+    };
+    const entries = [
+      withGeneratedPages(createEntry("Sources/A.md", "source-a"), [{ ...page }]),
+      withGeneratedPages(createEntry("Sources/B.md", "source-b"), [{ ...page }]),
+    ];
+
+    expectBuildError(
+      () => buildKnowledgeSourceWatchPlan([createFixture({ entries })]),
+      "generated_output_invalid"
+    );
+  });
+
   it("rejects a Bundle and Manifest ownership mismatch", () => {
     const input = createFixture();
     input.manifest.bundleId = "another-bundle";
