@@ -16,6 +16,7 @@ import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_STAGE_ATTEMPTS = 2;
+const MAX_PENDING_SOURCE_ISSUE_HINT_BUNDLES = 10_000;
 // Capturing this intrinsic accessor is intentional; Reflect.apply supplies the candidate receiver.
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
@@ -88,7 +89,7 @@ export type VaultSourceWatcherNotification =
       sourceId: string;
     };
 
-/** Authoritative, sanitized reason that one watcher generation cannot become ready. */
+/** Authoritative sanitized source state classified as fatal or recoverable by startup. */
 export type VaultSourceWatcherStartupBlocker =
   | {
       kind: "capture_failed";
@@ -113,6 +114,12 @@ export type VaultSourceWatcherStartupBlocker =
       bundleId: string;
       sourceId: string;
     };
+
+/** Source issue that can be cleared only by a successful exact-path recapture. */
+export type VaultSourceWatcherRecoverableIssue = Extract<
+  VaultSourceWatcherStartupBlocker,
+  { kind: "source_missing" | "source_change_unsupported" }
+>;
 
 /** Non-authoritative sink used by future Activity and diagnostic adapters. */
 export interface VaultSourceWatcherNotificationSink {
@@ -208,6 +215,10 @@ interface GeneratedOutputEventMatch {
   caseMismatch: boolean;
 }
 
+interface SourceIssueHintSubscription {
+  readonly listener: () => void;
+}
+
 /**
  * Creates an AbortError without depending on a particular renderer Window.
  *
@@ -289,6 +300,13 @@ function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
+}
+
+/** Tests whether one source blocker can be healed by exact-path recreation. */
+function isRecoverableSourceIssue(
+  blocker: Readonly<VaultSourceWatcherStartupBlocker>
+): blocker is Readonly<VaultSourceWatcherRecoverableIssue> {
+  return blocker.kind === "source_missing" || blocker.kind === "source_change_unsupported";
 }
 
 /**
@@ -649,7 +667,7 @@ export class ObsidianExactSourceArtifactReader {
  * Manifest, write Wiki pages, run startup recovery, or claim Queue work. In
  * addition to source events, committed Manifest outputs are read-only drift
  * signals: their events can only re-observe their original source owners.
- * Rename and delete remain fail-closed for source-lifecycle changes.
+ * Rename and delete quarantine the source until a successful exact-path recapture.
  */
 export class ObsidianVaultSourceWatcher {
   private readonly app: App;
@@ -673,6 +691,10 @@ export class ObsidianVaultSourceWatcher {
   private readonly startupBlockers = new Map<string, Readonly<VaultSourceWatcherStartupBlocker>>();
   private readonly sourceGenerations = new Map<string, number>();
   private readonly usedCaptureIds = new Set<string>();
+  private readonly sourceIssueListeners = new Map<string, Set<SourceIssueHintSubscription>>();
+  private readonly pendingSourceIssueHintBundles = new Set<string>();
+  private sourceIssueHintGeneration = 0;
+  private sourceIssueHintFlushScheduled = false;
 
   /**
    * Creates one exact App/Vault watcher over an immutable registered-source plan.
@@ -782,13 +804,22 @@ export class ObsidianVaultSourceWatcher {
         throw new VaultSourceWatchPlanError();
       }
     }
+    const changedIssueBundles = new Set(
+      [...this.startupBlockers.values()]
+        .filter(isRecoverableSourceIssue)
+        .map((issue) => issue.bundleId)
+    );
     this.watchPlanGeneration += 1;
+    this.invalidatePendingSourceIssueHints();
     this.watchPlan = plan;
     this.quarantinedSourceKeys.clear();
     this.startupBlockers.clear();
     this.sourceGenerations.clear();
     if (this.started && this.crawlActivated) {
       this.scan();
+    }
+    for (const bundleId of changedIssueBundles) {
+      this.scheduleSourceIssueHint(bundleId);
     }
   }
 
@@ -941,6 +972,41 @@ export class ObsidianVaultSourceWatcher {
   }
 
   /**
+   * Subscribes one Bundle to coalesced recoverable issue-set changes.
+   *
+   * Callbacks are value-free reload hints. They do not expose blocker state and
+   * cannot affect watcher capture, quarantine, or durable hand-off progress.
+   *
+   * @param bundleId - Exact Bundle identity present in the current watch plan
+   * @param listener - Best-effort reload callback
+   * @returns Idempotent subscription cleanup
+   */
+  subscribeSourceIssueChanges(bundleId: string, listener: () => void): () => void {
+    this.assertActive();
+    if (
+      typeof bundleId !== "string" ||
+      bundleId.length === 0 ||
+      typeof listener !== "function" ||
+      !this.watchPlan.getBundleAuthorities().some((authority) => authority.bundleId === bundleId)
+    ) {
+      throw new VaultSourceWatchPlanError();
+    }
+    const listeners =
+      this.sourceIssueListeners.get(bundleId) ?? new Set<SourceIssueHintSubscription>();
+    const subscription: SourceIssueHintSubscription = Object.freeze({ listener });
+    listeners.add(subscription);
+    this.sourceIssueListeners.set(bundleId, listeners);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const current = this.sourceIssueListeners.get(bundleId);
+      current?.delete(subscription);
+      if (current?.size === 0) this.sourceIssueListeners.delete(bundleId);
+    };
+  }
+
+  /**
    * Waits until captures already scheduled by this watcher have settled.
    *
    * Vault events may add more work while waiting, so the method repeats until
@@ -968,11 +1034,14 @@ export class ObsidianVaultSourceWatcher {
     this.closed = true;
     this.started = false;
     this.crawlActivated = false;
+    this.invalidatePendingSourceIssueHints();
+    this.sourceIssueListeners.clear();
     this.releaseEventRefs();
   }
 
   /** Handles a Vault create event without awaiting inside the callback. */
   private readonly handleCreate = (file: TAbstractFile): void => {
+    this.releaseRecoverableQuarantineForCreate(file);
     this.scheduleFile(file, "create");
     this.scheduleGeneratedOutputFile(file, "generated_output_create");
   };
@@ -1425,6 +1494,8 @@ export class ObsidianVaultSourceWatcher {
       const settlement = await this.commit(work, allocation, artifact.sourceContentHash);
       if (!settlement || !this.isAuthorityCurrent(work)) return;
 
+      this.clearRecoverableSourceIssues(work.source);
+
       this.emit({
         kind: "capture_settled",
         cause: work.cause,
@@ -1607,6 +1678,83 @@ export class ObsidianVaultSourceWatcher {
   }
 
   /**
+   * Releases only a recoverable quarantine for an exact registered file creation.
+   *
+   * The issue remains authoritative until the resulting capture commits. A new
+   * destructive event increments source authority again and invalidates the
+   * recovery attempt before it can clear that issue.
+   *
+   * @param file - Vault create target
+   */
+  private releaseRecoverableQuarantineForCreate(file: TAbstractFile): void {
+    if (!this.started || this.closed || !(file instanceof TFile)) {
+      return;
+    }
+    const parsed = parseVaultPath(file.path);
+    if (!parsed.ok) {
+      return;
+    }
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const watchPlanGeneration = this.watchPlanGeneration;
+    const matchingSources = this.watchPlan
+      .getSourcesForPathKey(toWindowsPathKey(parsed.path))
+      .filter((source) => source.sourcePath === parsed.path);
+
+    for (const source of matchingSources) {
+      if (!this.isPlanGenerationCurrent(lifecycleGeneration, watchPlanGeneration)) {
+        return;
+      }
+      const sourceAuthorityKey = createBundleSourceKey(source);
+      const blockers = this.getBlockersForSource(source);
+      if (blockers.length === 0 || blockers.some((blocker) => !isRecoverableSourceIssue(blocker))) {
+        continue;
+      }
+      this.sourceGenerations.set(
+        sourceAuthorityKey,
+        (this.sourceGenerations.get(sourceAuthorityKey) ?? 0) + 1
+      );
+      this.quarantinedSourceKeys.delete(sourceAuthorityKey);
+    }
+  }
+
+  /**
+   * Clears recoverable issues after one current exact-path capture commits.
+   *
+   * @param source - Successfully captured registered source
+   */
+  private clearRecoverableSourceIssues(source: ImmutableWatchedKnowledgeSource): void {
+    let changed = false;
+    for (const [blockerKey, blocker] of this.startupBlockers) {
+      if (
+        blocker.bundleId === source.bundleId &&
+        blocker.sourceId === source.sourceId &&
+        isRecoverableSourceIssue(blocker)
+      ) {
+        this.startupBlockers.delete(blockerKey);
+        changed = true;
+      }
+    }
+    if (this.getBlockersForSource(source).length === 0) {
+      this.quarantinedSourceKeys.delete(createBundleSourceKey(source));
+    }
+    if (changed) this.scheduleSourceIssueHint(source.bundleId);
+  }
+
+  /**
+   * Returns blockers belonging to one exact Bundle/source authority.
+   *
+   * @param source - Registered source identity
+   * @returns Current blocker values without exposing the mutable Map
+   */
+  private getBlockersForSource(
+    source: Pick<WatchedKnowledgeSource, "bundleId" | "sourceId">
+  ): readonly Readonly<VaultSourceWatcherStartupBlocker>[] {
+    return [...this.startupBlockers.values()].filter(
+      (blocker) => blocker.bundleId === source.bundleId && blocker.sourceId === source.sourceId
+    );
+  }
+
+  /**
    * Checks exact lifecycle and watch-plan identity without selecting a source.
    *
    * @param lifecycleGeneration - Captured watcher lifecycle
@@ -1671,7 +1819,9 @@ export class ObsidianVaultSourceWatcher {
       detail = blocker.change;
     }
     const blockerKey = `${sourceAuthorityKey.length}:${sourceAuthorityKey}${blocker.kind}:${detail}`;
+    const issueChanged = isRecoverableSourceIssue(blocker) && !this.startupBlockers.has(blockerKey);
     this.startupBlockers.set(blockerKey, Object.freeze({ ...blocker }));
+    if (issueChanged) this.scheduleSourceIssueHint(blocker.bundleId);
   }
 
   /** Rejects mutation after permanent lifecycle closure. */
@@ -1708,7 +1858,56 @@ export class ObsidianVaultSourceWatcher {
     this.quarantinedSourceKeys.clear();
     this.startupBlockers.clear();
     this.sourceGenerations.clear();
+    this.invalidatePendingSourceIssueHints();
+    this.sourceIssueListeners.clear();
     this.releaseEventRefs();
+  }
+
+  /** Queues at most one pending recoverable-issue hint for a Bundle. */
+  private scheduleSourceIssueHint(bundleId: string): void {
+    if (
+      this.closed ||
+      !this.started ||
+      !this.sourceIssueListeners.has(bundleId) ||
+      (!this.pendingSourceIssueHintBundles.has(bundleId) &&
+        this.pendingSourceIssueHintBundles.size >= MAX_PENDING_SOURCE_ISSUE_HINT_BUNDLES)
+    ) {
+      return;
+    }
+    this.pendingSourceIssueHintBundles.add(bundleId);
+    if (this.sourceIssueHintFlushScheduled) return;
+    this.sourceIssueHintFlushScheduled = true;
+    const generation = this.sourceIssueHintGeneration;
+    queueMicrotask(() => this.flushSourceIssueHints(generation));
+  }
+
+  /** Delivers one detached callback per changed Bundle for the current hint generation. */
+  private flushSourceIssueHints(generation: number): void {
+    if (generation !== this.sourceIssueHintGeneration || this.closed || !this.started) {
+      return;
+    }
+    this.sourceIssueHintFlushScheduled = false;
+    const bundleIds = [...this.pendingSourceIssueHintBundles].sort(compareText);
+    this.pendingSourceIssueHintBundles.clear();
+    for (const bundleId of bundleIds) {
+      const listeners = this.sourceIssueListeners.get(bundleId);
+      if (!listeners) continue;
+      for (const subscription of [...listeners]) {
+        if (!this.sourceIssueListeners.get(bundleId)?.has(subscription)) continue;
+        try {
+          subscription.listener();
+        } catch {
+          // Issue hints are advisory and cannot interrupt watcher progress.
+        }
+      }
+    }
+  }
+
+  /** Invalidates queued issue hints without affecting current source authority. */
+  private invalidatePendingSourceIssueHints(): void {
+    this.sourceIssueHintGeneration += 1;
+    this.sourceIssueHintFlushScheduled = false;
+    this.pendingSourceIssueHintBundles.clear();
   }
 
   /**

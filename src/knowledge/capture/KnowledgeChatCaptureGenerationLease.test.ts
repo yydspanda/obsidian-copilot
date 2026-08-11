@@ -3,6 +3,7 @@ import { KnowledgeChatCaptureGenerationLease } from "@/knowledge/capture/Knowled
 import type {
   KnowledgeChatCapturePort,
   KnowledgeChatCaptureReceipt,
+  KnowledgeChatDraftReceipt,
 } from "@/knowledge/capture/KnowledgeChatCapturePort";
 
 /** Creates one delegate returning an identifiable receipt. */
@@ -11,6 +12,12 @@ function createDelegate(bundleId: string): KnowledgeChatCapturePort {
     addVaultSource: async (): Promise<KnowledgeChatCaptureReceipt> => ({
       status: "registered",
       bundleId,
+    }),
+    prepareKnowledgeDraft: () => ({ bundleId, sourceRoot: "Sources" }),
+    createKnowledgeDraft: async (): Promise<KnowledgeChatDraftReceipt> => ({
+      status: "registered",
+      bundleId,
+      sourcePath: "Sources/Knowledge Draft.md",
     }),
   };
 }

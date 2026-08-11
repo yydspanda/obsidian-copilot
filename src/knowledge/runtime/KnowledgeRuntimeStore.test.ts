@@ -49,6 +49,11 @@ import {
 } from "@/knowledge/manifest/NoChangesManifestCommit";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { SourceManifestRevisionConflictError } from "@/knowledge/manifest/SourceManifestStorage";
+import {
+  createKnowledgeSourceRetirementRecord,
+  parseKnowledgeSourceRetirements,
+  projectKnowledgeSourceRetirement,
+} from "@/knowledge/manifest/SourceRetirement";
 import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
 import type {
   JsonValue,
@@ -97,7 +102,9 @@ import {
   KnowledgeRuntimeStartupReleasePort,
   KnowledgeRuntimeStore,
   KnowledgeRuntimeStoreCorruptError,
+  KnowledgeRuntimeSourceRetiredError,
   KnowledgeRuntimeTransactionStorage,
+  KnowledgeSourceRetirementConflictError,
   KNOWLEDGE_RUNTIME_STORE_VERSION,
   KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
   SourceInputCaptureConflictError,
@@ -2094,7 +2101,7 @@ describe("KnowledgeRuntimeStore", () => {
       ...legacy,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: migrated.runtimeId,
-      revision: 9,
+      revision: 10,
       reviews: [
         {
           bundleId: "personal",
@@ -2176,7 +2183,7 @@ describe("KnowledgeRuntimeStore", () => {
     const authorityQueue = authority.queues[0].value as IngestQueueSnapshot;
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 9,
+      revision: 10,
       activeTransaction: { transactionId: proof.journal.transactionId },
       inputRevisions: [
         {
@@ -2225,11 +2232,11 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await file.read()).toBe(committed);
     expect(JSON.parse(committed)).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 9,
+      revision: 10,
     });
   });
 
-  it("rejects a direct runtime-v4 whose current completion has no durable proof", async () => {
+  it("rejects a direct current runtime whose completion has no durable proof", async () => {
     const file = new MemoryAtomicRuntimeFile();
     await file.initialize(
       JSON.stringify(createMarkerlessCompletionRuntimeSnapshot(KNOWLEDGE_RUNTIME_STORE_VERSION))
@@ -2254,7 +2261,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: "1".repeat(32),
-      revision: 8,
+      revision: 9,
       queues: [
         {
           bundleId: "personal",
@@ -7909,5 +7916,476 @@ describe("KnowledgeRuntimeStore", () => {
       "constructor",
       "rejectReviewAtomically",
     ]);
+  });
+});
+
+describe("KnowledgeRuntimeStore source retirement", () => {
+  it("migrates runtime v4 through a one-revision v5 downgrade fence", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
+    await file.initialize(
+      JSON.stringify({
+        ...current,
+        version: 4,
+        revision: 7,
+      })
+    );
+
+    await new KnowledgeRuntimeStore(file).initialize();
+
+    expect(JSON.parse(await file.read())).toEqual({
+      ...current,
+      version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+      revision: 8,
+    });
+  });
+
+  it("rejects a runtime-v4 envelope carrying reserved source-retirement state", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const manifest = createRegisteredManifest();
+    const retiredManifest = projectKnowledgeSourceRetirement(
+      manifest,
+      createKnowledgeSourceRetirementRecord({
+        bundleId: "personal",
+        requestToken: HASH_A,
+        reason: "user_requested",
+        retiredAt: 100,
+        retiredManifestRevision: 2,
+        source: manifest.entries[0],
+      })
+    );
+    await file.initialize(
+      JSON.stringify({
+        ...createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32)),
+        version: 4,
+        revision: 7,
+        manifests: [{ bundleId: "personal", value: retiredManifest }],
+      })
+    );
+    const before = await file.read();
+
+    await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toMatchObject({
+      name: KnowledgeRuntimeMigrationUnsafeError.name,
+      reason: "source_retirement_state_present",
+      bundleId: "personal",
+    });
+    expect(await file.read()).toBe(before);
+  });
+
+  it("projects one token-bound source and retires it without changing adjacent histories", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const beforeGenericRemoval = await harness.file.read();
+    await expect(
+      new SourceManifestRepository(harness.manifest).removeSource("personal", "source-1")
+    ).rejects.toMatchObject({
+      name: KnowledgeRuntimeManifestProtectedStateError.name,
+      state: "source_identity",
+    });
+    expect(await harness.file.read()).toBe(beforeGenericRemoval);
+
+    const projection = await harness.runtime.readSourceRetirementCandidates("personal");
+    expect(projection).toMatchObject({
+      bundleId: "personal",
+      manifestRevision: 1,
+      candidates: [
+        {
+          sourceId: "source-1",
+          sourcePath: "Sources/Source-1.md",
+          custody: "user_managed",
+          generatedPageCount: 0,
+          status: "ready",
+          blockers: [],
+        },
+      ],
+    });
+    const candidate = projection.candidates[0];
+    const command = {
+      version: 1 as const,
+      bundleId: "personal",
+      sourceId: "source-1",
+      expectedToken: candidate.expectedToken,
+      reason: "user_requested" as const,
+      confirm: {
+        keepWikiFiles: true as const,
+        revokeProvenance: true as const,
+        reserveIdentity: true as const,
+      },
+    };
+    const before = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const beforeManifest = before.manifests[0].value as SourceManifest;
+    let hints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      hints += 1;
+    });
+
+    await expect(harness.runtime.retireSourceAtomically(command)).resolves.toMatchObject({
+      outcome: "retired",
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourcePath: "Sources/Source-1.md",
+      manifestRevision: 2,
+      runtimeRevision: before.revision + 1,
+      generatedPages: [],
+    });
+    const committedText = await harness.file.read();
+    const committed = JSON.parse(committedText) as KnowledgeRuntimeStoreSnapshot;
+    const retiredManifest = committed.manifests[0].value as SourceManifest;
+    const retirements = parseKnowledgeSourceRetirements(retiredManifest);
+    expect(retiredManifest.entries).toEqual([]);
+    expect(retirements).toMatchObject({
+      ok: true,
+      value: [{ source: beforeManifest.entries[0] }],
+    });
+    expect({
+      queues: committed.queues,
+      reviews: committed.reviews,
+      inputRevisions: committed.inputRevisions,
+      applyCommits: committed.applyCommits,
+    }).toEqual({
+      queues: before.queues,
+      reviews: before.reviews,
+      inputRevisions: before.inputRevisions,
+      applyCommits: before.applyCommits,
+    });
+    expect((await harness.runtime.readAppliedProvenance("personal")).pages).toEqual([]);
+    await expect(harness.runtime.retireSourceAtomically(command)).resolves.toMatchObject({
+      outcome: "already_retired",
+      runtimeRevision: committed.revision,
+    });
+    expect(await harness.file.read()).toBe(committedText);
+    expect(hints).toBe(1);
+    await expect(
+      harness.revisions.allocate({
+        bundleId: "personal",
+        sourceId: "source-1",
+        captureId: "capture-after-retirement",
+      })
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeSourceRetiredError);
+  });
+
+  it("rejects a stale retirement token after an unrelated atomic Runtime commit", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const projection = await harness.runtime.readSourceRetirementCandidates("personal");
+    await harness.queue.write("other", createQueueSnapshot(1, "other"), null);
+    const before = await harness.file.read();
+
+    await expect(
+      harness.runtime.retireSourceAtomically({
+        version: 1,
+        bundleId: "personal",
+        sourceId: "source-1",
+        expectedToken: projection.candidates[0].expectedToken,
+        reason: "user_requested",
+        confirm: { keepWikiFiles: true, revokeProvenance: true, reserveIdentity: true },
+      })
+    ).rejects.toMatchObject({
+      name: KnowledgeSourceRetirementConflictError.name,
+      reason: "state_changed",
+    });
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("serializes retirement against a concurrent generic Manifest rename", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const projection = await harness.runtime.readSourceRetirementCandidates("personal");
+    const repository = new SourceManifestRepository(harness.manifest);
+
+    const results = await Promise.allSettled([
+      harness.runtime.retireSourceAtomically({
+        version: 1,
+        bundleId: "personal",
+        sourceId: "source-1",
+        expectedToken: projection.candidates[0].expectedToken,
+        reason: "user_requested",
+        confirm: { keepWikiFiles: true, revokeProvenance: true, reserveIdentity: true },
+      }),
+      repository.renameSource("personal", "source-1", "Sources/Renamed.md"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const manifest = state.manifests[0].value as SourceManifest;
+    const retirements = parseKnowledgeSourceRetirements(manifest);
+    expect(retirements.ok).toBe(true);
+    if (!retirements.ok) throw new Error("Expected strict source retirement history");
+    const isRetired = retirements.value.length === 1;
+    expect(isRetired ? manifest.entries.length : retirements.value.length).toBe(0);
+    if (!isRetired) {
+      expect(manifest.entries[0].sourcePath).toBe("Sources/Renamed.md");
+    }
+  });
+
+  it("confirms the exact retirement after the atomic file commits and reports failure", async () => {
+    const harness = await createHarness();
+    await harness.manifest.write("personal", createRegisteredManifest(), null);
+    const projection = await harness.runtime.readSourceRetirementCandidates("personal");
+    let hints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      hints += 1;
+    });
+    harness.file.throwAfterCommitOnNextWrite();
+
+    const command = {
+      version: 1 as const,
+      bundleId: "personal",
+      sourceId: "source-1",
+      expectedToken: projection.candidates[0].expectedToken,
+      reason: "user_requested" as const,
+      confirm: {
+        keepWikiFiles: true as const,
+        revokeProvenance: true as const,
+        reserveIdentity: true as const,
+      },
+    };
+    const receipt = await harness.runtime.retireSourceAtomically(command);
+    expect(receipt).toMatchObject({ outcome: "already_retired", runtimeRevision: 2 });
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const retiredManifest = state.manifests[0].value as SourceManifest;
+    expect(retiredManifest.entries).toEqual([]);
+    expect(parseKnowledgeSourceRetirements(retiredManifest)).toMatchObject({
+      ok: true,
+      value: [{ requestToken: projection.candidates[0].expectedToken }],
+    });
+    const committed = await harness.file.read();
+    await expect(harness.runtime.retireSourceAtomically(command)).resolves.toEqual(receipt);
+    expect(await harness.file.read()).toBe(committed);
+    expect(hints).toBe(1);
+  });
+
+  it("atomically terminalizes only the retired source observation and rejects late work", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    manifest.entries.push({
+      sourceId: "source-2",
+      sourceKey: "sources/source-2.md",
+      sourcePath: "Sources/Source-2.md",
+      custody: "user_managed",
+    });
+    await harness.manifest.write("personal", manifest, null);
+    const allocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "capture-pending-at-retirement",
+    });
+    await harness.observations.bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+    });
+    const otherAllocation = await harness.revisions.allocate({
+      bundleId: "personal",
+      sourceId: "source-2",
+      captureId: "capture-other-source",
+    });
+    const projection = await harness.runtime.readSourceRetirementCandidates("personal");
+    const candidate = projection.candidates.find((entry) => entry.sourceId === "source-1");
+    if (!candidate) throw new Error("Expected the target source retirement candidate");
+    expect(candidate).toMatchObject({ status: "ready", blockers: [] });
+
+    await expect(
+      harness.runtime.retireSourceAtomically({
+        version: 1,
+        bundleId: "personal",
+        sourceId: "source-1",
+        expectedToken: candidate.expectedToken,
+        reason: "source_missing",
+        confirm: { keepWikiFiles: true, revokeProvenance: true, reserveIdentity: true },
+      })
+    ).resolves.toMatchObject({ outcome: "retired" });
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const retiredManifest = state.manifests[0].value as SourceManifest;
+    const retirements = parseKnowledgeSourceRetirements(retiredManifest);
+    if (!retirements.ok) throw new Error("Expected strict source retirement history");
+    const targetSource = state.inputRevisions[0].sources.find(
+      (source) => source.sourceId === "source-1"
+    );
+    const otherSource = state.inputRevisions[0].sources.find(
+      (source) => source.sourceId === "source-2"
+    );
+    const observation = targetSource?.observations[0] as unknown as {
+      status: string;
+      retirementId: string;
+      sourceContentHash: string;
+      pipelineFingerprint: string;
+    };
+    expect(observation.status).toBe("retired");
+    expect(observation.retirementId).toBe(retirements.value[0].retirementId);
+    expect(observation.sourceContentHash).toBe(HASH_A);
+    expect(observation.pipelineFingerprint).toBe(HASH_B);
+    expect(otherSource?.observations).toHaveLength(1);
+    expect(otherSource?.observations[0].observationToken).toBe(otherAllocation.observationToken);
+    expect(otherSource?.observations[0].captureId).toBe("capture-other-source");
+    expect(otherSource?.observations[0].inputRevision).toBe(1);
+    expect(otherSource?.observations[0].status).toBe("allocated");
+    await expect(
+      harness.observations.bind({
+        observationToken: allocation.observationToken,
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+      })
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeSourceRetiredError);
+    await expect(
+      harness.runtime.settleInputObservation(allocation.observationToken)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeSourceRetiredError);
+
+    const lateQueue: IngestQueueSnapshot = {
+      ...createQueueSnapshot(1),
+      jobs: [
+        {
+          id: "job-late-retired-source",
+          bundleId: "personal",
+          sourceId: "source-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 1,
+          attempt: 0,
+          rerunRequested: false,
+          createdAt: 100,
+          updatedAt: 100,
+          status: "pending",
+          stage: "queued",
+        },
+      ],
+      sourceHighWatermarks: [
+        {
+          sourceId: "source-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 1,
+          observedAt: 100,
+        },
+      ],
+    };
+    await expect(
+      harness.queue.write("personal", lateQueue, null, {
+        kind: "source_observation",
+        observationToken: allocation.observationToken,
+      })
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeSourceRetiredError);
+
+    await expect(
+      harness.observations.bind({
+        observationToken: otherAllocation.observationToken,
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: HASH_B,
+      })
+    ).resolves.toMatchObject({ kind: "ready" });
+    const activeQueue: IngestQueueSnapshot = {
+      ...createQueueSnapshot(1),
+      jobs: [
+        {
+          ...lateQueue.jobs[0],
+          id: "job-active-other-source",
+          sourceId: "source-2",
+          sourceContentHash: HASH_C,
+        },
+      ],
+      sourceHighWatermarks: [
+        {
+          sourceId: "source-2",
+          sourceContentHash: HASH_C,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 1,
+          observedAt: 101,
+        },
+      ],
+    };
+    await expect(
+      harness.queue.write("personal", activeQueue, null, {
+        kind: "source_observation",
+        observationToken: otherAllocation.observationToken,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("archives an applied source while retaining its accepted Review and Apply ledger", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest, "transaction-retirement-history", 1, [
+      createSourceCitation(),
+    ]);
+    const harness = await createApplyHarness(manifest, proof);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const recoveryQueue = new IngestQueue(
+      new KnowledgeRuntimeQueueStorage(harness.runtime),
+      {
+        /** Recovery does not execute new source work. */
+        execute: async () => ({ kind: "no_changes", changeSetId: "changeset-unused" }),
+      },
+      { clock: () => 250, jobIdFactory: () => "job-unused-after-retirement" }
+    );
+    await recoveryQueue.resolveApplyRecovery(harness.receipt);
+    await new KnowledgeRuntimeTransactionStorage(harness.runtime).clearActive({
+      transactionId: harness.journal.transactionId,
+      revision: harness.journal.revision,
+    });
+    await recoveryQueue.finalizeApplyRecovery("personal", harness.receipt.transactionId);
+    await new KnowledgeRuntimeStartupReleasePort(harness.runtime).release(
+      await createStartupReleaseRequest(harness)
+    );
+    const before = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const projection = await harness.runtime.readSourceRetirementCandidates("personal");
+    expect(projection.candidates[0]).toMatchObject({
+      status: "ready",
+      generatedPageCount: 1,
+    });
+
+    await harness.runtime.retireSourceAtomically({
+      version: 1,
+      bundleId: "personal",
+      sourceId: "source-1",
+      expectedToken: projection.candidates[0].expectedToken,
+      reason: "user_requested",
+      confirm: { keepWikiFiles: true, revokeProvenance: true, reserveIdentity: true },
+    });
+
+    const after = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const afterManifest = after.manifests[0].value as SourceManifest;
+    const retirements = parseKnowledgeSourceRetirements(afterManifest);
+    expect(after.applyCommits).toEqual(before.applyCommits);
+    expect(after.queues).toEqual(before.queues);
+    expect(after.reviews).toEqual(before.reviews);
+    expect(after.inputRevisions).toEqual(before.inputRevisions);
+    expect(retirements.ok).toBe(true);
+    if (!retirements.ok) throw new Error("Expected strict source retirement history");
+    expect(retirements.value[0].source.sourceId).toBe("source-1");
+    expect(retirements.value[0].source.lastSuccessful?.generatedPages).toEqual(
+      harness.journal.manifestCommitIntent.generatedPages
+    );
+    expect((await harness.runtime.readAppliedProvenance("personal")).pages).toEqual([]);
+
+    const queue = (await new KnowledgeRuntimeQueueStorage(harness.runtime).read(
+      "personal"
+    )) as IngestQueueSnapshot;
+    const changedQueue: IngestQueueSnapshot = {
+      ...queue,
+      revision: queue.revision + 1,
+      jobs: queue.jobs.map((job) => ({
+        ...job,
+        updatedAt: job.updatedAt + 1,
+        ...(job.status === "completed" ? { completedAt: job.completedAt + 1 } : {}),
+      })),
+    };
+    await expect(
+      new KnowledgeRuntimeQueueStorage(harness.runtime).write(
+        "personal",
+        changedQueue,
+        queue.revision
+      )
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeSourceRetiredError);
+
+    const review = (await new KnowledgeRuntimeReviewStorage(harness.runtime).read(
+      "personal"
+    )) as ChangeSetReviewSnapshot;
+    await expect(
+      new KnowledgeRuntimeReviewStorage(harness.runtime).write(
+        "personal",
+        { ...review, revision: review.revision + 1, records: [] },
+        review.revision
+      )
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeSourceRetiredError);
   });
 });

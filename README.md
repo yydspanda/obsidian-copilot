@@ -56,6 +56,7 @@ This is the future we believe in. If you share this vision, please support this 
 - [The What](#the-what)
 - [The Why](#the-why)
 - [Key Features](#key-features)
+- [Personal Knowledge Studio 中文手册](#personal-knowledge-studio-中文手册)
 - [Copilot v4: Agent Mode, Reimagined 🚀](#copilot-v4-agent-mode-reimagined-)
 - [Why People Love It ❤️](#why-people-love-it-️)
 - [Get Started](#get-started)
@@ -77,6 +78,14 @@ This is the future we believe in. If you share this vision, please support this 
 - [**🙏 Thank You**](#-thank-you)
 - [**Copilot Plus Disclosure**](#copilot-plus-disclosure)
 - [**Authors**](#authors)
+
+## Personal Knowledge Studio 中文手册
+
+This Windows-focused fork includes a review-gated personal knowledge workflow: import Markdown,
+text, and PDF sources; inspect durable Activity; review proposed Wiki changes; query accepted
+knowledge with citations; and save useful answers back through the same Review/Apply pipeline.
+
+中文用户请阅读 [Personal Knowledge Studio 中文使用手册](docs/knowledge/zh-CN/index.md)。手册说明当前已验证范围，也明确列出持续文件夹同步、OCR、自动 Apply、多 Bundle 和跨平台等尚不支持的能力。
 
 ## Copilot v4: Agent Mode, Reimagined 🚀
 

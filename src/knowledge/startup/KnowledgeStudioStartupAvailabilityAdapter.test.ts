@@ -3,8 +3,12 @@ import {
   KnowledgeStudioStartupAvailabilityAdapter,
 } from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
 import type { KnowledgePluginStartupState } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
+import { KnowledgeStudioReadGenerationLease } from "@/knowledge/startup/KnowledgeStudioReadGenerationLease";
 import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
-import { UnavailableKnowledgeStudioPort } from "@/knowledge/ui/KnowledgeStudioController";
+import {
+  KnowledgeStudioAdapterUnavailableError,
+  UnavailableKnowledgeStudioPort,
+} from "@/knowledge/ui/KnowledgeStudioController";
 import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 
 type StartupStateWithoutGeneration<T> = T extends KnowledgePluginStartupState
@@ -66,6 +70,7 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
       replaceDelegate: jest.fn(() => calls.push("delegate")),
     };
     const sessions = {
+      publishRefreshing: jest.fn(() => calls.push("refreshing")),
       replaceSelection: jest.fn(() => calls.push("session")),
     };
     const adapter = new KnowledgeStudioStartupAvailabilityAdapter(port, sessions);
@@ -85,6 +90,107 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
     expect(getKnowledgeStartupNotice(state)).toContain(
       "delete acceptance and Query remain disabled"
     );
+    expect(sessions.publishRefreshing).not.toHaveBeenCalled();
+  });
+
+  it("revokes the delegate before publishing an explicit layout-refresh session", async () => {
+    const calls: string[] = [];
+    const port = new DelegatingKnowledgeStudioPort();
+    const replaceDelegate = jest.spyOn(port, "replaceDelegate").mockImplementation((delegate) => {
+      calls.push("delegate");
+      Object.getPrototypeOf(port).replaceDelegate.call(port, delegate);
+    });
+    const sessions = new KnowledgeStudioSessionStore("Waiting.");
+    sessions.subscribe(() => calls.push(`session:${sessions.getState().status}`));
+    const adapter = new KnowledgeStudioStartupAvailabilityAdapter(port, sessions);
+    calls.length = 0;
+
+    adapter.setUnavailable(createState({ status: "waiting_for_layout" }));
+
+    expect(calls).toEqual(["delegate", "session:refreshing"]);
+    expect(replaceDelegate).toHaveBeenCalledTimes(1);
+    expect(sessions.getState()).toEqual({ status: "refreshing", revision: 1 });
+    expect(Object.keys(sessions.getState()).sort()).toEqual(["revision", "status"]);
+    await expect(port.pauseBundle("personal", 1, new AbortController().signal)).rejects.toEqual(
+      new KnowledgeStudioAdapterUnavailableError()
+    );
+  });
+
+  it("keeps durable configuration failures unavailable instead of styling them as refresh", () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const sessions = new KnowledgeStudioSessionStore("Waiting.");
+    const adapter = new KnowledgeStudioStartupAvailabilityAdapter(port, sessions);
+
+    adapter.setUnavailable(
+      createState({
+        status: "bundle_invalid",
+        diagnosticCodes: Object.freeze(["bundle_config_invalid"]),
+      })
+    );
+
+    expect(sessions.getState().status).toBe("unavailable");
+    expect(sessions.getState().unavailableNotice).toContain("configuration is invalid");
+  });
+
+  it("supports main-shaped generation turnover without stale or duplicate withdrawal winning", async () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const sessions = new KnowledgeStudioSessionStore("Waiting.");
+    const adapter = new KnowledgeStudioStartupAvailabilityAdapter(port, sessions);
+    const firstDelegate = new UnavailableKnowledgeStudioPort("First generation.");
+    const firstPause = jest.spyOn(firstDelegate, "pauseBundle").mockResolvedValue();
+    let invalidateFirst: (() => void) | undefined;
+    const firstLease = new KnowledgeStudioReadGenerationLease({
+      delegate: firstDelegate,
+      subscribeInvalidation: (listener) => {
+        invalidateFirst = listener;
+        return jest.fn();
+      },
+      replaceDelegate: (delegate) => port.replaceDelegate(delegate),
+      setUnavailable: () => adapter.setUnavailable({ generation: 2, status: "waiting_for_layout" }),
+      assertCurrent: jest.fn(),
+    });
+    adapter.setReadReady({
+      generation: 1,
+      status: "workflow_read_ready",
+      bundleIds: Object.freeze(["personal"]),
+    });
+
+    await expect(
+      port.pauseBundle("personal", 1, new AbortController().signal)
+    ).resolves.toBeUndefined();
+    expect(firstPause).toHaveBeenCalledTimes(1);
+
+    invalidateFirst?.();
+    invalidateFirst?.();
+    firstLease.close();
+    firstLease.close();
+    expect(sessions.getState()).toEqual({ status: "refreshing", revision: 2 });
+    await expect(
+      port.pauseBundle("personal", 2, new AbortController().signal)
+    ).rejects.toBeInstanceOf(KnowledgeStudioAdapterUnavailableError);
+    expect(firstPause).toHaveBeenCalledTimes(1);
+
+    const secondDelegate = new UnavailableKnowledgeStudioPort("Second generation.");
+    const secondLease = new KnowledgeStudioReadGenerationLease({
+      delegate: secondDelegate,
+      subscribeInvalidation: () => jest.fn(),
+      replaceDelegate: (delegate) => port.replaceDelegate(delegate),
+      setUnavailable: () => adapter.setUnavailable({ generation: 4, status: "waiting_for_layout" }),
+      assertCurrent: jest.fn(),
+    });
+    adapter.setReadReady({
+      generation: 3,
+      status: "workflow_read_ready",
+      bundleIds: Object.freeze(["personal"]),
+    });
+    expect(sessions.getState()).toMatchObject({ status: "selected", bundleId: "personal" });
+
+    invalidateFirst?.();
+    expect(sessions.getState()).toMatchObject({ status: "selected", bundleId: "personal" });
+    sessions.dispose();
+    secondLease.close();
+    expect(sessions.getState().status).toBe("unavailable");
+    expect(sessions.getState().unavailableNotice).toContain("plugin is unloading");
   });
 
   it("publishes a staged recovery delegate for the exact stopped Bundle", async () => {
@@ -107,6 +213,29 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
     });
     expect(sessions.getState().unavailableNotice).toContain("Open Recovery");
     expect(sessions.getState().unavailableNotice).toContain("new ingest work remains stopped");
+  });
+
+  it("publishes a staged source-only delegate for the exact stopped Bundle", async () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const sessions = new KnowledgeStudioSessionStore("Waiting.");
+    const adapter = new KnowledgeStudioStartupAvailabilityAdapter(port, sessions);
+    port.replaceDelegate(new UnavailableKnowledgeStudioPort("Staged source delegate."));
+
+    adapter.setSourceRecoveryReady({
+      generation: 2,
+      status: "source_recovery_required",
+      bundleIds: Object.freeze(["personal"]),
+      sourceRecoveryBundleId: "personal",
+      blockerKinds: Object.freeze(["source_observation_pending"]),
+    });
+
+    expect(sessions.getState()).toMatchObject({ bundleId: "personal" });
+    await expect(port.load("personal", new AbortController().signal)).resolves.toMatchObject({
+      notice: "Staged source delegate.",
+    });
+    expect(sessions.getState().unavailableNotice).toContain("Open Sources");
+    expect(sessions.getState().unavailableNotice).toContain("model calls");
+    expect(sessions.getState().unavailableNotice).toContain("Wiki writes remain stopped");
   });
 
   it("fails closed when a staged recovery names a Bundle outside its validated set", async () => {
@@ -248,6 +377,7 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
       replaceDelegate: jest.fn(() => calls.push("delegate")),
     };
     const sessions = {
+      publishRefreshing: jest.fn(() => calls.push("refreshing")),
       replaceSelection: jest.fn(() => calls.push("session")),
     };
     const adapter = new KnowledgeStudioStartupAvailabilityAdapter(port, sessions);

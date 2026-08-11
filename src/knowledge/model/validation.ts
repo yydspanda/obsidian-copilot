@@ -1,5 +1,9 @@
 import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
 import {
+  KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY,
+  parseKnowledgeSourceRetirements,
+} from "@/knowledge/manifest/SourceRetirement";
+import {
   parseClaimCitation,
   parseKnowledgeBundleConfig,
   parseKnowledgeChangeSet,
@@ -217,6 +221,72 @@ export function validateSourceManifest(value: unknown): KnowledgeValidationResul
       appendNested(
         diagnostics,
         `${prefix}.lastSuccessful.generatedPages[${pageIndex}].path`,
+        validateVaultRelativePath(page.path, "")
+      );
+    });
+  });
+
+  const retirements = parseKnowledgeSourceRetirements(parsed.value);
+  if (!retirements.ok) {
+    for (const issue of retirements.issues) {
+      diagnostics.push({
+        ...issue,
+        field: issue.field
+          ? `extensions.${KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY}.${issue.field}`
+          : `extensions.${KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY}`,
+      });
+    }
+    return toResult(diagnostics);
+  }
+
+  const retirementIds = new Set<string>();
+  retirements.value.forEach((record, index) => {
+    const entry = record.source;
+    const prefix = `extensions.${KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY}[${index}]`;
+    appendNested(
+      diagnostics,
+      `${prefix}.source.sourcePath`,
+      validateVaultRelativePath(entry.sourcePath, "")
+    );
+    if (entry.sourceKey !== toWindowsPathKey(entry.sourcePath)) {
+      addError(
+        diagnostics,
+        "source_retirement_key_mismatch",
+        `${prefix}.source.sourceKey`,
+        "Retired source key must match its normalized Windows path"
+      );
+    }
+    if (sourceIds.has(entry.sourceId)) {
+      addError(
+        diagnostics,
+        "source_retirement_id_duplicate",
+        `${prefix}.source.sourceId`,
+        "Active and retired source ids must be unique within a manifest"
+      );
+    }
+    if (sourceKeys.has(entry.sourceKey)) {
+      addError(
+        diagnostics,
+        "source_retirement_key_duplicate",
+        `${prefix}.source.sourceKey`,
+        "Active and retired source paths must be unique within a manifest"
+      );
+    }
+    if (retirementIds.has(record.retirementId)) {
+      addError(
+        diagnostics,
+        "source_retirement_identity_duplicate",
+        `${prefix}.retirementId`,
+        "Source retirement identities must be unique"
+      );
+    }
+    sourceIds.add(entry.sourceId);
+    sourceKeys.add(entry.sourceKey);
+    retirementIds.add(record.retirementId);
+    entry.lastSuccessful?.generatedPages.forEach((page, pageIndex) => {
+      appendNested(
+        diagnostics,
+        `${prefix}.source.lastSuccessful.generatedPages[${pageIndex}].path`,
         validateVaultRelativePath(page.path, "")
       );
     });

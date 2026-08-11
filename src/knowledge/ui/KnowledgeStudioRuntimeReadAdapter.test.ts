@@ -45,6 +45,8 @@ import {
 } from "@/knowledge/ui/KnowledgeStudioRuntimeReadAdapter";
 import { KnowledgeStudioRuntimeCommandAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeCommandAdapter";
 import { KnowledgeStudioReviewedApplyPort } from "@/knowledge/ui/KnowledgeStudioReviewedApplyPort";
+import type { KnowledgeSourceLifecyclePort } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
+import { createKnowledgeSourceLifecycleModel } from "@/knowledge/ui/sourceLifecycleModel";
 
 const BUNDLE_ID = "personal";
 const SOURCE_HASH = "a".repeat(64);
@@ -286,7 +288,8 @@ function createAdapter(
   assertCurrent: () => void = () => undefined,
   commands?: KnowledgeStudioRuntimeCommandAdapter,
   query?: Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent"> &
-    Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">>
+    Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">>,
+  sourceLifecycle?: KnowledgeSourceLifecyclePort
 ): KnowledgeStudioRuntimeReadAdapter {
   return new KnowledgeStudioRuntimeReadAdapter({
     runtime,
@@ -296,6 +299,7 @@ function createAdapter(
     subscribeVaultHints,
     ...(commands === undefined ? {} : { commands }),
     ...(query === undefined ? {} : { query }),
+    ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
   });
 }
 
@@ -340,6 +344,84 @@ function createReviewCommand(record: PendingChangeSetReviewRecord): KnowledgeRev
 }
 
 describe("KnowledgeStudioRuntimeReadAdapter", () => {
+  it("publishes only a same-revision source lifecycle model and delegates its exact commands", async () => {
+    const loadSources = jest.fn(async () =>
+      createKnowledgeSourceLifecycleModel({
+        bundleId: BUNDLE_ID,
+        runtimeRevision: 4,
+        manifestRevision: 2,
+        sources: [],
+      })
+    );
+    const checkAgain = jest.fn(async () => undefined);
+    const retireSource = jest.fn(async () => ({
+      outcome: "retired" as const,
+      retainedWikiPageCount: 0,
+    }));
+    const sourceLifecycle: KnowledgeSourceLifecyclePort = {
+      loadSources,
+      checkAgain,
+      retireSource,
+    };
+    const adapter = createAdapter(
+      new FakeRuntime([createProjection(4), createProjection(4)]),
+      createMissingResolver(),
+      undefined,
+      () => undefined,
+      undefined,
+      undefined,
+      sourceLifecycle
+    );
+    const signal = new AbortController().signal;
+
+    await expect(adapter.load(BUNDLE_ID, signal)).resolves.toMatchObject({
+      sourceLifecycle: {
+        bundleId: BUNDLE_ID,
+        runtimeRevision: 4,
+        manifestRevision: 2,
+        sources: [],
+      },
+    });
+    await adapter.checkAgain(BUNDLE_ID, "source-1", signal);
+    await adapter.retireSource(
+      BUNDLE_ID,
+      { sourceId: "source-1", retirementRef: "d".repeat(64), reason: "user_requested" },
+      signal
+    );
+
+    expect(loadSources).toHaveBeenCalledWith(BUNDLE_ID, signal);
+    expect(checkAgain).toHaveBeenCalledWith(BUNDLE_ID, "source-1", signal);
+    expect(retireSource).toHaveBeenCalledTimes(1);
+    expect("replaceMissingSource" in adapter).toBe(false);
+  });
+
+  it("rejects a source lifecycle projection from a different Runtime revision", async () => {
+    const sourceLifecycle: KnowledgeSourceLifecyclePort = {
+      loadSources: async () =>
+        createKnowledgeSourceLifecycleModel({
+          bundleId: BUNDLE_ID,
+          runtimeRevision: 5,
+          manifestRevision: 2,
+          sources: [],
+        }),
+      checkAgain: async () => undefined,
+      retireSource: async () => ({ outcome: "retired", retainedWikiPageCount: 0 }),
+    };
+    const adapter = createAdapter(
+      new FakeRuntime([createProjection(4)]),
+      createMissingResolver(),
+      undefined,
+      () => undefined,
+      undefined,
+      undefined,
+      sourceLifecycle
+    );
+
+    await expect(adapter.load(BUNDLE_ID, new AbortController().signal)).rejects.toBeInstanceOf(
+      KnowledgeStudioRuntimeReadError
+    );
+  });
+
   it("renders empty durable Activity and Review from one atomic Runtime generation", async () => {
     const projection = createProjection(4);
     const runtime = new FakeRuntime([projection, projection]);

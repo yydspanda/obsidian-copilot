@@ -8,6 +8,7 @@ export type KnowledgePluginStartupStatus =
   | "recovery_unavailable"
   | "recovery_attention_required"
   | "recovery_blocked"
+  | "source_recovery_required"
   | "workflow_adapters_unavailable"
   | "workflow_read_ready";
 
@@ -38,6 +39,12 @@ export type KnowledgePluginStartupState =
       bundleIds: readonly string[];
       recoveryBundleId: string;
       attentionKinds: readonly string[];
+    })
+  | (KnowledgePluginStartupStateBase & {
+      status: "source_recovery_required";
+      bundleIds: readonly string[];
+      sourceRecoveryBundleId: string;
+      blockerKinds: readonly ["source_observation_pending"];
     })
   | (KnowledgePluginStartupStateBase & {
       status: "workflow_adapters_unavailable";
@@ -102,7 +109,11 @@ export interface KnowledgePluginObservationStartupPort {
 /** Sanitized observation result accepted by the startup barrier. */
 export type KnowledgePluginObservationStartupResult =
   | Readonly<{ kind: "observation_converged"; scheduledCaptureCount: number }>
-  | Readonly<{ kind: "blocked"; blockerKinds: readonly string[] }>
+  | Readonly<{
+      kind: "blocked";
+      blockerKinds: readonly string[];
+      sourceRecoveryBundleIds?: readonly string[];
+    }>
   | Readonly<{ kind: "diagnostic"; code: string }>;
 
 /** Sanitized result of the optional fresh Gate/release hand-off. */
@@ -135,6 +146,10 @@ export interface KnowledgeStudioStartupAvailabilityPort {
       KnowledgePluginStartupState,
       { status: "recovery_attention_required" | "recovery_blocked" }
     >
+  ): void;
+  /** Publishes the exact stopped Bundle after its source-lifecycle-only delegate was staged. */
+  setSourceRecoveryReady?(
+    state: Extract<KnowledgePluginStartupState, { status: "source_recovery_required" }>
   ): void;
 }
 
@@ -188,6 +203,7 @@ function freezeStartupState<T extends KnowledgePluginStartupState>(state: T): T 
     state.status === "recovery_unavailable" ||
     state.status === "recovery_attention_required" ||
     state.status === "recovery_blocked" ||
+    state.status === "source_recovery_required" ||
     state.status === "workflow_adapters_unavailable" ||
     state.status === "workflow_read_ready"
   ) {
@@ -195,6 +211,9 @@ function freezeStartupState<T extends KnowledgePluginStartupState>(state: T): T 
   }
   if (state.status === "recovery_attention_required" || state.status === "recovery_blocked") {
     Object.freeze(state.attentionKinds);
+  }
+  if (state.status === "source_recovery_required") {
+    Object.freeze(state.blockerKinds);
   }
   return Object.freeze(state);
 }
@@ -251,6 +270,75 @@ function isObservationConverged(
     Number.isSafeInteger(scheduled.value) &&
     scheduled.value >= 0
   );
+}
+
+/** Strict source-only startup recovery evidence retained while observation stays blocked. */
+interface KnowledgeSourceObservationRecoveryResult {
+  readonly bundleId: string;
+  readonly blockerKinds: readonly ["source_observation_pending"];
+}
+
+/** Reads one dense singleton array without invoking an indexed accessor. */
+function isExactSingletonStringArray(candidate: unknown, expected: string): boolean {
+  if (!Array.isArray(candidate) || Reflect.ownKeys(candidate).length !== 2) return false;
+  const length = Object.getOwnPropertyDescriptor(candidate, "length");
+  const item = Object.getOwnPropertyDescriptor(candidate, "0");
+  return (
+    !!length &&
+    "value" in length &&
+    length.value === 1 &&
+    !!item &&
+    "value" in item &&
+    item.enumerable === true &&
+    item.value === expected
+  );
+}
+
+/**
+ * Accepts only the exact, single-Bundle recoverable observation blocker shape.
+ *
+ * Generic observation pending cannot open a lifecycle surface because it may
+ * have no missing/delete/rename issue a user can resolve.
+ */
+function readSourceObservationRecoveryResult(
+  value: unknown,
+  configuredBundleIds: readonly string[]
+): KnowledgeSourceObservationRecoveryResult | undefined {
+  try {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      configuredBundleIds.length !== 1 ||
+      Reflect.ownKeys(value).length !== 3
+    ) {
+      return undefined;
+    }
+    const kind = Object.getOwnPropertyDescriptor(value, "kind");
+    const blockers = Object.getOwnPropertyDescriptor(value, "blockerKinds");
+    const recoveryBundles = Object.getOwnPropertyDescriptor(value, "sourceRecoveryBundleIds");
+    if (
+      !kind ||
+      !("value" in kind) ||
+      kind.enumerable !== true ||
+      kind.value !== "blocked" ||
+      !blockers ||
+      !("value" in blockers) ||
+      blockers.enumerable !== true ||
+      !recoveryBundles ||
+      !("value" in recoveryBundles) ||
+      recoveryBundles.enumerable !== true ||
+      !isExactSingletonStringArray(blockers.value, "source_observation_pending") ||
+      !isExactSingletonStringArray(recoveryBundles.value, configuredBundleIds[0])
+    ) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return Object.freeze({
+    bundleId: configuredBundleIds[0],
+    blockerKinds: Object.freeze(["source_observation_pending"] as const),
+  });
 }
 
 /** Finds a callable data method without evaluating accessors on an injected object. */
@@ -607,6 +695,19 @@ export class KnowledgePluginStartupBarrier {
         ? await this.startObservation(generation, signal, bundleIds, observation)
         : "observed";
       if (observationResult === false) return;
+      if (typeof observationResult === "object") {
+        this.publish(
+          generation,
+          freezeStartupState({
+            generation,
+            status: "source_recovery_required",
+            bundleIds,
+            sourceRecoveryBundleId: observationResult.bundleId,
+            blockerKinds: observationResult.blockerKinds,
+          })
+        );
+        return;
+      }
       this.publish(
         generation,
         freezeStartupState({
@@ -672,7 +773,7 @@ export class KnowledgePluginStartupBarrier {
     signal: AbortSignal,
     bundleIds: readonly string[],
     observation: KnowledgePluginObservationStartupPort
-  ): Promise<"observed" | "released" | false> {
+  ): Promise<"observed" | "released" | KnowledgeSourceObservationRecoveryResult | false> {
     const session = { generation, port: observation };
     this.activeObservation = session;
     let result: KnowledgePluginObservationStartupResult;
@@ -688,6 +789,10 @@ export class KnowledgePluginStartupBarrier {
     if (!this.isCurrent(generation, signal)) {
       this.closeObservationSession(session);
       return false;
+    }
+    const sourceRecovery = readSourceObservationRecoveryResult(result, bundleIds);
+    if (sourceRecovery) {
+      return sourceRecovery;
     }
     if (!isObservationConverged(result)) {
       this.closeObservationSession(session);
@@ -812,6 +917,12 @@ export class KnowledgePluginStartupBarrier {
     }
     if (state.status === "workflow_read_ready") {
       this.dependencies.studio.setReadReady(state);
+    } else if (state.status === "source_recovery_required") {
+      if (this.dependencies.studio.setSourceRecoveryReady) {
+        this.dependencies.studio.setSourceRecoveryReady(state);
+      } else {
+        this.dependencies.studio.setUnavailable(state);
+      }
     } else if (
       state.status === "recovery_attention_required" ||
       state.status === "recovery_blocked"

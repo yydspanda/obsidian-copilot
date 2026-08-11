@@ -19,26 +19,41 @@ import {
   type KnowledgeDeepSeekFetchPort,
   type KnowledgeDeepSeekHttpResponse,
 } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
+import { KnowledgeProductionChatCaptureCoordinator } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
+import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import type { KnowledgeProductionPreflightSettingsInput } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import { parseIngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY } from "@/knowledge/manifest/NoChangesManifestCommit";
+import { createSourceContentHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import {
+  KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import { KnowledgeProductionSourceLifecycleCoordinator } from "@/knowledge/sourceLifecycle/KnowledgeProductionSourceLifecycleCoordinator";
+import type { KnowledgeSourceLifecyclePort } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import {
   KnowledgePluginProductionPreflightLifecycle,
   type KnowledgePluginProductionPreflightAdmission,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import {
+  KnowledgePluginStartupBarrier,
+  type KnowledgePluginObservationStartupPort,
+} from "@/knowledge/startup/KnowledgePluginStartupBarrier";
+import { createSourceObservationPreReleaseResult } from "@/knowledge/startup/KnowledgeSourceObservationPreRelease";
 import { KnowledgeStudioReadGenerationLease } from "@/knowledge/startup/KnowledgeStudioReadGenerationLease";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
-import { UnavailableKnowledgeStudioPort } from "@/knowledge/ui/KnowledgeStudioController";
+import { KnowledgeStudioSourceLifecycleOnlyAdapter } from "@/knowledge/ui/KnowledgeStudioSourceLifecycleOnlyAdapter";
+import {
+  KnowledgeStudioController,
+  UnavailableKnowledgeStudioPort,
+} from "@/knowledge/ui/KnowledgeStudioController";
 import { App, EventRef, FileSystemAdapter, TAbstractFile, TFile, Vault } from "obsidian";
 
 const PROJECT_ID = "project-personal";
@@ -66,6 +81,21 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+/** Flushes coalesced value-free Studio hints without advancing timers. */
+async function flushStudioHints(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+/** Waits bounded Promise turns for one asynchronous Studio state transition. */
+async function waitForStudioState(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  throw new Error("Timed out waiting for Knowledge Studio state");
+}
+
 /** Creates a timer port whose callbacks remain inert unless a retry is actually scheduled. */
 function createWorkerScheduler(): KnowledgeProductionWorkerScheduler {
   return {
@@ -75,8 +105,12 @@ function createWorkerScheduler(): KnowledgeProductionWorkerScheduler {
   };
 }
 
-/** Creates one strict Bundle used by the real production loader. */
-function createBundle(): KnowledgeBundleConfig {
+/**
+ * Creates one strict Bundle used by the real production loader.
+ *
+ * @param patch - Optional Bundle fields replaced for one test
+ */
+function createBundle(patch: Partial<KnowledgeBundleConfig> = {}): KnowledgeBundleConfig {
   return {
     version: 1,
     id: "personal",
@@ -84,6 +118,7 @@ function createBundle(): KnowledgeBundleConfig {
     wikiRoot: "Wiki/personal",
     schemaRef: SCHEMA_PATH,
     reviewMode: "always",
+    ...patch,
   };
 }
 
@@ -281,8 +316,16 @@ class PostCommitThrowRuntimeFile extends KnowledgeExecutionMemoryRuntimeFile {
   }
 }
 
-/** Mints one authentic same-snapshot workflow lease through production preflight. */
-async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
+/**
+ * Mints one authentic same-snapshot workflow lease through production preflight.
+ *
+ * @param fetchPort - Test model transport that observation must not call
+ * @param bundle - Bundle projected into the production preflight snapshot
+ */
+async function createAdmission(
+  fetchPort: KnowledgeDeepSeekFetchPort,
+  bundle: KnowledgeBundleConfig = createBundle()
+): Promise<{
   lifecycle: KnowledgePluginProductionPreflightLifecycle;
   admission: KnowledgePluginProductionPreflightAdmission;
 }> {
@@ -291,7 +334,7 @@ async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
       {
         project: {
           id: PROJECT_ID,
-          knowledgeBundle: createBundle(),
+          knowledgeBundle: bundle,
           projectModelKey: MODEL_KEY,
           modelConfigs: {},
         },
@@ -361,6 +404,13 @@ describe("KnowledgeProductionObservationComposer", () => {
       scheduledCaptureCount: 1,
     });
     expect(() => composer.assertHealthy()).not.toThrow();
+    expect(composer.getSourceIssues()).toEqual([]);
+    const registeredSources = composer.getRegisteredSourcePaths();
+    expect(registeredSources).toEqual([
+      { bundleId: "personal", sourceId: "source-1", sourcePath: SOURCE_PATH },
+    ]);
+    expect(Object.isFrozen(registeredSources)).toBe(true);
+    expect(registeredSources.every(Object.isFrozen)).toBe(true);
     await expect(composer.reprove(controller.signal)).resolves.toEqual({
       kind: "observation_reproved",
     });
@@ -403,8 +453,127 @@ describe("KnowledgeProductionObservationComposer", () => {
     expect("runNext" in composer).toBe(false);
 
     composer.close();
+    expect(() => composer.getSourceIssues()).toThrow("The operation was aborted");
+    expect(() => composer.getRegisteredSourcePaths()).toThrow("The operation was aborted");
     lifecycle.close();
     expect(vault.activeListenerCount()).toBe(0);
+  });
+
+  it("routes a real startup-missing pending observation through the source-only Barrier state", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    await new KnowledgeRuntimeInputRevisionAllocator(runtime).allocate({
+      bundleId: "personal",
+      sourceId: "source-1",
+      captureId: "capture-missing-before-restart",
+    });
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+    let active = true;
+    let sourceOnly: KnowledgeStudioSourceLifecycleOnlyAdapter | undefined;
+    const release = jest.fn(async () => ({ kind: "released" as const, bundleIds: ["personal"] }));
+    const observation: KnowledgePluginObservationStartupPort = {
+      start: async (signal) => {
+        const result = await composer.start(signal);
+        const sourceRecovery = createSourceObservationPreReleaseResult(
+          result,
+          ["personal"],
+          composer.getSourceIssues()
+        );
+        if (!sourceRecovery) return result;
+        const assertCurrent = (): void => {
+          if (!active) throw new DOMException("The operation was aborted", "AbortError");
+          composer.getSourceIssues();
+        };
+        const coordinator = new KnowledgeProductionSourceLifecycleCoordinator({
+          runtime,
+          getSourceIssues: () => composer.getSourceIssues(),
+          assertCurrent,
+          onGenerationRefreshRequired: () => undefined,
+        });
+        const sourceLifecycle: KnowledgeSourceLifecyclePort = Object.freeze({
+          loadSources: (bundleId: string, nextSignal: AbortSignal) =>
+            coordinator.loadSources(bundleId, nextSignal),
+          checkAgain: (bundleId: string, sourceId: string, nextSignal: AbortSignal) =>
+            coordinator.checkAgain(bundleId, sourceId, nextSignal),
+          retireSource: (
+            bundleId: string,
+            request: Parameters<KnowledgeSourceLifecyclePort["retireSource"]>[1],
+            nextSignal: AbortSignal
+          ) => coordinator.retireSource(bundleId, request, nextSignal),
+        });
+        sourceOnly = new KnowledgeStudioSourceLifecycleOnlyAdapter({
+          bundleId: "personal",
+          sourceLifecycle,
+          assertCurrent,
+        });
+        return sourceRecovery;
+      },
+      release,
+      close: () => {
+        active = false;
+        composer.close();
+      },
+    };
+    const setSourceRecoveryReady = jest.fn<void, [unknown]>();
+    const barrier = new KnowledgePluginStartupBarrier({
+      runtime: { isAvailable: () => true },
+      projects: { initialize: async () => undefined },
+      bundleConfig: {
+        load: async () => ({
+          kind: "configured",
+          bundleIds: ["personal"],
+          recovery: {
+            start: async () => ({ kind: "observed_clear" as const }),
+            close: () => undefined,
+          },
+          observation,
+        }),
+      },
+      studio: {
+        setUnavailable: () => undefined,
+        setReadReady: () => undefined,
+        setSourceRecoveryReady,
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(barrier.getState()).toMatchObject({
+      status: "source_recovery_required",
+      sourceRecoveryBundleId: "personal",
+    });
+    expect(setSourceRecoveryReady).toHaveBeenCalledWith(barrier.getState());
+    expect(release).not.toHaveBeenCalled();
+    expect(sourceOnly).toBeDefined();
+    await expect(sourceOnly!.load("personal", new AbortController().signal)).resolves.toMatchObject(
+      {
+        availability: "ready",
+        preferredTab: "sources",
+        sourceLifecycle: {
+          sources: [expect.objectContaining({ sourceId: "source-1", status: "missing" })],
+        },
+      }
+    );
+    await expect(
+      sourceOnly!.pauseBundle("personal", 0, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+    expect("replaceMissingSource" in sourceOnly!).toBe(false);
+
+    barrier.cancel();
+    expect(() => composer.getSourceIssues()).toThrow("The operation was aborted");
+    await expect(sourceOnly!.load("personal", new AbortController().signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(release).not.toHaveBeenCalled();
+    lifecycle.close();
+    expect(fetchPort).not.toHaveBeenCalled();
   });
 
   it("synchronously closes the live watcher when the preflight lease is invalidated", async () => {
@@ -426,6 +595,8 @@ describe("KnowledgeProductionObservationComposer", () => {
 
     expect(vault.activeListenerCount()).toBe(0);
     expect(() => composer.assertHealthy()).toThrow("The operation was aborted");
+    expect(() => composer.getSourceIssues()).toThrow("The operation was aborted");
+    expect(() => composer.getRegisteredSourcePaths()).toThrow("The operation was aborted");
     expect(fetchPort).not.toHaveBeenCalled();
   });
 
@@ -464,6 +635,7 @@ describe("KnowledgeProductionObservationComposer", () => {
           runtime: Record<PropertyKey, unknown>;
           commands: Record<PropertyKey, unknown>;
           query: Record<PropertyKey, unknown>;
+          sourceLifecycle: Record<PropertyKey, unknown>;
         };
       }
     ).input;
@@ -508,6 +680,25 @@ describe("KnowledgeProductionObservationComposer", () => {
     ]) {
       expect(forbiddenAuthority in commandAdapter).toBe(false);
     }
+    const sourceLifecycleAdapter = adapterInput.sourceLifecycle;
+    expect(Reflect.ownKeys(sourceLifecycleAdapter).sort()).toEqual([
+      "checkAgain",
+      "loadSources",
+      "retireSource",
+    ]);
+    expect(Object.isFrozen(sourceLifecycleAdapter)).toBe(true);
+    for (const forbiddenAuthority of [
+      "runtime",
+      "vault",
+      "write",
+      "remove",
+      "queue",
+      "review",
+      "apply",
+      "transaction",
+    ]) {
+      expect(forbiddenAuthority in sourceLifecycleAdapter).toBe(false);
+    }
     const studioPort = new DelegatingKnowledgeStudioPort();
     const studioReadGeneration = new KnowledgeStudioReadGenerationLease({
       delegate: adapter,
@@ -541,12 +732,25 @@ describe("KnowledgeProductionObservationComposer", () => {
         bundleId: "personal",
         items: [],
       },
+      sourceLifecycle: {
+        bundleId: "personal",
+        sources: [
+          expect.objectContaining({
+            sourceId: "source-1",
+            sourcePath: SOURCE_PATH,
+            status: "ready",
+          }),
+        ],
+      },
       queryAvailable: true,
       queryWritebackAvailable: true,
     });
+    expect(snapshot.sourceLifecycle?.sources[0]?.actions.canRemove).toBe(false);
     expect(snapshot.notice).toContain("reviewed Save to Wiki");
     expect(snapshot.notice).toContain("Saved answers enter Review");
-    expect(snapshot.notice).toContain("delete remains disabled");
+    expect(snapshot.notice).toContain("source lifecycle recovery");
+    expect(snapshot.notice).toContain("without deleting generated Wiki files");
+    expect(snapshot.notice).toContain("generated Wiki deletion remains disabled");
     expect(Object.isFrozen(snapshot.commandCapabilities)).toBe(true);
     expect(onApplyGenerationRefreshRequired).not.toHaveBeenCalled();
 
@@ -585,19 +789,31 @@ describe("KnowledgeProductionObservationComposer", () => {
     vault.trigger("create", createFile("Elsewhere/Note.md"));
     expect(onHint).not.toHaveBeenCalled();
     vault.trigger("create", createFile("Wiki/personal/Page.md"));
-    expect(onHint).toHaveBeenCalledTimes(1);
     vault.trigger("modify", createFile("Wiki/personal/Page.md"));
     vault.trigger("delete", createFile("Wiki/personal/Page.md"));
     vault.trigger("rename", createFile("Elsewhere/Moved.md"), "Wiki/personal/BeforeMove.md");
     vault.trigger("rename", createFile("Wiki/personal/MovedIn.md"), "Elsewhere/BeforeMove.md");
     vault.trigger("create", createFile("wiki/PERSONAL/Case.md"));
     vault.trigger("rename", createFile("Elsewhere/New.md"), "Elsewhere/Old.md");
-    expect(onHint).toHaveBeenCalledTimes(6);
+    await flushStudioHints();
+    expect(onHint).toHaveBeenCalledTimes(1);
+    vault.trigger("create", createFile("Sources/personal/New.md"));
+    vault.trigger("modify", createFile("Sources/personal/New.md"));
+    vault.trigger("delete", createFile("Sources/personal/New.md"));
+    vault.trigger("rename", createFile("Elsewhere/MovedSource.md"), "Sources/personal/Old.md");
+    vault.trigger("rename", createFile("Sources/personal/MovedIn.md"), "Elsewhere/OldSource.md");
+    vault.trigger("create", createFile("sources/PERSONAL/Case.md"));
+    await flushStudioHints();
+    expect(onHint).toHaveBeenCalledTimes(2);
     const retainedHandlers = [...vault.handlers.values()].flatMap((handlers) => [
       ...handlers.values(),
     ]);
 
+    vault.trigger("create", createFile("Wiki/personal/PendingClose.md"));
     lifecycle.invalidate();
+    expect(onHint).toHaveBeenCalledTimes(3);
+    await flushStudioHints();
+    expect(onHint).toHaveBeenCalledTimes(3);
     expect(vault.activeListenerCount()).toBe(0);
     await expect(
       adapter.pauseBundle("personal", pausedQueue.value.revision, new AbortController().signal)
@@ -628,7 +844,59 @@ describe("KnowledgeProductionObservationComposer", () => {
     expect(fetchPort).not.toHaveBeenCalled();
   });
 
-  it("revokes health immediately when the live watcher observes a destructive source change", async () => {
+  it("emits Studio hints for every configured source root and both sides of rename", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission } = await createAdmission(
+      fetchPort,
+      createBundle({ sourceRoots: ["Sources/personal", "Inbox/research"] })
+    );
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+    await composer.start(new AbortController().signal);
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => undefined
+    );
+    const adapter = composer.createKnowledgeStudioRuntimeReadAdapter(admission.modelRouteLease);
+    const onHint = jest.fn<void, []>();
+    const unsubscribe = adapter.subscribe("personal", onHint);
+
+    vault.trigger("create", createFile("Sources/personal/New.md"));
+    await flushStudioHints();
+    vault.trigger("create", createFile("Inbox/research/Paper.pdf"));
+    await flushStudioHints();
+    vault.trigger("create", createFile("Wiki/personal/New.md"));
+    await flushStudioHints();
+    vault.trigger("rename", createFile("Elsewhere/Moved.pdf"), "Inbox/research/Before.pdf");
+    await flushStudioHints();
+    vault.trigger("rename", createFile("Sources/personal/MovedIn.md"), "Elsewhere/Before.md");
+    await flushStudioHints();
+    vault.trigger("create", createFile("Inbox/research-other/No.md"));
+    vault.trigger("rename", createFile("Elsewhere/New.md"), "Elsewhere/Old.md");
+
+    expect(onHint).toHaveBeenCalledTimes(5);
+
+    vault.trigger("create", createFile("Wiki/personal/PendingUnsubscribe.md"));
+    unsubscribe();
+    await flushStudioHints();
+    expect(onHint).toHaveBeenCalledTimes(5);
+    composer.close();
+    await worker.whenSettled();
+    lifecycle.close();
+    expect(vault.activeListenerCount()).toBe(0);
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("reloads an open Studio after delete and again only when recovery settles", async () => {
     const fetchPort = createFetchPort();
     const { lifecycle, admission } = await createAdmission(fetchPort);
     const runtime = await createRuntime();
@@ -636,22 +904,77 @@ describe("KnowledgeProductionObservationComposer", () => {
     vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
     const source = vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
     const controller = new AbortController();
+    const emit = jest.fn<void, [unknown]>();
     const composer = new KnowledgeProductionObservationComposer({
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      notificationSink: { emit },
     });
     await composer.start(controller.signal);
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => undefined
+    );
+    const adapter = composer.createKnowledgeStudioRuntimeReadAdapter(
+      admission.modelRouteLease,
+      undefined,
+      () => undefined
+    );
+    const studio = new KnowledgeStudioController(adapter, adapter, undefined, undefined, adapter);
+    studio.start("personal");
+    await waitForStudioState(
+      () => studio.getState().snapshot?.sourceLifecycle?.sources[0]?.status === "ready"
+    );
 
-    source.path = "Sources/personal/renamed.md";
-    vault.trigger("rename", source, SOURCE_PATH);
+    vault.loadedFiles.delete(SOURCE_PATH);
+    vault.files.delete(SOURCE_PATH);
+    vault.trigger("delete", source);
+    await waitForStudioState(
+      () => studio.getState().snapshot?.sourceLifecycle?.sources[0]?.status === "missing"
+    );
 
-    expect(() => composer.assertHealthy()).toThrow("The operation was aborted");
-    expect(vault.activeListenerCount()).toBe(0);
-    await expect(composer.reprove(controller.signal)).rejects.toMatchObject({
-      name: "AbortError",
+    expect(() => composer.assertHealthy()).not.toThrow();
+    expect(composer.getSourceIssues()).toEqual([
+      {
+        kind: "source_change_unsupported",
+        change: "delete",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+    expect(composer.getRegisteredSourcePaths()).toEqual([
+      { bundleId: "personal", sourceId: "source-1", sourcePath: SOURCE_PATH },
+    ]);
+    expect(vault.activeListenerCount()).toBe(8);
+    expect(emit).toHaveBeenCalledWith({
+      kind: "source_change_unsupported",
+      change: "delete",
+      bundleId: "personal",
+      sourceId: "source-1",
     });
+
+    const replacement = vault.addFile(SOURCE_PATH, encodeText("# Restored source\n"));
+    vault.trigger("create", replacement);
+    await waitForStudioState(
+      () => studio.getState().snapshot?.sourceLifecycle?.sources[0]?.status === "ready"
+    );
+    expect(composer.getSourceIssues()).toEqual([]);
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "capture_settled",
+        cause: "create",
+        bundleId: "personal",
+        sourceId: "source-1",
+      })
+    );
+    expect(vault.activeListenerCount()).toBe(8);
     expect(fetchPort).not.toHaveBeenCalled();
+    studio.stop();
+    composer.close();
+    await worker.whenSettled();
     lifecycle.close();
   });
 
@@ -842,6 +1165,130 @@ describe("KnowledgeProductionObservationComposer", () => {
     composer.close();
     await worker.whenSettled();
     lifecycle.close();
+  });
+
+  it("turns a reviewed Chat draft into completed no-change Activity after the requested production rebuild", async () => {
+    const modelStarted = createDeferred<void>();
+    const workerRefreshRequired = createDeferred<void>();
+    const fetchPort = jest.fn<
+      ReturnType<KnowledgeDeepSeekFetchPort>,
+      Parameters<KnowledgeDeepSeekFetchPort>
+    >(async () => {
+      modelStarted.resolve();
+      return createNoChangesResponse();
+    });
+    const firstAdmission = await createAdmission(fetchPort);
+    const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+    await runtime.initialize();
+    const manifests = new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime));
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    const captureRefreshRequired = jest.fn<void, []>();
+    const captureCoordinator = new KnowledgeProductionChatCaptureCoordinator({
+      owners: firstAdmission.admission.owners,
+      parserProfiles: firstAdmission.admission.workflowLease
+        .getParsers()
+        .map((parser) => parser.getProfile()),
+      sourcePresence: { isFile: (sourcePath) => vault.loadedFiles.has(sourcePath) },
+      registration: new KnowledgeSourceRegistrationCore(manifests, {
+        assertCurrent: () => firstAdmission.admission.workflowLease.assertCurrent(),
+      }),
+      createFileStore: () => ({
+        publish: async (sourcePath, bytes, signal) => {
+          if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
+          const contentHash = createSourceContentHash(bytes);
+          const existing = vault.files.get(sourcePath);
+          if (existing) {
+            return createSourceContentHash(new Uint8Array(existing)) === contentHash
+              ? { status: "reused" as const, contentHash }
+              : { status: "conflict" as const };
+          }
+          vault.addFile(sourcePath, new Uint8Array(bytes).buffer);
+          return { status: "created" as const, contentHash };
+        },
+      }),
+      assertCurrent: () => firstAdmission.admission.workflowLease.assertCurrent(),
+      onGenerationRefreshRequired: captureRefreshRequired,
+    });
+    const session = captureCoordinator.prepareKnowledgeDraft();
+    if (!session) throw new Error("Expected a current Chat draft destination");
+
+    const receipt = await captureCoordinator.createKnowledgeDraft(
+      session,
+      {
+        title: "Reviewed Chat draft",
+        body: "The user checked this explanation before registering it as a source.",
+        reviewConfirmed: true,
+      },
+      new AbortController().signal
+    );
+
+    expect(receipt).toMatchObject({ status: "registered", bundleId: "personal" });
+    expect(captureRefreshRequired).toHaveBeenCalledTimes(1);
+    const registeredManifest = await manifests.load("personal");
+    expect(registeredManifest.entries).toHaveLength(1);
+    expect(registeredManifest.entries[0]).toMatchObject({
+      sourcePath: receipt.sourcePath,
+      custody: "managed_copy",
+      extensions: {
+        obsidianCopilotKnowledgeSourceOrigin: {
+          version: 1,
+          operation: "chat_knowledge_draft",
+        },
+      },
+    });
+    firstAdmission.lifecycle.close();
+
+    const nextAdmission = await createAdmission(fetchPort);
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: nextAdmission.admission.workflowLease,
+    });
+    await expect(composer.start(new AbortController().signal)).resolves.toEqual({
+      kind: "observation_converged",
+      scheduledCaptureCount: 1,
+    });
+    const worker = composer.createCompileReviewWorkerController(
+      nextAdmission.admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => workerRefreshRequired.resolve()
+    );
+    const studio = composer.createKnowledgeStudioRuntimeReadAdapter(
+      nextAdmission.admission.modelRouteLease,
+      undefined,
+      () => undefined
+    );
+
+    worker.start();
+    await modelStarted.promise;
+    await workerRefreshRequired.promise;
+    const snapshot = await studio.load("personal", new AbortController().signal);
+    expect(snapshot.activity.items).toEqual([
+      expect.objectContaining({
+        sourceId: registeredManifest.entries[0]?.sourceId,
+        status: "completed",
+        terminal: true,
+      }),
+    ]);
+    expect(snapshot.reviews).toEqual([]);
+    expect(snapshot.sourceLifecycle?.sources).toEqual([
+      expect.objectContaining({
+        sourceId: registeredManifest.entries[0]?.sourceId,
+        sourcePath: receipt.sourcePath,
+        status: "ready",
+      }),
+    ]);
+    const committedManifest = await manifests.load("personal");
+    expect(
+      committedManifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+    ).toBeDefined();
+    expect(fetchPort).toHaveBeenCalledTimes(1);
+
+    composer.close();
+    await worker.whenSettled();
+    nextAdmission.lifecycle.close();
   });
 
   it("admits an unchanged cold observation from a real zero-page no-change authority", async () => {

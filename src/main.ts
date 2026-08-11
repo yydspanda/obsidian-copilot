@@ -14,6 +14,7 @@ import { KNOWLEDGE_STUDIO_VIEW_TYPE, KnowledgeStudioView } from "@/components/Kn
 import { LoadChatHistoryModal } from "@/components/modals/LoadChatHistoryModal";
 
 import { registerContextMenu } from "@/commands/contextMenu";
+import { registerKnowledgeSourceMenu } from "@/commands/knowledgeSourceMenu";
 import { CustomCommandRegister } from "@/commands/customCommandRegister";
 import { migrateCommands, suggestDefaultCommands } from "@/commands/migrator";
 import { migrateSystemPromptsFromSettings } from "@/system-prompts/migration";
@@ -34,6 +35,16 @@ import {
 } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
 import { KnowledgeProductionFolderImportCoordinator } from "@/knowledge/capture/KnowledgeProductionFolderImportCoordinator";
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
+import {
+  KnowledgeSourcePathIndex,
+  type KnowledgeSourcePathIndexLease,
+} from "@/knowledge/sourceLifecycle/KnowledgeSourcePathIndex";
+import { createKnowledgeSourceIssueNotificationSink } from "@/knowledge/sourceLifecycle/KnowledgeSourceIssueNotificationSink";
+import { KnowledgeProductionSourceLifecycleCoordinator } from "@/knowledge/sourceLifecycle/KnowledgeProductionSourceLifecycleCoordinator";
+import type {
+  KnowledgeSourceLifecyclePort,
+  KnowledgeSourceRetirementRequest,
+} from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
 import {
@@ -48,6 +59,7 @@ import {
 import { KnowledgeProductionRecoveryComposer } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
 import { KnowledgeProductionRecoveryActionCoordinator } from "@/knowledge/startup/KnowledgeProductionRecoveryActionCoordinator";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import { createSourceObservationPreReleaseResult } from "@/knowledge/startup/KnowledgeSourceObservationPreRelease";
 import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgePluginProductionRecoveryPort } from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
@@ -69,6 +81,7 @@ import {
 } from "@/knowledge/startup/KnowledgeStudioReadGenerationLease";
 import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
 import { KnowledgeStudioRecoveryOnlyAdapter } from "@/knowledge/ui/KnowledgeStudioRecoveryOnlyAdapter";
+import { KnowledgeStudioSourceLifecycleOnlyAdapter } from "@/knowledge/ui/KnowledgeStudioSourceLifecycleOnlyAdapter";
 import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { logError, logInfo, logWarn } from "@/logger";
 import { logFileManager } from "@/logFileManager";
@@ -211,6 +224,12 @@ export default class CopilotPlugin extends Plugin {
   private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
   private readonly knowledgeChatCapturePort = new DelegatingKnowledgeChatCapturePort();
   private readonly knowledgeFolderImportPort = new DelegatingKnowledgeFolderImportPort();
+  private readonly knowledgeSourcePathIndex = new KnowledgeSourcePathIndex();
+  private readonly knowledgeSourceIssueNotificationSink =
+    createKnowledgeSourceIssueNotificationSink((message) => {
+      if (this.knowledgeLifecycleClosed) return;
+      new Notice(message);
+    });
   private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
   private readonly knowledgeStudioStartupAvailability =
     new KnowledgeStudioStartupAvailabilityAdapter(
@@ -363,7 +382,7 @@ export default class CopilotPlugin extends Plugin {
       void this.initializeKnowledgeStartupPrerequisites();
       this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
         const port = this.knowledgeStudioPort;
-        const controller = new KnowledgeStudioController(port, port, port, port);
+        const controller = new KnowledgeStudioController(port, port, port, port, port);
         return new KnowledgeStudioView(
           leaf,
           controller,
@@ -394,6 +413,15 @@ export default class CopilotPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu: Menu) => {
         registerContextMenu(menu, this.app);
+      })
+    );
+
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        registerKnowledgeSourceMenu(menu, file, {
+          index: this.knowledgeSourcePathIndex,
+          openKnowledgeStudio: () => void this.activateKnowledgeStudio(),
+        });
       })
     );
 
@@ -534,6 +562,12 @@ export default class CopilotPlugin extends Plugin {
           }
           this.knowledgeStudioStartupAvailability.setRecoveryReady(state);
         },
+        setSourceRecoveryReady: (state) => {
+          if (this.knowledgeLifecycleClosed) {
+            return;
+          }
+          this.knowledgeStudioStartupAvailability.setSourceRecoveryReady(state);
+        },
       },
     });
     return barrier;
@@ -656,6 +690,7 @@ export default class CopilotPlugin extends Plugin {
       app: this.app,
       runtime,
       workflowLease: admission.workflowLease,
+      notificationSink: this.knowledgeSourceIssueNotificationSink,
     });
     const releaseComposer = new KnowledgeProductionRecoveryComposer({
       runtime,
@@ -668,8 +703,10 @@ export default class CopilotPlugin extends Plugin {
       | ReturnType<KnowledgeProductionObservationComposer["createCompileReviewWorkerController"]>
       | undefined;
     let studioReadGeneration: KnowledgeStudioReadGenerationLease | undefined;
+    let preReleaseStudioGeneration: KnowledgeStudioReadGenerationLease | undefined;
     let captureGeneration: KnowledgeChatCaptureGenerationLease | undefined;
     let folderImportGeneration: KnowledgeFolderImportGenerationLease | undefined;
+    let sourcePathIndexLease: Readonly<KnowledgeSourcePathIndexLease> | undefined;
     try {
       throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
       this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
@@ -679,7 +716,87 @@ export default class CopilotPlugin extends Plugin {
       throw error;
     }
     const port: KnowledgePluginObservationStartupPort = {
-      start: (signal) => candidate.start(signal),
+      start: async (signal) => {
+        const result = await candidate.start(signal);
+        const bundleId = admission.owners[0]?.config.id;
+        if (
+          !bundleId ||
+          admission.owners.length !== 1 ||
+          result.kind !== "blocked" ||
+          result.blockerKinds.length !== 1 ||
+          result.blockerKinds[0] !== "source_observation_pending"
+        ) {
+          return result;
+        }
+        const issues = candidate.getSourceIssues();
+        const sourceRecoveryResult = createSourceObservationPreReleaseResult(
+          result,
+          admission.owners.map(({ config }) => config.id),
+          issues
+        );
+        if (!sourceRecoveryResult) {
+          return result;
+        }
+        const assertPreReleaseCurrent = (): void => {
+          if (
+            releaseState !== "held" ||
+            this.knowledgeLifecycleClosed ||
+            this.knowledgeRuntime !== runtime ||
+            this.knowledgeProductionObservation !== port
+          ) {
+            throw new DOMException("The operation was aborted", "AbortError");
+          }
+          this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
+          candidate.getSourceIssues();
+        };
+        const coordinator = new KnowledgeProductionSourceLifecycleCoordinator({
+          runtime,
+          getSourceIssues: () => candidate.getSourceIssues(),
+          assertCurrent: assertPreReleaseCurrent,
+          onGenerationRefreshRequired: () =>
+            this.deferKnowledgeProductionGenerationInvalidation(assertPreReleaseCurrent),
+        });
+        const retainLifecycleAction = <T>(operation: Promise<T>): Promise<T> => {
+          retainKnowledgeProductionDrain(
+            this.app.vault,
+            operation.then(
+              () => undefined,
+              () => undefined
+            )
+          );
+          return operation;
+        };
+        const sourceLifecycle: KnowledgeSourceLifecyclePort = Object.freeze({
+          loadSources: (nextBundleId: string, nextSignal: AbortSignal) =>
+            coordinator.loadSources(nextBundleId, nextSignal),
+          checkAgain: (nextBundleId: string, sourceId: string, nextSignal: AbortSignal) =>
+            retainLifecycleAction(coordinator.checkAgain(nextBundleId, sourceId, nextSignal)),
+          retireSource: (
+            nextBundleId: string,
+            request: Readonly<KnowledgeSourceRetirementRequest>,
+            nextSignal: AbortSignal
+          ) => retainLifecycleAction(coordinator.retireSource(nextBundleId, request, nextSignal)),
+        });
+        const adapter = new KnowledgeStudioSourceLifecycleOnlyAdapter({
+          bundleId,
+          sourceLifecycle,
+          assertCurrent: assertPreReleaseCurrent,
+        });
+        preReleaseStudioGeneration = new KnowledgeStudioReadGenerationLease({
+          delegate: adapter,
+          subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
+          replaceDelegate: (delegate) => this.knowledgeStudioPort.replaceDelegate(delegate),
+          setUnavailable: () => {
+            if (this.knowledgeLifecycleClosed) return;
+            this.knowledgeStudioStartupAvailability.setUnavailable({
+              generation: 0,
+              status: "waiting_for_layout",
+            });
+          },
+          assertCurrent: assertPreReleaseCurrent,
+        });
+        return sourceRecoveryResult;
+      },
       release: async (signal) => {
         if (releaseState !== "held") {
           throw new DOMException("The operation was aborted", "AbortError");
@@ -703,6 +820,8 @@ export default class CopilotPlugin extends Plugin {
               admission.owners.map(({ config }) => config.id)
             )
           ) {
+            preReleaseStudioGeneration?.close();
+            preReleaseStudioGeneration = undefined;
             released = true;
             const assertCurrent = (): void => {
               if (
@@ -782,9 +901,14 @@ export default class CopilotPlugin extends Plugin {
                 .map((parser) => parser.getProfile()),
               sourcePresence: new ObsidianKnowledgeVaultSourcePresence(this.app.vault),
               registration,
+              createFileStore: (sourceRoot) =>
+                new ObsidianKnowledgeFolderImportFileStore(this.app.vault.adapter, sourceRoot, {
+                  assertCurrent,
+                }),
               assertCurrent,
               onGenerationRefreshRequired: () =>
                 this.deferKnowledgeProductionGenerationInvalidation(assertCurrent),
+              retainDrain: (drain) => retainKnowledgeProductionDrain(this.app.vault, drain),
             });
             captureGeneration = new KnowledgeChatCaptureGenerationLease({
               delegate: nextCaptureDelegate,
@@ -815,6 +939,9 @@ export default class CopilotPlugin extends Plugin {
               revokeDelegate: (delegate) => this.knowledgeFolderImportPort.revokeDelegate(delegate),
               assertCurrent,
             });
+            sourcePathIndexLease = this.knowledgeSourcePathIndex.install(
+              candidate.getRegisteredSourcePaths()
+            );
             retainKnowledgeProductionDrain(this.app.vault, workerController.whenSettled());
             workerController.start();
             studioReadGeneration.assertCurrent();
@@ -830,8 +957,14 @@ export default class CopilotPlugin extends Plugin {
           captureGeneration = undefined;
           folderImportGeneration?.close();
           folderImportGeneration = undefined;
+          if (sourcePathIndexLease) {
+            this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
+            sourcePathIndexLease = undefined;
+          }
           studioReadGeneration?.close();
           studioReadGeneration = undefined;
+          preReleaseStudioGeneration?.close();
+          preReleaseStudioGeneration = undefined;
           workerController?.close();
           throw error;
         }
@@ -843,8 +976,14 @@ export default class CopilotPlugin extends Plugin {
         captureGeneration = undefined;
         folderImportGeneration?.close();
         folderImportGeneration = undefined;
+        if (sourcePathIndexLease) {
+          this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
+          sourcePathIndexLease = undefined;
+        }
         studioReadGeneration?.close();
         studioReadGeneration = undefined;
+        preReleaseStudioGeneration?.close();
+        preReleaseStudioGeneration = undefined;
         workerController?.close();
         workerController = undefined;
         candidate.close();
@@ -965,6 +1104,7 @@ export default class CopilotPlugin extends Plugin {
     this.knowledgeStudioPort.dispose();
     this.knowledgeChatCapturePort.dispose();
     this.knowledgeFolderImportPort.dispose();
+    this.knowledgeSourcePathIndex.clear();
     this.knowledgeProjectRecordsUnsubscriber?.();
     this.knowledgeProjectRecordsUnsubscriber = undefined;
     // Unsubscribe ProjectManager before releasing project state. Reversing

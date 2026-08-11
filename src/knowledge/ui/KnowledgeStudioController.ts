@@ -12,14 +12,23 @@ import type {
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
 import type {
+  KnowledgeSourceLifecyclePort,
+  KnowledgeSourceRetirementUiReceipt,
+} from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
+import type {
   KnowledgeActivityCounts,
   KnowledgeActivityModel,
   KnowledgeActivityStatus,
 } from "@/knowledge/ui/activityModel";
 import type { KnowledgeRecoveryModel } from "@/knowledge/ui/recoveryModel";
+import {
+  createKnowledgeSourceLifecycleModel,
+  type KnowledgeSourceLifecycleModel,
+  type KnowledgeSourceRemovalConfirmation,
+} from "@/knowledge/ui/sourceLifecycleModel";
 
 /** Knowledge Studio tabs currently exposed by the Windows desktop surface. */
-export type KnowledgeStudioTab = "query" | "activity" | "review" | "recovery";
+export type KnowledgeStudioTab = "query" | "activity" | "review" | "sources" | "recovery";
 
 /** Availability of the runtime adapters behind a UI snapshot. */
 export type KnowledgeStudioAvailability = "ready" | "adapter_unavailable";
@@ -45,6 +54,10 @@ export interface KnowledgeStudioSnapshot {
   activity: Readonly<KnowledgeActivityModel>;
   reviews: readonly Readonly<KnowledgeReviewPlan>[];
   recovery: Readonly<KnowledgeRecoveryModel>;
+  /** Active registered sources when the exact lifecycle generation is connected. */
+  sourceLifecycle?: Readonly<KnowledgeSourceLifecycleModel>;
+  /** Optional first-load tab selected by a constrained startup adapter. */
+  preferredTab?: "sources";
   /** Whether the exact adapter generation exposes scoped applied-Wiki Query. */
   queryAvailable?: boolean;
   /** Whether current grounded answers can enter the reviewed writeback pipeline. */
@@ -131,7 +144,13 @@ export interface KnowledgeStudioCommandPort {
 }
 
 /** Controller lifecycle independent of any particular React render root. */
-export type KnowledgeStudioLoadStatus = "idle" | "unavailable" | "loading" | "ready" | "error";
+export type KnowledgeStudioLoadStatus =
+  | "idle"
+  | "refreshing"
+  | "unavailable"
+  | "loading"
+  | "ready"
+  | "error";
 
 /** User-visible action currently serialized by the controller. */
 export interface KnowledgeStudioPendingAction {
@@ -141,6 +160,8 @@ export interface KnowledgeStudioPendingAction {
     | "cancel"
     | "retry"
     | "submit_review"
+    | "check_source"
+    | "retire_source"
     | "continue_recovery"
     | "abandon_recovery";
   targetId?: string;
@@ -392,13 +413,68 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
     (snapshot.queryAvailable !== undefined && typeof snapshot.queryAvailable !== "boolean") ||
     (snapshot.queryWritebackAvailable !== undefined &&
       typeof snapshot.queryWritebackAvailable !== "boolean") ||
-    (snapshot.queryWritebackAvailable === true && snapshot.queryAvailable !== true)
+    (snapshot.queryWritebackAvailable === true && snapshot.queryAvailable !== true) ||
+    (snapshot.sourceLifecycle !== undefined && snapshot.sourceLifecycle.bundleId !== bundleId) ||
+    (snapshot.preferredTab !== undefined && snapshot.preferredTab !== "sources") ||
+    (snapshot.preferredTab === "sources" && snapshot.sourceLifecycle === undefined)
   ) {
     throw new TypeError("Knowledge Studio snapshot identity is invalid");
   }
   if (snapshot.reviews.some((review) => review.bundleId !== bundleId)) {
     throw new TypeError("Knowledge Studio review belongs to another Bundle");
   }
+}
+
+/**
+ * Reads one exact, frozen, data-only source-removal authority token.
+ *
+ * A copied frozen value prevents accessors or later caller mutation from changing
+ * the authority that was validated before the Runtime command is submitted.
+ */
+function snapshotRemovalConfirmation(
+  value: Readonly<KnowledgeSourceRemovalConfirmation>
+): Readonly<KnowledgeSourceRemovalConfirmation> | undefined {
+  if (typeof value !== "object" || value === null || !Object.isFrozen(value)) return undefined;
+  const expectedKeys = [
+    "sourceId",
+    "sourcePath",
+    "retirementRef",
+    "runtimeRevision",
+    "manifestRevision",
+  ] as const;
+  if (Reflect.ownKeys(value).length !== expectedKeys.length) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (expectedKeys.some((key) => !("value" in (descriptors[key] ?? {})))) return undefined;
+
+  const sourceId: unknown = descriptors.sourceId?.value;
+  const sourcePath: unknown = descriptors.sourcePath?.value;
+  const retirementRef: unknown = descriptors.retirementRef?.value;
+  const runtimeRevision: unknown = descriptors.runtimeRevision?.value;
+  const manifestRevision: unknown = descriptors.manifestRevision?.value;
+  if (
+    typeof sourceId !== "string" ||
+    sourceId.trim().length === 0 ||
+    typeof sourcePath !== "string" ||
+    sourcePath.trim().length === 0 ||
+    typeof retirementRef !== "string" ||
+    retirementRef.trim().length === 0 ||
+    typeof runtimeRevision !== "number" ||
+    !Number.isSafeInteger(runtimeRevision) ||
+    runtimeRevision < 0 ||
+    typeof manifestRevision !== "number" ||
+    !Number.isSafeInteger(manifestRevision) ||
+    manifestRevision < 0
+  ) {
+    return undefined;
+  }
+
+  return Object.freeze({
+    sourceId,
+    sourcePath,
+    retirementRef,
+    runtimeRevision,
+    manifestRevision,
+  });
 }
 
 /**
@@ -430,12 +506,14 @@ export class KnowledgeStudioController {
    * @param commandPort - Durable mutation orchestration boundary
    * @param queryPort - Optional scoped Query and citation-navigation boundary
    * @param queryWritebackPort - Optional current-answer capture boundary
+   * @param sourceLifecyclePort - Optional source inventory and lifecycle command boundary
    */
   constructor(
     private readonly readPort: KnowledgeStudioReadPort,
     private readonly commandPort: KnowledgeStudioCommandPort,
     private readonly queryPort?: KnowledgeStudioQueryPort,
-    private readonly queryWritebackPort?: KnowledgeStudioQueryWritebackPort
+    private readonly queryWritebackPort?: KnowledgeStudioQueryWritebackPort,
+    private readonly sourceLifecyclePort?: KnowledgeSourceLifecyclePort
   ) {}
 
   /** Returns the current immutable-by-contract controller state. */
@@ -500,6 +578,23 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
+  /**
+   * Presents a transient, action-free refresh state while runtime ownership is rebuilt.
+   *
+   * This state deliberately retains no Bundle identity, snapshot, or command
+   * capability. Callers must start a freshly admitted Bundle generation before
+   * the Studio exposes durable state again.
+   */
+  showRefreshing(): void {
+    this.cancelSessionWork();
+    this.state = {
+      status: "refreshing",
+      activeTab: "activity",
+      refreshing: true,
+    };
+    this.emit();
+  }
+
   /** Stops the current Bundle session and cancels in-flight work. */
   stop(): void {
     this.cancelSessionWork();
@@ -520,11 +615,12 @@ export class KnowledgeStudioController {
   /**
    * Selects a top-level Knowledge Studio tab.
    *
-   * @param tab - Query, Activity, Review, or Recovery tab
+   * @param tab - Query, Activity, Review, Sources, or Recovery tab
    */
   selectTab(tab: KnowledgeStudioTab): void {
     const snapshot = this.state.snapshot;
     if (tab === "query" && snapshot?.queryAvailable !== true) return;
+    if (tab === "sources" && snapshot?.sourceLifecycle === undefined) return;
     if (tab === "recovery" && (snapshot?.recovery.items.length ?? 0) === 0) return;
     if (this.state.activeTab === tab) return;
     this.state = { ...this.state, activeTab: tab };
@@ -809,6 +905,29 @@ export class KnowledgeStudioController {
     this.emit();
   }
 
+  /**
+   * Detaches one coherent Studio projection from the current read generation.
+   *
+   * Source lifecycle data must already belong to the read port's Runtime
+   * consistency sandwich. The separate lifecycle port is command-only here so the
+   * controller never combines independently observed revisions.
+   *
+   * @param base - Snapshot returned by the Studio read boundary
+   * @returns Original snapshot or a copy with a strict detached lifecycle model
+   */
+  private snapshotStudioRead(base: KnowledgeStudioSnapshot): KnowledgeStudioSnapshot {
+    const rawSourceLifecycle = base.sourceLifecycle;
+    if (rawSourceLifecycle === undefined) return base;
+
+    const sourceLifecycle = createKnowledgeSourceLifecycleModel({
+      bundleId: rawSourceLifecycle.bundleId,
+      runtimeRevision: rawSourceLifecycle.runtimeRevision,
+      manifestRevision: rawSourceLifecycle.manifestRevision,
+      sources: rawSourceLifecycle.sources,
+    });
+    return Object.freeze({ ...base, sourceLifecycle });
+  }
+
   /** Reloads the current durable snapshot without optimistic status changes. */
   async refresh(): Promise<void> {
     const bundleId = this.state.bundleId;
@@ -833,7 +952,7 @@ export class KnowledgeStudioController {
     this.emit();
 
     try {
-      const snapshot = await this.readPort.load(bundleId, abort.signal);
+      const snapshot = this.snapshotStudioRead(await this.readPort.load(bundleId, abort.signal));
       assertSnapshotIdentity(bundleId, snapshot);
       if (
         abort.signal.aborted ||
@@ -848,15 +967,19 @@ export class KnowledgeStudioController {
         ? this.state.selectedReviewChangeSetId
         : snapshot.reviews[0]?.changeSetId;
       const activeTab =
-        snapshot.recovery.items.length > 0
-          ? this.state.snapshot === undefined
-            ? "recovery"
-            : this.state.activeTab
-          : this.state.activeTab === "recovery"
-            ? "activity"
-            : this.state.activeTab === "query" && snapshot.queryAvailable !== true
+        this.state.snapshot === undefined && snapshot.preferredTab === "sources"
+          ? "sources"
+          : snapshot.recovery.items.length > 0
+            ? this.state.snapshot === undefined
+              ? "recovery"
+              : this.state.activeTab
+            : this.state.activeTab === "recovery"
               ? "activity"
-              : this.state.activeTab;
+              : this.state.activeTab === "query" && snapshot.queryAvailable !== true
+                ? "activity"
+                : this.state.activeTab === "sources" && snapshot.sourceLifecycle === undefined
+                  ? "activity"
+                  : this.state.activeTab;
       this.state = {
         ...this.state,
         status: "ready",
@@ -957,6 +1080,118 @@ export class KnowledgeStudioController {
         this.commandPort.retryJob(bundleId, jobId, expectedQueueRevision, signal),
       () => ({ kind: "success", message: "Knowledge job queued for retry." })
     );
+  }
+
+  /**
+   * Rechecks one currently missing source against fresh durable watcher state.
+   *
+   * @param sourceId - Opaque source identity from the current lifecycle snapshot
+   * @param callerSignal - Optional view-owned cancellation signal
+   */
+  async checkSourceAgain(sourceId: string, callerSignal?: AbortSignal): Promise<void> {
+    if (this.state.pendingAction) return;
+    const sourceLifecyclePort = this.sourceLifecyclePort;
+    const source = this.state.snapshot?.sourceLifecycle?.sources.find(
+      (candidate) => candidate.sourceId === sourceId
+    );
+    if (
+      !sourceLifecyclePort ||
+      source?.status !== "missing" ||
+      source.actions.canCheckAgain !== true
+    ) {
+      await this.rejectUnavailableAction(
+        "This source cannot be checked again from the current snapshot."
+      );
+      return;
+    }
+
+    await this.executeAction<void>(
+      { kind: "check_source", targetId: sourceId },
+      (bundleId, signal) => sourceLifecyclePort.checkAgain(bundleId, sourceId, signal),
+      () => ({
+        kind: "success",
+        message: "Source check completed. Current durable state has been refreshed.",
+      }),
+      () => true,
+      callerSignal
+    );
+  }
+
+  /**
+   * Requests retirement of one exact active source without deleting generated Wiki pages.
+   *
+   * @param confirmation - Exact frozen row and revision authority shown to the user
+   * @param callerSignal - Optional view-owned cancellation signal
+   */
+  async retireSource(
+    confirmation: Readonly<KnowledgeSourceRemovalConfirmation>,
+    callerSignal?: AbortSignal
+  ): Promise<void> {
+    if (this.state.pendingAction) return;
+    const sourceLifecyclePort = this.sourceLifecyclePort;
+    const lifecycle = this.state.snapshot?.sourceLifecycle;
+    const authority = snapshotRemovalConfirmation(confirmation);
+    const source = lifecycle?.sources.find(
+      (candidate) => candidate.sourceId === authority?.sourceId
+    );
+    if (
+      !sourceLifecyclePort ||
+      !lifecycle ||
+      !authority ||
+      !source ||
+      lifecycle.runtimeRevision !== authority.runtimeRevision ||
+      lifecycle.manifestRevision !== authority.manifestRevision ||
+      source.sourcePath !== authority.sourcePath ||
+      source.retirementRef !== authority.retirementRef ||
+      source.actions.canRemove !== true ||
+      source.retirementBlockers.length > 0
+    ) {
+      await this.rejectUnavailableAction(
+        "This source cannot be removed from the current snapshot. Clear pending work and check again."
+      );
+      return;
+    }
+
+    const reason = source.status === "missing" ? "source_missing" : "user_requested";
+    const { sourceId, retirementRef } = authority;
+    await this.executeAction<Readonly<KnowledgeSourceRetirementUiReceipt>>(
+      { kind: "retire_source", targetId: sourceId },
+      (bundleId, signal) =>
+        sourceLifecyclePort.retireSource(bundleId, { sourceId, retirementRef, reason }, signal),
+      (result) => this.createSourceRetirementFeedback(result),
+      () => true,
+      callerSignal
+    );
+  }
+
+  /** Validates one path-free retirement receipt and maps it to stable feedback. */
+  private createSourceRetirementFeedback(
+    result: Readonly<KnowledgeSourceRetirementUiReceipt>
+  ): KnowledgeStudioFeedback {
+    if (typeof result !== "object" || result === null || Reflect.ownKeys(result).length !== 2) {
+      throw new TypeError("Knowledge source retirement receipt is invalid");
+    }
+    const outcome = Object.getOwnPropertyDescriptor(result, "outcome")?.value;
+    const retainedWikiPageCount = Object.getOwnPropertyDescriptor(
+      result,
+      "retainedWikiPageCount"
+    )?.value;
+    if (
+      (outcome !== "retired" && outcome !== "already_retired") ||
+      !Number.isSafeInteger(retainedWikiPageCount) ||
+      retainedWikiPageCount < 0
+    ) {
+      throw new TypeError("Knowledge source retirement receipt is invalid");
+    }
+    return {
+      kind: "success",
+      message:
+        outcome === "retired"
+          ? `Source removed from future ingest, Review, and Query citations. ${retainedWikiPageCount} generated Wiki ${
+              retainedWikiPageCount === 1 ? "page was" : "pages were"
+            } retained.`
+          : "The source was already removed. Existing generated Wiki pages remain unchanged.",
+    };
   }
 
   /**
@@ -1187,21 +1422,26 @@ export class KnowledgeStudioController {
    * @param operation - Port call receiving the current Bundle and cancellation signal
    * @param toFeedback - Successful result mapper
    * @param shouldRefreshAfterSuccess - Optional durable reload policy for successful results
+   * @param callerSignal - Optional view-owned signal bridged to controller cancellation
    */
   private async executeAction<T>(
     pendingAction: KnowledgeStudioPendingAction,
     operation: (bundleId: string, signal: AbortSignal) => Promise<T>,
     toFeedback: (result: T) => KnowledgeStudioFeedback,
-    shouldRefreshAfterSuccess: (result: T) => boolean = () => true
+    shouldRefreshAfterSuccess: (result: T) => boolean = () => true,
+    callerSignal?: AbortSignal
   ): Promise<void> {
     const bundleId = this.state.bundleId;
-    if (!bundleId || this.state.pendingAction) return;
+    if (!bundleId || this.state.pendingAction || callerSignal?.aborted) return;
 
     this.cancelQueryWork();
     this.loadAbort?.abort();
     this.loadAbort = undefined;
     const abort = new AbortController();
     this.actionAbort = abort;
+    const abortFromCaller = (): void => abort.abort();
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    if (callerSignal?.aborted) abort.abort();
     const generation = ++this.actionGeneration;
     this.state = {
       ...this.state,
@@ -1240,9 +1480,14 @@ export class KnowledgeStudioController {
       };
       this.emit();
     } finally {
+      callerSignal?.removeEventListener("abort", abortFromCaller);
       if (generation === this.actionGeneration) {
         this.actionAbort = undefined;
         this.refreshQueued = false;
+        if (this.state.pendingAction === pendingAction) {
+          this.state = { ...this.state, pendingAction: undefined };
+          this.emit();
+        }
         if (successfulResult === undefined || shouldRefreshAfterSuccess(successfulResult)) {
           await this.refresh();
         }

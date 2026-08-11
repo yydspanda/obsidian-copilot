@@ -433,6 +433,165 @@ describe("DelegatingKnowledgeStudioPort", () => {
     await flushAsync();
   });
 
+  it("revokes stale source lifecycle work and routes new actions only to the current generation", async () => {
+    const oldCheck = createDeferred<void>();
+    let oldSignal: AbortSignal | undefined;
+    const oldDelegate = Object.assign(new RecordingKnowledgeStudioPort("old"), {
+      loadSources: async () =>
+        Object.freeze({
+          bundleId: "personal",
+          runtimeRevision: 1,
+          manifestRevision: 1,
+          sources: Object.freeze([]),
+        }),
+      checkAgain: async (_bundleId: string, _sourceId: string, signal: AbortSignal) => {
+        oldSignal = signal;
+        return oldCheck.promise;
+      },
+      retireSource: async () =>
+        Object.freeze({ outcome: "retired" as const, retainedWikiPageCount: 0 }),
+    });
+    const retireSource = jest.fn(async () =>
+      Object.freeze({ outcome: "retired" as const, retainedWikiPageCount: 2 })
+    );
+    const replacement = Object.assign(new RecordingKnowledgeStudioPort("new"), {
+      loadSources: async () =>
+        Object.freeze({
+          bundleId: "personal",
+          runtimeRevision: 2,
+          manifestRevision: 2,
+          sources: Object.freeze([]),
+        }),
+      checkAgain: async () => undefined,
+      retireSource,
+    });
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(oldDelegate);
+    expect("replaceMissingSource" in port).toBe(false);
+
+    const stale = port.checkAgain("personal", "source-old", new AbortController().signal);
+    await flushAsync();
+    port.replaceDelegate(replacement);
+
+    expect(oldSignal?.aborted).toBe(true);
+    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
+    await expect(port.loadSources("personal", new AbortController().signal)).resolves.toMatchObject(
+      {
+        runtimeRevision: 2,
+      }
+    );
+    await expect(
+      port.retireSource(
+        "personal",
+        {
+          sourceId: "source-new",
+          retirementRef: "d".repeat(64),
+          reason: "user_requested",
+        },
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ outcome: "retired", retainedWikiPageCount: 2 });
+    expect(retireSource).toHaveBeenCalledTimes(1);
+
+    oldCheck.resolve();
+    await flushAsync();
+  });
+
+  it("returns a committed retirement receipt after delegate replacement", async () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const replacementRetire = jest.fn(async () =>
+      Object.freeze({ outcome: "retired" as const, retainedWikiPageCount: 9 })
+    );
+    const replacement = Object.assign(new RecordingKnowledgeStudioPort("new"), {
+      retireSource: replacementRetire,
+    });
+    const committedReceipt = Object.freeze({
+      outcome: "retired" as const,
+      retainedWikiPageCount: 2,
+    });
+    const retireSource = jest.fn(async () => {
+      port.replaceDelegate(replacement);
+      return committedReceipt;
+    });
+    port.replaceDelegate(
+      Object.assign(new RecordingKnowledgeStudioPort("old"), {
+        retireSource,
+      })
+    );
+
+    await expect(
+      port.retireSource(
+        "personal",
+        {
+          sourceId: "source-old",
+          retirementRef: "d".repeat(64),
+          reason: "user_requested",
+        },
+        new AbortController().signal
+      )
+    ).resolves.toBe(committedReceipt);
+    expect(retireSource).toHaveBeenCalledTimes(1);
+    expect(replacementRetire).not.toHaveBeenCalled();
+  });
+
+  it("returns a committed retirement receipt after caller cancellation", async () => {
+    const caller = new AbortController();
+    const committedReceipt = Object.freeze({
+      outcome: "retired" as const,
+      retainedWikiPageCount: 2,
+    });
+    const retireSource = jest.fn(async () => {
+      caller.abort();
+      return committedReceipt;
+    });
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(
+      Object.assign(new RecordingKnowledgeStudioPort("current"), {
+        retireSource,
+      })
+    );
+
+    await expect(
+      port.retireSource(
+        "personal",
+        {
+          sourceId: "source-current",
+          retirementRef: "d".repeat(64),
+          reason: "user_requested",
+        },
+        caller.signal
+      )
+    ).resolves.toBe(committedReceipt);
+    expect(retireSource).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invoke retirement when caller cancellation is already active", async () => {
+    const caller = new AbortController();
+    caller.abort();
+    const retireSource = jest.fn(async () =>
+      Object.freeze({ outcome: "retired" as const, retainedWikiPageCount: 2 })
+    );
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(
+      Object.assign(new RecordingKnowledgeStudioPort("current"), {
+        retireSource,
+      })
+    );
+
+    await expect(
+      port.retireSource(
+        "personal",
+        {
+          sourceId: "source-current",
+          retirementRef: "d".repeat(64),
+          reason: "user_requested",
+        },
+        caller.signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(retireSource).not.toHaveBeenCalled();
+  });
+
   it("routes reviewed writeback through one generation and rejects its late replaced result", async () => {
     const oldWriteback = createDeferred<KnowledgeStudioQueryWritebackResult>();
     const oldDelegate = new RecordingKnowledgeStudioPort("old", {

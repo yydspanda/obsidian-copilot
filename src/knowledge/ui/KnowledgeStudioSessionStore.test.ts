@@ -9,13 +9,21 @@ import {
 
 /** Copies the exact public state fields captured by one synchronous listener. */
 function copyState(state: KnowledgeStudioSessionState): KnowledgeStudioSessionState {
-  if (state.bundleId === undefined) {
+  if (state.status === "refreshing") {
     return {
+      status: "refreshing",
+      revision: state.revision,
+    };
+  }
+  if (state.status === "unavailable") {
+    return {
+      status: "unavailable",
       revision: state.revision,
       unavailableNotice: state.unavailableNotice,
     };
   }
   return {
+    status: "selected",
     revision: state.revision,
     bundleId: state.bundleId,
     unavailableNotice: state.unavailableNotice,
@@ -38,20 +46,24 @@ describe("KnowledgeStudioSessionStore", () => {
 
     expect(observations).toEqual([
       {
+        status: "unavailable",
         revision: 0,
         unavailableNotice: "Waiting for project selection.",
       },
       {
+        status: "selected",
         revision: 1,
         bundleId: "personal",
         unavailableNotice: "Workflow adapters remain unavailable.",
       },
       {
+        status: "unavailable",
         revision: 2,
         unavailableNotice: "No knowledge Bundle is selected.",
       },
     ]);
     expect(store.getState()).toEqual({
+      status: "selected",
       revision: 3,
       bundleId: "research",
       unavailableNotice: "Still unavailable.",
@@ -66,11 +78,49 @@ describe("KnowledgeStudioSessionStore", () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(store.getState()).toEqual({
+      status: "unavailable",
       revision: 0,
       unavailableNotice: KNOWLEDGE_STUDIO_INITIAL_UNAVAILABLE_NOTICE,
     });
-    expect(Object.keys(store.getState()).sort()).toEqual(["revision", "unavailableNotice"]);
+    expect(Object.keys(store.getState()).sort()).toEqual([
+      "revision",
+      "status",
+      "unavailableNotice",
+    ]);
     unsubscribe();
+  });
+
+  it("publishes an explicit action-free refresh before the same Bundle is selected again", () => {
+    const store = new KnowledgeStudioSessionStore("Waiting.");
+    const observations: KnowledgeStudioSessionState[] = [];
+    store.subscribe(() => observations.push(copyState(store.getState())));
+
+    store.replaceSelection("personal", "Ready.");
+    store.publishRefreshing();
+    store.publishRefreshing();
+    store.replaceSelection("personal", "Ready again.");
+
+    expect(observations).toEqual([
+      { status: "unavailable", revision: 0, unavailableNotice: "Waiting." },
+      {
+        status: "selected",
+        revision: 1,
+        bundleId: "personal",
+        unavailableNotice: "Ready.",
+      },
+      { status: "refreshing", revision: 2 },
+      { status: "refreshing", revision: 3 },
+      {
+        status: "selected",
+        revision: 4,
+        bundleId: "personal",
+        unavailableNotice: "Ready again.",
+      },
+    ]);
+    expect(Object.keys(observations[2]).sort()).toEqual(["revision", "status"]);
+    expect(observations[2].bundleId).toBeUndefined();
+    expect(observations[2].unavailableNotice).toBeUndefined();
+    expect(Object.isFrozen(store.getState())).toBe(true);
   });
 
   it("rejects empty selection input with fixed errors and no state mutation", () => {
@@ -120,12 +170,20 @@ describe("KnowledgeStudioSessionStore", () => {
 
     store.replaceSelection("personal", "Adapters are unavailable.");
     const selected = store.getState();
+    store.publishRefreshing();
+    const refreshing = store.getState();
     store.replaceSelection(undefined, "Selection cleared.");
     const cleared = store.getState();
 
-    expect([initial, selected, cleared].every(Object.isFrozen)).toBe(true);
-    expect(Object.keys(selected).sort()).toEqual(["bundleId", "revision", "unavailableNotice"]);
-    expect(Object.keys(cleared).sort()).toEqual(["revision", "unavailableNotice"]);
+    expect([initial, selected, refreshing, cleared].every(Object.isFrozen)).toBe(true);
+    expect(Object.keys(selected).sort()).toEqual([
+      "bundleId",
+      "revision",
+      "status",
+      "unavailableNotice",
+    ]);
+    expect(Object.keys(refreshing).sort()).toEqual(["revision", "status"]);
+    expect(Object.keys(cleared).sort()).toEqual(["revision", "status", "unavailableNotice"]);
   });
 
   it("disposes once, publishes the fixed unload state, clears listeners, and cannot reopen", () => {
@@ -146,6 +204,7 @@ describe("KnowledgeStudioSessionStore", () => {
     store.dispose();
 
     expect(disposedState).toEqual({
+      status: "unavailable",
       revision: 2,
       unavailableNotice: KNOWLEDGE_STUDIO_UNLOAD_UNAVAILABLE_NOTICE,
     });
@@ -153,11 +212,13 @@ describe("KnowledgeStudioSessionStore", () => {
     expect(store.getState()).toBe(disposedState);
     expect(observations).toEqual([
       {
+        status: "selected",
         revision: 1,
         bundleId: "personal",
         unavailableNotice: "Caller-provided notice.",
       },
       {
+        status: "unavailable",
         revision: 2,
         unavailableNotice: KNOWLEDGE_STUDIO_UNLOAD_UNAVAILABLE_NOTICE,
       },
@@ -171,6 +232,7 @@ describe("KnowledgeStudioSessionStore", () => {
 
     const rawBundle = "private-bundle";
     const rawNotice = "C:\\private\\vault";
+    expect(() => store.publishRefreshing()).toThrow(KnowledgeStudioSessionDisposedError);
     try {
       store.replaceSelection(rawBundle, rawNotice);
       throw new Error("Expected disposed replacement to fail");

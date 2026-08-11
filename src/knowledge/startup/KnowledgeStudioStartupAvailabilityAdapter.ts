@@ -30,6 +30,8 @@ export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): s
       return "Knowledge startup found durable work that needs an explicit recovery decision. Open Recovery to continue eligible work or abandon an eligible no-journal apply; new ingest work remains stopped.";
     case "recovery_blocked":
       return "Knowledge startup is blocked by durable recovery state. Open Recovery to inspect and recheck it; unsafe actions remain disabled to protect existing notes.";
+    case "source_recovery_required":
+      return "Knowledge startup found a missing or moved source. Open Sources to recheck it or remove its registration; ingest, model calls, Review, Apply, Query, and Wiki writes remain stopped.";
     case "workflow_adapters_unavailable":
       return state.bundleIds.length === 1
         ? "The project Knowledge Bundle is valid and startup recovery is clear, but the live workflow adapter is unavailable. Activity, Review, Apply, and Query remain disabled."
@@ -50,9 +52,16 @@ function selectUnavailableBundleId(state: KnowledgePluginStartupState): string |
     return state.recoveryBundleId;
   }
   if (
+    state.status === "source_recovery_required" &&
+    state.bundleIds.includes(state.sourceRecoveryBundleId)
+  ) {
+    return state.sourceRecoveryBundleId;
+  }
+  if (
     (state.status === "recovery_unavailable" ||
       state.status === "recovery_attention_required" ||
       state.status === "recovery_blocked" ||
+      state.status === "source_recovery_required" ||
       state.status === "workflow_adapters_unavailable") &&
     state.bundleIds.length === 1
   ) {
@@ -79,13 +88,25 @@ export class KnowledgeStudioStartupAvailabilityAdapter
    */
   constructor(
     private readonly port: Pick<DelegatingKnowledgeStudioPort, "replaceDelegate">,
-    private readonly sessions: Pick<KnowledgeStudioSessionStore, "replaceSelection">
+    private readonly sessions: Pick<
+      KnowledgeStudioSessionStore,
+      "publishRefreshing" | "replaceSelection"
+    >
   ) {}
 
-  /** Installs a fresh unavailable delegate before publishing the matching session selection. */
+  /**
+   * Revokes the prior delegate before publishing either transient refresh or durable failure.
+   *
+   * Only layout-waiting is transient. Every runtime, project, configuration,
+   * recovery, and workflow failure remains an explicit unavailable selection.
+   */
   setUnavailable(state: KnowledgePluginStartupState): void {
     const notice = getKnowledgeStartupNotice(state);
     this.port.replaceDelegate(new UnavailableKnowledgeStudioPort(notice));
+    if (state.status === "waiting_for_layout") {
+      this.sessions.publishRefreshing();
+      return;
+    }
     this.sessions.replaceSelection(selectUnavailableBundleId(state), notice);
   }
 
@@ -116,5 +137,18 @@ export class KnowledgeStudioStartupAvailabilityAdapter
       return;
     }
     this.sessions.replaceSelection(state.recoveryBundleId, notice);
+  }
+
+  /** Publishes one staged source-lifecycle-only delegate for the exact stopped Bundle. */
+  setSourceRecoveryReady(
+    state: Extract<KnowledgePluginStartupState, { status: "source_recovery_required" }>
+  ): void {
+    const notice = getKnowledgeStartupNotice(state);
+    if (!state.bundleIds.includes(state.sourceRecoveryBundleId)) {
+      this.port.replaceDelegate(new UnavailableKnowledgeStudioPort(notice));
+      this.sessions.replaceSelection(undefined, notice);
+      return;
+    }
+    this.sessions.replaceSelection(state.sourceRecoveryBundleId, notice);
   }
 }

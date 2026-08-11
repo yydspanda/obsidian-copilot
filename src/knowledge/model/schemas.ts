@@ -83,7 +83,8 @@ const sourceCompileFailureSchema = z
   })
   .strict();
 
-const sourceManifestEntrySchema = z
+/** Strict runtime schema for one active or durably archived source entry. */
+export const sourceManifestEntrySchema = z
   .object({
     sourceId: nonEmptyStringSchema,
     sourceKey: nonEmptyStringSchema,

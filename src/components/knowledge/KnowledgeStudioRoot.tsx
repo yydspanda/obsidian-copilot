@@ -3,6 +3,7 @@ import {
   Activity,
   AlertCircle,
   CheckCircle2,
+  Files,
   Inbox,
   Loader2,
   RefreshCw,
@@ -15,6 +16,7 @@ import { KnowledgeFolderImportButton } from "@/components/knowledge/KnowledgeFol
 import { KnowledgeRecoveryPanel } from "@/components/knowledge/KnowledgeRecoveryPanel";
 import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
 import { KnowledgeQueryPanel } from "@/components/knowledge/KnowledgeQueryPanel";
+import { KnowledgeSourceLifecyclePanel } from "@/components/knowledge/KnowledgeSourceLifecyclePanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
@@ -44,6 +46,7 @@ const STUDIO_TABS: readonly TabDefinition[] = [
   { id: "query", label: "Query", icon: Search },
   { id: "activity", label: "Activity", icon: Activity },
   { id: "review", label: "Review", icon: Inbox },
+  { id: "sources", label: "Sources", icon: Files },
   { id: "recovery", label: "Recovery", icon: ShieldAlert },
 ];
 
@@ -53,6 +56,8 @@ const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"
   cancel: "Cancelling the selected job…",
   retry: "Queuing the selected job for retry…",
   submit_review: "Submitting the review decision…",
+  check_source: "Checking the selected source…",
+  retire_source: "Removing the selected source…",
   continue_recovery: "Continuing the selected recovery…",
   abandon_recovery: "Abandoning the selected no-journal apply…",
 };
@@ -366,13 +371,40 @@ export function KnowledgeStudioRoot({
   const activityTabId = React.useId();
   const queryTabId = React.useId();
   const reviewTabId = React.useId();
+  const sourcesTabId = React.useId();
   const recoveryTabId = React.useId();
   const tabIds: Readonly<Record<KnowledgeStudioTab, string>> = {
     query: queryTabId,
     activity: activityTabId,
     review: reviewTabId,
+    sources: sourcesTabId,
     recovery: recoveryTabId,
   };
+
+  if (state.status === "refreshing") {
+    return (
+      <main className="tw-flex tw-h-full tw-items-center tw-justify-center tw-p-6">
+        <section
+          className="tw-max-w-xl tw-rounded-xl tw-border tw-border-solid tw-border-border tw-bg-secondary-alt tw-p-5 tw-text-muted"
+          role="status"
+        >
+          <div className="tw-flex tw-items-start tw-gap-3">
+            <Loader2
+              aria-hidden="true"
+              className="tw-mt-0.5 tw-size-5 tw-shrink-0 tw-animate-spin"
+            />
+            <div>
+              <h1 className="tw-m-0 tw-text-base tw-font-semibold">Refreshing Knowledge Studio…</h1>
+              <p className="tw-m-0 tw-mt-2 tw-text-sm">
+                Checking the current configuration and durable state. Actions are temporarily
+                paused; this is expected and does not mean the operation failed.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   if (state.status === "unavailable") {
     return (
@@ -442,6 +474,9 @@ export function KnowledgeStudioRoot({
     );
   }
 
+  const missingSourceCount =
+    snapshot.sourceLifecycle?.sources.filter((source) => source.status === "missing").length ?? 0;
+
   return (
     <main className="tw-flex tw-h-full tw-flex-col tw-gap-4 tw-overflow-auto tw-p-4">
       <header className="tw-flex tw-flex-wrap tw-items-start tw-justify-between tw-gap-3">
@@ -457,6 +492,7 @@ export function KnowledgeStudioRoot({
             {STUDIO_TABS.filter(
               (tab) =>
                 (tab.id !== "query" || snapshot.queryAvailable === true) &&
+                (tab.id !== "sources" || snapshot.sourceLifecycle !== undefined) &&
                 (tab.id !== "recovery" || snapshot.recovery.items.length > 0)
             ).map((tab) => {
               const selected = state.activeTab === tab.id;
@@ -482,6 +518,11 @@ export function KnowledgeStudioRoot({
                   {tab.id === "recovery" && snapshot.recovery.items.length > 0 ? (
                     <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
                       {snapshot.recovery.items.length}
+                    </Badge>
+                  ) : null}
+                  {tab.id === "sources" && missingSourceCount > 0 ? (
+                    <Badge className="tw-ml-1 tw-shadow-none" variant="destructive">
+                      {missingSourceCount}
                     </Badge>
                   ) : null}
                 </Button>
@@ -538,6 +579,18 @@ export function KnowledgeStudioRoot({
           )
         ) : state.activeTab === "review" ? (
           <ReviewWorkspace controller={controller} state={state} />
+        ) : state.activeTab === "sources" ? (
+          snapshot.sourceLifecycle ? (
+            <KnowledgeSourceLifecyclePanel
+              model={snapshot.sourceLifecycle}
+              onCheckAgain={(sourceId, signal) => controller.checkSourceAgain(sourceId, signal)}
+              onRemove={(confirmation, signal) => controller.retireSource(confirmation, signal)}
+            />
+          ) : (
+            <p className="tw-m-0 tw-text-sm tw-text-muted" role="status">
+              Source lifecycle state is not available from this snapshot.
+            </p>
+          )
         ) : (
           <KnowledgeRecoveryPanel
             model={snapshot.recovery}

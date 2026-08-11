@@ -1,3 +1,5 @@
+import type { KnowledgeChatDraftRequest } from "@/knowledge/capture/KnowledgeChatDraftCapture";
+
 /** Vault source request exposed to Chat without Runtime or Queue authority. */
 export interface KnowledgeChatCaptureRequest {
   sourcePath: string;
@@ -9,6 +11,19 @@ export interface KnowledgeChatCaptureReceipt {
   bundleId: string;
 }
 
+/** Truthful durable result for one user-reviewed Chat draft registration. */
+export interface KnowledgeChatDraftReceipt {
+  status: "registered" | "already_registered";
+  bundleId: string;
+  sourcePath: string;
+}
+
+/** Frozen destination capability shown before one Chat draft is edited. */
+export interface KnowledgeChatDraftSession {
+  readonly bundleId: string;
+  readonly sourceRoot: string;
+}
+
 /** Stable, value-free Chat capture failure categories safe to render. */
 export type KnowledgeChatCaptureErrorCode =
   | "unavailable"
@@ -18,13 +33,16 @@ export type KnowledgeChatCaptureErrorCode =
   | "source_outside_root"
   | "source_missing"
   | "source_conflict"
+  | "draft_invalid"
+  | "draft_conflict"
+  | "draft_persistence_failed"
   | "registration_failed";
 
 /** Sanitized capture failure that retains no source path or persisted content. */
 export class KnowledgeChatCaptureError extends Error {
   /** Creates one stable capture failure. */
   constructor(public readonly code: KnowledgeChatCaptureErrorCode) {
-    super("The Vault file could not be added to Knowledge");
+    super("The Knowledge capture operation could not be completed");
     this.name = "KnowledgeChatCaptureError";
   }
 }
@@ -36,6 +54,16 @@ export interface KnowledgeChatCapturePort {
     request: Readonly<KnowledgeChatCaptureRequest>,
     signal: AbortSignal
   ): Promise<KnowledgeChatCaptureReceipt>;
+
+  /** Captures the exact current Bundle/root or reports that draft creation is unavailable. */
+  prepareKnowledgeDraft(): Readonly<KnowledgeChatDraftSession> | null;
+
+  /** Persists one edited Chat response as a registered Source, never as direct Wiki output. */
+  createKnowledgeDraft(
+    session: Readonly<KnowledgeChatDraftSession>,
+    request: Readonly<KnowledgeChatDraftRequest>,
+    signal: AbortSignal
+  ): Promise<KnowledgeChatDraftReceipt>;
 }
 
 /** Exact source suffixes enabled for the current Chat capture production slice. */

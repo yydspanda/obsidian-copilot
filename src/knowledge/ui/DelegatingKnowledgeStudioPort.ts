@@ -16,6 +16,11 @@ import type {
   KnowledgeStudioReviewSubmissionResult,
   KnowledgeStudioSnapshot,
 } from "@/knowledge/ui/KnowledgeStudioController";
+import type {
+  KnowledgeSourceLifecyclePort,
+  KnowledgeSourceRetirementRequest,
+  KnowledgeSourceRetirementUiReceipt,
+} from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import {
   KnowledgeStudioAdapterUnavailableError,
   UnavailableKnowledgeStudioPort,
@@ -24,7 +29,8 @@ import {
 type KnowledgeStudioPort = KnowledgeStudioReadPort & KnowledgeStudioCommandPort;
 type QueryCapableKnowledgeStudioPort = KnowledgeStudioPort &
   Partial<Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">> &
-  Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">>;
+  Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">> &
+  Partial<KnowledgeSourceLifecyclePort>;
 
 interface DelegateGeneration {
   delegate: QueryCapableKnowledgeStudioPort;
@@ -92,7 +98,8 @@ export class DelegatingKnowledgeStudioPort
     KnowledgeStudioReadPort,
     KnowledgeStudioCommandPort,
     KnowledgeStudioQueryPort,
-    KnowledgeStudioQueryWritebackPort
+    KnowledgeStudioQueryWritebackPort,
+    KnowledgeSourceLifecyclePort
 {
   private readonly unavailableDelegate: KnowledgeStudioPort;
   private generation: DelegateGeneration;
@@ -304,6 +311,37 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
+  /** Loads active source lifecycle state from the current delegate generation. */
+  async loadSources(bundleId: string, signal: AbortSignal) {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.loadSources === "function"
+        ? delegate.loadSources(bundleId, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
+  /** Requests a current-generation source recheck. */
+  async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.checkAgain === "function"
+        ? delegate.checkAgain(bundleId, sourceId, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
+  /** Routes one exact source retirement through the current generation. */
+  async retireSource(
+    bundleId: string,
+    request: Readonly<KnowledgeSourceRetirementRequest>,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeSourceRetirementUiReceipt>> {
+    return this.runCommitWinsWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.retireSource === "function"
+        ? delegate.retireSource(bundleId, request, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
   /** Routes one scoped applied-Wiki query through the current delegate generation. */
   async query(
     bundleId: string,
@@ -359,6 +397,40 @@ export class DelegatingKnowledgeStudioPort
   /** Permanently closes the stable Query boundary together with the Studio port. */
   close(): void {
     this.dispose();
+  }
+
+  /**
+   * Runs one atomic mutation without allowing post-commit cancellation to erase its receipt.
+   *
+   * Cancellation is still linked into the delegate so it can stop before commit. Once
+   * the delegate resolves, that resolution is authoritative even if the caller or
+   * generation was revoked while the durable transition was completing.
+   *
+   * @param callerSignal - Cancellation owned by the Studio controller
+   * @param operation - Atomic delegate operation using the linked generation signal
+   * @returns The delegate's durable receipt when it resolves
+   */
+  private async runCommitWinsWithCurrentDelegate<T>(
+    callerSignal: AbortSignal,
+    operation: (delegate: QueryCapableKnowledgeStudioPort, signal: AbortSignal) => Promise<T>
+  ): Promise<T> {
+    const generation = this.generation;
+    const linked = linkAbortSignals([callerSignal, generation.abortController.signal]);
+    try {
+      if (linked.signal.aborted || generation !== this.generation) {
+        throw createAbortError();
+      }
+      try {
+        return await operation(generation.delegate, linked.signal);
+      } catch (error) {
+        if (linked.signal.aborted || generation !== this.generation) {
+          throw createAbortError();
+        }
+        throw error;
+      }
+    } finally {
+      linked.release();
+    }
   }
 
   /**

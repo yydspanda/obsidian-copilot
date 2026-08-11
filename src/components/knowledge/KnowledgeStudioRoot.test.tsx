@@ -13,6 +13,10 @@ import type {
   KnowledgeStudioState,
 } from "@/knowledge/ui/KnowledgeStudioController";
 import type { KnowledgeRecoveryModel } from "@/knowledge/ui/recoveryModel";
+import type {
+  KnowledgeSourceLifecycleModel,
+  KnowledgeSourceRemovalConfirmation,
+} from "@/knowledge/ui/sourceLifecycleModel";
 
 jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
   /** Test seam that exposes Activity callback wiring without testing its rendering again. */
@@ -151,6 +155,48 @@ jest.mock("@/components/knowledge/KnowledgeQueryPanel", () => ({
   ),
 }));
 
+jest.mock("@/components/knowledge/KnowledgeSourceLifecyclePanel", () => ({
+  /** Test seam that exposes the immutable source model and narrow command callbacks. */
+  KnowledgeSourceLifecyclePanel: (props: {
+    model: Readonly<KnowledgeSourceLifecycleModel>;
+    onCheckAgain: (sourceId: string, signal: AbortSignal) => void;
+    onRemove: (
+      confirmation: Readonly<KnowledgeSourceRemovalConfirmation>,
+      signal: AbortSignal
+    ) => void;
+  }) => {
+    const source = props.model.sources[0];
+    return (
+      <div data-testid="source-lifecycle-panel">
+        <span>Source count {props.model.sources.length}</span>
+        <button
+          type="button"
+          onClick={() => props.onCheckAgain(source.sourceId, new AbortController().signal)}
+        >
+          Source check
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            props.onRemove(
+              Object.freeze({
+                sourceId: source.sourceId,
+                sourcePath: source.sourcePath,
+                retirementRef: source.retirementRef,
+                runtimeRevision: props.model.runtimeRevision,
+                manifestRevision: props.model.manifestRevision,
+              }),
+              new AbortController().signal
+            )
+          }
+        >
+          Source remove
+        </button>
+      </div>
+    );
+  },
+}));
+
 const EMPTY_STATUS_COUNTS = {
   queued: 0,
   parsing: 0,
@@ -201,6 +247,28 @@ function createRecoveryModel(): Readonly<KnowledgeRecoveryModel> {
         status: "decision_required",
         changeSetId: "changeset-recovery",
         actions: { canContinue: true, canAbandon: true },
+      },
+    ],
+  };
+}
+
+/** Creates one missing-source lifecycle projection for Sources tab wiring tests. */
+function createSourceLifecycleModel(): Readonly<KnowledgeSourceLifecycleModel> {
+  return {
+    bundleId: "personal",
+    runtimeRevision: 7,
+    manifestRevision: 3,
+    sources: [
+      {
+        sourceId: "source-missing",
+        sourcePath: "Sources/Missing.md",
+        custody: "user_managed",
+        generatedPageCount: 2,
+        status: "missing",
+        issueReason: "source_missing",
+        retirementRef: "retirement-ref",
+        retirementBlockers: [],
+        actions: { canCheckAgain: true, canRemove: true },
       },
     ],
   };
@@ -398,6 +466,22 @@ class TestKnowledgeStudioController {
   async saveCurrentQueryToWiki(title: string): Promise<void> {
     this.calls.push(`save:${title}`);
   }
+
+  /** Records a source recheck without receiving its path or model row. */
+  async checkSourceAgain(sourceId: string, _signal?: AbortSignal): Promise<void> {
+    this.calls.push(`source-check:${sourceId}`);
+  }
+
+  /** Records exact source retirement authority without updating React state. */
+  async retireSource(
+    confirmation: Readonly<KnowledgeSourceRemovalConfirmation>,
+    _signal?: AbortSignal
+  ): Promise<void> {
+    this.calls.push(
+      `source-retire:${confirmation.sourceId}:${confirmation.retirementRef}:` +
+        `${confirmation.runtimeRevision}:${confirmation.manifestRevision}:${confirmation.sourcePath}`
+    );
+  }
 }
 
 /** Converts the focused fake to the concrete controller boundary expected by React. */
@@ -420,6 +504,24 @@ function renderStudio(controller: TestKnowledgeStudioController): ReturnType<typ
 }
 
 describe("KnowledgeStudioRoot", () => {
+  it("renders a neutral action-free page during transient Studio refresh", () => {
+    const controller = new TestKnowledgeStudioController({
+      status: "refreshing",
+      activeTab: "activity",
+      refreshing: true,
+    });
+    renderStudio(controller);
+
+    expect(screen.getByRole("status").textContent).toContain("Refreshing Knowledge Studio…");
+    expect(screen.getByRole("status").textContent).toContain(
+      "this is expected and does not mean the operation failed"
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByTestId("activity-panel")).toBeNull();
+    expect(screen.queryByText("Knowledge Studio unavailable")).toBeNull();
+  });
+
   it("renders startup unavailability without displaying a fabricated Bundle identity", () => {
     const controller = new TestKnowledgeStudioController({
       status: "unavailable",
@@ -573,6 +675,38 @@ describe("KnowledgeStudioRoot", () => {
       "query:grounded topic",
       "citation:citation-ref-1",
       "save:Durable insight",
+    ]);
+  });
+
+  it("reveals Sources only with a lifecycle model and delegates narrow source actions", () => {
+    const hiddenController = new TestKnowledgeStudioController(createReadyState([]));
+    const hidden = renderStudio(hiddenController);
+    expect(screen.queryByRole("tab", { name: /Sources/ })).toBeNull();
+    hidden.unmount();
+
+    const ready = createReadyState([]);
+    const controller = new TestKnowledgeStudioController({
+      ...ready,
+      snapshot: {
+        ...ready.snapshot!,
+        sourceLifecycle: createSourceLifecycleModel(),
+      },
+    });
+    renderStudio(controller);
+
+    const sourcesTab = screen.getByRole("tab", { name: /Sources/ });
+    expect(sourcesTab.textContent).toContain("1");
+    fireEvent.click(sourcesTab);
+    expect(screen.getByTestId("source-lifecycle-panel")).toBeTruthy();
+    expect(screen.getByText("Source count 1")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Source check" }));
+    fireEvent.click(screen.getByRole("button", { name: "Source remove" }));
+
+    expect(controller.calls).toEqual([
+      "tab:sources",
+      "source-check:source-missing",
+      "source-retire:source-missing:retirement-ref:7:3:Sources/Missing.md",
     ]);
   });
 

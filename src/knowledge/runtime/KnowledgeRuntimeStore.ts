@@ -89,6 +89,17 @@ import {
   type KnowledgeRuntimeSourceCommitExtension,
 } from "@/knowledge/manifest/KnowledgeRuntimeSourceCommit";
 import {
+  KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY,
+  createKnowledgeSourceRetirementRecord,
+  findKnowledgeSourceHistoryEntry,
+  findKnowledgeSourceRetirement,
+  listKnowledgeSourceHistoryEntries,
+  parseKnowledgeSourceRetirements,
+  projectKnowledgeSourceRetirement,
+  type KnowledgeSourceRetirementReason,
+  type KnowledgeSourceRetirementRecord,
+} from "@/knowledge/manifest/SourceRetirement";
+import {
   SourceManifestRevisionConflictError,
   type SourceManifestStorage,
 } from "@/knowledge/manifest/SourceManifestStorage";
@@ -101,6 +112,7 @@ import {
 import type {
   ClaimCitation,
   GeneratedPageOwnership,
+  GeneratedPageReference,
   JsonValue,
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
@@ -161,9 +173,12 @@ import {
 import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
-export const KNOWLEDGE_RUNTIME_STORE_VERSION = 4 as const;
+export const KNOWLEDGE_RUNTIME_STORE_VERSION = 5 as const;
 
 export { KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY };
+
+/** Previous runtime envelope without the source-retirement downgrade fence. */
+const RUNTIME_V4_STORE_VERSION = 4 as const;
 
 /** Previous runtime envelope with the observation journal but no completion proof fence. */
 const PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION = 3 as const;
@@ -222,6 +237,18 @@ export type KnowledgeRuntimeSourceObservationRecord =
       boundAt?: number;
       settledAt: number;
       supersededByInputRevision: number;
+    }
+  | {
+      observationToken: string;
+      captureId: string;
+      inputRevision: number;
+      allocatedAt: number;
+      status: "retired";
+      sourceContentHash?: string;
+      pipelineFingerprint?: string;
+      boundAt?: number;
+      settledAt: number;
+      retirementId: string;
     };
 
 /** Latest allocator floor and durable observation journal for one source. */
@@ -275,6 +302,19 @@ export interface KnowledgeRuntimeStoreSnapshot {
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
 }
 
+/** Runtime-v4 envelope accepted only by the source-retirement fence migration. */
+interface KnowledgeRuntimeStoreSnapshotV4 {
+  version: typeof RUNTIME_V4_STORE_VERSION;
+  runtimeId: string;
+  revision: number;
+  queues: KnowledgeRuntimeBundleSlot[];
+  reviews: KnowledgeRuntimeBundleSlot[];
+  manifests: KnowledgeRuntimeBundleSlot[];
+  activeTransaction: object | null;
+  inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
+  applyCommits: KnowledgeApplyCommitLedgerRecord[];
+}
+
 /** Detached Queue and Review state read from one atomic Runtime envelope. */
 export interface KnowledgeRuntimeStudioBundleSnapshot {
   bundleId: string;
@@ -317,6 +357,64 @@ export interface KnowledgeRuntimeAppliedProvenanceSnapshot {
   readonly runtimeRevision: number;
   readonly manifestRevision: number;
   readonly pages: readonly Readonly<KnowledgeRuntimeAppliedPageProvenance>[];
+}
+
+/** Stable reason one source cannot enter the atomic retirement transition yet. */
+export type KnowledgeSourceRetirementBlocker =
+  | "active_transaction"
+  | "bundle_work_active"
+  | "bundle_rerun_pending"
+  | "bundle_review_pending"
+  | "bundle_apply_pending"
+  | "bundle_apply_recovery_required"
+  | "source_observation_pending"
+  | "revision_overflow";
+
+/** One active source projected from a single atomic Runtime envelope read. */
+export interface KnowledgeSourceRetirementCandidate {
+  readonly sourceId: string;
+  readonly sourcePath: string;
+  readonly custody: SourceCustody;
+  readonly generatedPageCount: number;
+  readonly status: "ready" | "blocked";
+  readonly expectedToken: string;
+  readonly blockers: readonly KnowledgeSourceRetirementBlocker[];
+}
+
+/** Batch source-retirement projection used by one Studio reload. */
+export interface KnowledgeSourceRetirementCandidateSnapshot {
+  readonly bundleId: string;
+  readonly runtimeRevision: number;
+  readonly manifestRevision: number;
+  readonly candidates: readonly KnowledgeSourceRetirementCandidate[];
+}
+
+/** Explicit confirmations required before a source can leave the active Manifest. */
+export interface KnowledgeSourceRetirementCommand {
+  version: 1;
+  bundleId: string;
+  sourceId: string;
+  expectedToken: string;
+  reason: KnowledgeSourceRetirementReason;
+  confirm: {
+    keepWikiFiles: true;
+    revokeProvenance: true;
+    reserveIdentity: true;
+  };
+}
+
+/** Durable result of one atomic source-retirement transition. */
+export interface KnowledgeSourceRetirementReceipt {
+  outcome: "retired" | "already_retired";
+  bundleId: string;
+  sourceId: string;
+  sourcePath: string;
+  custody: SourceCustody;
+  retirementId: string;
+  retiredAt: number;
+  manifestRevision: number;
+  runtimeRevision: number;
+  generatedPages: readonly Readonly<GeneratedPageReference>[];
 }
 
 /** Exact durable receipt returned by the atomic Runtime Reject boundary. */
@@ -384,6 +482,7 @@ interface PreviousKnowledgeRuntimeStoreSnapshot {
 /** Fields shared by runtime versions whose observation journal is authoritative. */
 type KnowledgeRuntimeSemanticSnapshot =
   | KnowledgeRuntimeStoreSnapshot
+  | KnowledgeRuntimeStoreSnapshotV4
   | PreviousKnowledgeRuntimeStoreSnapshot;
 
 const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 0, {
@@ -391,6 +490,7 @@ const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 
 });
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const opaqueIdSchema = z.string().regex(/^[a-f0-9]{32}$/);
+const sourceRetirementIdSchema = z.string().regex(/^knowledge-source-retirement-[a-f0-9]{64}$/);
 const nonNegativeSafeIntegerSchema = z.number().int().safe().nonnegative();
 
 const runtimeBundleSlotSchema: z.ZodType<KnowledgeRuntimeBundleSlot> = z
@@ -469,12 +569,28 @@ const runtimeSupersededObservationSchema = z
   })
   .strict();
 
+const runtimeRetiredObservationSchema = z
+  .object({
+    observationToken: opaqueIdSchema,
+    captureId: nonEmptyStringSchema,
+    inputRevision: z.number().int().safe().positive(),
+    allocatedAt: nonNegativeSafeIntegerSchema,
+    status: z.literal("retired"),
+    sourceContentHash: sha256Schema.optional(),
+    pipelineFingerprint: sha256Schema.optional(),
+    boundAt: nonNegativeSafeIntegerSchema.optional(),
+    settledAt: nonNegativeSafeIntegerSchema,
+    retirementId: sourceRetirementIdSchema,
+  })
+  .strict();
+
 const runtimeSourceObservationSchema: z.ZodType<KnowledgeRuntimeSourceObservationRecord> =
   z.discriminatedUnion("status", [
     runtimeAllocatedObservationSchema,
     runtimeBoundObservationSchema,
     runtimeConsumedObservationSchema,
     runtimeSupersededObservationSchema,
+    runtimeRetiredObservationSchema,
   ]);
 
 const runtimeInputRevisionRecordSchema: z.ZodType<KnowledgeRuntimeInputRevisionRecord> = z
@@ -566,6 +682,20 @@ const previousKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<PreviousKnowledgeRu
     })
     .strict();
 
+const runtimeV4StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV4> = z
+  .object({
+    version: z.literal(RUNTIME_V4_STORE_VERSION),
+    runtimeId: opaqueIdSchema,
+    revision: nonNegativeSafeIntegerSchema,
+    queues: z.array(runtimeBundleSlotSchema),
+    reviews: z.array(runtimeBundleSlotSchema),
+    manifests: z.array(runtimeBundleSlotSchema),
+    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    inputRevisions: z.array(runtimeInputRevisionBundleSchema),
+    applyCommits: z.array(applyCommitLedgerRecordSchema),
+  })
+  .strict();
+
 const legacyEmptyReviewSnapshotSchema = z
   .object({
     version: z.literal(1),
@@ -586,6 +716,23 @@ const knowledgeRuntimeStoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapsh
     activeTransaction: z.union([z.record(z.unknown()), z.null()]),
     inputRevisions: z.array(runtimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
+  })
+  .strict();
+
+const sourceRetirementCommandSchema: z.ZodType<KnowledgeSourceRetirementCommand> = z
+  .object({
+    version: z.literal(1),
+    bundleId: nonEmptyStringSchema,
+    sourceId: nonEmptyStringSchema,
+    expectedToken: sha256Schema,
+    reason: z.enum(["user_requested", "source_missing"]),
+    confirm: z
+      .object({
+        keepWikiFiles: z.literal(true),
+        revokeProvenance: z.literal(true),
+        reserveIdentity: z.literal(true),
+      })
+      .strict(),
   })
   .strict();
 
@@ -639,6 +786,7 @@ export type KnowledgeRuntimeMigrationUnsafeReason =
   | "queue_revision_overflow"
   | "manifest_success_present"
   | "manifest_reserved_commit_metadata_present"
+  | "source_retirement_state_present"
   | "revision_overflow";
 
 /** Reports a valid v1 envelope whose durable work makes automatic migration unsafe. */
@@ -805,7 +953,9 @@ export class KnowledgeRuntimeManifestReservationError extends Error {
 export type KnowledgeRuntimeManifestProtectedState =
   | "last_successful"
   | "reserved_commit_extension"
-  | "reserved_no_changes_extension";
+  | "reserved_no_changes_extension"
+  | "source_identity"
+  | "retirement_extension";
 
 /** Reports an attempt to bypass the atomic Manifest/ledger success path. */
 export class KnowledgeRuntimeManifestProtectedStateError extends Error {
@@ -823,6 +973,32 @@ export class KnowledgeRuntimeManifestProtectedStateError extends Error {
   ) {
     super(`Source '${sourceId}' has protected commit state in Manifest '${bundleId}'`);
     this.name = "KnowledgeRuntimeManifestProtectedStateError";
+  }
+}
+
+/** Reports a stale, blocked, missing, or malformed source-retirement command. */
+export class KnowledgeSourceRetirementConflictError extends Error {
+  /** Creates one sanitized retirement conflict. */
+  constructor(
+    public readonly bundleId: string,
+    public readonly sourceId: string,
+    public readonly reason: "request_invalid" | "source_missing" | "state_changed" | "blocked",
+    public readonly blockers: readonly KnowledgeSourceRetirementBlocker[] = []
+  ) {
+    super(`Source '${sourceId}' cannot be retired from Bundle '${bundleId}'`);
+    this.name = "KnowledgeSourceRetirementConflictError";
+  }
+}
+
+/** Reports post-retirement source work that no longer has active Manifest authority. */
+export class KnowledgeRuntimeSourceRetiredError extends Error {
+  /** Creates a stable retired-source admission failure. */
+  constructor(
+    public readonly bundleId: string,
+    public readonly sourceId: string
+  ) {
+    super(`Source '${sourceId}' is retired in Bundle '${bundleId}'`);
+    this.name = "KnowledgeRuntimeSourceRetiredError";
   }
 }
 
@@ -1036,7 +1212,7 @@ function assertRuntimeSlotSemantics(
   if (requireReusableCompletionProof) {
     assertReusableCompletionSemantics(snapshot, manifests, queues);
   }
-  assertObservationJournalSemantics(snapshot, queues);
+  assertObservationJournalSemantics(snapshot, queues, manifests);
 }
 
 /**
@@ -1086,16 +1262,22 @@ function assertUniqueInputRevisionRecords(
  *
  * @param snapshot - Strict current runtime envelope
  * @param queues - Already parsed Queue slots indexed by Bundle
+ * @param manifests - Already parsed Manifest slots indexed by Bundle
  */
 function assertObservationJournalSemantics(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
-  queues: ReadonlyMap<string, IngestQueueSnapshot>
+  queues: ReadonlyMap<string, IngestQueueSnapshot>,
+  manifests: ReadonlyMap<string, SourceManifest>
 ): void {
   const captureIds = new Set<string>();
   const observationTokens = new Set<string>();
   for (const bundle of snapshot.inputRevisions) {
     const queue = queues.get(bundle.bundleId);
     for (const source of bundle.sources) {
+      const manifest = manifests.get(bundle.bundleId);
+      const retirement = manifest
+        ? findKnowledgeSourceRetirement(manifest, source.sourceId)
+        : undefined;
       if (source.managedAfterRevision > source.inputRevision) {
         throw new KnowledgeRuntimeStoreCorruptError();
       }
@@ -1140,6 +1322,10 @@ function assertObservationJournalSemantics(
           (observation.status === "superseded" &&
             observation.sourceContentHash !== undefined &&
             observation.pipelineFingerprint !== undefined &&
+            observation.boundAt !== undefined) ||
+          (observation.status === "retired" &&
+            observation.sourceContentHash !== undefined &&
+            observation.pipelineFingerprint !== undefined &&
             observation.boundAt !== undefined)
         ) {
           highestBindingRevision = observation.inputRevision;
@@ -1175,7 +1361,35 @@ function assertObservationJournalSemantics(
             throw new KnowledgeRuntimeStoreCorruptError();
           }
         }
+        if (observation.status === "retired") {
+          const hasAnyBinding =
+            observation.sourceContentHash !== undefined ||
+            observation.pipelineFingerprint !== undefined ||
+            observation.boundAt !== undefined;
+          const hasCompleteBinding =
+            observation.sourceContentHash !== undefined &&
+            observation.pipelineFingerprint !== undefined &&
+            observation.boundAt !== undefined;
+          if (
+            (hasAnyBinding && !hasCompleteBinding) ||
+            !retirement ||
+            observation.retirementId !== retirement.retirementId ||
+            observation.allocatedAt > observation.settledAt ||
+            (observation.boundAt !== undefined && observation.boundAt > observation.settledAt) ||
+            retirement.retiredAt > observation.settledAt
+          ) {
+            throw new KnowledgeRuntimeStoreCorruptError();
+          }
+        }
         expectedRevision += 1;
+      }
+      if (
+        retirement &&
+        source.observations.some(
+          (observation) => observation.status === "allocated" || observation.status === "bound"
+        )
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
       }
       if (expectedRevision !== source.inputRevision + 1) {
         throw new KnowledgeRuntimeStoreCorruptError();
@@ -1306,7 +1520,9 @@ function assertManifestLedgerSemantics(
 
   for (const record of records) {
     const manifest = manifests.get(record.bundleId);
-    const source = manifest?.entries.find((entry) => entry.sourceId === record.sourceId);
+    const source = manifest
+      ? findKnowledgeSourceHistoryEntry(manifest, record.sourceId)
+      : undefined;
     if (!manifest || !source || record.manifestAfterRevision > manifest.revision) {
       throw new KnowledgeRuntimeStoreCorruptError();
     }
@@ -1395,6 +1611,40 @@ function assertManifestLedgerSemantics(
         success.pipelineFingerprint !== latest.pipelineFingerprint ||
         success.changeSetId !== latest.changeSetId ||
         success.completedAt !== latest.recordedAt
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+    const retirements = parseKnowledgeSourceRetirements(manifest);
+    if (!retirements.ok) throw new KnowledgeRuntimeStoreCorruptError();
+    for (const retirement of retirements.value) {
+      const entry = retirement.source;
+      const success = entry.lastSuccessful;
+      const rawExtension = entry.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY];
+      const sourceKey = `${manifest.bundleId}\u0000${entry.sourceId}`;
+      const history = histories.get(sourceKey) ?? [];
+      if (!success || rawExtension === undefined) {
+        if (success !== undefined || rawExtension !== undefined || history.length > 0) {
+          throw new KnowledgeRuntimeStoreCorruptError();
+        }
+        continue;
+      }
+      const extension = parseKnowledgeRuntimeSourceCommitExtension(rawExtension);
+      if (!extension.ok || history.length === 0) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const latest = [...history].sort(
+        (left, right) => right.manifestAfterRevision - left.manifestAfterRevision
+      )[0];
+      if (
+        extension.value.transactionId !== latest.transactionId ||
+        extension.value.inputRevision !== latest.inputRevision ||
+        extension.value.manifestIntentDigest !== latest.manifestIntentDigest ||
+        success.sourceContentHash !== latest.sourceContentHash ||
+        success.pipelineFingerprint !== latest.pipelineFingerprint ||
+        success.changeSetId !== latest.changeSetId ||
+        success.completedAt !== latest.recordedAt ||
+        latest.manifestAfterRevision >= retirement.retiredManifestRevision
       ) {
         throw new KnowledgeRuntimeStoreCorruptError();
       }
@@ -1493,7 +1743,13 @@ function assertNoChangesCommitSemantics(
 ): void {
   for (const [bundleId, manifest] of manifests) {
     const queue = queues.get(bundleId);
-    for (const source of manifest.entries) {
+    let sourceHistory: SourceManifestEntry[];
+    try {
+      sourceHistory = listKnowledgeSourceHistoryEntries(manifest);
+    } catch {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    for (const source of sourceHistory) {
       const rawMarker = source.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
       if (rawMarker === undefined) continue;
       const parsed = parseKnowledgeNoChangesCommitMarker(rawMarker);
@@ -1638,7 +1894,7 @@ function reusableCompletionHasProof(
   manifest: SourceManifest | undefined,
   job: ReusableCompletedJob
 ): boolean {
-  const source = manifest?.entries.find((entry) => entry.sourceId === job.sourceId);
+  const source = manifest ? findKnowledgeSourceHistoryEntry(manifest, job.sourceId) : undefined;
   const marker = parseKnowledgeNoChangesCommitMarker(
     source?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
   );
@@ -3058,6 +3314,13 @@ function assertGenericManifestPreservesCommitState(
   for (const sourceId of sourceIds) {
     const before = currentEntries.get(sourceId);
     const after = candidateEntries.get(sourceId);
+    if (before !== undefined && after === undefined) {
+      throw new KnowledgeRuntimeManifestProtectedStateError(
+        candidate.bundleId,
+        sourceId,
+        "source_identity"
+      );
+    }
     if (!optionalJsonValuesEqual(before?.lastSuccessful, after?.lastSuccessful)) {
       throw new KnowledgeRuntimeManifestProtectedStateError(
         candidate.bundleId,
@@ -3089,6 +3352,18 @@ function assertGenericManifestPreservesCommitState(
         "reserved_no_changes_extension"
       );
     }
+  }
+  if (
+    !optionalJsonValuesEqual(
+      current?.extensions?.[KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY],
+      candidate.extensions?.[KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY]
+    )
+  ) {
+    throw new KnowledgeRuntimeManifestProtectedStateError(
+      candidate.bundleId,
+      "retirement-history",
+      "retirement_extension"
+    );
   }
 }
 
@@ -3435,7 +3710,7 @@ function parsePreviousKnowledgeRuntimeStoreSnapshot(
 }
 
 /** Adds the v4 exact-completion proof fence through one atomic transform. */
-function migrateRuntimeV3ToV4Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+function migrateRuntimeV3ToV4Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV4 {
   const previous = parsePreviousKnowledgeRuntimeStoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
     throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
@@ -3458,11 +3733,65 @@ function migrateRuntimeV3ToV4Snapshot(value: unknown): KnowledgeRuntimeStoreSnap
       value: migrateRuntimeV3Queue(previous, parsed.value, manifests.get(slot.bundleId)),
     };
   });
+  return parseRuntimeV4StoreSnapshot({
+    ...previous,
+    version: RUNTIME_V4_STORE_VERSION,
+    revision: previous.revision + 1,
+    queues,
+  });
+}
+
+/** Strictly parses one runtime-v4 envelope before installing the downgrade fence. */
+function parseRuntimeV4StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV4 {
+  const parsed = runtimeV4StoreSnapshotSchema.safeParse(value);
+  if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
+  const snapshot = parsed.data;
+  for (const slot of snapshot.manifests) {
+    const manifest = parseSourceManifest(slot.value);
+    if (
+      manifest.ok &&
+      Object.prototype.hasOwnProperty.call(
+        manifest.value.extensions ?? {},
+        KNOWLEDGE_SOURCE_RETIREMENTS_EXTENSION_KEY
+      )
+    ) {
+      throw new KnowledgeRuntimeMigrationUnsafeError(
+        "source_retirement_state_present",
+        slot.bundleId
+      );
+    }
+  }
+  for (const bundle of snapshot.inputRevisions) {
+    if (
+      bundle.sources.some((source) =>
+        source.observations.some((observation) => observation.status === "retired")
+      )
+    ) {
+      throw new KnowledgeRuntimeMigrationUnsafeError(
+        "source_retirement_state_present",
+        bundle.bundleId
+      );
+    }
+  }
+  assertUniqueBundleSlots(snapshot.queues);
+  assertUniqueBundleSlots(snapshot.reviews);
+  assertUniqueBundleSlots(snapshot.manifests);
+  assertUniqueInputRevisionRecords(snapshot.inputRevisions);
+  assertUniqueApplyCommits(snapshot.applyCommits);
+  assertRuntimeSlotSemantics(snapshot);
+  return cloneJson(snapshot);
+}
+
+/** Installs the runtime-v5 source-retirement downgrade fence without changing subsystem slots. */
+function migrateRuntimeV4ToV5Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+  const previous = parseRuntimeV4StoreSnapshot(value);
+  if (previous.revision === Number.MAX_SAFE_INTEGER) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
+  }
   return parseKnowledgeRuntimeStoreSnapshot({
     ...previous,
     version: KNOWLEDGE_RUNTIME_STORE_VERSION,
     revision: previous.revision + 1,
-    queues,
   });
 }
 
@@ -4526,7 +4855,7 @@ function findStudioChangedBundleIds(
   next: KnowledgeRuntimeStoreSnapshot
 ): string[] {
   const bundleIds = new Set<string>();
-  for (const collection of ["queues", "reviews"] as const) {
+  for (const collection of ["queues", "reviews", "manifests"] as const) {
     for (const slot of current[collection]) bundleIds.add(slot.bundleId);
     for (const slot of next[collection]) bundleIds.add(slot.bundleId);
   }
@@ -4540,6 +4869,10 @@ function findStudioChangedBundleIds(
         !exactJsonValuesEqual(
           findBundleSlot(current, "reviews", bundleId),
           findBundleSlot(next, "reviews", bundleId)
+        ) ||
+        !exactJsonValuesEqual(
+          findBundleSlot(current, "manifests", bundleId),
+          findBundleSlot(next, "manifests", bundleId)
         )
     )
     .sort(compareIdentifiers);
@@ -4624,6 +4957,224 @@ function nextStoreRevision(state: KnowledgeRuntimeStoreSnapshot): number {
   return state.revision + 1;
 }
 
+/** Creates the source-specific anti-stale token returned by one Runtime projection. */
+function createSourceRetirementExpectedToken(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  source: SourceManifestEntry
+): string {
+  return sha256(
+    `knowledge-source-retirement-request-v1\n${canonicalizeJson({
+      runtimeId: state.runtimeId,
+      runtimeRevision: state.revision,
+      bundleId: manifest.bundleId,
+      manifestRevision: manifest.revision,
+      manifestDigest: createSourceManifestDigest(manifest),
+      source,
+    } as unknown as JsonValue)}`
+  );
+}
+
+/** Returns whether an accepted Review has already reached one terminal durable outcome. */
+function acceptedReviewIsTerminalForRetirement(
+  state: KnowledgeRuntimeStoreSnapshot,
+  bundleId: string,
+  queue: IngestQueueSnapshot,
+  record: AcceptedChangeSetReviewRecord
+): boolean {
+  const matchingLedgers = state.applyCommits.filter((ledger) =>
+    ledgerMatchesAcceptedRecord(ledger, bundleId, record)
+  );
+  if (matchingLedgers.length === 1) return true;
+  const abandonments = queue.applyAbandonments.filter((abandonment) =>
+    abandonmentMatchesAcceptedRecord(abandonment, record)
+  );
+  return matchingLedgers.length === 0 && abandonments.length === 1;
+}
+
+/** Computes stable Bundle-wide blockers for the deliberately conservative MVP transition. */
+function collectSourceRetirementBlockers(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  queue: IngestQueueSnapshot,
+  review: ChangeSetReviewSnapshot
+): KnowledgeSourceRetirementBlocker[] {
+  const blockers = new Set<KnowledgeSourceRetirementBlocker>();
+  if (state.activeTransaction !== null) blockers.add("active_transaction");
+  if (
+    queue.jobs.some(
+      (job) =>
+        !["failed", "completed", "cancelled"].includes(job.status) ||
+        (job.status === "failed" && job.stage === "applying")
+    )
+  ) {
+    blockers.add("bundle_work_active");
+  }
+  if (queue.reruns.length > 0) blockers.add("bundle_rerun_pending");
+  if (
+    queue.pendingReviews.length > 0 ||
+    review.records.some((record) => record.outcome === "pending")
+  ) {
+    blockers.add("bundle_review_pending");
+  }
+  if (queue.applyClaim !== undefined || queue.applyCommit !== undefined) {
+    blockers.add("bundle_apply_pending");
+  }
+  if (
+    review.records.some(
+      (record) =>
+        record.outcome === "accepted" &&
+        !acceptedReviewIsTerminalForRetirement(state, manifest.bundleId, queue, record)
+    )
+  ) {
+    blockers.add("bundle_apply_recovery_required");
+  }
+  if (state.revision === Number.MAX_SAFE_INTEGER || manifest.revision === Number.MAX_SAFE_INTEGER) {
+    blockers.add("revision_overflow");
+  }
+  const order: readonly KnowledgeSourceRetirementBlocker[] = [
+    "active_transaction",
+    "bundle_work_active",
+    "bundle_rerun_pending",
+    "bundle_review_pending",
+    "bundle_apply_pending",
+    "bundle_apply_recovery_required",
+    "source_observation_pending",
+    "revision_overflow",
+  ];
+  return order.filter((blocker) => blockers.has(blocker));
+}
+
+/** Projects every Queue field owned by one retired source for exact history comparison. */
+function createRetiredSourceQueueProjection(
+  queue: IngestQueueSnapshot | null,
+  sourceId: string,
+  linkedJobIds: ReadonlySet<string>
+): JsonValue {
+  return {
+    jobs: (queue?.jobs ?? []).filter((job) => job.sourceId === sourceId),
+    reruns: (queue?.reruns ?? []).filter((rerun) => rerun.sourceId === sourceId),
+    sourceHighWatermarks: (queue?.sourceHighWatermarks ?? []).filter(
+      (watermark) => watermark.sourceId === sourceId
+    ),
+    pendingReviews: (queue?.pendingReviews ?? []).filter((record) =>
+      linkedJobIds.has(record.jobId)
+    ),
+    reviewRejections: (queue?.reviewRejections ?? []).filter((record) =>
+      linkedJobIds.has(record.jobId)
+    ),
+    applyAbandonments: (queue?.applyAbandonments ?? []).filter(
+      (record) => record.sourceId === sourceId
+    ),
+    applyClaim: queue?.applyClaim?.sourceId === sourceId ? queue.applyClaim : null,
+    applyCommit: queue?.applyCommit?.sourceId === sourceId ? queue.applyCommit : null,
+  } as unknown as JsonValue;
+}
+
+/** Rejects either insertion or removal of generic Queue history for retired sources. */
+function assertRetiredQueueHistoryPreserved(
+  bundleId: string,
+  current: IngestQueueSnapshot | null,
+  candidate: IngestQueueSnapshot,
+  retiredSourceIds: ReadonlySet<string>
+): void {
+  for (const sourceId of [...retiredSourceIds].sort(compareIdentifiers)) {
+    const linkedJobIds = new Set([
+      ...(current?.jobs ?? []).filter((job) => job.sourceId === sourceId).map((job) => job.id),
+      ...candidate.jobs.filter((job) => job.sourceId === sourceId).map((job) => job.id),
+    ]);
+    if (
+      !exactJsonValuesEqual(
+        createRetiredSourceQueueProjection(current, sourceId, linkedJobIds),
+        createRetiredSourceQueueProjection(candidate, sourceId, linkedJobIds)
+      )
+    ) {
+      throw new KnowledgeRuntimeSourceRetiredError(bundleId, sourceId);
+    }
+  }
+}
+
+/** Rejects either insertion or removal of generic Review history for retired sources. */
+function assertRetiredReviewHistoryPreserved(
+  bundleId: string,
+  current: ChangeSetReviewSnapshot | null,
+  candidate: ChangeSetReviewSnapshot,
+  retiredSourceIds: ReadonlySet<string>
+): void {
+  for (const sourceId of [...retiredSourceIds].sort(compareIdentifiers)) {
+    const before = (current?.records ?? []).filter(
+      (record) => record.jobClaim.sourceId === sourceId
+    );
+    const after = candidate.records.filter((record) => record.jobClaim.sourceId === sourceId);
+    if (!exactJsonValuesEqual(before, after)) {
+      throw new KnowledgeRuntimeSourceRetiredError(bundleId, sourceId);
+    }
+  }
+}
+
+/** Atomically closes pending observations owned only by the source being retired. */
+function terminalizeSourceRetirementObservations(
+  inputRevisions: readonly KnowledgeRuntimeInputRevisionBundle[],
+  record: KnowledgeSourceRetirementRecord
+): KnowledgeRuntimeInputRevisionBundle[] {
+  const bundle = inputRevisions.find((candidate) => candidate.bundleId === record.bundleId);
+  const source = bundle?.sources.find((candidate) => candidate.sourceId === record.source.sourceId);
+  if (!source) return cloneJson([...inputRevisions]);
+  const observations: KnowledgeRuntimeSourceObservationRecord[] = source.observations.map(
+    (observation) => {
+      if (observation.status !== "allocated" && observation.status !== "bound") {
+        return observation;
+      }
+      return {
+        observationToken: observation.observationToken,
+        captureId: observation.captureId,
+        inputRevision: observation.inputRevision,
+        allocatedAt: observation.allocatedAt,
+        status: "retired" as const,
+        ...(observation.status === "bound"
+          ? {
+              sourceContentHash: observation.sourceContentHash,
+              pipelineFingerprint: observation.pipelineFingerprint,
+              boundAt: observation.boundAt,
+            }
+          : {}),
+        settledAt: Math.max(
+          record.retiredAt,
+          observation.allocatedAt,
+          observation.status === "bound" ? observation.boundAt : 0
+        ),
+        retirementId: record.retirementId,
+      };
+    }
+  );
+  return replaceInputRevisionSource(inputRevisions, record.bundleId, {
+    ...source,
+    observations,
+  });
+}
+
+/** Creates one detached immutable retirement receipt from its durable tombstone. */
+function createSourceRetirementReceipt(
+  record: KnowledgeSourceRetirementRecord,
+  runtimeRevision: number,
+  outcome: KnowledgeSourceRetirementReceipt["outcome"]
+): KnowledgeSourceRetirementReceipt {
+  return Object.freeze({
+    outcome,
+    bundleId: record.bundleId,
+    sourceId: record.source.sourceId,
+    sourcePath: record.source.sourcePath,
+    custody: record.source.custody,
+    retirementId: record.retirementId,
+    retiredAt: record.retiredAt,
+    manifestRevision: record.retiredManifestRevision,
+    runtimeRevision,
+    generatedPages: Object.freeze(
+      (record.source.lastSuccessful?.generatedPages ?? []).map((page) => Object.freeze({ ...page }))
+    ),
+  });
+}
+
 /**
  * Owns one Vault-private atomic envelope and exposes strict subsystem operations.
  */
@@ -4673,6 +5224,35 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     await this.updateState((state) => {
       const currentRaw = findBundleSlot(state, "queues", bundleId);
       const current = currentRaw === null ? null : this.requireQueueSnapshot(bundleId, currentRaw);
+      const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+      const retiredSourceIds = new Set<string>();
+      if (manifestRaw !== null) {
+        const manifest = this.requireManifest(bundleId, manifestRaw);
+        const retirements = parseKnowledgeSourceRetirements(manifest);
+        if (!retirements.ok) throw new KnowledgeRuntimeStoreCorruptError();
+        for (const retirement of retirements.value) {
+          retiredSourceIds.add(retirement.source.sourceId);
+        }
+      }
+      assertRetiredQueueHistoryPreserved(bundleId, current, candidate, retiredSourceIds);
+      if (authority?.kind === "source_observation") {
+        const owner = state.inputRevisions
+          .find((bundle) => bundle.bundleId === bundleId)
+          ?.sources.find((source) =>
+            source.observations.some(
+              (observation) => observation.observationToken === authority.observationToken
+            )
+          );
+        if (owner && retiredSourceIds.has(owner.sourceId)) {
+          throw new KnowledgeRuntimeSourceRetiredError(bundleId, owner.sourceId);
+        }
+      }
+      if (
+        authority?.kind === "no_changes_commit" &&
+        retiredSourceIds.has(authority.plan.sourceId)
+      ) {
+        throw new KnowledgeRuntimeSourceRetiredError(bundleId, authority.plan.sourceId);
+      }
       const actualRevision = current?.revision ?? null;
       if (actualRevision !== expectedRevision) {
         throw new IngestQueueRevisionConflictError(bundleId, expectedRevision, actualRevision);
@@ -4783,6 +5363,184 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
           ? createEmptyRuntimeReviewSnapshot(bundleId)
           : this.requireReviewSnapshot(bundleId, reviewRaw),
     };
+  }
+
+  /**
+   * Reads every active source retirement candidate from one atomic Runtime envelope.
+   *
+   * The opaque token binds the complete Runtime and Manifest revision. A later
+   * command never rebases a stale confirmation onto newer durable state.
+   *
+   * @param bundleId - Bundle whose active sources are projected
+   * @returns Immutable candidate list and exact Runtime revisions
+   */
+  async readSourceRetirementCandidates(
+    bundleId: string
+  ): Promise<KnowledgeSourceRetirementCandidateSnapshot> {
+    assertIdentifier(bundleId, "bundleId");
+    const state = await this.readState();
+    const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+    const manifest: SourceManifest =
+      manifestRaw === null
+        ? { version: 1, bundleId, revision: 0, entries: [] }
+        : this.requireManifest(bundleId, manifestRaw);
+    const queueRaw = findBundleSlot(state, "queues", bundleId);
+    const queue =
+      queueRaw === null
+        ? createEmptyRuntimeQueueSnapshot(bundleId)
+        : this.requireQueueSnapshot(bundleId, queueRaw);
+    const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+    const review =
+      reviewRaw === null
+        ? createEmptyRuntimeReviewSnapshot(bundleId)
+        : this.requireReviewSnapshot(bundleId, reviewRaw);
+    const blockers = Object.freeze(collectSourceRetirementBlockers(state, manifest, queue, review));
+    const candidates = manifest.entries
+      .map((source): KnowledgeSourceRetirementCandidate => {
+        const candidateBlockers = Object.freeze([...blockers]);
+        return Object.freeze({
+          sourceId: source.sourceId,
+          sourcePath: source.sourcePath,
+          custody: source.custody,
+          generatedPageCount: source.lastSuccessful?.generatedPages.length ?? 0,
+          status: candidateBlockers.length === 0 ? "ready" : "blocked",
+          expectedToken: createSourceRetirementExpectedToken(state, manifest, source),
+          blockers: candidateBlockers,
+        });
+      })
+      .sort((left, right) => compareIdentifiers(left.sourcePath, right.sourcePath));
+    return Object.freeze({
+      bundleId,
+      runtimeRevision: state.revision,
+      manifestRevision: manifest.revision,
+      candidates: Object.freeze(candidates),
+    });
+  }
+
+  /**
+   * Atomically moves one quiescent active source into protected retirement history.
+   *
+   * Queue, Review, input-revision, ledger, and Wiki bytes remain unchanged. The
+   * transition only changes the active Manifest projection and its exact Runtime
+   * envelope revision. Exact replay returns the original receipt without writes.
+   *
+   * @param commandValue - Strict token-bound user confirmation
+   * @returns Durable retirement receipt or exact replay
+   */
+  async retireSourceAtomically(commandValue: unknown): Promise<KnowledgeSourceRetirementReceipt> {
+    const parsed = sourceRetirementCommandSchema.safeParse(commandValue);
+    if (!parsed.success) {
+      const candidate = isRecord(commandValue) ? commandValue : {};
+      throw new KnowledgeSourceRetirementConflictError(
+        typeof candidate.bundleId === "string" ? candidate.bundleId : "unknown",
+        typeof candidate.sourceId === "string" ? candidate.sourceId : "unknown",
+        "request_invalid"
+      );
+    }
+    const command = parsed.data;
+    const retiredAt = this.now();
+    try {
+      return await this.updateState((state) => {
+        const manifestRaw = findBundleSlot(state, "manifests", command.bundleId);
+        if (manifestRaw === null) {
+          throw new KnowledgeSourceRetirementConflictError(
+            command.bundleId,
+            command.sourceId,
+            "source_missing"
+          );
+        }
+        const manifest = this.requireManifest(command.bundleId, manifestRaw);
+        const retirements = parseKnowledgeSourceRetirements(manifest);
+        if (!retirements.ok) throw new KnowledgeRuntimeStoreCorruptError();
+        const existing = retirements.value.find(
+          (record) => record.source.sourceId === command.sourceId
+        );
+        if (existing) {
+          if (
+            existing.requestToken !== command.expectedToken ||
+            existing.reason !== command.reason
+          ) {
+            throw new KnowledgeSourceRetirementConflictError(
+              command.bundleId,
+              command.sourceId,
+              "state_changed"
+            );
+          }
+          return {
+            value: createSourceRetirementReceipt(existing, state.revision, "already_retired"),
+          };
+        }
+        const source = manifest.entries.find((entry) => entry.sourceId === command.sourceId);
+        if (!source) {
+          throw new KnowledgeSourceRetirementConflictError(
+            command.bundleId,
+            command.sourceId,
+            "source_missing"
+          );
+        }
+        const expectedToken = createSourceRetirementExpectedToken(state, manifest, source);
+        if (expectedToken !== command.expectedToken) {
+          throw new KnowledgeSourceRetirementConflictError(
+            command.bundleId,
+            command.sourceId,
+            "state_changed"
+          );
+        }
+        const queueRaw = findBundleSlot(state, "queues", command.bundleId);
+        const queue =
+          queueRaw === null
+            ? createEmptyRuntimeQueueSnapshot(command.bundleId)
+            : this.requireQueueSnapshot(command.bundleId, queueRaw);
+        const reviewRaw = findBundleSlot(state, "reviews", command.bundleId);
+        const review =
+          reviewRaw === null
+            ? createEmptyRuntimeReviewSnapshot(command.bundleId)
+            : this.requireReviewSnapshot(command.bundleId, reviewRaw);
+        const blockers = collectSourceRetirementBlockers(state, manifest, queue, review);
+        if (blockers.length > 0) {
+          throw new KnowledgeSourceRetirementConflictError(
+            command.bundleId,
+            command.sourceId,
+            "blocked",
+            Object.freeze(blockers)
+          );
+        }
+        const retiredManifestRevision = manifest.revision + 1;
+        const record = createKnowledgeSourceRetirementRecord({
+          bundleId: command.bundleId,
+          requestToken: command.expectedToken,
+          reason: command.reason,
+          retiredAt,
+          retiredManifestRevision,
+          source,
+        });
+        const nextManifest = this.requireManifest(
+          command.bundleId,
+          projectKnowledgeSourceRetirement(manifest, record)
+        );
+        const inputRevisions = terminalizeSourceRetirementObservations(
+          state.inputRevisions,
+          record
+        );
+        const runtimeRevision = nextStoreRevision(state);
+        return {
+          next: {
+            ...state,
+            revision: runtimeRevision,
+            manifests: replaceBundleSlot(state.manifests, command.bundleId, nextManifest),
+            inputRevisions,
+          },
+          value: createSourceRetirementReceipt(record, runtimeRevision, "retired"),
+        };
+      });
+    } catch (error) {
+      const confirmed = await this.confirmSourceRetirement(command);
+      if (confirmed) {
+        this.emitStudioHints([command.bundleId]);
+        return confirmed;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -4914,8 +5672,16 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     this.assertNextBundleRevision(candidate.revision, expectedRevision, "review");
     await this.updateState((state) => {
       const currentRaw = findBundleSlot(state, "reviews", bundleId);
-      const actualRevision =
-        currentRaw === null ? null : this.requireReviewSnapshot(bundleId, currentRaw).revision;
+      const current = currentRaw === null ? null : this.requireReviewSnapshot(bundleId, currentRaw);
+      const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+      if (manifestRaw !== null) {
+        const manifest = this.requireManifest(bundleId, manifestRaw);
+        const retirements = parseKnowledgeSourceRetirements(manifest);
+        if (!retirements.ok) throw new KnowledgeRuntimeStoreCorruptError();
+        const retiredSourceIds = new Set(retirements.value.map((record) => record.source.sourceId));
+        assertRetiredReviewHistoryPreserved(bundleId, current, candidate, retiredSourceIds);
+      }
+      const actualRevision = current?.revision ?? null;
       if (actualRevision !== expectedRevision) {
         throw new ReviewStorageRevisionConflictError(bundleId, expectedRevision, actualRevision);
       }
@@ -5767,6 +6533,15 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   ): Promise<SourceInputRevisionAllocation> {
     this.assertInputRevisionRequest(request);
     return this.updateState<SourceInputRevisionAllocation>((state) => {
+      const manifestRaw = findBundleSlot(state, "manifests", request.bundleId);
+      if (manifestRaw !== null) {
+        const manifest = this.requireManifest(request.bundleId, manifestRaw);
+        const retirements = parseKnowledgeSourceRetirements(manifest);
+        if (!retirements.ok) throw new KnowledgeRuntimeStoreCorruptError();
+        if (retirements.value.some((record) => record.source.sourceId === request.sourceId)) {
+          throw new KnowledgeRuntimeSourceRetiredError(request.bundleId, request.sourceId);
+        }
+      }
       for (const candidateBundle of state.inputRevisions) {
         for (const candidateSource of candidateBundle.sources) {
           const replay = candidateSource.observations.find(
@@ -5864,6 +6639,18 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
           );
           if (!current) {
             continue;
+          }
+          if (current.status === "retired") {
+            throw new KnowledgeRuntimeSourceRetiredError(bundle.bundleId, source.sourceId);
+          }
+          const manifestRaw = findBundleSlot(state, "manifests", bundle.bundleId);
+          if (manifestRaw !== null) {
+            const manifest = this.requireManifest(bundle.bundleId, manifestRaw);
+            const retirements = parseKnowledgeSourceRetirements(manifest);
+            if (!retirements.ok) throw new KnowledgeRuntimeStoreCorruptError();
+            if (retirements.value.some((record) => record.source.sourceId === source.sourceId)) {
+              throw new KnowledgeRuntimeSourceRetiredError(bundle.bundleId, source.sourceId);
+            }
           }
           if (current.status === "superseded") {
             if (
@@ -5990,6 +6777,9 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
           );
           if (!current) {
             continue;
+          }
+          if (current.status === "retired") {
+            throw new KnowledgeRuntimeSourceRetiredError(bundle.bundleId, source.sourceId);
           }
           if (current.status === "allocated" || current.status === "bound") {
             const queueRaw = findBundleSlot(state, "queues", bundle.bundleId);
@@ -6217,7 +7007,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return proof;
   }
 
-  /** Migrates a supported v1/v2/v3 envelope through one atomic transform. */
+  /** Migrates a supported v1/v2/v3/v4 envelope through one atomic transform. */
   private async migrateLegacyStore(): Promise<void> {
     let callbackCalled = false;
     let expectedText: string | undefined;
@@ -6235,14 +7025,22 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         expectedText = currentText;
         return currentText;
       }
+      if (value.version === RUNTIME_V4_STORE_VERSION) {
+        expectedText = JSON.stringify(migrateRuntimeV4ToV5Snapshot(value));
+        return expectedText;
+      }
       if (value.version === PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION) {
-        expectedText = JSON.stringify(migrateRuntimeV3ToV4Snapshot(value));
+        expectedText = JSON.stringify(
+          migrateRuntimeV4ToV5Snapshot(migrateRuntimeV3ToV4Snapshot(value))
+        );
         return expectedText;
       }
       if (value.version === RUNTIME_V2_STORE_VERSION) {
         const runtimeId = this.nextOpaqueId("runtimeId");
         expectedText = JSON.stringify(
-          migrateRuntimeV3ToV4Snapshot(migrateRuntimeV2ToV3Snapshot(value, runtimeId))
+          migrateRuntimeV4ToV5Snapshot(
+            migrateRuntimeV3ToV4Snapshot(migrateRuntimeV2ToV3Snapshot(value, runtimeId))
+          )
         );
         return expectedText;
       }
@@ -6251,7 +7049,9 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       }
       const runtimeId = this.nextOpaqueId("runtimeId");
       expectedText = JSON.stringify(
-        migrateRuntimeV3ToV4Snapshot(migrateLegacyRuntimeSnapshot(value, runtimeId))
+        migrateRuntimeV4ToV5Snapshot(
+          migrateRuntimeV3ToV4Snapshot(migrateLegacyRuntimeSnapshot(value, runtimeId))
+        )
       );
       return expectedText;
     });
@@ -6617,6 +7417,31 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   /** Reads and strictly validates the complete atomic runtime envelope. */
   private async readState(): Promise<KnowledgeRuntimeStoreSnapshot> {
     return parseRuntimeText(await this.file.read());
+  }
+
+  /** Re-proves one exact tombstone after an uncertain atomic-file result. */
+  private async confirmSourceRetirement(
+    command: KnowledgeSourceRetirementCommand
+  ): Promise<KnowledgeSourceRetirementReceipt | undefined> {
+    try {
+      const state = await this.readState();
+      const manifestRaw = findBundleSlot(state, "manifests", command.bundleId);
+      if (manifestRaw === null) return undefined;
+      const manifest = this.requireManifest(command.bundleId, manifestRaw);
+      const retirements = parseKnowledgeSourceRetirements(manifest);
+      if (!retirements.ok) return undefined;
+      const record = retirements.value.find(
+        (candidate) =>
+          candidate.source.sourceId === command.sourceId &&
+          candidate.requestToken === command.expectedToken &&
+          candidate.reason === command.reason
+      );
+      return record
+        ? createSourceRetirementReceipt(record, state.revision, "already_retired")
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Commits one Queue+Review Reject projection inside one Runtime transform. */

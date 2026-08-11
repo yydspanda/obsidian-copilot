@@ -1,4 +1,7 @@
-import type { VaultSourceWatcherStartupBlocker } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
+import type {
+  VaultSourceWatcherRecoverableIssue,
+  VaultSourceWatcherStartupBlocker,
+} from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 import {
   isKnowledgeSourceObservationStartupError,
   KnowledgeSourceObservationStartupError,
@@ -7,6 +10,13 @@ import {
 } from "@/knowledge/startup/KnowledgeSourceObservationStartupReconciler";
 
 const MAX_STARTUP_BLOCKERS = 10_000;
+const EMPTY_SOURCE_ISSUES: readonly Readonly<VaultSourceWatcherRecoverableIssue>[] = Object.freeze(
+  []
+);
+
+/** Recoverable source state exposed without transferring watcher authority. */
+export type KnowledgeSourceObservationRecoverableIssue =
+  Readonly<VaultSourceWatcherRecoverableIssue>;
 
 /** Listener, crawl, and health surface owned by one production watcher generation. */
 export interface KnowledgeSourceObservationStartupWatcherPort {
@@ -18,6 +28,8 @@ export interface KnowledgeSourceObservationStartupWatcherPort {
   waitForIdle(): Promise<void>;
   /** Returns authoritative content-free blockers for the current plan generation. */
   getStartupBlockers(): readonly Readonly<VaultSourceWatcherStartupBlocker>[];
+  /** Subscribes one Bundle to coalesced recoverable source-issue changes. */
+  subscribeSourceIssueChanges(bundleId: string, listener: () => void): () => void;
   /** Synchronously invalidates listeners and all future capture stages. */
   close(): void;
 }
@@ -83,6 +95,7 @@ interface CapturedCoordinatorDependencies {
     scan(): unknown;
     waitForIdle(): Promise<unknown>;
     getStartupBlockers(): unknown;
+    subscribeSourceIssueChanges(bundleId: string, listener: () => void): unknown;
     close(): void;
   };
   reconciler: {
@@ -153,6 +166,7 @@ function captureDependencies(
     const scan = captureMethod(watcherValue, "scan");
     const waitForIdle = captureMethod(watcherValue, "waitForIdle");
     const getStartupBlockers = captureMethod(watcherValue, "getStartupBlockers");
+    const subscribeSourceIssueChanges = captureMethod(watcherValue, "subscribeSourceIssueChanges");
     const closeWatcher = captureMethod(watcherValue, "close");
     const reconcile = captureMethod(reconcilerValue, "reconcile");
     const closeReconciler = captureMethod(reconcilerValue, "close");
@@ -162,6 +176,7 @@ function captureDependencies(
       !scan ||
       !waitForIdle ||
       !getStartupBlockers ||
+      !subscribeSourceIssueChanges ||
       !closeWatcher ||
       !reconcile ||
       !closeReconciler
@@ -176,6 +191,11 @@ function captureDependencies(
         scan: () => callZero(scan),
         waitForIdle: () => callZero(waitForIdle) as Promise<unknown>,
         getStartupBlockers: () => callZero(getStartupBlockers),
+        subscribeSourceIssueChanges: (bundleId: string, listener: () => void): unknown =>
+          Reflect.apply(subscribeSourceIssueChanges.method, subscribeSourceIssueChanges.receiver, [
+            bundleId,
+            listener,
+          ]) as unknown,
         close: () => {
           callZero(closeWatcher);
         },
@@ -265,29 +285,180 @@ function snapshotReconciliationResult(value: unknown): KnowledgeSourceObservatio
   });
 }
 
+/** Copies exact enumerable data properties without invoking accessors. */
+function snapshotExactDataProperties(
+  value: unknown,
+  keys: readonly string[]
+): Readonly<Record<string, unknown>> | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Reflect.ownKeys(value).length !== keys.length
+  ) {
+    return undefined;
+  }
+  const snapshot: Record<string, unknown> = {};
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+      return undefined;
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
+
+/** Tests one opaque Bundle or source identifier at the startup boundary. */
+function isOpaqueIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+/** Copies one strict blocker object without retaining observer-owned values. */
+function snapshotStartupBlocker(value: unknown): Readonly<VaultSourceWatcherStartupBlocker> {
+  const kind = readOwnDataProperty(value, "kind");
+  if (kind === "capture_failed") {
+    const snapshot = snapshotExactDataProperties(value, ["kind", "stage", "bundleId", "sourceId"]);
+    if (
+      !snapshot ||
+      (snapshot.stage !== "prepare" &&
+        snapshot.stage !== "allocate" &&
+        snapshot.stage !== "read" &&
+        snapshot.stage !== "commit") ||
+      !isOpaqueIdentifier(snapshot.bundleId) ||
+      !isOpaqueIdentifier(snapshot.sourceId)
+    ) {
+      throw new TypeError("Invalid watcher blocker snapshot");
+    }
+    return Object.freeze({
+      kind,
+      stage: snapshot.stage,
+      bundleId: snapshot.bundleId,
+      sourceId: snapshot.sourceId,
+    });
+  }
+  if (kind === "source_missing") {
+    const snapshot = snapshotExactDataProperties(value, ["kind", "bundleId", "sourceId"]);
+    if (
+      !snapshot ||
+      !isOpaqueIdentifier(snapshot.bundleId) ||
+      !isOpaqueIdentifier(snapshot.sourceId)
+    ) {
+      throw new TypeError("Invalid watcher blocker snapshot");
+    }
+    return Object.freeze({
+      kind,
+      bundleId: snapshot.bundleId,
+      sourceId: snapshot.sourceId,
+    });
+  }
+  if (kind === "source_path_invalid") {
+    const snapshot = snapshotExactDataProperties(value, ["kind", "reason", "bundleId", "sourceId"]);
+    if (
+      !snapshot ||
+      (snapshot.reason !== "case_mismatch" && snapshot.reason !== "windows_collision") ||
+      !isOpaqueIdentifier(snapshot.bundleId) ||
+      !isOpaqueIdentifier(snapshot.sourceId)
+    ) {
+      throw new TypeError("Invalid watcher blocker snapshot");
+    }
+    return Object.freeze({
+      kind,
+      reason: snapshot.reason,
+      bundleId: snapshot.bundleId,
+      sourceId: snapshot.sourceId,
+    });
+  }
+  if (kind === "source_change_unsupported") {
+    const snapshot = snapshotExactDataProperties(value, ["kind", "change", "bundleId", "sourceId"]);
+    if (
+      !snapshot ||
+      (snapshot.change !== "delete" && snapshot.change !== "rename") ||
+      !isOpaqueIdentifier(snapshot.bundleId) ||
+      !isOpaqueIdentifier(snapshot.sourceId)
+    ) {
+      throw new TypeError("Invalid watcher blocker snapshot");
+    }
+    return Object.freeze({
+      kind,
+      change: snapshot.change,
+      bundleId: snapshot.bundleId,
+      sourceId: snapshot.sourceId,
+    });
+  }
+  throw new TypeError("Invalid watcher blocker snapshot");
+}
+
 /** Copies a dense bounded blocker array without retaining observer-owned values. */
-function snapshotBlockerKinds(value: unknown): readonly VaultSourceWatcherStartupBlocker["kind"][] {
-  if (!Array.isArray(value) || value.length > MAX_STARTUP_BLOCKERS) {
+function snapshotStartupBlockers(
+  value: unknown
+): readonly Readonly<VaultSourceWatcherStartupBlocker>[] {
+  if (
+    !Array.isArray(value) ||
+    !Number.isSafeInteger(value.length) ||
+    value.length > MAX_STARTUP_BLOCKERS
+  ) {
     throw new TypeError("Invalid watcher blocker snapshot");
   }
-  const kinds = new Set<VaultSourceWatcherStartupBlocker["kind"]>();
+  if (Reflect.ownKeys(value).length !== value.length + 1) {
+    throw new TypeError("Invalid watcher blocker snapshot");
+  }
+  const blockers: Readonly<VaultSourceWatcherStartupBlocker>[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
       throw new TypeError("Invalid watcher blocker snapshot");
     }
-    const kind = readOwnDataProperty(descriptor.value, "kind");
-    if (
-      kind !== "capture_failed" &&
-      kind !== "source_missing" &&
-      kind !== "source_path_invalid" &&
-      kind !== "source_change_unsupported"
-    ) {
-      throw new TypeError("Invalid watcher blocker snapshot");
+    blockers.push(snapshotStartupBlocker(descriptor.value));
+  }
+  return Object.freeze(
+    blockers.sort(
+      (left, right) =>
+        compareText(left.bundleId, right.bundleId) ||
+        compareText(left.sourceId, right.sourceId) ||
+        compareText(left.kind, right.kind) ||
+        compareText(
+          "stage" in left
+            ? left.stage
+            : "reason" in left
+              ? left.reason
+              : "change" in left
+                ? left.change
+                : "",
+          "stage" in right
+            ? right.stage
+            : "reason" in right
+              ? right.reason
+              : "change" in right
+                ? right.change
+                : ""
+        )
+    )
+  );
+}
+
+/** Selects deduplicated fatal blocker kinds from one strict snapshot. */
+function snapshotFatalBlockerKinds(
+  blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[]
+): readonly ("capture_failed" | "source_path_invalid")[] {
+  const kinds = new Set<"capture_failed" | "source_path_invalid">();
+  for (const blocker of blockers) {
+    if (blocker.kind === "capture_failed" || blocker.kind === "source_path_invalid") {
+      kinds.add(blocker.kind);
     }
-    kinds.add(kind);
   }
   return Object.freeze([...kinds].sort(compareText));
+}
+
+/** Selects recoverable issues from one already detached strict snapshot. */
+function snapshotRecoverableSourceIssues(
+  blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[]
+): readonly KnowledgeSourceObservationRecoverableIssue[] {
+  return Object.freeze(
+    blockers.filter(
+      (blocker): blocker is KnowledgeSourceObservationRecoverableIssue =>
+        blocker.kind === "source_missing" || blocker.kind === "source_change_unsupported"
+    )
+  );
 }
 
 /** Maps a branded reconciler failure into a stable coordinator diagnostic. */
@@ -316,6 +487,8 @@ export class KnowledgeSourceObservationStartupCoordinator {
   private sessionHealthy = false;
   private reproofInFlight = false;
   private healthCheckInProgress = false;
+  private sourceRecoveryClassificationOpen = false;
+  private sourceIssues: readonly KnowledgeSourceObservationRecoverableIssue[] = EMPTY_SOURCE_ISSUES;
 
   /** Creates one generation-owned observation session without Queue authority. */
   constructor(dependencies: KnowledgeSourceObservationStartupCoordinatorDependencies) {
@@ -418,16 +591,18 @@ export class KnowledgeSourceObservationStartupCoordinator {
       const finalWaitFailure = await this.waitForWatcher(generation, signal);
       if (finalWaitFailure) return finalWaitFailure;
 
-      let blockerKinds: readonly VaultSourceWatcherStartupBlocker["kind"][];
+      let blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[];
       try {
-        blockerKinds = snapshotBlockerKinds(this.dependencies.watcher.getStartupBlockers());
+        blockers = snapshotStartupBlockers(this.dependencies.watcher.getStartupBlockers());
       } catch {
         this.assertCurrent(generation, signal);
         return this.finishDiagnostic("watcher_state_invalid");
       }
       this.assertCurrent(generation, signal);
-      if (blockerKinds.length > 0) {
-        return this.finishBlocked(blockerKinds);
+      this.sourceIssues = snapshotRecoverableSourceIssues(blockers);
+      const fatalBlockerKinds = snapshotFatalBlockerKinds(blockers);
+      if (fatalBlockerKinds.length > 0) {
+        return this.finishBlocked(fatalBlockerKinds);
       }
       if (
         finalReconciliation.deferredAllocatedCount > 0 ||
@@ -516,16 +691,18 @@ export class KnowledgeSourceObservationStartupCoordinator {
       const finalWaitFailure = await this.waitForWatcher(generation, signal);
       if (finalWaitFailure) return finalWaitFailure;
 
-      let blockerKinds: readonly VaultSourceWatcherStartupBlocker["kind"][];
+      let blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[];
       try {
-        blockerKinds = snapshotBlockerKinds(this.dependencies.watcher.getStartupBlockers());
+        blockers = snapshotStartupBlockers(this.dependencies.watcher.getStartupBlockers());
       } catch {
         this.assertCurrent(generation, signal);
         return this.finishDiagnostic("watcher_state_invalid");
       }
       this.assertCurrent(generation, signal);
-      if (blockerKinds.length > 0) {
-        return this.finishBlocked(blockerKinds);
+      this.sourceIssues = snapshotRecoverableSourceIssues(blockers);
+      const fatalBlockerKinds = snapshotFatalBlockerKinds(blockers);
+      if (fatalBlockerKinds.length > 0) {
+        return this.finishBlocked(fatalBlockerKinds);
       }
       if (reconciliation.deferredAllocatedCount > 0 || reconciliation.deferredDriftCount > 0) {
         return this.finishBlocked(Object.freeze(["source_observation_pending"]));
@@ -545,11 +722,11 @@ export class KnowledgeSourceObservationStartupCoordinator {
   }
 
   /**
-   * Synchronously proves that the converged session is still current and blocker-free.
+   * Synchronously proves that the converged session is current and fatal-blocker-free.
    *
    * This method deliberately returns no transferable token. A failed proof closes
    * the whole session, so a caller cannot retain an earlier successful observation
-   * after a rename, delete, lifecycle replacement, or concurrent reproof.
+   * after a fatal capture/path failure, lifecycle replacement, or concurrent reproof.
    */
   assertHealthy(): void {
     if (
@@ -571,9 +748,10 @@ export class KnowledgeSourceObservationStartupCoordinator {
     const signal = this.callerSignal;
     try {
       this.assertCurrent(generation, signal);
-      const blockerKinds = snapshotBlockerKinds(this.dependencies.watcher.getStartupBlockers());
+      const blockers = snapshotStartupBlockers(this.dependencies.watcher.getStartupBlockers());
       this.assertCurrent(generation, signal);
-      if (blockerKinds.length > 0) {
+      this.sourceIssues = snapshotRecoverableSourceIssues(blockers);
+      if (snapshotFatalBlockerKinds(blockers).length > 0) {
         throw createAbortError();
       }
     } catch {
@@ -584,6 +762,99 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
   }
 
+  /**
+   * Returns a detached read-only snapshot of currently recoverable source issues.
+   *
+   * The synchronous health proof refreshes the snapshot first and closes the
+   * session if watcher state is malformed, fatal, or no longer current.
+   *
+   * @returns Strict source issues for a consumer-owned presentation model
+   */
+  getSourceIssues(): readonly KnowledgeSourceObservationRecoverableIssue[] {
+    this.assertHealthy();
+    return this.sourceIssues;
+  }
+
+  /**
+   * Returns the recoverable issue snapshot retained only for immediate startup classification.
+   *
+   * This narrow read is available after the exact singleton observation-pending
+   * result and before the production composer closes the coordinator. It does
+   * not make the blocked session healthy or eligible for reproof/release.
+   *
+   * @returns Frozen path-free issues, or undefined for every other blocked result
+   */
+  getSourceRecoveryClassificationIssues():
+    | readonly KnowledgeSourceObservationRecoverableIssue[]
+    | undefined {
+    if (!this.sourceRecoveryClassificationOpen) return undefined;
+    if (this.closed || !this.started || !this.callerSignal) {
+      throw createAbortError();
+    }
+    const generation = this.generation;
+    const signal = this.callerSignal;
+    this.assertCurrent(generation, signal);
+    return this.sourceIssues;
+  }
+
+  /**
+   * Subscribes one Bundle to value-free recoverable source-issue changes.
+   *
+   * @param bundleId - Exact Bundle identity owned by this watcher generation
+   * @param listener - Best-effort reload callback
+   * @returns Idempotent cleanup for this generation-owned subscription
+   */
+  subscribeSourceIssueChanges(bundleId: string, listener: () => void): () => void {
+    this.assertHealthy();
+    if (!isOpaqueIdentifier(bundleId) || typeof listener !== "function" || !this.callerSignal) {
+      throw createAbortError();
+    }
+    const generation = this.generation;
+    const signal = this.callerSignal;
+    this.assertCurrent(generation, signal);
+    let active = true;
+    let unsubscribe: unknown;
+    const guardedListener = (): void => {
+      if (!active) return;
+      try {
+        this.assertCurrent(generation, signal);
+      } catch {
+        return;
+      }
+      try {
+        listener();
+      } catch {
+        // Presentation listeners cannot affect observation authority.
+      }
+    };
+    try {
+      unsubscribe = this.dependencies.watcher.subscribeSourceIssueChanges(
+        bundleId,
+        guardedListener
+      );
+      this.assertCurrent(generation, signal);
+      if (typeof unsubscribe !== "function") throw createAbortError();
+    } catch {
+      if (typeof unsubscribe === "function") {
+        try {
+          unsubscribe();
+        } catch {
+          // A failed subscription never became presentation authority.
+        }
+      }
+      throw createAbortError();
+    }
+    return () => {
+      if (!active) return;
+      active = false;
+      try {
+        (unsubscribe as () => void)();
+      } catch {
+        // The value-free subscription is already detached locally.
+      }
+    };
+  }
+
   /** Synchronously invalidates listener, crawl, and recovery continuations exactly once. */
   close(): void {
     if (this.closed) {
@@ -591,6 +862,8 @@ export class KnowledgeSourceObservationStartupCoordinator {
     }
     this.closed = true;
     this.sessionHealthy = false;
+    this.sourceRecoveryClassificationOpen = false;
+    this.sourceIssues = EMPTY_SOURCE_ISSUES;
     this.generation += 1;
     this.operationController?.abort();
     if (this.callerSignal && this.callerAbort) {
@@ -637,7 +910,7 @@ export class KnowledgeSourceObservationStartupCoordinator {
     return Object.freeze({ kind: "diagnostic", code });
   }
 
-  /** Revokes a permanently blocked generation after snapshotting its safe reasons. */
+  /** Retains only exact source-recovery evidence until its composer snapshots and closes it. */
   private finishBlocked(
     blockerKinds: readonly (
       | VaultSourceWatcherStartupBlocker["kind"]
@@ -648,6 +921,14 @@ export class KnowledgeSourceObservationStartupCoordinator {
       kind: "blocked" as const,
       blockerKinds: Object.freeze([...blockerKinds]),
     });
+    if (
+      blockerKinds.length === 1 &&
+      blockerKinds[0] === "source_observation_pending" &&
+      this.sourceIssues.length > 0
+    ) {
+      this.sourceRecoveryClassificationOpen = true;
+      return result;
+    }
     this.closeSafely();
     return result;
   }

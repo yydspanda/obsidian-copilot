@@ -22,6 +22,8 @@ import {
 import {
   ObsidianExactSourceArtifactReader,
   ObsidianVaultSourceWatcher,
+  type VaultSourceWatcherNotification,
+  type VaultSourceWatcherNotificationSink,
 } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
@@ -45,6 +47,7 @@ import { KnowledgeProductionReviewedApplyCoordinator } from "@/knowledge/startup
 import { KnowledgePluginProductionWorkflowLease } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import {
   KnowledgeSourceObservationStartupCoordinator,
+  type KnowledgeSourceObservationRecoverableIssue,
   type KnowledgeSourceObservationStartupCoordinatorResult,
   type KnowledgeSourceObservationStartupReproofResult,
 } from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator";
@@ -57,6 +60,8 @@ import {
 import { KnowledgeStudioRuntimeReadAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeReadAdapter";
 import { KnowledgeStudioRuntimeCommandAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeCommandAdapter";
 import { KnowledgeStudioReviewedApplyPort } from "@/knowledge/ui/KnowledgeStudioReviewedApplyPort";
+import { KnowledgeProductionSourceLifecycleCoordinator } from "@/knowledge/sourceLifecycle/KnowledgeProductionSourceLifecycleCoordinator";
+import type { KnowledgeSourceLifecyclePort } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import {
   KnowledgeProductionPreparationExecutor,
   type KnowledgePreparedIngestHandler,
@@ -70,6 +75,8 @@ export interface KnowledgeProductionObservationComposerInput {
   runtime: KnowledgeRuntimeStore;
   /** Same-snapshot, secret-free capability minted by production preflight. */
   workflowLease: KnowledgePluginProductionWorkflowLease;
+  /** Best-effort path-free host notification capability for source issues. */
+  notificationSink?: VaultSourceWatcherNotificationSink;
 }
 
 /** Stable composition failures that never expose paths, settings, bytes, or causes. */
@@ -93,6 +100,13 @@ export type KnowledgeProductionObservationReproofResult =
       kind: "diagnostic";
       code: KnowledgeProductionObservationDiagnosticCode;
     }>;
+
+/** Exact active Manifest source identity projected without watch-plan authority. */
+export interface KnowledgeProductionRegisteredSourcePathSummary {
+  readonly bundleId: string;
+  readonly sourceId: string;
+  readonly sourcePath: string;
+}
 
 /** Execution boundary deliberately unavailable to an observation-only Queue controller. */
 class KnowledgeObservationExecutionUnavailableError extends Error {
@@ -159,6 +173,7 @@ interface KnowledgeProductionObservationComposition {
   heldExecutor: StartupHeldObservationIngestExecutor;
   eventSink: StartupHeldObservationEventSink;
   proofPort: KnowledgeRuntimeIngestExecutionProofPort;
+  notificationSink?: VaultSourceWatcherNotificationSink;
 }
 
 interface KnowledgeProductionObservationInternalState {
@@ -173,6 +188,7 @@ interface KnowledgeProductionObservationInternalState {
   modelRouteLease?: KnowledgeProductionModelRouteLease;
   plan?: KnowledgeSourceExecutionPlan;
   lastResult?: KnowledgeProductionObservationResult | KnowledgeProductionObservationReproofResult;
+  sourceRecoveryIssues?: readonly KnowledgeSourceObservationRecoverableIssue[];
   unsubscribeLease?: () => void;
   closeListeners: Set<() => void>;
 }
@@ -196,6 +212,33 @@ function readDataProperty(value: unknown, key: string): unknown {
   return descriptor.value;
 }
 
+/** Reads one optional enumerable data property without evaluating an accessor. */
+function readOptionalDataProperty(value: unknown, key: string): unknown {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    throw new TypeError("Invalid production observation input");
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor) return undefined;
+  if (!("value" in descriptor) || !descriptor.enumerable) {
+    throw new TypeError("Invalid production observation input");
+  }
+  return descriptor.value;
+}
+
+/** Snapshots one optional watcher notification capability without retaining accessors. */
+function snapshotNotificationSink(value: unknown): VaultSourceWatcherNotificationSink | undefined {
+  if (value === undefined) return undefined;
+  const emit = readDataProperty(value, "emit");
+  if (typeof emit !== "function") {
+    throw new TypeError("Invalid production observation dependencies");
+  }
+  return Object.freeze({
+    emit: (notification: VaultSourceWatcherNotification) => {
+      Reflect.apply(emit, value, [notification]);
+    },
+  });
+}
+
 /** Returns hidden mutable state only for an authentic composer instance. */
 function requireComposerState(value: unknown): KnowledgeProductionObservationInternalState {
   if (typeof value !== "object" || value === null) {
@@ -213,6 +256,37 @@ function createDiagnostic(
   code: KnowledgeProductionObservationDiagnosticCode
 ): Extract<KnowledgeProductionObservationResult, { kind: "diagnostic" }> {
   return Object.freeze({ kind: "diagnostic" as const, code });
+}
+
+/** Compares stable source identifiers without depending on the host locale. */
+function compareText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+/** Projects a retained watch plan into a frozen path-only source index. */
+function snapshotRegisteredSourcePaths(
+  plan: KnowledgeSourceExecutionPlan
+): readonly Readonly<KnowledgeProductionRegisteredSourcePathSummary>[] {
+  return Object.freeze(
+    plan
+      .getWatchPlan()
+      .getSources()
+      .map((source) =>
+        Object.freeze({
+          bundleId: source.bundleId,
+          sourceId: source.sourceId,
+          sourcePath: source.sourcePath,
+        })
+      )
+      .sort(
+        (left, right) =>
+          compareText(left.bundleId, right.bundleId) ||
+          compareText(left.sourceId, right.sourceId) ||
+          compareText(left.sourcePath, right.sourcePath)
+      )
+  );
 }
 
 /** Reports whether exact composer and preflight ownership remain current. */
@@ -257,6 +331,9 @@ function composeObservation(
   const app = readDataProperty(input, "app");
   const runtime = readDataProperty(input, "runtime");
   const workflowLease = readDataProperty(input, "workflowLease");
+  const notificationSink = snapshotNotificationSink(
+    readOptionalDataProperty(input, "notificationSink")
+  );
   if (typeof app !== "object" || app === null || !(runtime instanceof KnowledgeRuntimeStore)) {
     throw new TypeError("Invalid production observation dependencies");
   }
@@ -333,6 +410,7 @@ function composeObservation(
     heldExecutor,
     eventSink,
     proofPort,
+    notificationSink,
   });
   workflowLease.assertCurrent();
   return composition;
@@ -349,7 +427,10 @@ function createObservationCoordinator(
     composition.app,
     plan.getWatchPlan(),
     composition.handoffs,
-    { artifactReader: composition.artifactReader }
+    {
+      artifactReader: composition.artifactReader,
+      notificationSink: composition.notificationSink,
+    }
   );
   const reconciler = new KnowledgeSourceObservationStartupReconciler({
     watchPlan: plan.getWatchPlan(),
@@ -376,42 +457,62 @@ function closeCoordinator(state: KnowledgeProductionObservationInternalState): v
 }
 
 /**
- * Subscribes one Studio Bundle to value-free changes beneath its exact Wiki root.
+ * Subscribes one Studio Bundle to coalesced Vault and source-issue reload hints.
  *
  * @param composition - Current App/Vault and workflow generation
  * @param bundleId - Configured Bundle whose Wiki targets are observed
  * @param onHint - Non-authoritative reload callback
- * @returns Idempotent exact-Vault listener cleanup
+ * @param subscribeSourceIssueHints - Generation-owned recoverable issue hint source
+ * @returns Idempotent cleanup for every exact-generation hint source
  */
-function subscribeKnowledgeStudioVaultHints(
+function subscribeKnowledgeStudioExternalHints(
   composition: KnowledgeProductionObservationComposition,
   bundleId: string,
-  onHint: () => void
+  onHint: () => void,
+  subscribeSourceIssueHints: (listener: () => void) => () => void
 ): () => void {
   const owner = composition.owners.find(({ config }) => config.id === bundleId);
-  if (!owner || typeof onHint !== "function") throw createAbortError();
+  if (!owner || typeof onHint !== "function" || typeof subscribeSourceIssueHints !== "function") {
+    throw createAbortError();
+  }
   composition.workflowLease.assertCurrent();
   const vault = composition.app.vault;
   let active = true;
-  const affectsWiki = (file: TAbstractFile, oldPath?: string): void => {
+  let hintQueued = false;
+  const observedRoots = Object.freeze([...owner.config.sourceRoots, owner.config.wikiRoot]);
+  const emitHint = (): void => {
+    hintQueued = false;
+    if (!active) return;
+    try {
+      composition.workflowLease.assertCurrent();
+      onHint();
+    } catch {
+      // A stale generation or presentation failure cannot affect watcher state.
+    }
+  };
+  const scheduleHint = (): void => {
+    if (!active || hintQueued) return;
+    hintQueued = true;
+    queueMicrotask(emitHint);
+  };
+  const affectsBundle = (file: TAbstractFile, oldPath?: string): void => {
     if (!active) return;
     if (
-      isPathWithinRoot(file.path, owner.config.wikiRoot) ||
-      (oldPath !== undefined && isPathWithinRoot(oldPath, owner.config.wikiRoot))
+      observedRoots.some((root) => isPathWithinRoot(file.path, root)) ||
+      (oldPath !== undefined && observedRoots.some((root) => isPathWithinRoot(oldPath, root)))
     ) {
-      try {
-        onHint();
-      } catch {
-        // Reload hints are non-authoritative and cannot disrupt Vault events.
-      }
+      scheduleHint();
     }
   };
   const refs: EventRef[] = [];
+  let unsubscribeSourceIssues: (() => void) | undefined;
   try {
-    refs.push(vault.on("create", (file) => affectsWiki(file)));
-    refs.push(vault.on("modify", (file) => affectsWiki(file)));
-    refs.push(vault.on("delete", (file) => affectsWiki(file)));
-    refs.push(vault.on("rename", (file, oldPath) => affectsWiki(file, oldPath)));
+    unsubscribeSourceIssues = subscribeSourceIssueHints(scheduleHint);
+    if (typeof unsubscribeSourceIssues !== "function") throw createAbortError();
+    refs.push(vault.on("create", (file) => affectsBundle(file)));
+    refs.push(vault.on("modify", (file) => affectsBundle(file)));
+    refs.push(vault.on("delete", (file) => affectsBundle(file)));
+    refs.push(vault.on("rename", (file, oldPath) => affectsBundle(file, oldPath)));
   } catch {
     active = false;
     for (const ref of refs) {
@@ -421,17 +522,28 @@ function subscribeKnowledgeStudioVaultHints(
         // Partial subscription authority is already discarded.
       }
     }
+    try {
+      unsubscribeSourceIssues?.();
+    } catch {
+      // Partial issue subscription authority is already discarded.
+    }
     throw createAbortError();
   }
   return () => {
     if (!active) return;
     active = false;
+    hintQueued = false;
     for (const ref of refs) {
       try {
         vault.offref(ref);
       } catch {
         // The subscription is already non-authoritative for this generation.
       }
+    }
+    try {
+      unsubscribeSourceIssues?.();
+    } catch {
+      // The source-issue subscription is already non-authoritative.
     }
   };
 }
@@ -502,6 +614,14 @@ export class KnowledgeProductionObservationComposer {
       const result = await coordinator.start(signal);
       assertCompositionCurrent(state, generation, composition, signal);
       state.lastResult = result;
+      if (
+        result.kind === "blocked" &&
+        result.blockerKinds.length === 1 &&
+        result.blockerKinds[0] === "source_observation_pending"
+      ) {
+        const issues = coordinator.getSourceRecoveryClassificationIssues();
+        if (issues) state.sourceRecoveryIssues = issues;
+      }
       if (result.kind !== "observation_converged") {
         closeCoordinator(state);
       }
@@ -565,6 +685,61 @@ export class KnowledgeProductionObservationComposer {
       assertCompositionCurrent(state, state.generation, composition);
       coordinator.assertHealthy();
       assertCompositionCurrent(state, state.generation, composition);
+    } catch {
+      this.close();
+      throw createAbortError();
+    }
+  }
+
+  /**
+   * Returns current recoverable source issues without exposing watcher authority.
+   *
+   * @returns Coordinator-owned frozen issue snapshot for this exact generation
+   */
+  getSourceIssues(): readonly KnowledgeSourceObservationRecoverableIssue[] {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    const coordinator = state.coordinator;
+    const sourceRecoveryIssues = state.sourceRecoveryIssues;
+    if (!composition || !state.lastResult || (!coordinator && !sourceRecoveryIssues)) {
+      throw createAbortError();
+    }
+    try {
+      assertCompositionCurrent(state, state.generation, composition);
+      let issues: readonly KnowledgeSourceObservationRecoverableIssue[];
+      if (coordinator) {
+        issues = coordinator.getSourceIssues();
+      } else if (sourceRecoveryIssues) {
+        issues = sourceRecoveryIssues;
+      } else {
+        throw createAbortError();
+      }
+      assertCompositionCurrent(state, state.generation, composition);
+      return issues;
+    } catch {
+      this.close();
+      throw createAbortError();
+    }
+  }
+
+  /**
+   * Returns exact active registered source paths for a generation-owned file-menu index.
+   *
+   * @returns Frozen path-only summaries detached from the retained watch plan
+   */
+  getRegisteredSourcePaths(): readonly Readonly<KnowledgeProductionRegisteredSourcePathSummary>[] {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    const plan = state.plan;
+    if (!composition || !state.coordinator || !state.lastResult || !plan) {
+      throw createAbortError();
+    }
+    try {
+      assertCompositionCurrent(state, state.generation, composition);
+      this.assertHealthy();
+      const sources = snapshotRegisteredSourcePaths(plan);
+      assertCompositionCurrent(state, state.generation, composition);
+      return sources;
     } catch {
       this.close();
       throw createAbortError();
@@ -726,8 +901,10 @@ export class KnowledgeProductionObservationComposer {
   ): KnowledgeStudioRuntimeReadAdapter {
     const state = requireComposerState(this);
     const composition = state.composition;
+    const observationCoordinator = state.coordinator;
     if (
       !composition ||
+      !observationCoordinator ||
       !state.workerController ||
       !state.plan ||
       state.modelRouteLease !== modelRouteLease
@@ -778,6 +955,32 @@ export class KnowledgeProductionObservationComposer {
       ...(retainCommandDrain === undefined ? {} : { retainDrain: retainCommandDrain }),
       notifyReviewWorkAvailable: () => composition.eventSink.emit(),
     });
+    let sourceLifecycle: KnowledgeSourceLifecyclePort | undefined;
+    if (onApplyGenerationRefreshRequired) {
+      const sourceLifecycleCoordinator = new KnowledgeProductionSourceLifecycleCoordinator({
+        runtime: composition.runtime,
+        getSourceIssues: () => this.getSourceIssues(),
+        assertCurrent,
+        onGenerationRefreshRequired: onApplyGenerationRefreshRequired,
+      });
+      const retainLifecycleAction = <T>(operation: Promise<T>): Promise<T> => {
+        retainCommandDrain?.(
+          operation.then(
+            () => undefined,
+            () => undefined
+          )
+        );
+        return operation;
+      };
+      const lifecyclePort: KnowledgeSourceLifecyclePort = {
+        loadSources: (bundleId, signal) => sourceLifecycleCoordinator.loadSources(bundleId, signal),
+        checkAgain: (bundleId, sourceId, signal) =>
+          retainLifecycleAction(sourceLifecycleCoordinator.checkAgain(bundleId, sourceId, signal)),
+        retireSource: (bundleId, request, signal) =>
+          retainLifecycleAction(sourceLifecycleCoordinator.retireSource(bundleId, request, signal)),
+      };
+      sourceLifecycle = Object.freeze(lifecyclePort);
+    }
     const writeback = onApplyGenerationRefreshRequired
       ? new KnowledgeProductionQueryWritebackCoordinator({
           owners: composition.owners,
@@ -808,8 +1011,11 @@ export class KnowledgeProductionObservationComposer {
       assertCurrent,
       commands,
       query,
+      ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
       subscribeVaultHints: (bundleId, onHint) =>
-        subscribeKnowledgeStudioVaultHints(composition, bundleId, onHint),
+        subscribeKnowledgeStudioExternalHints(composition, bundleId, onHint, (listener) =>
+          observationCoordinator.subscribeSourceIssueChanges(bundleId, listener)
+        ),
     });
   }
 
@@ -850,6 +1056,7 @@ export class KnowledgeProductionObservationComposer {
     state.generation += 1;
     state.composition = undefined;
     state.plan = undefined;
+    state.sourceRecoveryIssues = undefined;
     state.worker = undefined;
     state.workerController = undefined;
     state.modelRouteLease = undefined;

@@ -81,6 +81,9 @@ function createHarness(overrides: Partial<KnowledgePluginStartupBarrierDependenc
       setRecoveryReady: jest.fn((state) => {
         studioStates.push(state);
       }),
+      setSourceRecoveryReady: jest.fn((state) => {
+        studioStates.push(state);
+      }),
     },
     ...overrides,
   };
@@ -274,6 +277,72 @@ describe("KnowledgePluginStartupBarrier", () => {
     expect(dependencies.studio.setReadReady).toHaveBeenCalledWith(barrier.getState());
     expect(observation.close).not.toHaveBeenCalled();
     barrier.cancel();
+  });
+
+  it("retains exact blocked observation and publishes only staged source recovery", async () => {
+    const recovery = createRecovery();
+    const observation = createObservation(async () => ({
+      kind: "blocked",
+      blockerKinds: Object.freeze(["source_observation_pending"]),
+      sourceRecoveryBundleIds: Object.freeze(["personal"]),
+    }));
+    const release = jest.fn<Promise<KnowledgePluginObservationReleaseResult>, [AbortSignal]>();
+    const port = { ...observation, release };
+    const { barrier, dependencies } = createHarness({
+      bundleConfig: {
+        load: async () => ({
+          kind: "configured",
+          bundleIds: ["personal"],
+          recovery,
+          observation: port,
+        }),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "source_recovery_required",
+      bundleIds: ["personal"],
+      sourceRecoveryBundleId: "personal",
+      blockerKinds: ["source_observation_pending"],
+    });
+    expect(dependencies.studio.setSourceRecoveryReady).toHaveBeenCalledWith(barrier.getState());
+    expect(release).not.toHaveBeenCalled();
+    expect(observation.close).not.toHaveBeenCalled();
+
+    barrier.cancel();
+    expect(observation.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for generic source observation pending without a staged recoverable issue", async () => {
+    const recovery = createRecovery();
+    const observation = createObservation(async () => ({
+      kind: "blocked",
+      blockerKinds: Object.freeze(["source_observation_pending"]),
+    }));
+    const { barrier, dependencies } = createHarness({
+      bundleConfig: {
+        load: async () => ({
+          kind: "configured",
+          bundleIds: ["personal"],
+          recovery,
+          observation,
+        }),
+      },
+    });
+
+    await barrier.startAfterLayout();
+
+    expect(barrier.getState()).toEqual({
+      generation: 1,
+      status: "recovery_unavailable",
+      bundleIds: ["personal"],
+      diagnosticCodes: ["recovery_result_invalid"],
+    });
+    expect(dependencies.studio.setSourceRecoveryReady).not.toHaveBeenCalled();
+    expect(observation.close).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when a released observation does not identify the exact configured Bundles", async () => {

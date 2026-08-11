@@ -1,4 +1,5 @@
 import { ChatButtons } from "@/components/chat-components/ChatButtons";
+import { KnowledgeChatDraftDialog } from "@/components/chat-components/KnowledgeChatDraftDialog";
 import { SourcesModal } from "@/components/modals/SourcesModal";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -27,16 +28,20 @@ import {
   type ToolCallRootRecord,
 } from "@/components/chat-components/toolCallRootManager";
 import { AgentReasoningBlock } from "@/components/chat-components/AgentReasoningBlock";
-import { USER_SENDER } from "@/constants";
+import { AI_SENDER, USER_SENDER } from "@/constants";
 import { cn } from "@/lib/utils";
 import { parseToolCallMarkers } from "@/LLMProviders/chainRunner/utils/toolCallParser";
 import { parseReasoningBlock } from "@/LLMProviders/chainRunner/utils/AgentReasoningState";
 import { processInlineCitations } from "@/LLMProviders/chainRunner/utils/citationUtils";
 import { logError } from "@/logger";
+import type {
+  KnowledgeChatCapturePort,
+  KnowledgeChatDraftSession,
+} from "@/knowledge/capture/KnowledgeChatCapturePort";
 import { ChatMessage } from "@/types/message";
 import { cleanMessageForCopy, extractYoutubeVideoId, insertIntoEditor } from "@/utils";
 import { preprocessAIResponse } from "@/utils/markdownPreprocess";
-import { App, Component, MarkdownRenderer, MarkdownView, TFile } from "obsidian";
+import { App, Component, MarkdownRenderer, MarkdownView, Notice, TFile } from "obsidian";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettingsValue } from "@/settings/model";
 import {
@@ -302,6 +307,7 @@ interface ChatSingleMessageProps {
   onRegenerate?: () => void;
   onEdit?: (newMessage: string) => void;
   onDelete: () => void;
+  knowledgeChatCapturePort?: KnowledgeChatCapturePort;
 }
 
 const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
@@ -311,9 +317,12 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
   onRegenerate,
   onEdit,
   onDelete,
+  knowledgeChatCapturePort,
 }) => {
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [knowledgeDraftSession, setKnowledgeDraftSession] =
+    useState<Readonly<KnowledgeChatDraftSession> | null>(null);
   const parsedReasoningBlock = useMemo(
     () => parseReasoningBlock(message.message),
     [message.message]
@@ -333,6 +342,7 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
     };
   }, [parsedReasoningBlock]);
   const contentRef = useRef<HTMLDivElement>(null);
+  const messageRootRef = useRef<HTMLDivElement>(null);
   const componentRef = useRef<Component | null>(null);
   const isUnmountingRef = useRef<boolean>(false);
   // Use a stable ID for the message to preserve tool call roots across re-renders
@@ -933,6 +943,25 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
     void insertIntoEditor(message.message, hasSelection);
   };
 
+  const knowledgeDraftBody = cleanMessageForCopy(message.message);
+  const canCreateKnowledgeDraft =
+    message.sender === AI_SENDER &&
+    !message.isErrorMessage &&
+    knowledgeDraftBody.trim().length > 0 &&
+    knowledgeChatCapturePort !== undefined;
+
+  /** Opens a draft only after binding the editor to one exact current Bundle/root. */
+  const openKnowledgeDraft = (): void => {
+    const session = knowledgeChatCapturePort?.prepareKnowledgeDraft() ?? null;
+    if (!session) {
+      new Notice(
+        "Knowledge Draft is not available for the current Project configuration or refresh state."
+      );
+      return;
+    }
+    setKnowledgeDraftSession(session);
+  };
+
   const renderMessageContent = () => {
     if (message.content) {
       return (
@@ -1000,7 +1029,7 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
   }
 
   return (
-    <div className="tw-my-1 tw-flex tw-w-full tw-flex-col">
+    <div ref={messageRootRef} className="tw-my-1 tw-flex tw-w-full tw-flex-col">
       <div
         className={cn(
           "tw-group tw-mx-2 tw-rounded-md tw-p-2",
@@ -1045,12 +1074,25 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
                 onEdit={handleEdit}
                 onDelete={onDelete}
                 onShowSources={handleShowSources}
+                onCreateKnowledgeDraft={canCreateKnowledgeDraft ? openKnowledgeDraft : undefined}
                 hasSources={message.sources && message.sources.length > 0 ? true : false}
               />
             </div>
           )}
         </div>
       </div>
+      {knowledgeDraftSession && knowledgeChatCapturePort && (
+        <KnowledgeChatDraftDialog
+          open={true}
+          initialBody={knowledgeDraftBody}
+          container={messageRootRef.current?.doc.body ?? null}
+          capturePort={knowledgeChatCapturePort}
+          session={knowledgeDraftSession}
+          onOpenChange={(open) => {
+            if (!open) setKnowledgeDraftSession(null);
+          }}
+        />
+      )}
     </div>
   );
 };

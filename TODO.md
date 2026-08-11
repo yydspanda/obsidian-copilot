@@ -128,7 +128,7 @@
 - [x] 将 Runtime 验证的 freshness 接入 production observation → Queue admission：只有 Manifest 授权的每个生成页当前为 exact file 且 SHA-256 一致，或存在显式首次零页 `no_changes` proof，才允许 exact-input high-watermark skip。冷启动 full crawl 及已跟踪生成输出的 create/modify/delete/rename/folder 事件会重新观察原 source owner；missing、directory 或 byte drift 会创建 repair job，或为 processing/awaiting-review 工作保留唯一 repair rerun。shared page 会重查全部 owner；Apply 期间延后检查，交由强制 generation refresh 复证。authority、identity 或 I/O 无法证明时不写 Queue；有实际变更的 repair 仍须经过 Review，绝不直接写 Wiki 或自动 Apply。若模型对仍然 stale 的输出返回 `no_changes`，Queue 不提交 success marker，而是记录脱敏、不可自动重试的 `output_repair_unresolved`，折叠同输入 rerun 并阻止重启重复花费；只有一次后续 `up_to_date` observation 才解除该输入 blocker，source/pipeline 已变化的 divergent rerun 不受影响。
 - [ ] 补 production-shaped 非空 Apply 组合门禁：完整输出 cold scan 必须零模型，missing/hash drift 必须恰好创建一次 repair，shared-owner Apply 交错不得制造冗余模型任务；当前 intact/missing 行为已有 Windows acceptance，hash drift、shared-owner 与 Apply 交错已有分层自动化，尚缺单一 Composer E2E fixture。
 - [ ] 优化大 Vault freshness 成本：按 Runtime revision 缓存 envelope digest 或引入 source-scoped proof digest；target resolver 只索引本批授权 path key 而不是首尾各构建一次全 Vault index；watcher capture identity 改为有界 generation-scoped 单调序列，避免长期 generation 的集合增长。
-- [ ] 增加 Runtime-owned source retirement/tombstone authority，以原子清理零页 no-change marker 及关联 Queue/observation，并保留重注册时不可回退的 revision floor；通用 Manifest writer 不得绕过该边界。
+- [x] 增加 Runtime-owned source retirement/tombstone authority：把来源从 active Manifest 移入受保护 tombstone，原子 terminalize 目标 allocated/bound observation，保留 Queue/Review/input/apply ledger 历史并永久保留 identity/path/revision floor；普通 registration、Manifest writer 与旧 Runtime 均不得绕过或静默复活该边界。
 - [ ] 在真实写盘前决定 CAS 后、progress 前崩溃的 content ABA 策略：接受 content-addressed at-least-once，或增加 mutation-intent marker 并在精确 before 状态 fail closed。
 - [ ] 为已经创建 journal 的 transaction `recovery_required` 增加显式重新校验、继续修复或安全 rollback 方案；当前 Recovery UI 对 active/blocked/finalizing/global/Queue blocker 仅允许重新检查，不冒充通用回滚。
 - [x] 为“accepted apply claim 已落盘、transaction journal 尚未创建即崩溃”完成 no-journal 显式恢复 Core 与 production Studio 接线：先从同一 Runtime snapshot 证明 exact Review/Queue/allocator 身份以及 journal、commit marker、source-input ledger 均不存在，再允许 Continue 或 Abandon；`accepted_not_started` 只允许 Continue，`requires_decision` 才允许二者。Manifest 漂移会阻止 Continue，但不阻止经原子证明的 Abandon；所有动作完成或进入新恢复门后重建完整启动代次。
@@ -321,6 +321,152 @@
 - [x] Folder-only import Windows production-port 实机：以最新 build 做 artifact-exact 真 unload/enable 后，通过 renderer 的真实 `File` capability 调用 production stable port。`D:\my_idea` 首次导入 5/5、628,205 bytes、0 conflict/failure，Activity `11 → 16`，新增 5 个 job 全部 completed，active/failed/recovery 均为 0；模型均证明 `no_changes`，因此正确保持 Review 0，未虚构 Accept/Apply。exact retry 为 0 imported / 5 reused / 0 bytes，Activity 不增长且没有新 Queue/model work；受控删除一个目标后重试为 1 imported / 4 reused，随后 exact restore，最终 Vault 目标为 5 文件 / 628,205 bytes、private temp 0。外部目录导入前后 count/bytes/mtime/attributes、相对 identity 与内容 aggregate hash 完全一致，safety/error 为 0；Studio 的 **Import folder**、Activity、Review 表面均正常，console、developer errors 与 cleanup warning 均为 0。
 - [ ] Folder-only import 剩余 Windows 交互门禁：production stable port 已通过，但尚未人工点击物理系统 folder picker 选择目录；本次模型结果全部为 `no_changes`，所以也未出现可供显式 Review/Apply 的非空提案。后续用物理 picker 手点复验，并在有真实 Wiki 变更提案时完成显式 Review/Apply；Windows 不同字节目标的冲突不覆盖仍保留为单独实机对抗门禁，自动化覆盖不冒充该实机结果。
 - [ ] 首批功能实现后，在 Windows Obsidian 测试 Vault 中完成 Golden Flow 实机验收。
+
+## 中文使用手册（2026-08-11）
+
+### Session Goal
+
+为当前核心 production port 与独立 Review/Apply、Query、Save、PDF、Recovery 链路已通过有界 Windows 实机、但完整 Golden Flow 和部分物理交互仍待现场复验的 Personal Knowledge Studio，编写一套可直接在 Obsidian 打开、仅依靠文档即可操作和审阅的中文用户手册；把用户操作、长期规范、隐私和故障恢复与工程架构/验收日志分离。
+
+### Architecture Decisions
+
+- 用户手册放在 `docs/knowledge/zh-CN/`，采用一页入口与按任务拆分的 Markdown 页面；相对链接同时适用于 GitHub 和 Obsidian。
+- `docs/personal-knowledge.md` 继续保留稳定英文入口和详细技术边界，只在顶部链接中文手册；Runtime/CAS/事务证明和历史实机数据不复制进普通用户步骤。
+- 每个操作页统一包含目标、前置条件、步骤、预期结果、异常处理、数据/网络/费用和相关页面。
+- 当前产品声明限定为 Windows Obsidian Desktop、单人、一个有效 Bundle、一个 sourceRoot、DeepSeek V4、显式 Review/Apply；持续文件夹同步、OCR、自动 Apply、Delete、多 Bundle、跨平台和双实例不写成支持能力。
+- 手册明确 `no_changes` 是正常成功、文件夹导入是一次性 managed snapshot、Query 只使用已应用知识、`Save to Wiki` 仍需重新经过编译和人工审核。
+
+### Task Tracking
+
+- [x] 完成现有 docs、代码 UI 标签、Bundle/DeepSeek 配置与 Windows 验收边界盘点。
+- [x] 新建中文手册首页、维护恢复、长期规范、隐私安全、故障排查和参考手册。
+- [x] 新建首次使用、安装模型与 Bundle 配置页面。
+- [x] 完成来源导入、Studio/Activity、Review/Apply、Query/Save-to-Wiki 日常工作流页面并做准确性复核。
+- [x] 更新 `docs/index.md`、`docs/personal-knowledge.md` 与 README 的中文手册入口。
+- [x] 完成全手册 Markdown 格式、相对链接、支持声明、敏感信息和差异门禁。
+- [x] 在手册首页增加大白话功能介绍，说明普通 Chat 能产生什么，以及 Chat、Add to Knowledge、Query、Save to Wiki、Review/Apply 的不同产物。
+- [x] 澄清 `sourceRoot` 目录与已登记 `Sources` 的区别，并解释当前单文件 `Add to Knowledge` 为什么位于 Chat。
+- [ ] 由用户在 Windows Obsidian 中按手册进行现场审阅：物理点击文件夹选择器、观察 `no_changes`，并用确定产生变更的材料完成非空 Review/Apply。
+
+### Testing Checklist
+
+- [x] `npx prettier --check` 覆盖全部新手册及入口文件。
+- [x] 所有本地 Markdown 链接解析到仓库内真实文件。
+- [x] 手册中无真实 API Key、个人绝对路径、私有 fixture ID 或请求/响应正文。
+- [x] 不把未验收的物理 picker、非空 folder Review、不同字节 Windows 冲突或完整 Golden Flow 冒充已完成。
+- [x] `git diff --check` 通过，变更范围只包含预期 Markdown 文档。
+- [x] 复核新增首页说明与 production Chat capture、folder import、Query writeback 和 Review/Apply 行为一致，并重新运行文档格式、链接与差异检查。
+- [x] 将最新版 14 篇中文手册同步到 Windows 测试 Vault；源与目标逐文件哈希一致，127 个本地链接全部可解析，临时备份已清理。
+
+## Knowledge Source Lifecycle（2026-08-11）
+
+### Session Goal
+
+让已注册 Knowledge Source 的删除、误删和恢复变成可解释、可操作、可审计的来源生命周期：一个来源缺失不得再让整个 Knowledge Studio 变成不可用；用户可以在不删除现有 Wiki 文件的前提下恢复精确原路径或安全停止跟踪。
+
+### Architecture Decisions
+
+- Obsidian/Windows Explorer 没有可靠的统一 before-delete hook；插件自己的移除入口必须事前确认，原生或外部删除则在事后立即进入持续的 Source Missing 恢复流。
+- `source_missing` 和 delete/rename 派生的可恢复 blocker 只隔离受影响来源；`capture_failed`、Windows 大小写/路径冲突和未收敛的 fatal durable observation 仍 fail closed。
+- 恢复必须回到原 Vault 相对路径并重新通过 exact-byte observation；`Check again` 不创建、复制、移动或覆盖文件，也不会把 Windows 回收站误写成插件可直接操作的权限。
+- 已打开的 Sources 通过同一代 issue hint 自动收敛 `Ready → Missing`，精确原路径恢复且 capture settle 后再收敛 `Missing → Ready`。
+- 同一 Bundle 的 recoverable missing + exact `source_observation_pending` 冷启动状态只发布 least-authority Sources-only pre-release surface；不放行 worker/model/Query/Review/Apply/Wiki capability。
+- 安全移除是 Runtime v5 owned 原子操作，不直接调用通用 `SourceManifestRepository.removeSource()`；protected tombstone 保留退役证明和 revision floor，只撤销 active Manifest membership/provenance 并保留 Queue/Review/Apply ledger 历史，不自动删除来源或 Wiki bytes。
+- 目标来源的 allocated/bound observation 在退役提交中原子 terminalize；真实 active Queue、pending Review/Apply、transaction、rerun 或 Recovery 工作仍必须先收敛。
+- 正常 generation 换代的 `waiting_for_layout` 只是短暂过渡：先撤销旧代权限，再显示中性 `Refreshing Knowledge Studio…`；刷新页不保留 Bundle、snapshot 或操作能力。红色 `Knowledge Studio unavailable` 只用于已判定需要处理的持久配置、Runtime 或 Recovery 等终态问题。
+
+### Task Tracking
+
+- [x] 定位误删导致 Studio 全局不可用的 watcher → startup blocker → Barrier 根因，并实机恢复被删来源后确认 Runtime/Queue/Studio 重新 Running。
+- [x] 将可恢复的 missing/delete/rename 与真正的 fatal observation/path 错误分层，保留其他来源和 Studio 的可用性。
+- [x] 实现 same-path restore 的同代解封、exact-byte 重观察、live Sources 刷新与旧 citation 撤销/新代签发。
+- [x] 实现 Runtime v5 protected retirement tombstone 和降级 fence；原子撤销 active Manifest membership/provenance、terminalize 目标 allocated/bound observation，保留 Queue/Review/Apply ledger 历史且不改 Wiki bytes。
+- [x] 实现 exact startup-pending 的 Sources-only pre-release recovery surface；只暴露 load/check/retire，不授予 worker/model/Query/Review/Apply/Wiki authority。
+- [x] 在 Knowledge Studio 显示持续 Source Missing 状态、后果说明、Check again 和 Remove from Knowledge 操作；不提供任意新路径替换入口。
+- [x] 为插件自有移除流程增加强确认，并在 Obsidian file menu 中对已注册来源提示“先从 Knowledge 安全移除”；不 monkey-patch Obsidian 原生删除。
+- [x] 将正常换代明确呈现为中性、无操作的 `Refreshing Knowledge Studio…`，不再在操作间隙短暂渲染红色 unavailable。
+- [x] 同步中文手册、技术边界和故障恢复文档，明确现有 Wiki 不会随 Source 自动删除。
+
+### Testing Checklist
+
+- [x] 自动化覆盖单文件 delete/rename、文件夹祖先菜单匹配和批量 issue；Studio 只隔离影响来源，已打开 Sources 自动刷新且一次同步批次最多一个通用 Notice。
+- [x] 自动化覆盖精确原路径恢复（同/不同字节）、大小写别名、重复事件和重启收敛；新路径不能被静默改绑。
+- [x] 自动化覆盖 Runtime v4→v5 downgrade fence、ready/applied source 退役、目标 allocated/bound observation terminalization、相邻来源继续可用、Queue/Review/ledger 历史保留、stale token/并发改名，以及 commit-then-throw 与重放幂等。
+- [x] 自动化覆盖退役后旧 Query/citation 失效、零新模型请求、零自动 Wiki 删除，以及其他来源继续查询/编译。
+- [x] 自动化覆盖 file-menu 提示、取消/二次确认、Settings/Projects/unload 换代与 stale authority 失效；提示明确不能拦截键盘或 Explorer 删除。
+- [x] 自动化覆盖 live 代→中性 refreshing→同 Bundle 新代，并证明旧 load/action/query 在换代时被撤销；持久配置/Runtime/Recovery 问题仍收敛到红色 unavailable。
+- [x] 聚焦来源生命周期、pre-release recovery、live issue hint、Runtime v5 退役与后续 Chat Draft 回归已通过；当前最终全仓单测为 262 个 Jest suite / 4387 个测试全部通过。
+- [x] 完成最终 DeepSeek integration（2 passed / 7 skipped）、TypeScript `noEmit`、`npm run format`、`format:check`、全仓 ESLint、production build、`git diff --check`、敏感信息与个人绝对路径扫描；新增内容无真实凭据或本机路径。
+- [x] 在 Windows Obsidian 测试 Vault 完成受控删除 → 单一 Notice → 已打开 Sources `Ready → Missing` → `Check again` 零重建/零覆盖 → 精确恢复 → `Missing → Ready` 的有界现场验收；Queue/Review/Apply/Wiki/data.json 均保持基线，临时探针与备份已清理。
+- [x] 使用新建的一次性来源完成 Windows production import → terminal no-changes → Sources `Remove` → `Confirm removal` 有界现场验收：6 个真实来源未动，active `7 → 6`、protected tombstone `0 → 1`，来源与 Wiki 字节不被退役删除，Queue/Review/input 历史精确保留；随后只清理已退役的一次性文件和空目录，Studio 保持 6 Ready / 0 Missing。
+- [x] 最新 production artifact 已在 Windows 测试 Vault 真 unload/enable；通过正式 generation invalidation 路径的 bounded DOM 观察确认 `Refreshing Knowledge Studio…` 出现、红色 unavailable 为 0，随后同一 Bundle 重新 selected/ready。前后 Queue jobs/rerun、Review、Manifest、Wiki 与 data.json 精确不变，observer、部署备份与临时脚本均已清理；这项程序化实测不替代下方用户人工观感验收。
+- [x] 用户已在 Windows Obsidian 实际重走相关操作，并确认操作间隙不再出现造成失败误解的红色 `Knowledge Studio unavailable`，当前中性刷新观感正常；本项采用用户现场反馈作为 UX 验收证据，不扩大为其他未测物理交互或完整 Golden Flow 证据。
+- [ ] 完成物理右键菜单提示的 Windows 人工现场验收；CDP 合成输入未能可靠打开原生菜单，当前只由自动化覆盖，且插件仍不能拦截键盘或 Explorer 删除。
+
+## Chat → Knowledge Draft（2026-08-11）
+
+### Session Goal
+
+把普通 Chat 的理解、解释和总结结果接入受控知识流水线：用户可以从一条完整 AI 回复创建草稿，在提交前编辑并核对内容，然后把它作为新的 Knowledge Source 登记；该动作不得直接改 Wiki，必须先进入 Activity，并且任何 Wiki 写入都不得绕过 Review 或 Apply。
+
+### Architecture Decisions
+
+- 普通 Chat 继续是临时理解与写作工作台；只有用户显式点击并确认的完整 AI 回复才能进入草稿流程，流式中、错误消息和用户消息不具备该能力。
+- 草稿在确认前必须允许编辑标题与 Markdown 正文，并明确标记为 AI 生成、需要对照原始材料核验；当前切片不伪造书名、页码、引用或来源事实。
+- durable 成功仅表示在唯一 configured sourceRoot 下排他创建精确 Markdown 文件并完成 Manifest registration；Wiki 仍只能由后续 Compiler → Review → Apply 写入。
+- 草稿路径必须由确定性内容摘要和 Windows-safe 固定前缀生成，不接受 UI 提供任意路径，不覆盖既有文件；精确重放收敛为复用，不同内容不能占用同一身份。
+- 打开编辑器前由 stable port 生成并冻结精确 Bundle/sourceRoot capability，窗口显示该目标；换代或配置变化后旧 capability 必须拒绝，禁止把已确认内容静默改投新的 Bundle。
+- 沿用 released generation 的 stable/revocable Chat capture capability、Manifest registration、generation refresh 与 Vault drain；失效 generation、取消和不完整 durable 边界必须 fail closed 或通过精确重放收敛。
+- 提交中允许用户请求停止，但不得把 abort 描述成跨文件/Manifest 的事务回滚；界面要求先检查 Sources/Activity，durable 成功仍以真实 receipt 为准，相同内容可安全重试收敛。
+- 产品投资遵循低成本 BYOK 路线：普通月度模型预算假设为不超过人民币 30 元，重度使用不超过 100 元；该数值是待实测预算而非已证明成本。当前不复制 Copilot Plus 的托管模型、计费、许可证或通用 Web Agent 后端。
+
+### Task Tracking
+
+- [x] 完成产品经理、项目经理、用户体验与 Copilot Plus 定位评估，并确定 Build / Reuse / Don't clone 边界。
+- [x] 保存中文产品评估与 Plus 对比报告，并接入中文手册首页。
+- [x] 定义 Chat Knowledge Draft 的 strict port、捕获格式、来源 origin 与脱敏错误语义。
+- [x] 实现 AI 回复动作、可编辑确认界面、排他文件创建、Manifest 登记和单次 generation refresh。
+- [x] 更新中文首页、Chat/来源工作流、Query Save 区分、隐私费用、技术边界与参考文档。
+- [x] 在 Windows Obsidian 使用一条已保存的完整非错误 AI 回复进入真实 Chat UI，并在提交前把标题与正文完全替换为一次性无隐私草稿；实测 destination Bundle/sourceRoot 锁定、未确认时禁用、Create Source → managed `chat_knowledge_draft` Source → completed Activity / `no_changes`、零 Review/Apply、Wiki 与 `data.json` 精确不变。随后通过 Sources 的正式二次确认 Remove 退役，仅在 tombstone、路径、长度与哈希全部复证后删除一次性文件；Runtime 历史保留且无临时备份残留。本项不声称当前 Chat provider 成功联网生成了新回答。
+
+### Testing Checklist
+
+- [x] 聚焦 UI 单测覆盖完整 AI 回复入口、用户/系统/错误/空清理结果/流式消息无入口、隐藏 reasoning 清理、空白标题、正文编辑、显式确认、不可用目的地、重复提交锁、停止请求、失败保留编辑内容与卸载 abort。
+- [x] 聚焦捕获/协调器单测覆盖标题/正文/严格 UTF-8 byte 边界、确定性 Markdown 与路径、精确重放、既有路径冲突、零覆盖、create→register、commit-then-throw、refresh failure、pre-publish abort、retained drain、长目标路径和 parser ambiguity。
+- [x] 聚焦 stable-port 单测覆盖旧 generation 的 Add-to-Knowledge 在途 abort、Draft caller 预先 abort、打开时 destination capability 换代拒绝，以及 Draft durable commit 后换代仍返回真实 receipt。
+- [x] 本轮 Chat Draft 聚焦门禁达到 7 个 Jest suites / 65 个 tests，并通过 TypeScript `noEmit` 与 scoped ESLint；全仓门禁仍由下项跟踪。
+- [x] 新增 production-shaped 跨层测试：真实 Chat Draft registration 请求换代后，下一代 observation 进入真实 worker，并以 `no_changes` 收敛为 completed Activity；Review 为空、Source ready、Manifest no-changes marker 存在，且草稿创建本身仍不直接写 Queue 或 Wiki。
+- [x] 最终聚焦门禁为 8 个 Jest suites / 78 个 tests，全仓单测为 262 个 suites / 4387 个 tests；TypeScript `noEmit`、Prettier、ESLint、production build、diff-check 与敏感信息扫描均通过。
+
+## 产品二次复评（2026-08-12）
+
+### Session Goal
+
+在 Chat → Knowledge Draft、Source 生命周期、中性刷新和 14 篇中文手册完成后，重新从产品经理、项目经理和用户体验官视角评估当前产品阶段；只用 2026-08-12 可核验的 Copilot 官方英文页面更新 Plus 对比，并把下一阶段投资转成可执行的 Build / Reuse / Don't clone 与四周验证决策。
+
+### Architecture Decisions
+
+- 当前阶段定义为 **owner-operated personal production**：对已配置、愿意审核和维护备份的当前所有者可正式使用；对其他用户仍是受约束 private beta，不宣称公开 GA。
+- 二次综合建议分为 6.8/10；分别保留 UX 6.6、已配置目标用户 7.5、首次普通用户 4.7、工程安全 8.8、核心闭环 7.6、商业成熟 4.2，避免用单一总分掩盖体验与工程差距。
+- Plus 只按可核验英文定价、功能文档、隐私和条款评价；明确 V4 英文首页与现有定价/文档尚未完全对齐，多 Agent、Symposium、Miyo 只作为官方宣传方向，不冒充稳定权益。
+- 当前 3.3.3 仓库边界限定为开源客户端中的 Plus UI、Agent/Projects/Composer/Miyo 连接与远端调用适配；不把 Brevilabs/Miyo 服务端、计费许可或官网宣传的 V4 多 Agent/Symposium 描述成仓库已证明包含的能力，也不把 semver 3.3.3 等同于产品代际 V3。
+- 下一阶段先投资首配/模型 readiness、Review 修正与证据、Wiki 版本回滚、统一 Source 入口和 Draft 原始材料绑定；Web、OCR、Explorer 单文件、Graph、多 Agent、多人和跨平台保持后置。
+
+### Task Tracking
+
+- [x] 更新并保存二次产品评估报告，分开呈现产品经理、项目经理和用户体验官判断。
+- [x] 纳入 Chat Draft、Source 生命周期、中性刷新、14 篇手册、262 suites / 4387 tests 与 Windows 有界验收带来的进步。
+- [x] 保留物理 folder picker、不同字节 Windows 冲突、非空 folder Review/Apply、物理右键提示和完整 Golden Flow 的真实 pending 状态。
+- [x] 更新 Copilot Plus 的 $14.99/月、$139.99/年、首次购买 14 天退款、公开月额度未知，以及 V4 首页与现有定价/功能文档尚未完全对齐的信息风险。
+- [x] 记录 ¥30/月常规、¥100/月重度预算假设与 ¥60/小时时间价值算例；预算仍须由真实账单和净节省验证。
+- [x] 定义 20 个真实来源、4 周本地验证，包括 activation、Review disposition、证据覆盖、7/30 天复用、每个接受页面成本和零未授权写入。
+
+### Testing Checklist
+
+- [x] 对二次评估报告和本段 TODO 执行 scoped Prettier check。
+- [x] 验证二次评估报告中的 5 个仓库内 Markdown 链接全部可解析。
+- [x] 执行 scoped `git diff --check`；本次复评子任务只编辑评估报告与 TODO，未修改代码或其他文档。
+- [x] 将二次复评冻结后的 14 篇中文手册同步到 Windows Vault；文件名集合与逐文件 SHA-256 完全一致，127 个本地链接、0 broken，验证后清理同步备份并在 Obsidian 聚焦复评报告；未触碰 Sources/Wiki/Runtime/data.json 或插件产物，也未调用模型。
 
 ## Source Documents
 

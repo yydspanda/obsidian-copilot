@@ -5,6 +5,7 @@ import {
   SourceManifestObservationConflictError,
   SourceManifestRepository,
   SourceManifestRevisionOverflowError,
+  SourceManifestSourceRetiredError,
   SourceManifestValidationError,
   SourceManifestWriteConflictExhaustedError,
 } from "@/knowledge/manifest/SourceManifestRepository";
@@ -18,6 +19,10 @@ import {
   createNoChangesManifestCommitPlan,
 } from "@/knowledge/manifest/NoChangesManifestCommit";
 import { KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY } from "@/knowledge/manifest/KnowledgeRuntimeSourceCommit";
+import {
+  createKnowledgeSourceRetirementRecord,
+  projectKnowledgeSourceRetirement,
+} from "@/knowledge/manifest/SourceRetirement";
 import type {
   JsonValue,
   SourceCompileFailure,
@@ -1148,5 +1153,44 @@ describe("SourceManifestRepository", () => {
     expect(manifest.revision).toBe(3);
     expect(generatedPages.get("Wiki/Concepts/Note.md")).toBe("# Durable user-visible page");
     expect(storage.writtenManifests.at(-1)?.entries).toEqual([]);
+  });
+
+  it("reserves retired source ids and Windows paths against registration and rename", async () => {
+    const storage = new InMemorySourceManifestStorage();
+    const retiredSource = createEntry("source-retired", "Sources/Retired.md");
+    const activeSource = createEntry("source-active", "Sources/Active.md");
+    const manifest = createManifest("personal", {
+      revision: 1,
+      entries: [retiredSource, activeSource],
+    });
+    const record = createKnowledgeSourceRetirementRecord({
+      bundleId: "personal",
+      requestToken: HASH_A,
+      reason: "user_requested",
+      retiredAt: 100,
+      retiredManifestRevision: 2,
+      source: retiredSource,
+    });
+    storage.seed("personal", projectKnowledgeSourceRetirement(manifest, record));
+    const repository = new SourceManifestRepository(storage);
+
+    await expect(
+      repository.registerSource("personal", {
+        sourceId: "source-retired",
+        sourcePath: "Sources/New.md",
+        custody: "user_managed",
+      })
+    ).rejects.toBeInstanceOf(SourceManifestSourceRetiredError);
+    await expect(
+      repository.registerSource("personal", {
+        sourceId: "source-new",
+        sourcePath: "sources/RETIRED.md",
+        custody: "user_managed",
+      })
+    ).rejects.toBeInstanceOf(SourceManifestSourceRetiredError);
+    await expect(
+      repository.renameSource("personal", "source-active", "sources/RETIRED.md")
+    ).rejects.toBeInstanceOf(SourceManifestSourceRetiredError);
+    expect(storage.writeAttempts).toBe(0);
   });
 });

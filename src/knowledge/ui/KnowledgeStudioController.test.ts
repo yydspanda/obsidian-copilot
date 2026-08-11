@@ -26,7 +26,17 @@ import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
+import type {
+  KnowledgeSourceLifecyclePort,
+  KnowledgeSourceRetirementRequest,
+  KnowledgeSourceRetirementUiReceipt,
+} from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import type { KnowledgeRecoveryItem } from "@/knowledge/ui/recoveryModel";
+import type {
+  KnowledgeSourceLifecycleItem,
+  KnowledgeSourceLifecycleModel,
+  KnowledgeSourceRemovalConfirmation,
+} from "@/knowledge/ui/sourceLifecycleModel";
 
 /** Promise whose completion is controlled explicitly by one test. */
 interface Deferred<T> {
@@ -55,6 +65,20 @@ interface RecordedQueryWritebackCall {
   bundleId: string;
   queryId: string;
   request: Readonly<KnowledgeStudioQueryWritebackRequest>;
+  signal: AbortSignal;
+}
+
+/** One recorded source lifecycle recheck. */
+interface RecordedSourceCheckCall {
+  bundleId: string;
+  sourceId: string;
+  signal: AbortSignal;
+}
+
+/** One recorded source retirement. */
+interface RecordedSourceRetirementCall {
+  bundleId: string;
+  request: Readonly<KnowledgeSourceRetirementRequest>;
   signal: AbortSignal;
 }
 
@@ -135,6 +159,52 @@ function createSnapshot(
     reviews,
     notice: undefined,
   };
+}
+
+/** Creates one source lifecycle projection embedded in a Studio read snapshot. */
+function createSourceLifecycle(
+  sources: readonly KnowledgeSourceLifecycleItem[] = [
+    {
+      sourceId: "source-missing",
+      sourcePath: "Sources/Missing.md",
+      custody: "user_managed",
+      generatedPageCount: 2,
+      status: "missing",
+      issueReason: "source_missing",
+      retirementRef: "retirement-missing",
+      retirementBlockers: [],
+      actions: { canCheckAgain: true, canRemove: true },
+    },
+  ]
+): Readonly<KnowledgeSourceLifecycleModel> {
+  return {
+    bundleId: "personal",
+    runtimeRevision: 9,
+    manifestRevision: 4,
+    sources,
+  };
+}
+
+/** Embeds one exact lifecycle model in an otherwise ready Studio snapshot. */
+function createSourceSnapshot(
+  revisionToken: string,
+  sourceLifecycle: Readonly<KnowledgeSourceLifecycleModel> = createSourceLifecycle()
+): KnowledgeStudioSnapshot {
+  return { ...createSnapshot(revisionToken, []), sourceLifecycle };
+}
+
+/** Freezes the exact source-removal authority emitted by the lifecycle panel. */
+function createRemovalConfirmation(
+  overrides: Partial<KnowledgeSourceRemovalConfirmation> = {}
+): Readonly<KnowledgeSourceRemovalConfirmation> {
+  return Object.freeze({
+    sourceId: "source-missing",
+    sourcePath: "Sources/Missing.md",
+    retirementRef: "retirement-missing",
+    runtimeRevision: 9,
+    manifestRevision: 4,
+    ...overrides,
+  });
 }
 
 /** Creates the two actionable recovery rows used by controller command tests. */
@@ -491,6 +561,53 @@ class FakeKnowledgeStudioQueryWritebackPort implements KnowledgeStudioQueryWrite
   }
 }
 
+/** Scriptable source lifecycle port that records only opaque command material. */
+class FakeKnowledgeSourceLifecyclePort implements KnowledgeSourceLifecyclePort {
+  readonly loadCalls: Array<{ bundleId: string; signal: AbortSignal }> = [];
+  readonly checkCalls: RecordedSourceCheckCall[] = [];
+  readonly retirementCalls: RecordedSourceRetirementCall[] = [];
+
+  /** Creates a fake around one model and optional command handlers. */
+  constructor(
+    private readonly model: Readonly<KnowledgeSourceLifecycleModel> = createSourceLifecycle(),
+    private readonly checkHandler: (call: RecordedSourceCheckCall) => Promise<void> = async () =>
+      undefined,
+    private readonly retirementHandler: (
+      call: RecordedSourceRetirementCall
+    ) => Promise<Readonly<KnowledgeSourceRetirementUiReceipt>> = async () => ({
+      outcome: "retired",
+      retainedWikiPageCount: 2,
+    })
+  ) {}
+
+  /** Records lifecycle loads so tests can prove Controller does not cross-read revisions. */
+  async loadSources(
+    bundleId: string,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeSourceLifecycleModel>> {
+    this.loadCalls.push({ bundleId, signal });
+    return this.model;
+  }
+
+  /** Records and delegates one source recheck. */
+  async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
+    const call = { bundleId, sourceId, signal };
+    this.checkCalls.push(call);
+    return this.checkHandler(call);
+  }
+
+  /** Records and delegates one exact source retirement. */
+  async retireSource(
+    bundleId: string,
+    request: Readonly<KnowledgeSourceRetirementRequest>,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeSourceRetirementUiReceipt>> {
+    const call = { bundleId, request, signal };
+    this.retirementCalls.push(call);
+    return this.retirementHandler(call);
+  }
+}
+
 /** Builds the content-free command expected by the controller boundary. */
 function createReviewCommand(token = "snapshot-1"): KnowledgeReviewCommand {
   return {
@@ -547,6 +664,213 @@ describe("KnowledgeStudioController", () => {
     await flushAsync();
     expect(controller.getState().snapshot?.revisionToken).toBe("revision-2");
     expect(port.loadCalls).toHaveLength(2);
+  });
+
+  it("uses the lifecycle model from the read snapshot without a cross-revision second load", async () => {
+    const rawSourceLifecycle = createSourceLifecycle();
+    const port = new FakeKnowledgeStudioPort(async () =>
+      createSourceSnapshot("source-revision", rawSourceLifecycle)
+    );
+    const sourcePort = new FakeKnowledgeSourceLifecyclePort(rawSourceLifecycle);
+    const controller = new KnowledgeStudioController(port, port, undefined, undefined, sourcePort);
+
+    controller.start("personal");
+    await flushAsync();
+
+    const projected = controller.getState().snapshot?.sourceLifecycle;
+    expect(sourcePort.loadCalls).toHaveLength(0);
+    expect(projected).not.toBe(rawSourceLifecycle);
+    expect(Object.isFrozen(projected)).toBe(true);
+    expect(Object.isFrozen(projected?.sources)).toBe(true);
+    expect(projected).toMatchObject({
+      bundleId: "personal",
+      runtimeRevision: 9,
+      manifestRevision: 4,
+      sources: [{ sourceId: "source-missing", status: "missing" }],
+    });
+
+    controller.selectTab("sources");
+    expect(controller.getState().activeTab).toBe("sources");
+  });
+
+  it("opens Sources on the first constrained startup snapshot", async () => {
+    const sourceLifecycle = createSourceLifecycle();
+    const port = new FakeKnowledgeStudioPort(async () => ({
+      ...createSourceSnapshot("source-recovery", sourceLifecycle),
+      preferredTab: "sources" as const,
+    }));
+    const sourcePort = new FakeKnowledgeSourceLifecyclePort(sourceLifecycle);
+    const controller = new KnowledgeStudioController(port, port, undefined, undefined, sourcePort);
+
+    controller.start("personal");
+    await flushAsync();
+
+    expect(controller.getState()).toMatchObject({
+      status: "ready",
+      activeTab: "sources",
+      snapshot: { preferredTab: "sources" },
+    });
+  });
+
+  it("serializes source rechecks and reloads the coherent Studio snapshot after completion", async () => {
+    const check = createDeferred<void>();
+    const snapshots = [createSourceSnapshot("source-before"), createSourceSnapshot("source-after")];
+    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
+    const sourcePort = new FakeKnowledgeSourceLifecyclePort(
+      createSourceLifecycle(),
+      async () => check.promise
+    );
+    const controller = new KnowledgeStudioController(port, port, undefined, undefined, sourcePort);
+    controller.start("personal");
+    await flushAsync();
+
+    const action = controller.checkSourceAgain("source-missing");
+    await flushAsync();
+    await controller.retireSource(createRemovalConfirmation());
+
+    expect(sourcePort.checkCalls).toHaveLength(1);
+    expect(sourcePort.checkCalls[0]).toMatchObject({
+      bundleId: "personal",
+      sourceId: "source-missing",
+    });
+    expect(sourcePort.checkCalls[0].signal.aborted).toBe(false);
+    expect(sourcePort.retirementCalls).toHaveLength(0);
+    expect(controller.getState()).toMatchObject({
+      pendingAction: { kind: "check_source", targetId: "source-missing" },
+      snapshot: { revisionToken: "source-before" },
+    });
+
+    check.resolve();
+    await action;
+
+    expect(port.loadCalls).toHaveLength(2);
+    expect(controller.getState()).toMatchObject({
+      pendingAction: undefined,
+      snapshot: { revisionToken: "source-after" },
+      feedback: { kind: "success" },
+    });
+  });
+
+  it("forwards only exact frozen retirement authority from the current source row", async () => {
+    const snapshots = [createSourceSnapshot("source-before"), createSourceSnapshot("source-after")];
+    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
+    const sourcePort = new FakeKnowledgeSourceLifecyclePort(
+      createSourceLifecycle(),
+      undefined,
+      async () => ({ outcome: "retired", retainedWikiPageCount: 2 })
+    );
+    const controller = new KnowledgeStudioController(port, port, undefined, undefined, sourcePort);
+    controller.start("personal");
+    await flushAsync();
+
+    const confirmation = createRemovalConfirmation();
+    await controller.retireSource(confirmation);
+    expect(sourcePort.retirementCalls).toHaveLength(1);
+    expect(sourcePort.retirementCalls[0]).toMatchObject({
+      bundleId: "personal",
+      request: {
+        sourceId: "source-missing",
+        retirementRef: "retirement-missing",
+        reason: "source_missing",
+      },
+    });
+    expect(Object.keys(sourcePort.retirementCalls[0].request).sort()).toEqual([
+      "reason",
+      "retirementRef",
+      "sourceId",
+    ]);
+    expect(port.loadCalls).toHaveLength(2);
+    expect(controller.getState().feedback?.message).toContain(
+      "2 generated Wiki pages were retained"
+    );
+  });
+
+  it("never forwards stale or disabled lifecycle actions", async () => {
+    const sourceLifecycle = createSourceLifecycle([
+      {
+        sourceId: "source-missing",
+        sourcePath: "Sources/Missing.md",
+        custody: "user_managed",
+        generatedPageCount: 2,
+        status: "missing",
+        issueReason: "source_missing",
+        retirementRef: "current-retirement-ref",
+        retirementBlockers: ["bundle_review_pending"],
+        actions: { canCheckAgain: false, canRemove: false },
+      },
+    ]);
+    const snapshot = createSourceSnapshot("source-blocked", sourceLifecycle);
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const sourcePort = new FakeKnowledgeSourceLifecyclePort(sourceLifecycle);
+    const controller = new KnowledgeStudioController(port, port, undefined, undefined, sourcePort);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.checkSourceAgain("source-missing");
+    await controller.retireSource(
+      createRemovalConfirmation({ retirementRef: "stale-retirement-ref" })
+    );
+
+    expect(sourcePort.checkCalls).toHaveLength(0);
+    expect(sourcePort.retirementCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toMatchObject({ kind: "blocked" });
+  });
+
+  it("rejects every stale or mutable removal token before the lifecycle port", async () => {
+    const snapshot = createSourceSnapshot("source-current");
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const sourcePort = new FakeKnowledgeSourceLifecyclePort();
+    const controller = new KnowledgeStudioController(port, port, undefined, undefined, sourcePort);
+    controller.start("personal");
+    await flushAsync();
+
+    const invalidConfirmations: Readonly<KnowledgeSourceRemovalConfirmation>[] = [
+      createRemovalConfirmation({ sourceId: "source-other" }),
+      createRemovalConfirmation({ sourcePath: "Sources/Other.md" }),
+      createRemovalConfirmation({ retirementRef: "retirement-stale" }),
+      createRemovalConfirmation({ runtimeRevision: 10 }),
+      createRemovalConfirmation({ manifestRevision: 5 }),
+      { ...createRemovalConfirmation() },
+    ];
+    for (const confirmation of invalidConfirmations) {
+      await controller.retireSource(confirmation);
+    }
+
+    expect(sourcePort.retirementCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toMatchObject({ kind: "blocked" });
+  });
+
+  it("bridges panel cancellation into a source command and clears pending state", async () => {
+    const snapshots = [createSourceSnapshot("source-before"), createSourceSnapshot("source-after")];
+    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
+    const sourcePort = new FakeKnowledgeSourceLifecyclePort(
+      createSourceLifecycle(),
+      async (call) =>
+        new Promise<void>((_resolve, reject) => {
+          call.signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("The operation was aborted", "AbortError")),
+            { once: true }
+          );
+        })
+    );
+    const controller = new KnowledgeStudioController(port, port, undefined, undefined, sourcePort);
+    controller.start("personal");
+    await flushAsync();
+    const caller = new AbortController();
+
+    const action = controller.checkSourceAgain("source-missing", caller.signal);
+    await flushAsync();
+    caller.abort();
+    await action;
+
+    expect(sourcePort.checkCalls[0].signal.aborted).toBe(true);
+    expect(port.loadCalls).toHaveLength(2);
+    expect(controller.getState()).toMatchObject({
+      pendingAction: undefined,
+      snapshot: { revisionToken: "source-after" },
+    });
+    expect(controller.getState().feedback).toBeUndefined();
   });
 
   it("runs scoped Query only when the durable snapshot enables it and opens opaque citations", async () => {
@@ -1319,6 +1643,24 @@ describe("KnowledgeStudioController", () => {
       unavailableNotice: "No project has a valid Knowledge Bundle configuration.",
     });
     expect(() => controller.showUnavailable(" ")).toThrow(TypeError);
+  });
+
+  it("shows an action-free transient refresh state and revokes the prior generation", () => {
+    const load = createDeferred<KnowledgeStudioSnapshot>();
+    const port = new FakeKnowledgeStudioPort(async () => load.promise);
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    const signal = port.loadCalls[0].signal;
+
+    controller.showRefreshing();
+
+    expect(signal.aborted).toBe(true);
+    expect(port.unsubscribed).toBe(true);
+    expect(controller.getState()).toEqual({
+      status: "refreshing",
+      activeTab: "activity",
+      refreshing: true,
+    });
   });
 
   it("aborts work and removes hint subscriptions when stopped", async () => {

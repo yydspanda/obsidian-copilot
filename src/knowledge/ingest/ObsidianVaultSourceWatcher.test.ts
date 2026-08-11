@@ -1552,13 +1552,17 @@ describe("ObsidianVaultSourceWatcher", () => {
     expect(commitSink.notifications).toHaveLength(0);
   });
 
-  it("quarantines destructive folder changes until an explicit plan replacement", async () => {
+  it("recovers a destructive folder change only after an exact-path create commits", async () => {
     const harness = new VaultHarness();
     const oldBytes = createBuffer(1);
     const newBytes = createBuffer(2);
     harness.addFile("Sources/研究.md", oldBytes);
     const deferredRead = createDeferred<unknown>();
-    harness.readBinaryImplementation = async () => deferredRead.promise;
+    let readAttempt = 0;
+    harness.readBinaryImplementation = async () => {
+      readAttempt += 1;
+      return readAttempt === 1 ? deferredRead.promise : newBytes;
+    };
     const handoff = new RecordingHandoff();
     const sink = new RecordingSink();
     let captureSequence = 0;
@@ -1580,30 +1584,17 @@ describe("ObsidianVaultSourceWatcher", () => {
     deferredRead.resolve(oldBytes);
     await watcher.waitForIdle();
 
-    expect(handoff.allocateCalls).toHaveLength(1);
-    expect(harness.readCalls).toEqual(["Sources/研究.md"]);
-    expect(handoff.commitCalls).toHaveLength(0);
+    expect(handoff.allocateCalls).toHaveLength(2);
+    expect(harness.readCalls).toEqual(["Sources/研究.md", "Sources/研究.md"]);
+    expect(handoff.commitCalls).toHaveLength(1);
+    expect(handoff.commitCalls[0]?.sourceContentHash).toBe(createSourceContentHash(newBytes));
     expect(sink.notifications).toContainEqual({
       kind: "source_change_unsupported",
       change: "delete",
       bundleId: "personal",
       sourceId: "source-1",
     });
-    expect(watcher.getStartupBlockers()).toContainEqual({
-      kind: "source_change_unsupported",
-      change: "delete",
-      bundleId: "personal",
-      sourceId: "source-1",
-    });
-
-    harness.readBinaryImplementation = undefined;
-    watcher.replaceWatchPlan(createWatchPlan([createSource()]));
-    await watcher.waitForIdle();
-
-    expect(handoff.allocateCalls).toHaveLength(2);
-    expect(harness.readCalls).toEqual(["Sources/研究.md", "Sources/研究.md"]);
-    expect(handoff.commitCalls).toHaveLength(1);
-    expect(handoff.commitCalls[0]?.sourceContentHash).toBe(createSourceContentHash(newBytes));
+    expect(watcher.getStartupBlockers()).toEqual([]);
   });
 
   it("keeps unrelated in-flight source authority when another source is quarantined", async () => {
@@ -1644,7 +1635,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     ]);
   });
 
-  it("blocks rename-to-old-path ABA captures until source identity is revalidated", async () => {
+  it("recovers a renamed source when a new file is created at the exact registered path", async () => {
     const harness = new VaultHarness();
     const oldPath = "Sources/研究.md";
     const renamedPath = "Sources/已移动.md";
@@ -1679,17 +1670,69 @@ describe("ObsidianVaultSourceWatcher", () => {
     harness.trigger("create", replacement);
     await watcher.waitForIdle();
 
-    expect(handoff.allocateCalls).toHaveLength(0);
-    expect(handoff.commitCalls).toHaveLength(0);
-    expect(harness.adapter.readBinary).not.toHaveBeenCalled();
-    expect(sink.notifications).toEqual([
-      {
-        kind: "source_change_unsupported",
-        change: "rename",
-        bundleId: "personal",
-        sourceId: "source-1",
-      },
-    ]);
+    expect(handoff.allocateCalls).toHaveLength(1);
+    expect(handoff.commitCalls).toHaveLength(1);
+    expect(harness.readCalls).toEqual([oldPath]);
+    expect(handoff.commitCalls[0]?.sourceContentHash).toBe(
+      createSourceContentHash(createBuffer(9))
+    );
+    expect(sink.notifications).toContainEqual({
+      kind: "source_change_unsupported",
+      change: "rename",
+      bundleId: "personal",
+      sourceId: "source-1",
+    });
+    expect(watcher.getStartupBlockers()).toEqual([]);
+  });
+
+  it("coalesces a 10k destructive source batch into one Bundle issue hint", async () => {
+    const harness = new VaultHarness();
+    const sources = Array.from({ length: 10_000 }, (_value, index) =>
+      createSource({
+        sourceId: `source-${index}`,
+        sourcePath: `Sources/Batch/${index}.md`,
+      })
+    );
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan(sources),
+      new Map([["personal", new RecordingHandoff()]])
+    );
+    watcher.startListening();
+    const onHint = jest.fn<void, []>();
+    const unsubscribe = watcher.subscribeSourceIssueChanges("personal", onHint);
+
+    harness.trigger("delete", createFolder("Sources/Batch"));
+    await waitUntil(() => onHint.mock.calls.length === 1);
+
+    expect(onHint).toHaveBeenCalledTimes(1);
+    expect(watcher.getStartupBlockers()).toHaveLength(10_000);
+    unsubscribe();
+    watcher.close();
+  });
+
+  it("drops queued issue hints after unsubscribe or watcher generation closure", async () => {
+    const harness = new VaultHarness();
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", new RecordingHandoff()]])
+    );
+    watcher.startListening();
+    const onHint = jest.fn<void, []>();
+    const unsubscribe = watcher.subscribeSourceIssueChanges("personal", onHint);
+
+    harness.trigger("delete", createFolder("Sources"));
+    unsubscribe();
+    await Promise.resolve();
+    expect(onHint).not.toHaveBeenCalled();
+
+    const onClosedHint = jest.fn<void, []>();
+    watcher.subscribeSourceIssueChanges("personal", onClosedHint);
+    harness.trigger("rename", createFolder("Elsewhere"), "Sources");
+    watcher.close();
+    await Promise.resolve();
+    expect(onClosedHint).not.toHaveBeenCalled();
   });
 
   it("keeps old cleanup from removing a replacement watcher's EventRefs", () => {
@@ -2262,7 +2305,7 @@ describe("ObsidianVaultSourceWatcher", () => {
     });
   });
 
-  it("quarantines a startup-missing source until a new plan generation revalidates it", async () => {
+  it("recovers a startup-missing source after its exact-path create commits", async () => {
     const harness = new VaultHarness();
     const handoff = new RecordingHandoff();
     const sink = new RecordingSink();
@@ -2296,11 +2339,6 @@ describe("ObsidianVaultSourceWatcher", () => {
     harness.trigger("create", created);
     await watcher.waitForIdle();
 
-    expect(handoff.allocateCalls).toHaveLength(0);
-
-    watcher.replaceWatchPlan(createWatchPlan([createSource()]));
-    await watcher.waitForIdle();
-
     expect(handoff.allocateCalls).toEqual([
       {
         bundleId: "personal",
@@ -2310,6 +2348,45 @@ describe("ObsidianVaultSourceWatcher", () => {
     ]);
     expect(handoff.commitCalls).toHaveLength(1);
     expect(watcher.getStartupBlockers()).toEqual([]);
+  });
+
+  it("keeps a missing issue quarantined when its exact-path recovery capture fails", async () => {
+    const harness = new VaultHarness();
+    const handoff = new RecordingHandoff();
+    handoff.allocateImplementation = async () => {
+      throw new Error("durable allocation unavailable");
+    };
+    let captureSequence = 0;
+    const watcher = new ObsidianVaultSourceWatcher(
+      harness.createApp(),
+      createWatchPlan([createSource()]),
+      new Map([["personal", handoff]]),
+      {
+        captureIdFactory: () => `failed-recovery-${++captureSequence}`,
+        maxAllocateAttempts: 1,
+      }
+    );
+
+    watcher.start();
+    const created = harness.addFile("Sources/研究.md", createBuffer(1, 2, 3));
+    harness.trigger("create", created);
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls).toHaveLength(1);
+    expect(watcher.getStartupBlockers()).toEqual([
+      {
+        kind: "capture_failed",
+        stage: "allocate",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+      { kind: "source_missing", bundleId: "personal", sourceId: "source-1" },
+    ]);
+
+    harness.trigger("create", created);
+    await watcher.waitForIdle();
+
+    expect(handoff.allocateCalls).toHaveLength(1);
   });
 
   it("blocks case-only source drift and Windows-key collisions during startup crawl", () => {

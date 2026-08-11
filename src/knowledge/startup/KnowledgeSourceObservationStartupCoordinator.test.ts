@@ -20,6 +20,8 @@ interface WatcherHarness extends KnowledgeSourceObservationStartupWatcherPort {
   scan: jest.Mock<number, []>;
   waitForIdle: jest.Mock<Promise<void>, []>;
   getStartupBlockers: jest.Mock<readonly Readonly<VaultSourceWatcherStartupBlocker>[], []>;
+  sourceIssueListeners: Map<string, Set<() => void>>;
+  subscribeSourceIssueChanges: jest.Mock<() => void, [string, () => void]>;
   close: jest.Mock<void, []>;
 }
 
@@ -56,6 +58,7 @@ function createWatcher(
   order: string[] = [],
   blockers: readonly Readonly<VaultSourceWatcherStartupBlocker>[] = []
 ): WatcherHarness {
+  const sourceIssueListeners = new Map<string, Set<() => void>>();
   return {
     startListening: jest.fn(() => {
       order.push("listener");
@@ -71,7 +74,21 @@ function createWatcher(
       order.push("blockers");
       return blockers;
     }),
+    sourceIssueListeners,
+    subscribeSourceIssueChanges: jest.fn((bundleId: string, listener: () => void) => {
+      const listeners = sourceIssueListeners.get(bundleId) ?? new Set<() => void>();
+      listeners.add(listener);
+      sourceIssueListeners.set(bundleId, listeners);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        listeners.delete(listener);
+        if (listeners.size === 0) sourceIssueListeners.delete(bundleId);
+      };
+    }),
     close: jest.fn(() => {
+      sourceIssueListeners.clear();
       order.push("watcher-close");
     }),
   };
@@ -237,7 +254,7 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
     expect(watcher.scan).not.toHaveBeenCalled();
   });
 
-  it("returns authoritative watcher blockers without releasing or running work", async () => {
+  it("blocks only fatal watcher state while ignoring coexisting recoverable issues", async () => {
     const watcher = createWatcher(
       [],
       [
@@ -258,11 +275,74 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
 
     await expect(coordinator.start(new AbortController().signal)).resolves.toEqual({
       kind: "blocked",
-      blockerKinds: ["source_missing", "source_path_invalid"],
+      blockerKinds: ["source_path_invalid"],
     });
     expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
     expect(watcher.close).toHaveBeenCalledTimes(1);
     expect(reconciler.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a generation healthy and exposes detached read-only recoverable issues", async () => {
+    const missing = {
+      kind: "source_missing" as const,
+      bundleId: "work",
+      sourceId: "source-2",
+    };
+    const renamed = {
+      kind: "source_change_unsupported" as const,
+      change: "rename" as const,
+      bundleId: "personal",
+      sourceId: "source-1",
+    };
+    const watcher = createWatcher([], [missing, renamed]);
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, createReconciler())
+    );
+
+    await expect(coordinator.start(new AbortController().signal)).resolves.toEqual({
+      kind: "observation_converged",
+      scheduledCaptureCount: 2,
+    });
+    const issues = coordinator.getSourceIssues();
+
+    expect(issues).toEqual([renamed, missing]);
+    expect(Object.isFrozen(issues)).toBe(true);
+    expect(issues.every(Object.isFrozen)).toBe(true);
+    missing.sourceId = "mutated-observer-state";
+    expect(issues[1]).toEqual({
+      kind: "source_missing",
+      bundleId: "work",
+      sourceId: "source-2",
+    });
+    expect(() => coordinator.assertHealthy()).not.toThrow();
+    expect(watcher.close).not.toHaveBeenCalled();
+  });
+
+  it("forwards Bundle-scoped issue hints only while its exact generation is subscribed", async () => {
+    const watcher = createWatcher();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, createReconciler())
+    );
+    await coordinator.start(new AbortController().signal);
+    const onHint = jest.fn<void, []>();
+
+    const unsubscribe = coordinator.subscribeSourceIssueChanges("personal", onHint);
+    const retainedHint = [...(watcher.sourceIssueListeners.get("personal") ?? [])][0];
+    expect(retainedHint).toBeDefined();
+    retainedHint?.();
+    expect(onHint).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    unsubscribe();
+    retainedHint?.();
+    expect(onHint).toHaveBeenCalledTimes(1);
+
+    const unsubscribeCurrent = coordinator.subscribeSourceIssueChanges("personal", onHint);
+    const retainedCurrentHint = [...(watcher.sourceIssueListeners.get("personal") ?? [])][0];
+    coordinator.close();
+    retainedCurrentHint?.();
+    expect(onHint).toHaveBeenCalledTimes(1);
+    expect(() => unsubscribeCurrent()).not.toThrow();
   });
 
   it.each([{ deferredAllocatedCount: 1 }, { deferredDriftCount: 1 }] as const)(
@@ -282,7 +362,38 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
     }
   );
 
-  it("detects a destructive watcher blocker synchronously after startup convergence", async () => {
+  it("retains exact recoverable issues only until startup classification closes it", async () => {
+    const issue = {
+      kind: "source_missing" as const,
+      bundleId: "personal",
+      sourceId: "source-1",
+    };
+    const watcher = createWatcher([], [issue]);
+    const reconciler = createReconciler([
+      createReconciliation(),
+      createReconciliation({ deferredAllocatedCount: 1 }),
+    ]);
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+
+    await expect(coordinator.start(new AbortController().signal)).resolves.toEqual({
+      kind: "blocked",
+      blockerKinds: ["source_observation_pending"],
+    });
+    expect(coordinator.getSourceRecoveryClassificationIssues()).toEqual([issue]);
+    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+    await expect(coordinator.reprove(new AbortController().signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    coordinator.close();
+    expect(coordinator.getSourceRecoveryClassificationIssues()).toBeUndefined();
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains synchronous health after a recoverable rename issue", async () => {
     const watcher = createWatcher();
     const reconciler = createReconciler();
     const controller = new AbortController();
@@ -299,15 +410,23 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
       },
     ]);
 
-    expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
-    expect(watcher.close).toHaveBeenCalledTimes(1);
-    expect(reconciler.close).toHaveBeenCalledTimes(1);
-    await expect(coordinator.reprove(controller.signal)).rejects.toMatchObject({
-      name: "AbortError",
+    expect(() => coordinator.assertHealthy()).not.toThrow();
+    expect(coordinator.getSourceIssues()).toEqual([
+      {
+        kind: "source_change_unsupported",
+        change: "rename",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
+    ]);
+    expect(watcher.close).not.toHaveBeenCalled();
+    expect(reconciler.close).not.toHaveBeenCalled();
+    await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+      kind: "observation_reproved",
     });
   });
 
-  it("reproves post-start work before returning a newly observed delete blocker", async () => {
+  it("reproves post-start work without closing for a newly observed delete issue", async () => {
     const order: string[] = [];
     const watcher = createWatcher(order);
     const reconciler = createReconciler(undefined, order);
@@ -329,19 +448,58 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
     });
 
     await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
-      kind: "blocked",
-      blockerKinds: ["source_change_unsupported"],
+      kind: "observation_reproved",
     });
-    expect(order.slice(-6)).toEqual([
-      "idle",
-      "reconcile-3",
-      "idle",
-      "blockers",
-      "watcher-close",
-      "reconciler-close",
+    expect(order.slice(-4)).toEqual(["idle", "reconcile-3", "idle", "blockers"]);
+    expect(watcher.close).not.toHaveBeenCalled();
+    expect(() => coordinator.assertHealthy()).not.toThrow();
+  });
+
+  it("clears its recoverable snapshot when watcher recovery later succeeds", async () => {
+    const watcher = createWatcher(
+      [],
+      [{ kind: "source_missing", bundleId: "personal", sourceId: "source-1" }]
+    );
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    expect(coordinator.getSourceIssues()).toHaveLength(1);
+
+    watcher.getStartupBlockers.mockReturnValue([]);
+
+    await expect(coordinator.reprove(controller.signal)).resolves.toEqual({
+      kind: "observation_reproved",
+    });
+    expect(coordinator.getSourceIssues()).toEqual([]);
+    expect(watcher.close).not.toHaveBeenCalled();
+  });
+
+  it("closes synchronously when a fatal capture blocker appears after convergence", async () => {
+    const watcher = createWatcher();
+    const reconciler = createReconciler();
+    const controller = new AbortController();
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, reconciler)
+    );
+    await coordinator.start(controller.signal);
+    watcher.getStartupBlockers.mockReturnValue([
+      {
+        kind: "capture_failed",
+        stage: "commit",
+        bundleId: "personal",
+        sourceId: "source-1",
+      },
     ]);
-    expect(watcher.close).toHaveBeenCalledTimes(1);
+
     expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(reconciler.close).toHaveBeenCalledTimes(1);
+    await expect(coordinator.reprove(controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
   });
 
   it.each([{ deferredAllocatedCount: 1 }, { deferredDriftCount: 1 }] as const)(
@@ -407,6 +565,27 @@ describe("KnowledgeSourceObservationStartupCoordinator", () => {
     expect(watcher.close).toHaveBeenCalledTimes(1);
     expect(reconciler.close).toHaveBeenCalledTimes(1);
     expect(() => coordinator.assertHealthy()).toThrow("The operation was aborted");
+  });
+
+  it("rejects recoverable blocker objects with extra observer-owned fields", async () => {
+    const watcher = createWatcher();
+    watcher.getStartupBlockers.mockReturnValue([
+      {
+        kind: "source_missing",
+        bundleId: "personal",
+        sourceId: "source-1",
+        secretPath: "Sources/private.md",
+      } as never,
+    ]);
+    const coordinator = new KnowledgeSourceObservationStartupCoordinator(
+      createDependencies(watcher, createReconciler())
+    );
+
+    await expect(coordinator.start(new AbortController().signal)).resolves.toEqual({
+      kind: "diagnostic",
+      code: "watcher_state_invalid",
+    });
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
   it("cannot publish reproof health when final blocker inspection aborts the startup signal", async () => {

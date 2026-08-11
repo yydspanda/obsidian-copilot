@@ -4,6 +4,7 @@ import { SuggestedPrompts } from "@/components/chat-components/SuggestedPrompts"
 import { USER_SENDER } from "@/constants";
 import { useChatScrolling } from "@/hooks/useChatScrolling";
 import { useSettingsValue } from "@/settings/model";
+import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
 import { ChatMessage } from "@/types/message";
 import { App } from "obsidian";
 import React, { memo, useEffect, useState } from "react";
@@ -21,6 +22,7 @@ interface ChatMessagesProps {
   onDelete: (messageIndex: number) => void;
   onReplaceChat: (prompt: string) => void;
   showHelperComponents: boolean;
+  knowledgeChatCapturePort: KnowledgeChatCapturePort;
 }
 
 const ChatMessages = memo(
@@ -36,6 +38,7 @@ const ChatMessages = memo(
     onDelete,
     onReplaceChat,
     showHelperComponents = true,
+    knowledgeChatCapturePort,
   }: ChatMessagesProps) => {
     const [loadingDots, setLoadingDots] = useState("");
 
@@ -109,6 +112,7 @@ const ChatMessages = memo(
                     onRegenerate={() => onRegenerate(index)}
                     onEdit={(newMessage) => onEdit(index, newMessage)}
                     onDelete={() => onDelete(index)}
+                    knowledgeChatCapturePort={knowledgeChatCapturePort}
                   />
                 </div>
               )
@@ -133,6 +137,7 @@ const ChatMessages = memo(
                 app={app}
                 isStreaming={true}
                 onDelete={() => {}}
+                knowledgeChatCapturePort={knowledgeChatCapturePort}
               />
             </div>
           )}

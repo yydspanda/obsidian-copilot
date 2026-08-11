@@ -8,6 +8,7 @@ import {
   KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
   parseKnowledgeRuntimeSourceCommitExtension,
 } from "@/knowledge/manifest/KnowledgeRuntimeSourceCommit";
+import { parseKnowledgeSourceRetirements } from "@/knowledge/manifest/SourceRetirement";
 import {
   SourceManifestRevisionConflictError,
   type SourceManifestStorage,
@@ -123,6 +124,25 @@ export class SourceManifestSourceNotFoundError extends Error {
   ) {
     super(`Source '${sourceId}' is not registered in Bundle '${bundleId}'`);
     this.name = "SourceManifestSourceNotFoundError";
+  }
+}
+
+/** Reports a registration or rename that would reuse a retired source identity. */
+export class SourceManifestSourceRetiredError extends Error {
+  /**
+   * Creates a stable retired-identity conflict.
+   *
+   * @param bundleId - Bundle retaining the protected tombstone
+   * @param sourceId - Requested or colliding source identifier
+   * @param sourcePath - Requested canonical Vault path
+   */
+  constructor(
+    public readonly bundleId: string,
+    public readonly sourceId: string,
+    public readonly sourcePath: string
+  ) {
+    super(`Source '${sourceId}' is retired in Bundle '${bundleId}'`);
+    this.name = "SourceManifestSourceRetiredError";
   }
 }
 
@@ -372,6 +392,21 @@ export class SourceManifestRepository {
     const sourceKey = toWindowsPathKey(registration.sourcePath);
 
     const manifest = await this.mutate(bundleId, (current) => {
+      const retirements = parseKnowledgeSourceRetirements(current);
+      if (!retirements.ok) {
+        throw new SourceManifestValidationError(bundleId, retirements.issues);
+      }
+      const retired = retirements.value.find(
+        (record) =>
+          record.source.sourceId === registration.sourceId || record.source.sourceKey === sourceKey
+      );
+      if (retired) {
+        throw new SourceManifestSourceRetiredError(
+          bundleId,
+          registration.sourceId,
+          registration.sourcePath
+        );
+      }
       const byId = current.entries.find((entry) => entry.sourceId === registration.sourceId);
       const byPath = current.entries.find((entry) => entry.sourceKey === sourceKey);
       if (byId) {
@@ -428,6 +463,13 @@ export class SourceManifestRepository {
       const existing = requireSource(current, sourceId);
       if (existing.sourcePath === sourcePath) {
         return undefined;
+      }
+      const retirements = parseKnowledgeSourceRetirements(current);
+      if (!retirements.ok) {
+        throw new SourceManifestValidationError(bundleId, retirements.issues);
+      }
+      if (retirements.value.some((record) => record.source.sourceKey === sourceKey)) {
+        throw new SourceManifestSourceRetiredError(bundleId, sourceId, sourcePath);
       }
       const collision = current.entries.some(
         (entry) => entry.sourceId !== sourceId && entry.sourceKey === sourceKey
@@ -536,7 +578,8 @@ export class SourceManifestRepository {
    * Removes a source identity without deleting any generated page directly.
    *
    * Page ownership and deletion decisions belong to a reviewed ChangeSet, not
-   * to manifest bookkeeping.
+   * to manifest bookkeeping. Production Runtime storage rejects this generic
+   * mutation; source lifecycle changes must use its atomic retirement command.
    *
    * @param bundleId - Stable Bundle identifier
    * @param sourceId - Stable source identifier

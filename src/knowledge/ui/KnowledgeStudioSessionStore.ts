@@ -7,11 +7,25 @@ export const KNOWLEDGE_STUDIO_UNLOAD_UNAVAILABLE_NOTICE =
   "Knowledge Studio is unavailable because the plugin is unloading.";
 
 /** Immutable Knowledge Studio selection observed by controller/view wiring. */
-export interface KnowledgeStudioSessionState {
-  readonly revision: number;
-  readonly bundleId?: string;
-  readonly unavailableNotice: string;
-}
+export type KnowledgeStudioSessionState =
+  | Readonly<{
+      status: "unavailable";
+      revision: number;
+      bundleId?: never;
+      unavailableNotice: string;
+    }>
+  | Readonly<{
+      status: "selected";
+      revision: number;
+      bundleId: string;
+      unavailableNotice: string;
+    }>
+  | Readonly<{
+      status: "refreshing";
+      revision: number;
+      bundleId?: never;
+      unavailableNotice?: never;
+    }>;
 
 /** Callback notified synchronously after a state publication. */
 export type KnowledgeStudioSessionListener = () => void;
@@ -45,7 +59,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 /**
- * Creates one exact, frozen session state.
+ * Creates one exact, frozen selected or unavailable session state.
  *
  * @param revision - Monotonic in-memory revision
  * @param bundleId - Optional selected Bundle identifier
@@ -58,9 +72,14 @@ function createSessionState(
   unavailableNotice: string
 ): KnowledgeStudioSessionState {
   if (bundleId === undefined) {
-    return Object.freeze({ revision, unavailableNotice });
+    return Object.freeze({ status: "unavailable", revision, unavailableNotice });
   }
-  return Object.freeze({ revision, bundleId, unavailableNotice });
+  return Object.freeze({ status: "selected", revision, bundleId, unavailableNotice });
+}
+
+/** Creates one exact, frozen action-free refresh state. */
+function createRefreshingState(revision: number): KnowledgeStudioSessionState {
+  return Object.freeze({ status: "refreshing", revision });
 }
 
 /**
@@ -79,8 +98,8 @@ function notifyListenerSafely(listener: KnowledgeStudioSessionListener): void {
 /**
  * Stable synchronous selection store for one Knowledge Studio plugin session.
  *
- * The store publishes only unavailable selection metadata. It does not own any
- * runtime, workflow, controller, or Vault operation.
+ * The store publishes selected, unavailable, or transient-refresh metadata. It
+ * does not own any runtime, workflow, controller, or Vault operation.
  */
 export class KnowledgeStudioSessionStore {
   private state: KnowledgeStudioSessionState;
@@ -122,6 +141,20 @@ export class KnowledgeStudioSessionStore {
     }
 
     this.state = createSessionState(this.nextRevision(), bundleId, sanitizedNotice);
+    this.notifyListeners();
+  }
+
+  /**
+   * Clears the selected Bundle while startup rebuilds its durable ownership.
+   *
+   * The typed transient carries no Bundle identity or unavailable notice, so a
+   * View cannot mistake normal generation turnover for a durable startup error.
+   */
+  publishRefreshing(): void {
+    if (this.disposed) {
+      throw new KnowledgeStudioSessionDisposedError();
+    }
+    this.state = createRefreshingState(this.nextRevision());
     this.notifyListeners();
   }
 

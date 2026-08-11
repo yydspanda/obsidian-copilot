@@ -23,7 +23,7 @@ function createEntry(patch: Partial<SourceManifestEntry> = {}): SourceManifestEn
 }
 
 describe("KnowledgeSourceOrigin", () => {
-  it("keeps legacy, Chat, and folder-import sources on ordinary ingest authority", () => {
+  it("keeps legacy, Chat, Chat-draft, and folder-import sources on ordinary ingest authority", () => {
     expect(deriveKnowledgeSourceCompileAuthority(createEntry())).toEqual({
       operation: "ingest",
     });
@@ -49,6 +49,23 @@ describe("KnowledgeSourceOrigin", () => {
         ]
       )
     ).toEqual({ version: 1, operation: "folder_import" });
+    const draftExtensions = createKnowledgeSourceOriginExtensions("chat_knowledge_draft", {
+      captureDigest: CAPTURE_DIGEST,
+      captureContentHash: CAPTURE_CONTENT_HASH,
+    });
+    expect(
+      deriveKnowledgeSourceCompileAuthority(createEntry({ extensions: draftExtensions }))
+    ).toEqual({
+      operation: "ingest",
+    });
+    expect(
+      parseKnowledgeSourceOrigin(draftExtensions[KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY])
+    ).toEqual({
+      version: 1,
+      operation: "chat_knowledge_draft",
+      captureDigest: CAPTURE_DIGEST,
+      captureContentHash: CAPTURE_CONTENT_HASH,
+    });
   });
 
   it("derives query writeback only from a strict managed capture origin", () => {

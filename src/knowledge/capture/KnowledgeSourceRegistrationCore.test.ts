@@ -1,5 +1,9 @@
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import type { SourceRegistration } from "@/knowledge/manifest/SourceManifestRepository";
+import {
+  createKnowledgeSourceRetirementRecord,
+  projectKnowledgeSourceRetirement,
+} from "@/knowledge/manifest/SourceRetirement";
 import type { SourceManifest, SourceManifestEntry } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
@@ -211,6 +215,42 @@ describe("KnowledgeSourceRegistrationCore", () => {
     await expect(
       core.preflight({ ...request, custody: "user_managed" }, new AbortController().signal)
     ).rejects.toMatchObject({ name: "KnowledgeSourceRegistrationMetadataConflictError" });
+    expect(registerSource).not.toHaveBeenCalled();
+  });
+
+  it("rejects a protected retired Windows path before registration", async () => {
+    const retiredSource = createEntry("source-retired", "Sources/Retired.md");
+    const activeManifest = createManifest([retiredSource]);
+    const retiredManifest = projectKnowledgeSourceRetirement(
+      activeManifest,
+      createKnowledgeSourceRetirementRecord({
+        bundleId: "personal",
+        requestToken: "a".repeat(64),
+        reason: "user_requested",
+        retiredAt: 100,
+        retiredManifestRevision: 1,
+        source: retiredSource,
+      })
+    );
+    const registerSource = jest.fn();
+    const core = new KnowledgeSourceRegistrationCore(
+      { load: async () => retiredManifest, registerSource },
+      { assertCurrent: () => undefined }
+    );
+    const request = {
+      bundleId: "personal",
+      sourceRoot: "Sources",
+      sourcePath: "sources/RETIRED.md",
+      custody: "user_managed" as const,
+      existingPathPolicy: "reuse_path" as const,
+    };
+
+    await expect(core.preflight(request, new AbortController().signal)).rejects.toMatchObject({
+      name: "KnowledgeSourceRegistrationMetadataConflictError",
+    });
+    await expect(core.register(request, new AbortController().signal)).rejects.toMatchObject({
+      name: "KnowledgeSourceRegistrationMetadataConflictError",
+    });
     expect(registerSource).not.toHaveBeenCalled();
   });
 

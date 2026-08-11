@@ -63,6 +63,7 @@ interface TestContainer extends HTMLElement {
 
 interface ControllerCalls {
   start: jest.Mock;
+  showRefreshing: jest.Mock;
   showUnavailable: jest.Mock;
   destroy: jest.Mock;
 }
@@ -71,6 +72,7 @@ interface ControllerCalls {
 function createController(): KnowledgeStudioController & ControllerCalls {
   return {
     start: jest.fn(),
+    showRefreshing: jest.fn(),
     showUnavailable: jest.fn(),
     destroy: jest.fn(),
   } as unknown as KnowledgeStudioController & ControllerCalls;
@@ -141,12 +143,21 @@ describe("KnowledgeStudioView", () => {
     sessionStore.replaceSelection("bundle-2", "Workflow adapters remain unavailable.");
     expect(controller.start).toHaveBeenLastCalledWith("bundle-2");
 
-    sessionStore.replaceSelection(undefined, "Bundle selection is required.");
-    expect(controller.showUnavailable).toHaveBeenLastCalledWith("Bundle selection is required.");
+    sessionStore.publishRefreshing();
+    expect(controller.showRefreshing).toHaveBeenCalledTimes(1);
+
+    sessionStore.replaceSelection("bundle-2", "Workflow adapters are ready again.");
+    expect(controller.start).toHaveBeenCalledTimes(2);
+    expect(controller.start).toHaveBeenLastCalledWith("bundle-2");
+
+    sessionStore.replaceSelection(undefined, "Bundle configuration is invalid.");
+    expect(controller.showUnavailable).toHaveBeenLastCalledWith("Bundle configuration is invalid.");
 
     await view.onClose();
+    sessionStore.publishRefreshing();
     sessionStore.replaceSelection("bundle-after-close", "Closed view must not restart.");
-    expect(controller.start).toHaveBeenCalledTimes(1);
+    expect(controller.start).toHaveBeenCalledTimes(2);
+    expect(controller.showRefreshing).toHaveBeenCalledTimes(1);
   });
 
   it("rebuilds the React root after window migration and cleans up exact owners", async () => {
@@ -174,5 +185,26 @@ describe("KnowledgeStudioView", () => {
     expect(container.destroyMigrationListener).toHaveBeenCalledTimes(1);
     expect(controller.destroy).toHaveBeenCalledTimes(1);
     expect(roots[1].unmount).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the unload explanation as durable unavailability", async () => {
+    const controller = createController();
+    const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
+    sessionStore.replaceSelection("bundle-2", "Ready.");
+    const view = new KnowledgeStudioView(
+      createLeaf(),
+      controller,
+      sessionStore,
+      createFolderImportPort()
+    );
+    await view.onOpen();
+
+    sessionStore.dispose();
+
+    expect(controller.showUnavailable).toHaveBeenLastCalledWith(
+      "Knowledge Studio is unavailable because the plugin is unloading."
+    );
+    expect(controller.showRefreshing).not.toHaveBeenCalled();
+    await view.onClose();
   });
 });

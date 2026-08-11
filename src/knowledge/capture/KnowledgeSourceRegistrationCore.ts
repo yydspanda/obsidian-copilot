@@ -1,4 +1,5 @@
 import type { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
+import { parseKnowledgeSourceRetirements } from "@/knowledge/manifest/SourceRetirement";
 import { parseSourceManifest } from "@/knowledge/model/schemas";
 import {
   KNOWLEDGE_CONTRACT_VERSION,
@@ -351,6 +352,15 @@ export class KnowledgeSourceRegistrationCore {
       captured.bundleId
     );
     assertCurrent(signal, this.generation);
+    const retirements = parseKnowledgeSourceRetirements(snapshot);
+    if (
+      !retirements.ok ||
+      retirements.value.some(
+        (record) => record.source.sourceKey === toWindowsPathKey(captured.sourcePath)
+      )
+    ) {
+      throw new KnowledgeSourceRegistrationMetadataConflictError();
+    }
     const existing = snapshot.entries.find(
       (entry) => entry.sourceKey === toWindowsPathKey(captured.sourcePath)
     );
@@ -387,6 +397,16 @@ export class KnowledgeSourceRegistrationCore {
       captured.bundleId
     );
     assertCurrent(signal, this.generation);
+    const retirements = parseKnowledgeSourceRetirements(snapshot);
+    if (
+      !retirements.ok ||
+      retirements.value.some(
+        (record) =>
+          record.source.sourceId === expectedSourceId || record.source.sourceKey === sourceKey
+      )
+    ) {
+      throw new KnowledgeSourceRegistrationMetadataConflictError();
+    }
     const existing = snapshot.entries.find((entry) => entry.sourceKey === sourceKey);
     if (existing) {
       if (

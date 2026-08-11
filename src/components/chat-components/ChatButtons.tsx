@@ -7,6 +7,7 @@ import {
   Check,
   Copy,
   LibraryBig,
+  NotebookPen,
   PenSquare,
   RotateCw,
   TextCursorInput,
@@ -24,6 +25,7 @@ interface ChatButtonsProps {
   onEdit?: () => void;
   onDelete: () => void;
   onShowSources?: () => void;
+  onCreateKnowledgeDraft?: () => void;
   hasSources: boolean;
 }
 
@@ -36,6 +38,7 @@ export const ChatButtons: React.FC<ChatButtonsProps> = ({
   onEdit,
   onDelete,
   onShowSources,
+  onCreateKnowledgeDraft,
   hasSources,
 }) => {
   return (
@@ -81,6 +84,21 @@ export const ChatButtons: React.FC<ChatButtonsProps> = ({
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Show Sources</TooltipContent>
+            </Tooltip>
+          )}
+          {onCreateKnowledgeDraft && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  onClick={onCreateKnowledgeDraft}
+                  variant="ghost2"
+                  size="fit"
+                  title="Create Knowledge Draft"
+                >
+                  <NotebookPen className="tw-size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Create Knowledge Draft</TooltipContent>
             </Tooltip>
           )}
           <Tooltip>

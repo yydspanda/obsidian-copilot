@@ -80,7 +80,12 @@ export class KnowledgeStudioView extends ItemView {
   /** Applies the latest exact Bundle selection without ever starting a shell sentinel. */
   private synchronizeSession(): void {
     const session = this.sessionStore.getState();
-    if (!session.bundleId) {
+    if (session.status === "refreshing") {
+      this.currentBundleId = undefined;
+      this.controller.showRefreshing();
+      return;
+    }
+    if (session.status === "unavailable") {
       this.currentBundleId = undefined;
       this.controller.showUnavailable(session.unavailableNotice);
       return;

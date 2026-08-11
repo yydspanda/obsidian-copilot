@@ -12,6 +12,7 @@ export type KnowledgeSourceCompileOperation = "ingest" | "query_writeback";
 /** Operations allowed to create a first-party durable source registration. */
 export type KnowledgeSourceOriginOperation =
   | "chat_add_to_knowledge"
+  | "chat_knowledge_draft"
   | "folder_import"
   | "query_writeback";
 
@@ -27,6 +28,14 @@ export interface KnowledgeFolderImportSourceOrigin {
   operation: "folder_import";
 }
 
+/** Editable managed-source capture explicitly created from one Chat response. */
+export interface KnowledgeChatDraftSourceOrigin {
+  version: 1;
+  operation: "chat_knowledge_draft";
+  captureDigest: string;
+  captureContentHash: string;
+}
+
 /** Immutable capture identity required to authorize a query-writeback compile. */
 export interface KnowledgeQueryWritebackSourceOrigin {
   version: 1;
@@ -38,6 +47,7 @@ export interface KnowledgeQueryWritebackSourceOrigin {
 /** Versioned, data-only source provenance retained in the Manifest extension bag. */
 export type KnowledgeSourceOrigin =
   | KnowledgeChatSourceOrigin
+  | KnowledgeChatDraftSourceOrigin
   | KnowledgeFolderImportSourceOrigin
   | KnowledgeQueryWritebackSourceOrigin;
 
@@ -46,6 +56,9 @@ export interface KnowledgeQueryWritebackSourceOriginInput {
   captureDigest: string;
   captureContentHash: string;
 }
+
+/** Content identity retained for an editable Chat-created draft's first publication. */
+export type KnowledgeChatDraftSourceOriginInput = KnowledgeQueryWritebackSourceOriginInput;
 
 /** Exact compile authority derived from one strict Manifest source entry. */
 export type KnowledgeSourceCompileAuthority =
@@ -116,7 +129,7 @@ export function parseKnowledgeSourceOrigin(value: unknown): KnowledgeSourceOrigi
     }
     return Object.freeze({ version: 1, operation });
   }
-  if (operation === "query_writeback") {
+  if (operation === "chat_knowledge_draft" || operation === "query_writeback") {
     assertExactKeys(value, ["version", "operation", "captureDigest", "captureContentHash"]);
     const captureDigest = readDataProperty(value, "captureDigest");
     const captureContentHash = readDataProperty(value, "captureContentHash");
@@ -153,7 +166,11 @@ export function deriveKnowledgeSourceCompileAuthority(
   const value = entry.extensions?.[KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY];
   if (value === undefined) return Object.freeze({ operation: "ingest" });
   const origin = parseKnowledgeSourceOrigin(value);
-  if (origin.operation === "chat_add_to_knowledge" || origin.operation === "folder_import") {
+  if (
+    origin.operation === "chat_add_to_knowledge" ||
+    origin.operation === "chat_knowledge_draft" ||
+    origin.operation === "folder_import"
+  ) {
     return Object.freeze({ operation: "ingest" });
   }
   if (entry.custody !== "managed_copy") {
@@ -181,6 +198,10 @@ export function createKnowledgeSourceOriginExtensions(
 export function createKnowledgeSourceOriginExtensions(
   operation: "query_writeback",
   input: Readonly<KnowledgeQueryWritebackSourceOriginInput>
+): Record<string, JsonValue>;
+export function createKnowledgeSourceOriginExtensions(
+  operation: "chat_knowledge_draft",
+  input: Readonly<KnowledgeChatDraftSourceOriginInput>
 ): Record<string, JsonValue>;
 export function createKnowledgeSourceOriginExtensions(
   operation: KnowledgeSourceOriginOperation,

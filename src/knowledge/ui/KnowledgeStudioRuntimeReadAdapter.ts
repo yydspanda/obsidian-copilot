@@ -48,6 +48,11 @@ import {
   NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES,
 } from "@/knowledge/ui/KnowledgeStudioController";
 import { KnowledgeStudioRuntimeCommandAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeCommandAdapter";
+import type {
+  KnowledgeSourceLifecyclePort,
+  KnowledgeSourceRetirementRequest,
+  KnowledgeSourceRetirementUiReceipt,
+} from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import { sha256 } from "@/utils/hash";
 
 const DEFAULT_MAX_CONSISTENCY_ATTEMPTS = 3;
@@ -59,7 +64,7 @@ export type KnowledgeStudioRuntimePort = Pick<
   "readStudioBundle" | "subscribeStudioBundle"
 >;
 
-/** Optional Vault hint source; callbacks never carry authoritative state. */
+/** Optional generation-owned external hint source; callbacks carry no authoritative state. */
 export type KnowledgeStudioVaultHintPort = (bundleId: string, onHint: () => void) => () => void;
 
 /** Query capabilities accepted from one exact production generation. */
@@ -78,8 +83,63 @@ export interface KnowledgeStudioRuntimeReadAdapterInput {
   assertCurrent(): void;
   commands?: KnowledgeStudioRuntimeCommandAdapter;
   query?: KnowledgeStudioRuntimeQueryPort;
+  sourceLifecycle?: KnowledgeSourceLifecyclePort;
   subscribeVaultHints?: KnowledgeStudioVaultHintPort;
   maxConsistencyAttempts?: number;
+}
+
+type KnowledgeSourceLifecycleMethodKey = "loadSources" | "checkAgain" | "retireSource";
+
+/** Captures one lifecycle data method without invoking an accessor. */
+function captureSourceLifecycleDataMethod(
+  owner: object,
+  key: KnowledgeSourceLifecycleMethodKey
+): (...args: never[]) => unknown {
+  try {
+    let candidate: object | null = owner;
+    const visited = new Set<object>();
+    while (candidate && !visited.has(candidate)) {
+      visited.add(candidate);
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      if (descriptor) {
+        if (!("value" in descriptor) || typeof descriptor.value !== "function") {
+          throw new KnowledgeStudioRuntimeReadError();
+        }
+        return descriptor.value as (...args: never[]) => unknown;
+      }
+      candidate = Object.getPrototypeOf(candidate) as object | null;
+    }
+  } catch (error) {
+    if (error instanceof KnowledgeStudioRuntimeReadError) throw error;
+  }
+  throw new KnowledgeStudioRuntimeReadError();
+}
+
+/** Snapshots one exact generation-owned source lifecycle capability. */
+function captureSourceLifecyclePort(value: unknown): KnowledgeSourceLifecyclePort {
+  if (typeof value !== "object" || value === null) {
+    throw new KnowledgeStudioRuntimeReadError();
+  }
+  const owner = value;
+  const loadSources = captureSourceLifecycleDataMethod(owner, "loadSources");
+  const checkAgain = captureSourceLifecycleDataMethod(owner, "checkAgain");
+  const retireSource = captureSourceLifecycleDataMethod(owner, "retireSource");
+  return Object.freeze({
+    loadSources: (bundleId: string, signal: AbortSignal) =>
+      Reflect.apply(loadSources, owner, [bundleId, signal]) as Promise<
+        Awaited<ReturnType<KnowledgeSourceLifecyclePort["loadSources"]>>
+      >,
+    checkAgain: (bundleId: string, sourceId: string, signal: AbortSignal) =>
+      Reflect.apply(checkAgain, owner, [bundleId, sourceId, signal]) as Promise<void>,
+    retireSource: (
+      bundleId: string,
+      request: Readonly<KnowledgeSourceRetirementRequest>,
+      signal: AbortSignal
+    ) =>
+      Reflect.apply(retireSource, owner, [bundleId, request, signal]) as Promise<
+        Readonly<KnowledgeSourceRetirementUiReceipt>
+      >,
+  });
 }
 
 /** Exact durable record, target read-set, and plan produced by one consistent observation. */
@@ -638,7 +698,11 @@ function createRevisionToken(
  * unless an authentic same-generation command adapter was installed explicitly.
  */
 export class KnowledgeStudioRuntimeReadAdapter
-  implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort, KnowledgeStudioQueryWritebackPort
+  implements
+    KnowledgeStudioReadPort,
+    KnowledgeStudioCommandPort,
+    KnowledgeStudioQueryWritebackPort,
+    KnowledgeSourceLifecyclePort
 {
   private readonly input: KnowledgeStudioRuntimeReadAdapterInput;
   private readonly bundles: ReadonlyMap<string, KnowledgeBundleConfig>;
@@ -661,6 +725,10 @@ export class KnowledgeStudioRuntimeReadAdapter
       KnowledgeStudioRuntimeCommandAdapter.assert(input.commands);
     }
     const query = captureOptionalQueryPort(input);
+    const sourceLifecycle =
+      input.sourceLifecycle === undefined
+        ? undefined
+        : captureSourceLifecyclePort(input.sourceLifecycle);
     const assertCurrent = input.assertCurrent.bind(input);
     this.input = Object.freeze({
       runtime: input.runtime,
@@ -669,6 +737,7 @@ export class KnowledgeStudioRuntimeReadAdapter
       assertCurrent,
       ...(input.commands === undefined ? {} : { commands: input.commands }),
       ...(query === undefined ? {} : { query }),
+      ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
       ...(input.subscribeVaultHints === undefined
         ? {}
         : { subscribeVaultHints: input.subscribeVaultHints }),
@@ -700,10 +769,18 @@ export class KnowledgeStudioRuntimeReadAdapter
           signal,
           () => this.input.assertCurrent()
         );
+        const sourceLifecycle = this.input.sourceLifecycle
+          ? await this.input.sourceLifecycle.loadSources(bundleId, signal)
+          : undefined;
         const after = await this.input.runtime.readStudioBundle(bundleId);
         throwIfAborted(signal);
         this.input.assertCurrent();
-        if (before.runtimeRevision !== after.runtimeRevision) {
+        if (
+          before.runtimeRevision !== after.runtimeRevision ||
+          (sourceLifecycle !== undefined &&
+            (sourceLifecycle.bundleId !== bundleId ||
+              sourceLifecycle.runtimeRevision !== before.runtimeRevision))
+        ) {
           throw new KnowledgeStudioConsistencyRetry();
         }
         const reviews = reviewContexts.map(({ plan }) => plan);
@@ -721,13 +798,16 @@ export class KnowledgeStudioRuntimeReadAdapter
             runtimeRevision: before.runtimeRevision,
             items: Object.freeze([]),
           }),
+          ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
           queryAvailable: this.input.query !== undefined,
           queryWritebackAvailable: this.input.query?.supportsWriteback?.() === true,
           notice: this.input.commands
             ? this.input.commands.getCapabilities().reviewAccept
               ? this.input.query
                 ? this.input.query.supportsWriteback?.() === true
-                  ? "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, and exact source citation navigation are connected. Saved answers enter Review before any Wiki change; delete remains disabled."
+                  ? this.input.sourceLifecycle
+                    ? "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, exact source citation navigation, and source lifecycle recovery are connected. Saved answers enter Review before any Wiki change. Sources can be safely retired without deleting generated Wiki files; generated Wiki deletion remains disabled."
+                    : "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, and exact source citation navigation are connected. Saved answers enter Review before any Wiki change; generated Wiki deletion remains disabled."
                   : "Durable Activity, Review, Apply, and grounded Query are connected. Query may call the selected DeepSeek model using only freshly verified source excerpts. Save to Wiki and delete remain disabled."
                 : "Durable Activity and Review are connected. Eligible create and update selections can be explicitly applied; delete acceptance and Query remain disabled."
               : "Durable Activity commands and proposal rejection are connected. Acceptance and Wiki apply remain disabled."
@@ -748,7 +828,7 @@ export class KnowledgeStudioRuntimeReadAdapter
     throw new KnowledgeStudioRuntimeReadError();
   }
 
-  /** Subscribes to Runtime and current Wiki reload hints for one configured Bundle. */
+  /** Subscribes to Runtime plus coalesced Vault/source-issue hints for one Bundle. */
   subscribe(bundleId: string, onHint: () => void): () => void {
     if (!this.bundles.has(bundleId) || typeof onHint !== "function") {
       throw new KnowledgeStudioRuntimeReadError();
@@ -876,6 +956,28 @@ export class KnowledgeStudioRuntimeReadAdapter
     _signal: AbortSignal
   ): Promise<KnowledgeStudioRecoverySubmissionResult> {
     throw new KnowledgeStudioAdapterUnavailableError();
+  }
+
+  /** Loads the source lifecycle projection through this exact production generation. */
+  async loadSources(bundleId: string, signal: AbortSignal) {
+    if (!this.input.sourceLifecycle) throw new KnowledgeStudioAdapterUnavailableError();
+    return this.input.sourceLifecycle.loadSources(bundleId, signal);
+  }
+
+  /** Requests a full source recheck through this exact production generation. */
+  async checkAgain(bundleId: string, sourceId: string, signal: AbortSignal): Promise<void> {
+    if (!this.input.sourceLifecycle) throw new KnowledgeStudioAdapterUnavailableError();
+    return this.input.sourceLifecycle.checkAgain(bundleId, sourceId, signal);
+  }
+
+  /** Atomically retires one exact source while retaining current Wiki bytes. */
+  async retireSource(
+    bundleId: string,
+    request: Readonly<KnowledgeSourceRetirementRequest>,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeSourceRetirementUiReceipt>> {
+    if (!this.input.sourceLifecycle) throw new KnowledgeStudioAdapterUnavailableError();
+    return this.input.sourceLifecycle.retireSource(bundleId, request, signal);
   }
 
   /** Runs one scoped retrieval-only query when the live generation installed it. */

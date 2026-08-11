@@ -319,6 +319,10 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         return "The Vault file no longer exists. Drop it into Chat again.";
       case "source_conflict":
         return "This file conflicts with an existing Knowledge source identity.";
+      case "draft_invalid":
+      case "draft_conflict":
+      case "draft_persistence_failed":
+        return "The file could not be registered in Knowledge.";
       case "registration_failed":
         return "Knowledge could not durably register this file. Please try again.";
     }
@@ -944,6 +948,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
           onDelete={handleDelete}
           onReplaceChat={setInputMessage}
           showHelperComponents={selectedChain !== ChainType.PROJECT_CHAIN}
+          knowledgeChatCapturePort={knowledgeChatCapturePort}
         />
         {shouldShowProgressCard() ? (
           <div className="tw-inset-0 tw-z-modal tw-flex tw-items-center tw-justify-center tw-rounded-xl">

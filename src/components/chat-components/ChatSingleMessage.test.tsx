@@ -1,11 +1,12 @@
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import ChatSingleMessage, {
   normalizeFootnoteRendering,
 } from "@/components/chat-components/ChatSingleMessage";
 import { ChatMessage } from "@/types/message";
 import type { App } from "obsidian";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
 
 jest.mock("@/settings/model", () => ({
   useSettingsValue: jest.fn(() => ({
@@ -51,6 +52,7 @@ jest.mock("obsidian", () => {
     Platform: {
       isMobile: false,
     },
+    Notice: jest.fn(),
     Modal: class {
       open() {
         /* noop */
@@ -66,6 +68,7 @@ jest.mock("obsidian", () => {
 const { __renderMarkdownMock: renderMarkdownMock } = jest.requireMock<{
   __renderMarkdownMock: jest.Mock;
 }>("obsidian");
+const { Notice: noticeMock } = jest.requireMock<{ Notice: jest.Mock }>("obsidian");
 
 // ---------------------------------------------------------------------------
 // Verifies that the HTML string passed to MarkdownRenderer.renderMarkdown
@@ -94,6 +97,7 @@ describe("think block rendering — closing tags are not consumed by indented co
   beforeEach(() => {
     renderMarkdownMock.mockReset();
     renderMarkdownMock.mockResolvedValue(undefined);
+    noticeMock.mockClear();
   });
 
   beforeAll(() => {
@@ -273,6 +277,16 @@ describe("ChatSingleMessage", () => {
       },
     }) as unknown as App;
 
+  const createCapturePort = (): KnowledgeChatCapturePort => ({
+    addVaultSource: async () => ({ status: "registered", bundleId: "personal" }),
+    prepareKnowledgeDraft: () => ({ bundleId: "personal", sourceRoot: "Sources" }),
+    createKnowledgeDraft: async () => ({
+      status: "registered",
+      bundleId: "personal",
+      sourcePath: "Sources/Knowledge Draft abc.md",
+    }),
+  });
+
   beforeEach(() => {
     renderMarkdownMock.mockReset();
     renderMarkdownMock.mockResolvedValue(undefined);
@@ -280,6 +294,14 @@ describe("ChatSingleMessage", () => {
 
   beforeAll(() => {
     (window as unknown as Record<string, unknown>).activeDocument = window.document;
+    Object.defineProperty(HTMLElement.prototype, "setCssProps", {
+      configurable: true,
+      value(this: HTMLElement, properties: Record<string, string>) {
+        for (const [name, value] of Object.entries(properties)) {
+          this.style.setProperty(name, value);
+        }
+      },
+    });
   });
 
   it("normalizes rendered footnotes for assistant messages", async () => {
@@ -322,5 +344,93 @@ describe("ChatSingleMessage", () => {
     expect(messageSegment?.querySelector(".footnote-backref")).toBeNull();
     expect(messageSegment?.querySelector(".content-hr")).not.toBeNull();
     expect(messageSegment?.querySelector('a[href="#fn-2"]')?.textContent).toBe("2");
+  });
+
+  it("offers an editable Knowledge draft only for a completed non-error AI response", async () => {
+    const rendered = render(
+      <TooltipProvider>
+        <ChatSingleMessage
+          message={{
+            ...baseMessage,
+            sender: "ai",
+            message: "<think>private reasoning</think>Checked visible answer",
+          }}
+          app={createAppStub()}
+          isStreaming={false}
+          onDelete={() => {}}
+          knowledgeChatCapturePort={createCapturePort()}
+        />
+      </TooltipProvider>
+    );
+
+    const action = rendered.getByRole("button", { name: "Create Knowledge Draft" });
+    fireEvent.click(action);
+
+    expect(rendered.getByRole("dialog", { name: "Create Knowledge Draft" })).toBeTruthy();
+    expect((rendered.getByLabelText("Markdown draft") as HTMLTextAreaElement).value).toBe(
+      "Checked visible answer"
+    );
+    expect((rendered.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+  });
+
+  it.each([
+    ["user message", { sender: "user", isErrorMessage: false }],
+    ["non-assistant system message", { sender: "system", isErrorMessage: false }],
+    ["error response", { sender: "ai", isErrorMessage: true }],
+    [
+      "empty cleaned response",
+      { sender: "ai", isErrorMessage: false, message: "<think>x</think>" },
+    ],
+  ])("does not offer a draft for a %s", (_name, patch) => {
+    const rendered = render(
+      <TooltipProvider>
+        <ChatSingleMessage
+          message={{ ...baseMessage, ...patch }}
+          app={createAppStub()}
+          isStreaming={false}
+          onDelete={() => {}}
+          knowledgeChatCapturePort={createCapturePort()}
+        />
+      </TooltipProvider>
+    );
+
+    expect(rendered.queryByRole("button", { name: "Create Knowledge Draft" })).toBeNull();
+  });
+
+  it("does not expose message actions while the assistant response is streaming", () => {
+    const rendered = render(
+      <TooltipProvider>
+        <ChatSingleMessage
+          message={{ ...baseMessage, sender: "ai", message: "Partial answer" }}
+          app={createAppStub()}
+          isStreaming={true}
+          onDelete={() => {}}
+          knowledgeChatCapturePort={createCapturePort()}
+        />
+      </TooltipProvider>
+    );
+
+    expect(rendered.queryByRole("button", { name: "Create Knowledge Draft" })).toBeNull();
+  });
+
+  it("does not open an editor when no current Knowledge destination can be bound", () => {
+    const port = createCapturePort();
+    port.prepareKnowledgeDraft = () => null;
+    const rendered = render(
+      <TooltipProvider>
+        <ChatSingleMessage
+          message={{ ...baseMessage, sender: "ai", message: "Completed answer" }}
+          app={createAppStub()}
+          isStreaming={false}
+          onDelete={() => {}}
+          knowledgeChatCapturePort={port}
+        />
+      </TooltipProvider>
+    );
+
+    fireEvent.click(rendered.getByRole("button", { name: "Create Knowledge Draft" }));
+
+    expect(rendered.queryByRole("dialog", { name: "Create Knowledge Draft" })).toBeNull();
+    expect(noticeMock).toHaveBeenCalledWith(expect.stringContaining("not available"));
   });
 });
