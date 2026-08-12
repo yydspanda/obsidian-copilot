@@ -503,6 +503,27 @@
 - [x] Windows Obsidian 主窗口有界验收已通过：final production artifact 真正 disable/enable 后，已就绪 Studio → `Setup & status` → 三卡 → `Refresh displayed status` → `Back to Studio` 两轮正常；Workspace / Knowledge 为 locally ready，缺 OpenRouter Key 的可选 Chat 单独为 credential missing 且不阻断 Studio。UI 明示本次状态检查零模型请求，Key 真伪、license entitlement、账单、额度、网络与本地 server 均未测试；刷新前后 `data.json`、Sources / Wiki / Knowledge / Projects 树保持精确不变，UI 资源请求为 0，最终 console 无 error / warn。
 - [ ] Setup/readiness 剩余 Windows 现场边界：不为验收而破坏配置或 durable state，因此尚未人工制造 no Project / no Bundle / invalid Bundle、Recovery / Sources-only、自然 generation `Refreshing` 与 popout Setup；这些路径保留自动化覆盖，不冒充本轮现场结果。
 
+## Review 修正与证据（2026-08-12）
+
+### Session Goal
+
+让用户在 Review 不满意时能够看清提案依据并进入安全的修正路径，而不是只能接受、拒绝后再猜应该改 Source 还是 Schema；本轮先按可独立验收的纵切收敛范围，不修改任何 AI prompt。
+
+### Architecture Decisions
+
+- **教程冻结**：功能、聚焦测试、全仓门禁和必要实机验收稳定前，暂不修改或同步 `docs/` 与 Windows Manuals；开发期间只维护本节 TODO。最终确认行为后一次性更新教程，避免反复改写和同步。
+- 先复用现有 Review proposal、sourceRefs、locator 与 generation-owned capability，不为 UI 创建新的证据真值来源，也不绕过 Review / Apply。
+- “证据并排”“用户编辑候选”“带反馈重新生成”按用户价值拆成独立纵切；只有当前纵切完整通过后再进入下一项，避免把 UI、Runtime 写协议和模型调用混成一次大改。
+
+### Task Tracking
+
+- [x] 完成现有 Review / provenance / source-open / Runtime command 的只读架构与 UX 审计；本刀收敛为 proposal-level 证据预览与 exact Source jump，不假称 citation 能证明每个 diff block，不包含候选编辑或反馈重生成。
+- [x] 实现当前最小纵切：Review plan 只发布 64 条有界、无 path/sourceId/hash/locator 的证据摘要和 opaque ref；点击时 fresh 重证 pending proposal、Runtime snapshot token、workflow generation、Manifest/watch source identity、sourceRoot 与当前文件 bytes，再复用 Markdown/PDF exact navigator。Controller、delegator、adapter 和 production composer 均按 generation fail closed；连续跳转的不可取消 Obsidian workspace 副作用按 App owner 串行，最终可见位置归最新点击。
+- [x] 同步补齐 Runtime 持久文本 64 MiB 硬上限：read / migration / mutation 均在 `JSON.parse` 前拒绝超限输入，任何超限输出不提交，避免畸形 durable proposal 造成无界解析；测试覆盖 pre-parse、exact limit、read、migration 与 mutation no-write。
+- [x] 完成当前冻结树自动化门禁：R1 production wiring 相邻 14 suites / 194 tests 通过；最终全仓 277 suites / 4555 tests 通过；TypeScript `noEmit`、`npm run format`、全仓 `format:check`、全仓 ESLint、production build 与 `git diff --check` 通过。未运行模型 integration，也未执行 Windows Obsidian R1 人工验收。
+- [ ] Windows Obsidian 有界验收：真实非空 Review 显示 proposal evidence；Markdown / PDF exact jump、stale source、连续点击 latest-visible、Reject 零 Wiki 写与 Validate-and-Apply 原有事务边界均按冻结产物复核。
+- [ ] 功能冻结后一次性解除教程冻结并更新相关手册；在此之前禁止为中间状态修改 `docs/`。
+
 ## Source Documents
 
 - [`designdocs/PERSONAL_KNOWLEDGE_OS_PRD.md`](./designdocs/PERSONAL_KNOWLEDGE_OS_PRD.md)：产品目标、Golden Flow、需求和验收标准。

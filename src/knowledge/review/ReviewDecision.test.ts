@@ -1,6 +1,11 @@
 import { createKnowledgeChangeSetDigest } from "@/knowledge/changeset/ChangeSetValidator";
-import { createFileContentHash } from "@/knowledge/model/fingerprint";
-import type { KnowledgeChangeSet, KnowledgeFileChange } from "@/knowledge/model/types";
+import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
+import type {
+  ClaimCitation,
+  KnowledgeChangeSet,
+  KnowledgeFileChange,
+} from "@/knowledge/model/types";
+import { createKnowledgeReviewEvidenceRef } from "@/knowledge/review/KnowledgeReviewEvidence";
 import {
   compileKnowledgeReviewSelection,
   createKnowledgeReviewPlan,
@@ -26,14 +31,17 @@ function cloneJson<T>(value: T): T {
 }
 
 /** Creates one valid proposed ChangeSet around caller-supplied changes. */
-function createProposal(changes: KnowledgeFileChange[]): KnowledgeChangeSet {
+function createProposal(
+  changes: KnowledgeFileChange[],
+  citations: ClaimCitation[] = []
+): KnowledgeChangeSet {
   return {
     id: "changeset-1",
     bundleId: "personal",
     operation: "ingest",
     sourceRefs: ["source-1"],
     changes,
-    citations: [],
+    citations,
     validation: { okfValid: true, citationsValid: true, linksValid: true },
     status: "proposed",
     createdAt: 100,
@@ -180,6 +188,46 @@ describe("createKnowledgeReviewPlan", () => {
     const reversed = createKnowledgeReviewPlan(proposal, [...observations].reverse());
 
     expect(reversed).toEqual(ordered);
+  });
+
+  it("projects proposal citations into frozen plan-level evidence summaries", () => {
+    const excerpt = "Exact source support";
+    const proposal = createProposal(
+      [createUpdate()],
+      [
+        {
+          citationId: "citation-1",
+          claimId: "claim-private",
+          relation: "supports",
+          locator: {
+            kind: "pdf_page",
+            sourceId: "source-1",
+            artifactId: "artifact-private",
+            artifactContentHash: "a".repeat(64),
+            excerpt,
+            quoteHash: createQuoteHash(excerpt),
+            page: 9,
+          },
+        },
+      ]
+    );
+
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+
+    expect(plan.evidence).toEqual([
+      {
+        evidenceRef: createKnowledgeReviewEvidenceRef(plan.proposalDigest, "citation-1"),
+        relation: "supports",
+        excerpt,
+        truncated: false,
+        location: { kind: "pdf_page", page: 9 },
+      },
+    ]);
+    expect(plan.omittedEvidenceCount).toBe(0);
+    expect(Object.isFrozen(plan.evidence)).toBe(true);
+    expect(Object.isFrozen(plan.evidence[0])).toBe(true);
+    expect(JSON.stringify(plan.evidence)).not.toContain("artifact-private");
+    expect(JSON.stringify(plan.evidence)).not.toContain("claim-private");
   });
 
   it("marks occupied, stale, missing, directory, and unavailable targets reject-only", () => {

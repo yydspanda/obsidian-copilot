@@ -1109,8 +1109,12 @@ export class SourceInputObservationTokenCollisionError extends Error {
 /** Runtime seams used for secure ids and deterministic observation timestamps. */
 export interface KnowledgeRuntimeStoreOptions {
   clock?: () => number;
+  maxTextCharacters?: number;
   opaqueIdFactory?: () => string;
 }
+
+/** Maximum persisted Runtime text accepted before any JSON parser allocation. */
+export const DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS = 64 * 1024 * 1024;
 
 /** Generates one browser-compatible 128-bit opaque identifier. */
 function createSecureOpaqueId(): string {
@@ -3387,7 +3391,11 @@ function cloneJson<T>(value: T): T {
  * @param text - Complete atomic runtime file contents
  * @returns Detached strict runtime snapshot
  */
-function parseRuntimeText(text: string): KnowledgeRuntimeStoreSnapshot {
+function parseRuntimeText(
+  text: string,
+  maxTextCharacters = DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS
+): KnowledgeRuntimeStoreSnapshot {
+  requireRuntimeTextWithinLimit(text, maxTextCharacters);
   let value: unknown;
   try {
     value = JSON.parse(text) as unknown;
@@ -3413,10 +3421,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * @param text - Complete persisted runtime text
  * @returns Unknown parsed JSON value
  */
-function parseUnknownRuntimeText(text: string): unknown {
+function parseUnknownRuntimeText(
+  text: string,
+  maxTextCharacters = DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS
+): unknown {
+  requireRuntimeTextWithinLimit(text, maxTextCharacters);
   try {
     return JSON.parse(text) as unknown;
   } catch {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+}
+
+/**
+ * Rejects an oversized persisted Runtime envelope before JSON parsing.
+ *
+ * @param text - Complete persisted Runtime text
+ * @param maxTextCharacters - Configured inclusive character limit
+ * @returns The unchanged text after the bound is proven
+ */
+function requireRuntimeTextWithinLimit(text: string, maxTextCharacters: number): string {
+  if (typeof text !== "string" || text.length > maxTextCharacters) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return text;
+}
+
+/**
+ * Serializes one validated Runtime value and enforces the persisted-text bound.
+ *
+ * @param value - Runtime value to serialize
+ * @param maxTextCharacters - Configured inclusive character limit
+ * @returns Bounded JSON text
+ */
+function stringifyBoundedRuntimeValue(value: unknown, maxTextCharacters: number): string {
+  try {
+    const text = JSON.stringify(value);
+    if (typeof text !== "string") {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    return requireRuntimeTextWithinLimit(text, maxTextCharacters);
+  } catch (error) {
+    if (error instanceof KnowledgeRuntimeStoreCorruptError) throw error;
     throw new KnowledgeRuntimeStoreCorruptError();
   }
 }
@@ -5180,6 +5226,7 @@ function createSourceRetirementReceipt(
  */
 export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAuthorityPort {
   private readonly clock: () => number;
+  private readonly maxTextCharacters: number;
   private readonly opaqueIdFactory: () => string;
   private readonly studioListeners = new Map<string, Set<() => void>>();
 
@@ -5189,6 +5236,15 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     options: KnowledgeRuntimeStoreOptions = {}
   ) {
     this.clock = options.clock ?? Date.now;
+    this.maxTextCharacters =
+      options.maxTextCharacters ?? DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS;
+    if (
+      !Number.isSafeInteger(this.maxTextCharacters) ||
+      this.maxTextCharacters < 1 ||
+      this.maxTextCharacters > DEFAULT_MAX_KNOWLEDGE_RUNTIME_TEXT_CHARACTERS
+    ) {
+      throw new TypeError("Knowledge Runtime text limit is invalid");
+    }
     this.opaqueIdFactory = options.opaqueIdFactory ?? createSecureOpaqueId;
   }
 
@@ -5197,8 +5253,9 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     try {
       await this.file.read();
     } catch {
-      const initial = JSON.stringify(
-        createEmptyKnowledgeRuntimeStoreSnapshot(this.nextOpaqueId("runtimeId"))
+      const initial = stringifyBoundedRuntimeValue(
+        createEmptyKnowledgeRuntimeStoreSnapshot(this.nextOpaqueId("runtimeId")),
+        this.maxTextCharacters
       );
       await this.file.initialize(initial);
     }
@@ -7016,7 +7073,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         throw new KnowledgeRuntimeAtomicWriteError();
       }
       callbackCalled = true;
-      const value = parseUnknownRuntimeText(currentText);
+      const value = parseUnknownRuntimeText(currentText, this.maxTextCharacters);
       if (!isRecord(value)) {
         throw new KnowledgeRuntimeStoreCorruptError();
       }
@@ -7026,21 +7083,26 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         return currentText;
       }
       if (value.version === RUNTIME_V4_STORE_VERSION) {
-        expectedText = JSON.stringify(migrateRuntimeV4ToV5Snapshot(value));
+        expectedText = stringifyBoundedRuntimeValue(
+          migrateRuntimeV4ToV5Snapshot(value),
+          this.maxTextCharacters
+        );
         return expectedText;
       }
       if (value.version === PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION) {
-        expectedText = JSON.stringify(
-          migrateRuntimeV4ToV5Snapshot(migrateRuntimeV3ToV4Snapshot(value))
+        expectedText = stringifyBoundedRuntimeValue(
+          migrateRuntimeV4ToV5Snapshot(migrateRuntimeV3ToV4Snapshot(value)),
+          this.maxTextCharacters
         );
         return expectedText;
       }
       if (value.version === RUNTIME_V2_STORE_VERSION) {
         const runtimeId = this.nextOpaqueId("runtimeId");
-        expectedText = JSON.stringify(
+        expectedText = stringifyBoundedRuntimeValue(
           migrateRuntimeV4ToV5Snapshot(
             migrateRuntimeV3ToV4Snapshot(migrateRuntimeV2ToV3Snapshot(value, runtimeId))
-          )
+          ),
+          this.maxTextCharacters
         );
         return expectedText;
       }
@@ -7048,17 +7110,18 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         throw new KnowledgeRuntimeStoreCorruptError();
       }
       const runtimeId = this.nextOpaqueId("runtimeId");
-      expectedText = JSON.stringify(
+      expectedText = stringifyBoundedRuntimeValue(
         migrateRuntimeV4ToV5Snapshot(
           migrateRuntimeV3ToV4Snapshot(migrateLegacyRuntimeSnapshot(value, runtimeId))
-        )
+        ),
+        this.maxTextCharacters
       );
       return expectedText;
     });
     if (!callbackCalled || expectedText === undefined || committedText !== expectedText) {
       throw new KnowledgeRuntimeAtomicWriteError();
     }
-    parseRuntimeText(committedText);
+    parseRuntimeText(committedText, this.maxTextCharacters);
   }
 
   /** Reads and clones one subsystem Bundle slot. */
@@ -7416,7 +7479,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
 
   /** Reads and strictly validates the complete atomic runtime envelope. */
   private async readState(): Promise<KnowledgeRuntimeStoreSnapshot> {
-    return parseRuntimeText(await this.file.read());
+    return parseRuntimeText(await this.file.read(), this.maxTextCharacters);
   }
 
   /** Re-proves one exact tombstone after an uncertain atomic-file result. */
@@ -7522,7 +7585,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         throw new KnowledgeRuntimeAtomicWriteError();
       }
       callbackCalled = true;
-      const current = parseRuntimeText(currentText);
+      const current = parseRuntimeText(currentText, this.maxTextCharacters);
       const mutation = transform(current);
       result = mutation.value;
       if (!mutation.next) {
@@ -7532,13 +7595,13 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       const next = parseKnowledgeRuntimeStoreSnapshot(mutation.next);
       this.assertUnfinishedTransactionFileAccessAuthority(next);
       changedBundleIds = findStudioChangedBundleIds(current, next);
-      expectedText = JSON.stringify(next);
+      expectedText = stringifyBoundedRuntimeValue(next, this.maxTextCharacters);
       return expectedText;
     });
     if (!callbackCalled || expectedText === undefined || committedText !== expectedText) {
       throw new KnowledgeRuntimeAtomicWriteError();
     }
-    parseRuntimeText(committedText);
+    parseRuntimeText(committedText, this.maxTextCharacters);
     this.emitStudioHints(changedBundleIds);
     return result as T;
   }

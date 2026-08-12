@@ -635,6 +635,7 @@ describe("KnowledgeProductionObservationComposer", () => {
           runtime: Record<PropertyKey, unknown>;
           commands: Record<PropertyKey, unknown>;
           query: Record<PropertyKey, unknown>;
+          reviewEvidence: Record<PropertyKey, unknown>;
           sourceLifecycle: Record<PropertyKey, unknown>;
         };
       }
@@ -662,6 +663,23 @@ describe("KnowledgeProductionObservationComposer", () => {
       "apply",
     ]) {
       expect(forbiddenAuthority in queryAdapter).toBe(false);
+    }
+    const reviewEvidenceAdapter = adapterInput.reviewEvidence;
+    expect(Reflect.ownKeys(reviewEvidenceAdapter)).toEqual(["openReviewEvidence"]);
+    expect(Object.isFrozen(reviewEvidenceAdapter)).toBe(true);
+    for (const forbiddenAuthority of [
+      "runtime",
+      "vault",
+      "model",
+      "network",
+      "write",
+      "queue",
+      "review",
+      "apply",
+      "sourceAuthority",
+      "navigator",
+    ]) {
+      expect(forbiddenAuthority in reviewEvidenceAdapter).toBe(false);
     }
     const commandAdapter = adapterInput.commands;
     expect(Reflect.ownKeys(commandAdapter)).toEqual([]);
@@ -744,6 +762,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       },
       queryAvailable: true,
       queryWritebackAvailable: true,
+      reviewEvidenceAvailable: true,
     });
     expect(snapshot.sourceLifecycle?.sources[0]?.actions.canRemove).toBe(false);
     expect(snapshot.notice).toContain("reviewed Save to Wiki");
@@ -822,10 +841,34 @@ describe("KnowledgeProductionObservationComposer", () => {
       adapter.query("personal", { query: "late" }, new AbortController().signal)
     ).rejects.toMatchObject({ name: "KnowledgeScopedQueryError" });
     await expect(
+      adapter.openReviewEvidence(
+        "personal",
+        {
+          changeSetId: "changeset-late",
+          proposalDigest: "a".repeat(64),
+          expectedSnapshotToken: "b".repeat(64),
+          evidenceRef: "c".repeat(64),
+        },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(
       studioPort.pauseBundle("personal", pausedQueue.value.revision, new AbortController().signal)
     ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
     await expect(
       studioPort.query("personal", { query: "late" }, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+    await expect(
+      studioPort.openReviewEvidence(
+        "personal",
+        {
+          changeSetId: "changeset-late",
+          proposalDigest: "a".repeat(64),
+          expectedSnapshotToken: "b".repeat(64),
+          evidenceRef: "c".repeat(64),
+        },
+        new AbortController().signal
+      )
     ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
     await expect(studioPort.load("personal", new AbortController().signal)).resolves.toMatchObject({
       availability: "adapter_unavailable",

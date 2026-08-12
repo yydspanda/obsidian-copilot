@@ -1713,6 +1713,101 @@ describe("KnowledgeRuntimeStore", () => {
     await expect(harness.queue.read("personal")).resolves.toEqual(createQueueSnapshot(1));
   });
 
+  it("rejects oversized persisted text before JSON parsing and preserves exact bytes", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const validText = JSON.stringify(createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32)));
+    const oversizedText = `${validText} `;
+    await file.initialize(oversizedText);
+    const runtime = new KnowledgeRuntimeStore(file, {
+      maxTextCharacters: validText.length,
+    });
+    const parseSpy = jest.spyOn(JSON, "parse");
+
+    try {
+      await expect(runtime.initialize()).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+    }
+    expect(await file.read()).toBe(oversizedText);
+  });
+
+  it("rejects externally enlarged Runtime text before a read-side JSON parse", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const validText = JSON.stringify(createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32)));
+    await file.initialize(validText);
+    const runtime = new KnowledgeRuntimeStore(file, {
+      maxTextCharacters: validText.length,
+    });
+    await runtime.initialize();
+    const oversizedText = `${validText} `;
+    file.replaceContent(oversizedText);
+    const parseSpy = jest.spyOn(JSON, "parse");
+
+    try {
+      await expect(runtime.readStudioBundle("personal")).rejects.toBeInstanceOf(
+        KnowledgeRuntimeStoreCorruptError
+      );
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+    }
+    expect(await file.read()).toBe(oversizedText);
+  });
+
+  it("accepts persisted Runtime text at the exact configured character limit", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const text = JSON.stringify(createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32)));
+    await file.initialize(text);
+
+    await expect(
+      new KnowledgeRuntimeStore(file, { maxTextCharacters: text.length }).initialize()
+    ).resolves.toBeUndefined();
+
+    expect(await file.read()).toBe(text);
+  });
+
+  it("rejects invalid or enlarged Runtime text limits before file access", () => {
+    const file = new MemoryAtomicRuntimeFile();
+
+    expect(() => new KnowledgeRuntimeStore(file, { maxTextCharacters: 0 })).toThrow(
+      "Knowledge Runtime text limit is invalid"
+    );
+    expect(
+      () =>
+        new KnowledgeRuntimeStore(file, {
+          maxTextCharacters: 64 * 1024 * 1024 + 1,
+        })
+    ).toThrow("Knowledge Runtime text limit is invalid");
+    expect(file.getReadCallCount()).toBe(0);
+  });
+
+  it("rejects an atomic mutation whose serialized Runtime would exceed the text limit", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const text = JSON.stringify(createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32)));
+    await file.initialize(text);
+    const runtime = new KnowledgeRuntimeStore(file, { maxTextCharacters: text.length });
+    await runtime.initialize();
+
+    await expect(
+      new KnowledgeRuntimeQueueStorage(runtime).write("personal", createQueueSnapshot(1), null)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+
+    expect(await file.read()).toBe(text);
+  });
+
+  it("does not commit a migration whose serialized Runtime exceeds the text limit", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const legacyText = JSON.stringify(createLegacyRuntimeSnapshot());
+    await file.initialize(legacyText);
+
+    await expect(
+      new KnowledgeRuntimeStore(file, { maxTextCharacters: legacyText.length }).initialize()
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+
+    expect(await file.read()).toBe(legacyText);
+  });
+
   it("returns detached revision-zero Studio state when Queue and Review slots are absent", async () => {
     const harness = await createHarness();
 

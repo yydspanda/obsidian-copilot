@@ -40,6 +40,21 @@ function createBinary(...values: number[]): ArrayBuffer {
   return new Uint8Array(values).buffer;
 }
 
+/** Promise whose completion is explicitly controlled by one navigation test. */
+function createDeferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+/** Flushes work scheduled behind the shared App navigation queue. */
+async function flushAsync(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 /** Creates one fake TFile despite Obsidian's opaque public constructor. */
 function createTestFile(path: string): TFile {
   const Constructor = TFile as unknown as new (value: string) => TFile;
@@ -163,6 +178,102 @@ class NavigatorHarness {
 }
 
 describe("ObsidianKnowledgeCitationNavigator", () => {
+  it("keeps the newest citation as the final workspace target after an older open settles", async () => {
+    const content = "# Evidence\nFirst fact\nSecond fact";
+    const harness = new NavigatorHarness(content);
+    const firstOpen = createDeferred<void>();
+    const openOrder: string[] = [];
+    harness.leaf.openFile.mockImplementationOnce(async () => {
+      openOrder.push("first-start");
+      await firstOpen.promise;
+      openOrder.push("first-finish");
+    });
+    harness.leaf.openFile.mockImplementationOnce(async () => {
+      openOrder.push("second");
+    });
+    const firstController = new AbortController();
+    const firstCitation = createCitation({
+      ...createLocatorBase(content, "First fact"),
+      kind: "markdown_lines",
+      startLine: 2,
+      endLine: 2,
+    });
+    const secondCitation = createCitation({
+      ...createLocatorBase(content, "Second fact"),
+      kind: "markdown_lines",
+      startLine: 3,
+      endLine: 3,
+    });
+    const navigator = harness.createNavigator();
+
+    const oldNavigation = navigator.navigate(
+      { sourcePath: SOURCE_PATH, citation: firstCitation },
+      firstController.signal
+    );
+    await flushAsync();
+    firstController.abort();
+    const latestNavigation = navigator.navigate({
+      sourcePath: SOURCE_PATH,
+      citation: secondCitation,
+    });
+    await flushAsync();
+
+    expect(openOrder).toEqual(["first-start"]);
+    firstOpen.resolve();
+    await expect(oldNavigation).resolves.toEqual({ status: "unavailable" });
+    await expect(latestNavigation).resolves.toEqual({ status: "opened" });
+    expect(openOrder).toEqual(["first-start", "first-finish", "second"]);
+    expect(harness.editor.setSelection).toHaveBeenCalledTimes(1);
+    expect(harness.editor.setSelection).toHaveBeenLastCalledWith(
+      { line: 2, ch: 0 },
+      { line: 2, ch: "Second fact".length }
+    );
+  });
+
+  it("shares navigation ordering across adapters that own the same App", async () => {
+    const content = "# Evidence\nFirst fact\nSecond fact";
+    const harness = new NavigatorHarness(content);
+    const firstOpen = createDeferred<void>();
+    const openOrder: string[] = [];
+    harness.leaf.openFile.mockImplementationOnce(async () => {
+      openOrder.push("first-start");
+      await firstOpen.promise;
+      openOrder.push("first-finish");
+    });
+    harness.leaf.openFile.mockImplementationOnce(async () => {
+      openOrder.push("second");
+    });
+    const firstController = new AbortController();
+    const firstCitation = createCitation({
+      ...createLocatorBase(content, "First fact"),
+      kind: "markdown_lines",
+      startLine: 2,
+      endLine: 2,
+    });
+    const secondCitation = createCitation({
+      ...createLocatorBase(content, "Second fact"),
+      kind: "markdown_lines",
+      startLine: 3,
+      endLine: 3,
+    });
+
+    const oldNavigation = harness
+      .createNavigator()
+      .navigate({ sourcePath: SOURCE_PATH, citation: firstCitation }, firstController.signal);
+    await flushAsync();
+    firstController.abort();
+    const latestNavigation = harness
+      .createNavigator()
+      .navigate({ sourcePath: SOURCE_PATH, citation: secondCitation });
+    await flushAsync();
+
+    expect(openOrder).toEqual(["first-start"]);
+    firstOpen.resolve();
+    await expect(oldNavigation).resolves.toEqual({ status: "unavailable" });
+    await expect(latestNavigation).resolves.toEqual({ status: "opened" });
+    expect(openOrder).toEqual(["first-start", "first-finish", "second"]);
+  });
+
   it("re-proves an exact Markdown citation without opening or changing the workspace", async () => {
     const content = "# Evidence\nGrounded fact";
     const harness = new NavigatorHarness(content);
@@ -362,6 +473,26 @@ describe("ObsidianKnowledgeCitationNavigator", () => {
     );
     expect(harness.workspace.iterateAllLeaves).not.toHaveBeenCalled();
     expect(harness.leaf.openFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses an ambiguous PDF linktext path before reading or opening the workspace", async () => {
+    const ambiguousPath = "Sources/Research#Appendix.pdf";
+    const harness = new NavigatorHarness("", "", ambiguousPath);
+    const citation = createCitation({
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: createSourceContentHash(harness.binaryContent),
+      excerpt: "PDF page text",
+      quoteHash: createQuoteHash("PDF page text"),
+      kind: "pdf_page",
+      page: 4,
+    });
+
+    await expect(
+      harness.createNavigator().navigate({ sourcePath: ambiguousPath, citation })
+    ).resolves.toEqual({ status: "unsupported" });
+    expect(harness.vault.readBinary).not.toHaveBeenCalled();
+    expect(harness.workspace.openLinkText).not.toHaveBeenCalled();
   });
 
   it("fails stale before opening when current PDF bytes do not match the locator", async () => {

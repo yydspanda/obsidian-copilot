@@ -48,6 +48,8 @@ import {
   NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES,
 } from "@/knowledge/ui/KnowledgeStudioController";
 import { KnowledgeStudioRuntimeCommandAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeCommandAdapter";
+import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";
+import type { KnowledgeReviewEvidenceOpenRequest } from "@/knowledge/review/KnowledgeReviewEvidence";
 import type {
   KnowledgeSourceLifecyclePort,
   KnowledgeSourceRetirementRequest,
@@ -83,9 +85,48 @@ export interface KnowledgeStudioRuntimeReadAdapterInput {
   assertCurrent(): void;
   commands?: KnowledgeStudioRuntimeCommandAdapter;
   query?: KnowledgeStudioRuntimeQueryPort;
+  reviewEvidence?: KnowledgeStudioReviewEvidencePort;
   sourceLifecycle?: KnowledgeSourceLifecyclePort;
   subscribeVaultHints?: KnowledgeStudioVaultHintPort;
   maxConsistencyAttempts?: number;
+}
+
+/** Captures one evidence-navigation method without retaining an accessor. */
+function captureReviewEvidencePort(value: unknown): KnowledgeStudioReviewEvidencePort {
+  if (typeof value !== "object" || value === null) {
+    throw new KnowledgeStudioRuntimeReadError();
+  }
+  const owner = value;
+  let candidate: object | null = owner;
+  const visited = new Set<object>();
+  try {
+    while (candidate && !visited.has(candidate)) {
+      visited.add(candidate);
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, "openReviewEvidence");
+      if (descriptor) {
+        if (!("value" in descriptor) || typeof descriptor.value !== "function") {
+          throw new KnowledgeStudioRuntimeReadError();
+        }
+        const openReviewEvidence = descriptor.value as (
+          this: object,
+          bundleId: string,
+          request: Readonly<KnowledgeReviewEvidenceOpenRequest>,
+          signal: AbortSignal
+        ) => ReturnType<KnowledgeStudioReviewEvidencePort["openReviewEvidence"]>;
+        return Object.freeze({
+          openReviewEvidence: (
+            bundleId: string,
+            request: Readonly<KnowledgeReviewEvidenceOpenRequest>,
+            signal: AbortSignal
+          ) => Reflect.apply(openReviewEvidence, owner, [bundleId, request, signal]),
+        });
+      }
+      candidate = Object.getPrototypeOf(candidate) as object | null;
+    }
+  } catch (error) {
+    if (error instanceof KnowledgeStudioRuntimeReadError) throw error;
+  }
+  throw new KnowledgeStudioRuntimeReadError();
 }
 
 type KnowledgeSourceLifecycleMethodKey = "loadSources" | "checkAgain" | "retireSource";
@@ -702,6 +743,7 @@ export class KnowledgeStudioRuntimeReadAdapter
     KnowledgeStudioReadPort,
     KnowledgeStudioCommandPort,
     KnowledgeStudioQueryWritebackPort,
+    KnowledgeStudioReviewEvidencePort,
     KnowledgeSourceLifecyclePort
 {
   private readonly input: KnowledgeStudioRuntimeReadAdapterInput;
@@ -725,6 +767,10 @@ export class KnowledgeStudioRuntimeReadAdapter
       KnowledgeStudioRuntimeCommandAdapter.assert(input.commands);
     }
     const query = captureOptionalQueryPort(input);
+    const reviewEvidence =
+      input.reviewEvidence === undefined
+        ? undefined
+        : captureReviewEvidencePort(input.reviewEvidence);
     const sourceLifecycle =
       input.sourceLifecycle === undefined
         ? undefined
@@ -737,6 +783,7 @@ export class KnowledgeStudioRuntimeReadAdapter
       assertCurrent,
       ...(input.commands === undefined ? {} : { commands: input.commands }),
       ...(query === undefined ? {} : { query }),
+      ...(reviewEvidence === undefined ? {} : { reviewEvidence }),
       ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
       ...(input.subscribeVaultHints === undefined
         ? {}
@@ -801,15 +848,18 @@ export class KnowledgeStudioRuntimeReadAdapter
           ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
           queryAvailable: this.input.query !== undefined,
           queryWritebackAvailable: this.input.query?.supportsWriteback?.() === true,
+          reviewEvidenceAvailable: this.input.reviewEvidence !== undefined,
           notice: this.input.commands
             ? this.input.commands.getCapabilities().reviewAccept
               ? this.input.query
                 ? this.input.query.supportsWriteback?.() === true
                   ? this.input.sourceLifecycle
-                    ? "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, exact source citation navigation, and source lifecycle recovery are connected. Saved answers enter Review before any Wiki change. Sources can be safely retired without deleting generated Wiki files; generated Wiki deletion remains disabled."
-                    : "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, and exact source citation navigation are connected. Saved answers enter Review before any Wiki change; generated Wiki deletion remains disabled."
+                    ? "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, exact Query and Review evidence navigation, and source lifecycle recovery are connected. Saved answers enter Review before any Wiki change. Sources can be safely retired without deleting generated Wiki files; generated Wiki deletion remains disabled."
+                    : "Durable Activity, Review, Apply, grounded Query, reviewed Save to Wiki, and exact Query and Review evidence navigation are connected. Saved answers enter Review before any Wiki change; generated Wiki deletion remains disabled."
                   : "Durable Activity, Review, Apply, and grounded Query are connected. Query may call the selected DeepSeek model using only freshly verified source excerpts. Save to Wiki and delete remain disabled."
-                : "Durable Activity and Review are connected. Eligible create and update selections can be explicitly applied; delete acceptance and Query remain disabled."
+                : this.input.reviewEvidence
+                  ? "Durable Activity, Review, Apply, and exact Review evidence navigation are connected. Eligible create and update selections can be explicitly applied; delete acceptance and Query remain disabled."
+                  : "Durable Activity and Review are connected. Eligible create and update selections can be explicitly applied; delete acceptance and Query remain disabled."
               : "Durable Activity commands and proposal rejection are connected. Acceptance and Wiki apply remain disabled."
             : this.input.query
               ? "Live durable Activity, Review, and grounded Query are connected. Query may call the selected DeepSeek model using only freshly verified source excerpts. Save to Wiki, PDF jump, Review decisions, and Wiki apply remain disabled."
@@ -936,6 +986,16 @@ export class KnowledgeStudioRuntimeReadAdapter
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     if (!this.input.commands) throw new KnowledgeStudioAdapterUnavailableError();
     return this.input.commands.submitReview(bundleId, command, signal);
+  }
+
+  /** Opens one opaque current Review evidence reference through the production coordinator. */
+  async openReviewEvidence(
+    bundleId: string,
+    request: Parameters<KnowledgeStudioReviewEvidencePort["openReviewEvidence"]>[1],
+    signal: AbortSignal
+  ): ReturnType<KnowledgeStudioReviewEvidencePort["openReviewEvidence"]> {
+    if (!this.input.reviewEvidence) throw new KnowledgeStudioAdapterUnavailableError();
+    return this.input.reviewEvidence.openReviewEvidence(bundleId, request, signal);
   }
 
   /** Rejects recovery continuation because live workflow snapshots contain no recovery rows. */

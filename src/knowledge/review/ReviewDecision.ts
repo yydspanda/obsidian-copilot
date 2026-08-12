@@ -11,6 +11,10 @@ import type {
   KnowledgeFileChange,
   KnowledgeValidationSummary,
 } from "@/knowledge/model/types";
+import {
+  createKnowledgeReviewEvidenceProjection,
+  type KnowledgeReviewEvidenceSummary,
+} from "@/knowledge/review/KnowledgeReviewEvidence";
 import { sha256 } from "@/utils/hash";
 
 const MAX_REVIEW_DIAGNOSTICS = 256;
@@ -75,6 +79,8 @@ export interface KnowledgeReviewPlan {
   sourceRefs: string[];
   validation: KnowledgeValidationSummary;
   createdAt: number;
+  evidence: readonly Readonly<KnowledgeReviewEvidenceSummary>[];
+  omittedEvidenceCount: number;
   files: KnowledgeReviewFile[];
 }
 
@@ -591,6 +597,10 @@ export function createKnowledgeReviewPlan(
     };
   });
   const proposalDigest = createKnowledgeChangeSetDigest(proposal);
+  const evidenceProjection = createKnowledgeReviewEvidenceProjection(
+    proposal.citations,
+    proposalDigest
+  );
   const snapshotObservations = observations
     .map((observation) =>
       observation.kind === "file"
@@ -615,6 +625,8 @@ export function createKnowledgeReviewPlan(
     sourceRefs: [...proposal.sourceRefs],
     validation: { ...proposal.validation },
     createdAt: proposal.createdAt,
+    evidence: evidenceProjection.evidence,
+    omittedEvidenceCount: evidenceProjection.omittedEvidenceCount,
     files: files.map((file) => ({
       ...file,
       sourceRefs: [...file.sourceRefs],

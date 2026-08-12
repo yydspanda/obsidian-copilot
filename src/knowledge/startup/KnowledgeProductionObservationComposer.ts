@@ -31,7 +31,11 @@ import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitI
 import { isPathWithinRoot } from "@/knowledge/paths/vaultPath";
 import { KnowledgeStudioScopedQueryAdapter } from "@/knowledge/query/KnowledgeStudioScopedQueryAdapter";
 import { KnowledgeProductionQueryWritebackCoordinator } from "@/knowledge/query/KnowledgeProductionQueryWritebackCoordinator";
+import { ObsidianKnowledgeCitationNavigator } from "@/knowledge/query/ObsidianKnowledgeCitationNavigator";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
+import { KnowledgeProductionReviewEvidenceCoordinator } from "@/knowledge/review/KnowledgeProductionReviewEvidenceCoordinator";
+import type { KnowledgeReviewEvidenceOpenRequest } from "@/knowledge/review/KnowledgeReviewEvidence";
+import { KnowledgeProductionReviewEvidenceSourceAuthority } from "@/knowledge/review/KnowledgeProductionReviewEvidenceSourceAuthority";
 import {
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
@@ -921,6 +925,7 @@ export class KnowledgeProductionObservationComposer {
       subscribeStudioBundle: (bundleId: string, onHint: () => void) =>
         composition.runtime.subscribeStudioBundle(bundleId, onHint),
     });
+    const executionPlan = state.plan;
     const assertCurrent = (): void => {
       assertCompositionCurrent(state, state.generation, composition);
       this.assertHealthy();
@@ -954,6 +959,34 @@ export class KnowledgeProductionObservationComposer {
       assertCurrent,
       ...(retainCommandDrain === undefined ? {} : { retainDrain: retainCommandDrain }),
       notifyReviewWorkAvailable: () => composition.eventSink.emit(),
+    });
+    const reviewEvidenceByBundle = new Map(
+      composition.owners.map(({ config }) => [
+        config.id,
+        new KnowledgeProductionReviewEvidenceCoordinator({
+          runtime,
+          bundle: config,
+          targetResolver,
+          sourceAuthority: new KnowledgeProductionReviewEvidenceSourceAuthority({
+            plan: executionPlan,
+            bundleId: config.id,
+            assertCurrent,
+          }),
+          navigator: new ObsidianKnowledgeCitationNavigator(composition.app),
+          assertCurrent,
+        }),
+      ])
+    );
+    const reviewEvidence = Object.freeze({
+      openReviewEvidence: (
+        bundleId: string,
+        request: Readonly<KnowledgeReviewEvidenceOpenRequest>,
+        signal: AbortSignal
+      ) => {
+        const coordinator = reviewEvidenceByBundle.get(bundleId);
+        if (!coordinator) return Promise.resolve(Object.freeze({ kind: "unavailable" as const }));
+        return coordinator.openReviewEvidence(bundleId, request, signal);
+      },
     });
     let sourceLifecycle: KnowledgeSourceLifecyclePort | undefined;
     if (onApplyGenerationRefreshRequired) {
@@ -1011,6 +1044,7 @@ export class KnowledgeProductionObservationComposer {
       assertCurrent,
       commands,
       query,
+      reviewEvidence,
       ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
       subscribeVaultHints: (bundleId, onHint) =>
         subscribeKnowledgeStudioExternalHints(composition, bundleId, onHint, (listener) =>

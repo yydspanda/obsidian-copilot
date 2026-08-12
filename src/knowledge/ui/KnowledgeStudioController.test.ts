@@ -110,6 +110,8 @@ function createReviewPlan(token = "snapshot-1"): KnowledgeReviewPlan {
     sourceRefs: ["source-1"],
     validation: { okfValid: true, citationsValid: true, linksValid: true },
     createdAt: 10,
+    evidence: [],
+    omittedEvidenceCount: 0,
     files: [
       {
         changeId: "change-1",

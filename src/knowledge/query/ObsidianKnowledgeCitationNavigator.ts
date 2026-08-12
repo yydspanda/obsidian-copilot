@@ -48,6 +48,12 @@ const UNSUPPORTED_RESULT = Object.freeze({ status: "unsupported" as const });
 const UNAVAILABLE_RESULT = Object.freeze({ status: "unavailable" as const });
 const VERIFIED_RESULT = Object.freeze({ status: "verified" as const });
 
+interface KnowledgeCitationNavigationQueueState {
+  tail: Promise<void>;
+}
+
+const navigationQueueStates = new WeakMap<object, KnowledgeCitationNavigationQueueState>();
+
 // Captured intrinsic performs a non-spoofable ArrayBuffer internal-slot check.
 // eslint-disable-next-line @typescript-eslint/unbound-method
 const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
@@ -218,6 +224,15 @@ export class ObsidianKnowledgeCitationNavigator {
     );
   }
 
+  /** Returns the navigation queue shared by every adapter for this exact App owner. */
+  private getNavigationQueue(): KnowledgeCitationNavigationQueueState {
+    const existing = navigationQueueStates.get(this.appOwner);
+    if (existing) return existing;
+    const created: KnowledgeCitationNavigationQueueState = { tail: Promise.resolve() };
+    navigationQueueStates.set(this.appOwner, created);
+    return created;
+  }
+
   /**
    * Re-reads and resolves one exact PDF page without changing the workspace.
    *
@@ -267,6 +282,7 @@ export class ObsidianKnowledgeCitationNavigator {
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
   ): Promise<ObsidianKnowledgeCitationNavigationResult> {
+    if (request.sourcePath.includes("#")) return UNSUPPORTED_RESULT;
     const initial = await this.resolveCurrentPdfPage(request, signal);
     if (initial.status !== "resolved") return mapResolutionFailure(initial);
     if (isAborted(signal) || !this.isCurrentOwner()) return UNAVAILABLE_RESULT;
@@ -362,7 +378,7 @@ export class ObsidianKnowledgeCitationNavigator {
    * @param signal - Optional cancellation checked around every asynchronous boundary
    * @returns Opened, stale, unsupported, or unavailable
    */
-  async navigate(
+  private async navigateCurrent(
     request: ObsidianKnowledgeCitationNavigationRequest,
     signal?: AbortSignal
   ): Promise<ObsidianKnowledgeCitationNavigationResult> {
@@ -446,5 +462,35 @@ export class ObsidianKnowledgeCitationNavigator {
     } catch {
       return UNAVAILABLE_RESULT;
     }
+  }
+
+  /**
+   * Serializes workspace navigation across every adapter sharing this App owner.
+   *
+   * An Obsidian `openFile` or `openLinkText` already in progress cannot be
+   * cancelled. Waiting for that concrete side effect to settle before starting
+   * the next request ensures a newer citation remains the final visible target.
+   *
+   * @param request - Source path and typed claim citation
+   * @param signal - Optional cancellation checked before and throughout navigation
+   * @returns Opened, stale, unsupported, or unavailable
+   */
+  async navigate(
+    request: ObsidianKnowledgeCitationNavigationRequest,
+    signal?: AbortSignal
+  ): Promise<ObsidianKnowledgeCitationNavigationResult> {
+    const queue = this.getNavigationQueue();
+    const execute = (): Promise<ObsidianKnowledgeCitationNavigationResult> => {
+      if (isAborted(signal) || !this.isCurrentOwner()) {
+        return Promise.resolve(UNAVAILABLE_RESULT);
+      }
+      return this.navigateCurrent(request, signal);
+    };
+    const result = queue.tail.then(execute, execute);
+    queue.tail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 }

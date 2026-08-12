@@ -429,7 +429,7 @@ export default class CopilotPlugin extends Plugin {
       void this.initializeKnowledgeStartupPrerequisites();
       this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
         const port = this.knowledgeStudioPort;
-        const controller = new KnowledgeStudioController(port, port, port, port, port);
+        const controller = new KnowledgeStudioController(port, port, port, port, port, port);
         return new KnowledgeStudioView(
           leaf,
           controller,

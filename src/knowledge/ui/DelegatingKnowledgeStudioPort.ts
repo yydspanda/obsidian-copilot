@@ -1,4 +1,5 @@
 import type { KnowledgeReviewCommand } from "@/knowledge/review/ReviewDecision";
+import type { KnowledgeReviewEvidenceOpenRequest } from "@/knowledge/review/KnowledgeReviewEvidence";
 import type {
   KnowledgeStudioQueryResult,
   KnowledgeStudioQueryPort,
@@ -21,6 +22,7 @@ import type {
   KnowledgeSourceRetirementRequest,
   KnowledgeSourceRetirementUiReceipt,
 } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
+import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";
 import {
   KnowledgeStudioAdapterUnavailableError,
   UnavailableKnowledgeStudioPort,
@@ -30,6 +32,7 @@ type KnowledgeStudioPort = KnowledgeStudioReadPort & KnowledgeStudioCommandPort;
 type QueryCapableKnowledgeStudioPort = KnowledgeStudioPort &
   Partial<Pick<KnowledgeStudioQueryPort, "query" | "openCitation" | "revokeCurrent">> &
   Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">> &
+  Partial<KnowledgeStudioReviewEvidencePort> &
   Partial<KnowledgeSourceLifecyclePort>;
 
 interface DelegateGeneration {
@@ -99,6 +102,7 @@ export class DelegatingKnowledgeStudioPort
     KnowledgeStudioCommandPort,
     KnowledgeStudioQueryPort,
     KnowledgeStudioQueryWritebackPort,
+    KnowledgeStudioReviewEvidencePort,
     KnowledgeSourceLifecyclePort
 {
   private readonly unavailableDelegate: KnowledgeStudioPort;
@@ -280,6 +284,19 @@ export class DelegatingKnowledgeStudioPort
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       delegate.submitReview(bundleId, command, delegatedSignal)
+    );
+  }
+
+  /** Routes one opaque Review evidence jump through the current delegate generation. */
+  async openReviewEvidence(
+    bundleId: string,
+    request: Readonly<KnowledgeReviewEvidenceOpenRequest>,
+    signal: AbortSignal
+  ) {
+    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.openReviewEvidence === "function"
+        ? delegate.openReviewEvidence(bundleId, request, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
     );
   }
 

@@ -2,6 +2,7 @@ import type { Change } from "diff";
 import React, { useMemo, useState } from "react";
 
 import { SplitDiffBlock } from "@/components/composer/DiffPreview";
+import { KnowledgeReviewEvidencePanel } from "@/components/knowledge/KnowledgeReviewEvidencePanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type {
@@ -20,6 +21,9 @@ export interface KnowledgeReviewPanelProps {
   rejectCommandsEnabled: boolean;
   onSubmit: (command: KnowledgeReviewCommand) => void | Promise<void>;
   onBack?: () => void;
+  onOpenEvidence?: (evidenceRef: string) => void | Promise<void>;
+  openingEvidenceRef?: string;
+  evidenceError?: string;
 }
 
 type BlockDecision = "accept" | "reject";
@@ -153,6 +157,50 @@ function createBlockDecisionBase(
   return {};
 }
 
+/** Returns the consequence-oriented accept label for one file operation. */
+function getAcceptFileLabel(file: KnowledgeReviewFile): string {
+  switch (file.operation) {
+    case "create":
+      return "Create proposed file";
+    case "update":
+      return "Use proposed file";
+    case "delete":
+      return "Delete file";
+  }
+}
+
+/** Returns the consequence-oriented reject label for one file operation. */
+function getRejectFileLabel(file: KnowledgeReviewFile): string {
+  return file.operation === "create" ? "Skip proposed file" : "Keep current file";
+}
+
+/** Returns the final action label for the current complete or incomplete decision set. */
+function getSubmissionLabel({
+  acceptCommandsEnabled,
+  rejectCommandsEnabled,
+  actionBusy,
+  complete,
+  commandEnabled,
+  wholeProposalRejected,
+}: {
+  acceptCommandsEnabled: boolean;
+  rejectCommandsEnabled: boolean;
+  actionBusy: boolean;
+  complete: boolean;
+  commandEnabled: boolean;
+  wholeProposalRejected: boolean;
+}): string {
+  if (!acceptCommandsEnabled && !rejectCommandsEnabled) return "Review actions unavailable";
+  if (actionBusy) {
+    return wholeProposalRejected ? "Rejecting proposal…" : "Validating and applying…";
+  }
+  if (!complete) return "Choose all decisions";
+  if (!commandEnabled) {
+    return wholeProposalRejected ? "Proposal rejection unavailable" : "Apply unavailable";
+  }
+  return wholeProposalRejected ? "Reject proposal" : "Validate and apply selection";
+}
+
 /**
  * Renders a review plan without exposing any file-write capability to React.
  *
@@ -167,6 +215,9 @@ function KnowledgeReviewSnapshotPanel({
   rejectCommandsEnabled,
   onSubmit,
   onBack,
+  onOpenEvidence,
+  openingEvidenceRef,
+  evidenceError,
 }: KnowledgeReviewPanelProps): JSX.Element {
   const [decisions, setDecisions] = useState<LocalDecisionState>({});
   const [submitting, setSubmitting] = useState(false);
@@ -178,6 +229,15 @@ function KnowledgeReviewSnapshotPanel({
   );
   const commandEnabled = wholeProposalRejected ? rejectCommandsEnabled : acceptCommandsEnabled;
   const actionBusy = busy || submitting;
+  const hasRejectOnlyFile = plan.files.some((file) => file.capability === "reject_only");
+  const submissionLabel = getSubmissionLabel({
+    acceptCommandsEnabled,
+    rejectCommandsEnabled,
+    actionBusy,
+    complete,
+    commandEnabled,
+    wholeProposalRejected,
+  });
 
   /** Applies one exact file-level decision. */
   const decideFile = (changeId: string, decision: LocalFileDecision): void => {
@@ -200,12 +260,12 @@ function KnowledgeReviewSnapshotPanel({
     });
   };
 
-  /** Accepts every eligible file exactly and safely rejects blocked files. */
+  /** Accepts every file exactly only when the whole proposal is eligible. */
   const acceptAll = (): void => {
+    if (hasRejectOnlyFile) return;
     const next: Record<string, LocalFileDecision> = {};
     plan.files.forEach((file) => {
-      next[file.changeId] =
-        file.capability === "reject_only" ? { kind: "reject" } : { kind: "accept_exact" };
+      next[file.changeId] = { kind: "accept_exact" };
     });
     setDecisions(next);
   };
@@ -261,10 +321,10 @@ function KnowledgeReviewSnapshotPanel({
             type="button"
             variant="secondary"
             size="sm"
-            disabled={actionBusy || !acceptCommandsEnabled}
+            disabled={actionBusy || !acceptCommandsEnabled || hasRejectOnlyFile}
             onClick={acceptAll}
           >
-            Accept all
+            Use all proposed changes
           </Button>
           <Button
             type="button"
@@ -273,10 +333,20 @@ function KnowledgeReviewSnapshotPanel({
             disabled={actionBusy || !rejectCommandsEnabled}
             onClick={rejectAll}
           >
-            Reject all
+            Skip all changes
           </Button>
         </div>
       </header>
+
+      <KnowledgeReviewEvidencePanel
+        busy={actionBusy}
+        evidence={plan.evidence}
+        evidenceError={evidenceError}
+        headingId={`knowledge-review-evidence-${plan.changeSetId}-${plan.snapshotToken}`}
+        omittedEvidenceCount={plan.omittedEvidenceCount}
+        openingEvidenceRef={openingEvidenceRef}
+        onOpenEvidence={onOpenEvidence}
+      />
 
       <div className="tw-flex tw-flex-col tw-gap-3">
         {plan.files.map((file) => {
@@ -311,22 +381,22 @@ function KnowledgeReviewSnapshotPanel({
                       variant="success"
                       size="sm"
                       disabled={actionBusy || !acceptCommandsEnabled || rejectOnly}
-                      aria-label={`Accept file ${file.path}`}
+                      aria-label={`${getAcceptFileLabel(file)} ${file.path}`}
                       aria-pressed={fileDecision?.kind === "accept_exact"}
                       onClick={() => decideFile(file.changeId, { kind: "accept_exact" })}
                     >
-                      Accept file
+                      {getAcceptFileLabel(file)}
                     </Button>
                     <Button
                       type="button"
                       variant="destructive"
                       size="sm"
                       disabled={actionBusy || !rejectCommandsEnabled}
-                      aria-label={`Reject file ${file.path}`}
+                      aria-label={`${getRejectFileLabel(file)} ${file.path}`}
                       aria-pressed={fileDecision?.kind === "reject"}
                       onClick={() => decideFile(file.changeId, { kind: "reject" })}
                     >
-                      Reject file
+                      {getRejectFileLabel(file)}
                     </Button>
                   </div>
                 </div>
@@ -361,22 +431,22 @@ function KnowledgeReviewSnapshotPanel({
                               variant="success"
                               size="sm"
                               disabled={actionBusy || !acceptCommandsEnabled}
-                              aria-label={`Accept block ${changedIndex + 1} in ${file.path}`}
+                              aria-label={`Use proposed block ${changedIndex + 1} in ${file.path}`}
                               aria-pressed={visibleDecision === "accept"}
                               onClick={() => decideBlock(file, block.blockId, "accept")}
                             >
-                              Accept block
+                              Use proposed block
                             </Button>
                             <Button
                               type="button"
                               variant="destructive"
                               size="sm"
                               disabled={actionBusy || !acceptCommandsEnabled}
-                              aria-label={`Reject block ${changedIndex + 1} in ${file.path}`}
+                              aria-label={`Keep current block ${changedIndex + 1} in ${file.path}`}
                               aria-pressed={visibleDecision === "reject"}
                               onClick={() => decideBlock(file, block.blockId, "reject")}
                             >
-                              Reject block
+                              Keep current block
                             </Button>
                           </div>
                         </div>
@@ -395,20 +465,18 @@ function KnowledgeReviewSnapshotPanel({
         <div>{onBack ? <Button onClick={onBack}>Back</Button> : null}</div>
         <div className="tw-flex tw-items-center tw-gap-3">
           {!complete ? (
-            <span className="tw-text-xs tw-text-muted">Decide every file and changed block.</span>
+            <span className="tw-text-xs tw-text-muted">
+              Choose what to do with every file and changed block.
+            </span>
+          ) : wholeProposalRejected ? (
+            <span className="tw-text-xs tw-text-muted">Rejecting makes no Wiki file changes.</span>
           ) : null}
           <Button
             type="button"
             disabled={actionBusy || !complete || !commandEnabled}
             onClick={submitReview}
           >
-            {!acceptCommandsEnabled && !rejectCommandsEnabled
-              ? "Review actions unavailable"
-              : actionBusy
-                ? "Submitting…"
-                : complete && !commandEnabled
-                  ? "Acceptance unavailable"
-                  : "Submit review"}
+            {submissionLabel}
           </Button>
         </div>
       </footer>

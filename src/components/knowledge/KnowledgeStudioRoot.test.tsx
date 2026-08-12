@@ -76,7 +76,10 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
     busy: boolean;
     acceptCommandsEnabled: boolean;
     rejectCommandsEnabled: boolean;
+    evidenceError?: string;
+    openingEvidenceRef?: string;
     onBack?: () => void;
+    onOpenEvidence?: (evidenceRef: string) => void | Promise<void>;
     onSubmit: (command: KnowledgeReviewCommand) => void | Promise<void>;
   }) => (
     <div data-testid="review-panel">
@@ -84,6 +87,11 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
       <span>Review busy {String(props.busy)}</span>
       <span>Review accept {String(props.acceptCommandsEnabled)}</span>
       <span>Review reject {String(props.rejectCommandsEnabled)}</span>
+      <span>Review evidence opening {props.openingEvidenceRef ?? "none"}</span>
+      <span>Review evidence error {props.evidenceError ?? "none"}</span>
+      <button type="button" onClick={() => props.onOpenEvidence?.("opaque-evidence-ref")}>
+        Review open evidence
+      </button>
       <button type="button" onClick={props.onBack}>
         Review back
       </button>
@@ -288,6 +296,8 @@ function createReviewPlan(changeSetId: string): KnowledgeReviewPlan {
     sourceRefs: ["source-1"],
     validation: { okfValid: true, citationsValid: true, linksValid: true },
     createdAt: 10,
+    evidence: [],
+    omittedEvidenceCount: 0,
     files: [
       {
         changeId: `change-${changeSetId}`,
@@ -362,6 +372,7 @@ function createReadyState(
       },
       reviews,
       recovery,
+      reviewEvidenceAvailable: true,
     },
   };
 }
@@ -443,6 +454,11 @@ class TestKnowledgeStudioController {
   async submitReview(command: KnowledgeReviewCommand): Promise<void> {
     this.calls.push(`submit:${command.changeSetId}`);
     this.submitted = command;
+  }
+
+  /** Records one opaque Review evidence reference without receiving a source path or locator. */
+  async openReviewEvidence(evidenceRef: string): Promise<void> {
+    this.calls.push(`review-evidence:${evidenceRef}`);
   }
 
   /** Records an explicit recovery continuation without optimistic state. */
@@ -796,6 +812,9 @@ describe("KnowledgeStudioRoot", () => {
       expectedSnapshotToken: "snapshot-changeset-2",
       decisions: [],
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Review open evidence" }));
+    expect(controller.calls).toContain("review-evidence:opaque-evidence-ref");
   });
 
   it("reveals Recovery only for durable rows and delegates its exact actions", () => {

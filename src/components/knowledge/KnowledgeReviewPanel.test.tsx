@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 
 import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
+import type { KnowledgeReviewEvidenceSummary } from "@/knowledge/review/KnowledgeReviewEvidence";
 import type {
   KnowledgeReviewBlock,
   KnowledgeReviewCommand,
@@ -59,7 +60,8 @@ function createReviewFile(overrides: Partial<KnowledgeReviewFile> = {}): Knowled
  */
 function createReviewPlan(
   files: KnowledgeReviewFile[],
-  snapshotToken = "snapshot-1"
+  snapshotToken = "snapshot-1",
+  evidence: readonly KnowledgeReviewEvidenceSummary[] = []
 ): KnowledgeReviewPlan {
   return {
     changeSetId: "changeset-1",
@@ -70,7 +72,29 @@ function createReviewPlan(
     sourceRefs: ["source-1"],
     validation: { okfValid: true, citationsValid: true, linksValid: true },
     createdAt: 1,
+    evidence,
+    omittedEvidenceCount: 0,
     files,
+  };
+}
+
+/** Creates one safe proposal-level evidence summary. */
+function createEvidence(
+  overrides: Partial<KnowledgeReviewEvidenceSummary> = {}
+): KnowledgeReviewEvidenceSummary {
+  return {
+    evidenceRef: "a".repeat(64),
+    relation: "supports",
+    excerpt: "A plain source excerpt.",
+    truncated: false,
+    location: {
+      kind: "markdown_lines",
+      startLine: 4,
+      endLine: 7,
+      heading: "Evidence",
+      headingTruncated: false,
+    },
+    ...overrides,
   };
 }
 
@@ -85,7 +109,7 @@ function getButton(name: string): HTMLButtonElement {
 }
 
 describe("KnowledgeReviewPanel", () => {
-  it("accepts eligible files while fail-closed rejecting a blocked delete", () => {
+  it("requires an explicit blocked-file decision instead of silently rejecting it in bulk", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     const update = createReviewFile();
     const deletion = createReviewFile({
@@ -110,10 +134,12 @@ describe("KnowledgeReviewPanel", () => {
     );
 
     expect(screen.getByText(/review_delete_read_set_not_journaled/)).toBeTruthy();
-    expect(getButton("Accept file Knowledge/Removed.md").disabled).toBe(true);
+    expect(getButton("Delete file Knowledge/Removed.md").disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Accept all" }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit review" }));
+    expect(getButton("Use all proposed changes").disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Use proposed file Knowledge/First.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep current file Knowledge/Removed.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "Validate and apply selection" }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     const command = onSubmit.mock.calls[0][0];
@@ -149,15 +175,20 @@ describe("KnowledgeReviewPanel", () => {
       />
     );
 
-    const submit = getButton("Submit review");
+    const submit = getButton("Choose all decisions");
     expect(submit.disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Accept block 1 in Knowledge/First.md" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Use proposed block 1 in Knowledge/First.md" })
+    );
     expect(submit.disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Reject block 2 in Knowledge/First.md" }));
-    expect(submit.disabled).toBe(false);
-    fireEvent.click(submit);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Keep current block 2 in Knowledge/First.md" })
+    );
+    const apply = getButton("Validate and apply selection");
+    expect(apply.disabled).toBe(false);
+    fireEvent.click(apply);
 
     expect(onSubmit).toHaveBeenCalledWith({
       changeSetId: "changeset-1",
@@ -190,8 +221,9 @@ describe("KnowledgeReviewPanel", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Reject all" }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip all changes" }));
+    expect(screen.getByText("Rejecting makes no Wiki file changes.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reject proposal" }));
 
     expect(onSubmit.mock.calls[0][0].decisions).toEqual([
       { changeId: "change-1", decision: "reject" },
@@ -211,14 +243,14 @@ describe("KnowledgeReviewPanel", () => {
       />
     );
 
-    expect(getButton("Accept all").disabled).toBe(true);
-    expect(getButton("Accept file Knowledge/First.md").disabled).toBe(true);
-    expect(getButton("Accept block 1 in Knowledge/First.md").disabled).toBe(true);
-    expect(getButton("Reject block 1 in Knowledge/First.md").disabled).toBe(true);
-    expect(getButton("Reject file Knowledge/First.md").disabled).toBe(false);
+    expect(getButton("Use all proposed changes").disabled).toBe(true);
+    expect(getButton("Use proposed file Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Use proposed block 1 in Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Keep current block 1 in Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Keep current file Knowledge/First.md").disabled).toBe(false);
 
-    fireEvent.click(getButton("Reject file Knowledge/First.md"));
-    fireEvent.click(getButton("Submit review"));
+    fireEvent.click(getButton("Keep current file Knowledge/First.md"));
+    fireEvent.click(getButton("Reject proposal"));
 
     expect(onSubmit).toHaveBeenCalledWith({
       changeSetId: "changeset-1",
@@ -246,8 +278,8 @@ describe("KnowledgeReviewPanel", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Accept file Knowledge/First.md" }));
-    expect(getButton("Submit review").disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Use proposed file Knowledge/First.md" }));
+    expect(getButton("Validate and apply selection").disabled).toBe(false);
 
     rerender(
       <KnowledgeReviewPanel
@@ -259,8 +291,10 @@ describe("KnowledgeReviewPanel", () => {
       />
     );
 
-    expect(getButton("Submit review").disabled).toBe(true);
-    expect(getButton("Accept file Knowledge/First.md").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Choose all decisions").disabled).toBe(true);
+    expect(getButton("Use proposed file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
+      "false"
+    );
   });
 
   it("suppresses duplicate submissions while an async command is pending", () => {
@@ -277,13 +311,13 @@ describe("KnowledgeReviewPanel", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Accept file Knowledge/First.md" }));
-    const submit = screen.getByRole("button", { name: "Submit review" });
+    fireEvent.click(screen.getByRole("button", { name: "Use proposed file Knowledge/First.md" }));
+    const submit = screen.getByRole("button", { name: "Validate and apply selection" });
     fireEvent.click(submit);
     fireEvent.click(submit);
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(getButton("Submitting…").disabled).toBe(true);
+    expect(getButton("Validating and applying…").disabled).toBe(true);
   });
 
   it("renders the exact diff while disabling every review decision in read-only mode", () => {
@@ -299,15 +333,155 @@ describe("KnowledgeReviewPanel", () => {
     );
 
     expect(screen.getByText("Knowledge/First.md")).toBeTruthy();
-    expect(screen.getByText("before", { exact: false })).toBeTruthy();
-    expect(getButton("Accept all").disabled).toBe(true);
-    expect(getButton("Reject all").disabled).toBe(true);
-    expect(getButton("Accept file Knowledge/First.md").disabled).toBe(true);
-    expect(getButton("Reject file Knowledge/First.md").disabled).toBe(true);
+    expect(screen.getAllByText("before", { exact: false }).length).toBeGreaterThan(0);
+    expect(getButton("Use all proposed changes").disabled).toBe(true);
+    expect(getButton("Skip all changes").disabled).toBe(true);
+    expect(getButton("Use proposed file Knowledge/First.md").disabled).toBe(true);
+    expect(getButton("Keep current file Knowledge/First.md").disabled).toBe(true);
     expect(getButton("Review actions unavailable").disabled).toBe(true);
 
-    fireEvent.click(getButton("Accept all"));
+    fireEvent.click(getButton("Use all proposed changes"));
     fireEvent.click(getButton("Review actions unavailable"));
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("shows bounded proposal evidence without claiming that it proves each block", () => {
+    const evidence = [
+      createEvidence(),
+      createEvidence({
+        evidenceRef: "b".repeat(64),
+        relation: "contradicts",
+        excerpt: "A conflicting excerpt.",
+        truncated: true,
+        location: {
+          kind: "heading",
+          heading: "Counterpoint",
+          headingTruncated: false,
+          occurrence: 2,
+        },
+      }),
+      createEvidence({
+        evidenceRef: "c".repeat(64),
+        relation: "context",
+        excerpt: "PDF context.",
+        location: { kind: "pdf_page", page: 12 },
+      }),
+      createEvidence({
+        evidenceRef: "d".repeat(64),
+        excerpt: "Exact quoted context.",
+        location: { kind: "quote" },
+      }),
+      createEvidence({
+        evidenceRef: "e".repeat(64),
+        excerpt: "Evidence under a shortened heading.",
+        location: {
+          kind: "markdown_lines",
+          startLine: 20,
+          endLine: 20,
+          heading: "Bounded heading",
+          headingTruncated: true,
+        },
+      }),
+    ];
+    const plan = {
+      ...createReviewPlan([createReviewFile()], "snapshot-1", evidence),
+      omittedEvidenceCount: 3,
+    };
+
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={jest.fn()}
+        plan={plan}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(
+      screen.getByRole("complementary", { name: "Source evidence for this proposal" })
+    ).toBeTruthy();
+    expect(screen.getByText(/do not prove every changed block/)).toBeTruthy();
+    expect(screen.getAllByText("Supports generated claim")).toHaveLength(3);
+    expect(screen.getByText("Evidence · lines 4–7")).toBeTruthy();
+    expect(screen.getByText("Contradicts generated claim")).toBeTruthy();
+    expect(screen.getByText("Counterpoint · occurrence 2")).toBeTruthy();
+    expect(screen.getByText("Context for generated claim")).toBeTruthy();
+    expect(screen.getByText("PDF page 12")).toBeTruthy();
+    expect(screen.getByText("Exact quote")).toBeTruthy();
+    expect(screen.getByText("Bounded heading… · line 20")).toBeTruthy();
+    expect(screen.getByText("Excerpt shortened for review.")).toBeTruthy();
+    expect(
+      screen.getByText("3 additional evidence items omitted from this bounded preview.")
+    ).toBeTruthy();
+  });
+
+  it("opens evidence using only its opaque reference and exposes controlled progress", () => {
+    const onOpenEvidence = jest.fn<void, [string]>();
+    const evidence = createEvidence();
+    const plan = createReviewPlan([createReviewFile()], "snapshot-1", [evidence]);
+    const { rerender } = render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onOpenEvidence={onOpenEvidence}
+        onSubmit={jest.fn()}
+        plan={plan}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    fireEvent.click(getButton("Open exact source location 1"));
+    expect(onOpenEvidence).toHaveBeenCalledTimes(1);
+    expect(onOpenEvidence).toHaveBeenCalledWith(evidence.evidenceRef);
+
+    rerender(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onOpenEvidence={onOpenEvidence}
+        onSubmit={jest.fn()}
+        openingEvidenceRef={evidence.evidenceRef}
+        plan={plan}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(getButton("Open exact source location 1").disabled).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe("Opening…");
+  });
+
+  it("renders safe empty and error evidence states without inventing an open action", () => {
+    const untrustedText = '<img src="x" onerror="stolen()">';
+    const plan = createReviewPlan([createReviewFile()], "snapshot-1", [
+      createEvidence({ excerpt: untrustedText }),
+    ]);
+    const { rerender, container } = render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        evidenceError="The source could not be reopened from this snapshot."
+        onSubmit={jest.fn()}
+        plan={plan}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(screen.getByRole("alert").textContent).toContain("could not be reopened");
+    expect(screen.getByText(untrustedText)).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open exact source location/ })).toBeNull();
+
+    rerender(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={jest.fn()}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(screen.getByText(/No source excerpt is available for this proposal/)).toBeTruthy();
   });
 });

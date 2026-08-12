@@ -328,7 +328,14 @@ function ReviewWorkspace({
           acceptCommandsEnabled={state.snapshot?.commandCapabilities.reviewAccept === true}
           rejectCommandsEnabled={state.snapshot?.commandCapabilities.reviewReject === true}
           plan={selectedReview}
+          evidenceError={state.reviewEvidenceError}
+          openingEvidenceRef={state.openingReviewEvidenceRef}
           onBack={() => controller.selectTab("activity")}
+          onOpenEvidence={
+            state.snapshot?.reviewEvidenceAvailable === true
+              ? (evidenceRef) => controller.openReviewEvidence(evidenceRef)
+              : undefined
+          }
           onSubmit={(command) => controller.submitReview(command)}
         />
       ) : (

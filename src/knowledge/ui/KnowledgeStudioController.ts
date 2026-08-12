@@ -11,6 +11,7 @@ import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
+import type { KnowledgeReviewEvidenceOpenResult } from "@/knowledge/review/KnowledgeReviewEvidence";
 import type {
   KnowledgeSourceLifecyclePort,
   KnowledgeSourceRetirementUiReceipt,
@@ -21,6 +22,7 @@ import type {
   KnowledgeActivityStatus,
 } from "@/knowledge/ui/activityModel";
 import type { KnowledgeRecoveryModel } from "@/knowledge/ui/recoveryModel";
+import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";
 import {
   createKnowledgeSourceLifecycleModel,
   type KnowledgeSourceLifecycleModel,
@@ -62,6 +64,8 @@ export interface KnowledgeStudioSnapshot {
   queryAvailable?: boolean;
   /** Whether current grounded answers can enter the reviewed writeback pipeline. */
   queryWritebackAvailable?: boolean;
+  /** Whether opaque Review evidence references can be re-proved and opened. */
+  reviewEvidenceAvailable?: boolean;
   notice?: string;
 }
 
@@ -196,6 +200,8 @@ export interface KnowledgeStudioState {
   unavailableNotice?: string;
   error?: string;
   query?: Readonly<KnowledgeStudioQueryState>;
+  openingReviewEvidenceRef?: string;
+  reviewEvidenceError?: string;
 }
 
 /** Callback used by a UI binding to observe controller state changes. */
@@ -413,6 +419,8 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
     (snapshot.queryAvailable !== undefined && typeof snapshot.queryAvailable !== "boolean") ||
     (snapshot.queryWritebackAvailable !== undefined &&
       typeof snapshot.queryWritebackAvailable !== "boolean") ||
+    (snapshot.reviewEvidenceAvailable !== undefined &&
+      typeof snapshot.reviewEvidenceAvailable !== "boolean") ||
     (snapshot.queryWritebackAvailable === true && snapshot.queryAvailable !== true) ||
     (snapshot.sourceLifecycle !== undefined && snapshot.sourceLifecycle.bundleId !== bundleId) ||
     (snapshot.preferredTab !== undefined && snapshot.preferredTab !== "sources") ||
@@ -478,6 +486,33 @@ function snapshotRemovalConfirmation(
 }
 
 /**
+ * Captures one exact value-free Review evidence result without invoking accessors.
+ *
+ * @param value - Untrusted result returned by the optional navigation boundary
+ * @returns Frozen canonical result, or undefined when the receipt is malformed
+ */
+function snapshotReviewEvidenceOpenResult(
+  value: unknown
+): Readonly<KnowledgeReviewEvidenceOpenResult> | undefined {
+  try {
+    if (typeof value !== "object" || value === null) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== 1 || keys[0] !== "kind") return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, "kind");
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return undefined;
+    const kind: unknown = descriptor.value;
+    if (kind !== "opened" && kind !== "stale" && kind !== "unsupported" && kind !== "unavailable") {
+      return undefined;
+    }
+    return Object.freeze({ kind });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Coordinates durable Studio state, ephemeral scoped Query, and serialized UI commands.
  *
  * Durable queue/review snapshots remain authoritative. Subscription events never
@@ -494,9 +529,11 @@ export class KnowledgeStudioController {
   private loadAbort?: AbortController;
   private actionAbort?: AbortController;
   private queryAbort?: AbortController;
+  private reviewEvidenceAbort?: AbortController;
   private loadGeneration = 0;
   private actionGeneration = 0;
   private queryGeneration = 0;
+  private reviewEvidenceGeneration = 0;
   private refreshQueued = false;
 
   /**
@@ -507,13 +544,15 @@ export class KnowledgeStudioController {
    * @param queryPort - Optional scoped Query and citation-navigation boundary
    * @param queryWritebackPort - Optional current-answer capture boundary
    * @param sourceLifecyclePort - Optional source inventory and lifecycle command boundary
+   * @param reviewEvidencePort - Optional opaque Review evidence navigation boundary
    */
   constructor(
     private readonly readPort: KnowledgeStudioReadPort,
     private readonly commandPort: KnowledgeStudioCommandPort,
     private readonly queryPort?: KnowledgeStudioQueryPort,
     private readonly queryWritebackPort?: KnowledgeStudioQueryWritebackPort,
-    private readonly sourceLifecyclePort?: KnowledgeSourceLifecyclePort
+    private readonly sourceLifecyclePort?: KnowledgeSourceLifecyclePort,
+    private readonly reviewEvidencePort?: KnowledgeStudioReviewEvidencePort
   ) {}
 
   /** Returns the current immutable-by-contract controller state. */
@@ -623,7 +662,13 @@ export class KnowledgeStudioController {
     if (tab === "sources" && snapshot?.sourceLifecycle === undefined) return;
     if (tab === "recovery" && (snapshot?.recovery.items.length ?? 0) === 0) return;
     if (this.state.activeTab === tab) return;
-    this.state = { ...this.state, activeTab: tab };
+    this.cancelReviewEvidenceWork();
+    this.state = {
+      ...this.state,
+      activeTab: tab,
+      openingReviewEvidenceRef: undefined,
+      reviewEvidenceError: undefined,
+    };
     this.emit();
   }
 
@@ -881,6 +926,7 @@ export class KnowledgeStudioController {
    * @param changeSetId - Review proposal selected from Activity or the inbox
    */
   openReview(changeSetId: string): void {
+    this.cancelReviewEvidenceWork();
     const review = this.state.snapshot?.reviews.find(
       (candidate) => candidate.changeSetId === changeSetId
     );
@@ -901,8 +947,115 @@ export class KnowledgeStudioController {
       activeTab: "review",
       selectedReviewChangeSetId: review.changeSetId,
       feedback: undefined,
+      openingReviewEvidenceRef: undefined,
+      reviewEvidenceError: undefined,
     };
     this.emit();
+  }
+
+  /**
+   * Opens one opaque evidence reference using only identities from the current Review plan.
+   *
+   * @param evidenceRef - Opaque reference emitted by the current plan projection
+   */
+  async openReviewEvidence(evidenceRef: string): Promise<void> {
+    const bundleId = this.state.bundleId;
+    const plan = this.state.snapshot?.reviews.find(
+      (review) => review.changeSetId === this.state.selectedReviewChangeSetId
+    );
+    const knownReference = plan?.evidence.some((evidence) => evidence.evidenceRef === evidenceRef);
+    if (
+      !bundleId ||
+      !plan ||
+      !knownReference ||
+      !this.reviewEvidencePort ||
+      this.state.snapshot?.reviewEvidenceAvailable !== true
+    ) {
+      this.cancelReviewEvidenceWork();
+      this.state = {
+        ...this.state,
+        openingReviewEvidenceRef: undefined,
+        reviewEvidenceError: "That review evidence is no longer available.",
+      };
+      this.emit();
+      return;
+    }
+
+    this.cancelReviewEvidenceWork();
+    const abort = new AbortController();
+    this.reviewEvidenceAbort = abort;
+    const generation = ++this.reviewEvidenceGeneration;
+    this.state = {
+      ...this.state,
+      openingReviewEvidenceRef: evidenceRef,
+      reviewEvidenceError: undefined,
+    };
+    this.emit();
+
+    try {
+      const rawResult = await this.reviewEvidencePort.openReviewEvidence(
+        bundleId,
+        {
+          changeSetId: plan.changeSetId,
+          proposalDigest: plan.proposalDigest,
+          expectedSnapshotToken: plan.snapshotToken,
+          evidenceRef,
+        },
+        abort.signal
+      );
+      if (
+        abort.signal.aborted ||
+        generation !== this.reviewEvidenceGeneration ||
+        this.state.bundleId !== bundleId ||
+        this.state.selectedReviewChangeSetId !== plan.changeSetId
+      ) {
+        return;
+      }
+      const result = snapshotReviewEvidenceOpenResult(rawResult);
+      if (!result) {
+        throw new TypeError("Knowledge review evidence result is invalid");
+      }
+      this.state = {
+        ...this.state,
+        openingReviewEvidenceRef: undefined,
+        reviewEvidenceError: this.getReviewEvidenceResultMessage(result),
+      };
+      this.emit();
+    } catch (error) {
+      if (
+        abort.signal.aborted ||
+        generation !== this.reviewEvidenceGeneration ||
+        isAbortError(error)
+      ) {
+        return;
+      }
+      this.state = {
+        ...this.state,
+        openingReviewEvidenceRef: undefined,
+        reviewEvidenceError: "That review evidence could not be opened.",
+      };
+      this.emit();
+    } finally {
+      if (generation === this.reviewEvidenceGeneration) {
+        this.reviewEvidenceAbort = undefined;
+      }
+    }
+  }
+
+  /** Maps one value-free evidence outcome to optional safe user feedback. */
+  private getReviewEvidenceResultMessage(
+    result: Readonly<KnowledgeReviewEvidenceOpenResult>
+  ): string | undefined {
+    switch (result.kind) {
+      case "opened":
+        return undefined;
+      case "stale":
+        return "This evidence or review changed. Refresh and try the current proposal.";
+      case "unsupported":
+        return "This evidence location cannot be opened in Obsidian.";
+      case "unavailable":
+        return "That review evidence could not be opened.";
+    }
   }
 
   /**
@@ -932,6 +1085,7 @@ export class KnowledgeStudioController {
   async refresh(): Promise<void> {
     const bundleId = this.state.bundleId;
     if (!bundleId) return;
+    this.cancelReviewEvidenceWork();
     if (this.state.pendingAction) {
       this.refreshQueued = true;
       return;
@@ -947,6 +1101,8 @@ export class KnowledgeStudioController {
       status: this.state.snapshot ? "ready" : "loading",
       refreshing: true,
       query: { status: "idle" },
+      openingReviewEvidenceRef: undefined,
+      reviewEvidenceError: undefined,
       error: undefined,
     };
     this.emit();
@@ -1200,6 +1356,7 @@ export class KnowledgeStudioController {
    * @param command - Opaque decisions bound to the currently rendered snapshot
    */
   async submitReview(command: KnowledgeReviewCommand): Promise<void> {
+    this.cancelReviewEvidenceWork();
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
     const current = snapshot?.reviews.find((review) => review.changeSetId === command.changeSetId);
@@ -1360,6 +1517,7 @@ export class KnowledgeStudioController {
   private handleReloadHint(): void {
     const hadQueryState = this.state.query !== undefined && this.state.query.status !== "idle";
     this.cancelQueryWork(true);
+    this.cancelReviewEvidenceWork();
     if (hadQueryState) {
       this.state = { ...this.state, query: { status: "idle" } };
       this.emit();
@@ -1391,10 +1549,13 @@ export class KnowledgeStudioController {
     this.actionAbort = undefined;
     this.queryAbort?.abort();
     this.queryAbort = undefined;
+    this.reviewEvidenceAbort?.abort();
+    this.reviewEvidenceAbort = undefined;
     this.revokeCurrentQueryCapability(false);
     this.loadGeneration += 1;
     this.actionGeneration += 1;
     this.queryGeneration += 1;
+    this.reviewEvidenceGeneration += 1;
     this.refreshQueued = false;
   }
 
@@ -1404,6 +1565,13 @@ export class KnowledgeStudioController {
     this.queryAbort = undefined;
     this.revokeCurrentQueryCapability(bundleWide);
     this.queryGeneration += 1;
+  }
+
+  /** Cancels only ephemeral Review evidence navigation and revokes late publication. */
+  private cancelReviewEvidenceWork(): void {
+    this.reviewEvidenceAbort?.abort();
+    this.reviewEvidenceAbort = undefined;
+    this.reviewEvidenceGeneration += 1;
   }
 
   /** Revokes exact UI refs, or all Bundle refs for an authoritative durable hint. */
@@ -1435,6 +1603,7 @@ export class KnowledgeStudioController {
     if (!bundleId || this.state.pendingAction || callerSignal?.aborted) return;
 
     this.cancelQueryWork();
+    this.cancelReviewEvidenceWork();
     this.loadAbort?.abort();
     this.loadAbort = undefined;
     const abort = new AbortController();
@@ -1447,6 +1616,8 @@ export class KnowledgeStudioController {
       ...this.state,
       pendingAction,
       query: { status: "idle" },
+      openingReviewEvidenceRef: undefined,
+      reviewEvidenceError: undefined,
       feedback: undefined,
       error: undefined,
     };
