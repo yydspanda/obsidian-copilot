@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { KnowledgeKnownAppliedWikiOutputsView } from "@/components/knowledge/KnowledgeKnownAppliedWikiOutputsView";
 import type {
   KnowledgeAppliedWikiEvidenceOpenResult,
   KnowledgeAppliedWikiPageInspectionRequest,
@@ -16,6 +17,7 @@ import {
   getKnowledgeAppliedWikiPageInspectorErrorCode,
   snapshotKnowledgeAppliedWikiPageInspectionRequest,
 } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
+import type { KnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 import type {
   KnowledgeReviewEvidenceLocationSummary,
   KnowledgeReviewEvidenceSummary,
@@ -26,6 +28,7 @@ import { createPluginRoot } from "@/utils/react/createPluginRoot";
 export interface KnowledgeAppliedWikiInspectorContentProps {
   readonly request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>;
   readonly inspector: KnowledgeAppliedWikiPageInspectorPort;
+  readonly knownOutputs?: KnowledgeKnownAppliedWikiOutputsPort;
   readonly onClose: () => void;
 }
 
@@ -210,15 +213,18 @@ function EvidenceRow({
 export function KnowledgeAppliedWikiInspectorContent({
   request,
   inspector,
+  knownOutputs,
   onClose,
 }: KnowledgeAppliedWikiInspectorContentProps): React.ReactElement {
   const pagePath = request.pagePath;
+  const [view, setView] = useState<"overview" | "known_outputs">("overview");
   const [inspectionState, setInspectionState] = useState<InspectionViewState>();
   const [evidenceState, setEvidenceState] = useState<EvidenceViewState>();
   const inspectGeneration = useRef(0);
   const inspectAbort = useRef<AbortController>();
   const evidenceGeneration = useRef(0);
   const evidenceAbort = useRef<AbortController>();
+  const knownOutputsButtonRef = useRef<HTMLButtonElement>(null);
   const headingIdPrefix = useId();
   const versionHeadingId = `${headingIdPrefix}-version`;
   const sourcesHeadingId = `${headingIdPrefix}-sources`;
@@ -234,6 +240,10 @@ export function KnowledgeAppliedWikiInspectorContent({
     session !== undefined && evidenceState?.session === session ? evidenceState : undefined;
   const openingEvidenceRef = currentEvidence?.openingEvidenceRef;
   const evidenceError = currentEvidence?.error;
+
+  useEffect(() => {
+    if (view === "overview") knownOutputsButtonRef.current?.focus();
+  }, [view]);
 
   useEffect(() => {
     const generation = inspectGeneration.current + 1;
@@ -315,6 +325,23 @@ export function KnowledgeAppliedWikiInspectorContent({
         );
       });
   };
+
+  if (view === "known_outputs" && knownOutputs) {
+    return (
+      <div className="tw-flex tw-max-h-[75vh] tw-flex-col tw-gap-4 tw-overflow-y-auto">
+        <KnowledgeKnownAppliedWikiOutputsView
+          history={knownOutputs}
+          request={Object.freeze({ pagePath })}
+          onBack={() => setView("overview")}
+        />
+        <div className="tw-flex tw-justify-end">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -440,7 +467,23 @@ export function KnowledgeAppliedWikiInspectorContent({
         </>
       ) : null}
 
-      <div className="tw-flex tw-justify-end">
+      <div className="tw-flex tw-flex-wrap tw-justify-end tw-gap-2">
+        {knownOutputs ? (
+          <Button
+            ref={knownOutputsButtonRef}
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              evidenceGeneration.current += 1;
+              evidenceAbort.current?.abort();
+              evidenceAbort.current = undefined;
+              setEvidenceState(undefined);
+              setView("known_outputs");
+            }}
+          >
+            Known applied outputs
+          </Button>
+        ) : null}
         <Button type="button" variant="secondary" onClick={onClose}>
           Close
         </Button>
@@ -456,13 +499,15 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
   private readonly request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>;
   private readonly inspector: KnowledgeAppliedWikiPageInspectorPort;
   private readonly onClosed?: (modal: KnowledgeAppliedWikiInspectorModal) => void;
+  private readonly knownOutputs?: KnowledgeKnownAppliedWikiOutputsPort;
 
   /** Captures one value-only page request and stable inspector capability. */
   constructor(
     app: App,
     request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>,
     inspector: KnowledgeAppliedWikiPageInspectorPort,
-    onClosed?: (modal: KnowledgeAppliedWikiInspectorModal) => void
+    onClosed?: (modal: KnowledgeAppliedWikiInspectorModal) => void,
+    knownOutputs?: KnowledgeKnownAppliedWikiOutputsPort
   ) {
     super(app);
     if (onClosed !== undefined && typeof onClosed !== "function") {
@@ -471,6 +516,7 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
     this.request = snapshotKnowledgeAppliedWikiPageInspectionRequest(request);
     this.inspector = inspector;
     this.onClosed = onClosed;
+    this.knownOutputs = knownOutputs;
   }
 
   /** Mounts the inspector into this Modal's owning document through the shared App root. */
@@ -479,6 +525,7 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
     this.root.render(
       <KnowledgeAppliedWikiInspectorContent
         inspector={this.inspector}
+        knownOutputs={this.knownOutputs}
         request={this.request}
         onClose={() => this.close()}
       />

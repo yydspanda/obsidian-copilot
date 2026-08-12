@@ -40,6 +40,8 @@ import { DelegatingKnowledgeAppliedWikiPageInspectorPort } from "@/knowledge/wik
 import { KnowledgeAppliedWikiPageInspectorGenerationLease } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorGenerationLease";
 import type { KnowledgeAppliedWikiPageInspectionRequest } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
+import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
+import { KnowledgeKnownAppliedWikiOutputsGenerationLease } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsGenerationLease";
 import { ObsidianKnowledgeFolderImportFileStore } from "@/knowledge/capture/ObsidianKnowledgeFolderImportFileStore";
 import {
   KnowledgeProductionChatCaptureCoordinator,
@@ -253,6 +255,8 @@ export default class CopilotPlugin extends Plugin {
   private readonly knowledgeSourcePathIndex = new KnowledgeSourcePathIndex();
   private readonly knowledgeAppliedWikiPageInspectorPort =
     new DelegatingKnowledgeAppliedWikiPageInspectorPort();
+  private readonly knowledgeKnownAppliedWikiOutputsPort =
+    new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
   private readonly knowledgeAppliedWikiPathIndex = new KnowledgeAppliedWikiPathIndex();
   private readonly knowledgeAppliedWikiInspectorModals =
     new Set<KnowledgeAppliedWikiInspectorModal>();
@@ -853,7 +857,8 @@ export default class CopilotPlugin extends Plugin {
         this.app,
         request,
         this.knowledgeAppliedWikiPageInspectorPort,
-        (closedModal) => this.knowledgeAppliedWikiInspectorModals.delete(closedModal)
+        (closedModal) => this.knowledgeAppliedWikiInspectorModals.delete(closedModal),
+        this.knowledgeKnownAppliedWikiOutputsPort
       );
       this.knowledgeAppliedWikiInspectorModals.add(modal);
       modal.open();
@@ -913,6 +918,9 @@ export default class CopilotPlugin extends Plugin {
     let folderImportGeneration: KnowledgeFolderImportGenerationLease | undefined;
     let appliedWikiInspectorGeneration:
       | KnowledgeAppliedWikiPageInspectorGenerationLease
+      | undefined;
+    let knownAppliedWikiOutputsGeneration:
+      | KnowledgeKnownAppliedWikiOutputsGenerationLease
       | undefined;
     let sourcePathIndexLease: Readonly<KnowledgeSourcePathIndexLease> | undefined;
     try {
@@ -1083,6 +1091,21 @@ export default class CopilotPlugin extends Plugin {
                 assertCurrent,
                 closePresentations: () => this.closeKnowledgeAppliedWikiInspectorModals(),
               });
+            try {
+              const delegate = candidate.createKnownAppliedWikiOutputsCoordinator();
+              knownAppliedWikiOutputsGeneration =
+                new KnowledgeKnownAppliedWikiOutputsGenerationLease({
+                  delegate,
+                  subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
+                  replaceDelegate: (next) =>
+                    this.knowledgeKnownAppliedWikiOutputsPort.replaceDelegate(next),
+                  revokeDelegate: (next) =>
+                    this.knowledgeKnownAppliedWikiOutputsPort.revokeDelegate(next),
+                  assertCurrent,
+                });
+            } catch {
+              this.knowledgeKnownAppliedWikiOutputsPort.setUnavailable();
+            }
             const studioAdapter = candidate.createKnowledgeStudioRuntimeReadAdapter(
               admission.modelRouteLease,
               (drain) => retainKnowledgeProductionDrain(this.app.vault, drain),
@@ -1181,6 +1204,8 @@ export default class CopilotPlugin extends Plugin {
           folderImportGeneration = undefined;
           appliedWikiInspectorGeneration?.close();
           appliedWikiInspectorGeneration = undefined;
+          knownAppliedWikiOutputsGeneration?.close();
+          knownAppliedWikiOutputsGeneration = undefined;
           this.closeKnowledgeAppliedWikiInspectorModals();
           if (sourcePathIndexLease) {
             this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
@@ -1203,6 +1228,8 @@ export default class CopilotPlugin extends Plugin {
         folderImportGeneration = undefined;
         appliedWikiInspectorGeneration?.close();
         appliedWikiInspectorGeneration = undefined;
+        knownAppliedWikiOutputsGeneration?.close();
+        knownAppliedWikiOutputsGeneration = undefined;
         this.closeKnowledgeAppliedWikiInspectorModals();
         if (sourcePathIndexLease) {
           this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
@@ -1343,6 +1370,7 @@ export default class CopilotPlugin extends Plugin {
     this.knowledgeFolderImportPort.dispose();
     this.knowledgeSourcePathIndex.clear();
     this.knowledgeAppliedWikiPageInspectorPort.dispose();
+    this.knowledgeKnownAppliedWikiOutputsPort.dispose();
     this.knowledgeAppliedWikiPathIndex.dispose();
     this.knowledgeProjectRecordsUnsubscriber?.();
     this.knowledgeProjectRecordsUnsubscriber = undefined;

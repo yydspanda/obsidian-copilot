@@ -16,6 +16,7 @@ import type {
   KnowledgeAppliedWikiPageInspectorPort,
 } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 import { KnowledgeAppliedWikiPageInspectorError } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
+import type { KnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
 import type { App } from "obsidian";
 import type { Root } from "react-dom/client";
@@ -109,6 +110,34 @@ function createInspector(
   })
 ): KnowledgeAppliedWikiPageInspectorPort {
   return { inspectPage: jest.fn(inspectPage), openEvidence: jest.fn(openEvidence) };
+}
+
+/** Creates the separate read-only known-output capability used by the Modal. */
+function createKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPort {
+  return {
+    inspectKnownOutputs: jest.fn(async () =>
+      Object.freeze({
+        pageRef: `known-wiki-page-${"e".repeat(64)}`,
+        displayPagePath: "Wiki/Topic.md",
+        currentState: "drifted" as const,
+        currentMatch: "none" as const,
+        knownOutputCount: 1,
+        items: Object.freeze([
+          Object.freeze({
+            outputRef: `known-wiki-output-${"f".repeat(64)}`,
+            appliedAt: 1_765_000_000_000,
+            verifiedApplyCount: 1,
+            relation: "latest_known" as const,
+          }),
+        ]),
+      })
+    ),
+    listMore: jest.fn(async () =>
+      Object.freeze({ kind: "loaded", value: Object.freeze({ items: Object.freeze([]) }) })
+    ),
+    readOutput: jest.fn(async () => Object.freeze({ kind: "unavailable" as const })),
+    compareWithCurrent: jest.fn(async () => Object.freeze({ kind: "unavailable" as const })),
+  };
 }
 
 /** Flushes pending promise continuations and React updates. */
@@ -219,6 +248,68 @@ describe("KnowledgeAppliedWikiInspectorContent", () => {
       expect(screen.queryByRole("button", { name: /Open exact source/ })).toBeNull();
     }
   );
+
+  it("opens known outputs through a separate capability even when the current page drifted", async () => {
+    const inspector = createInspector(async () => {
+      throw new KnowledgeAppliedWikiPageInspectorError("drifted");
+    });
+    render(
+      <KnowledgeAppliedWikiInspectorContent
+        inspector={inspector}
+        knownOutputs={createKnownOutputsHistory()}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onClose={jest.fn()}
+      />
+    );
+    await flushPromises();
+    expect(screen.getByRole("alert").textContent).toContain("changed since Knowledge applied it");
+
+    fireEvent.click(screen.getByRole("button", { name: "Known applied outputs" }));
+    await flushPromises();
+    expect(screen.getByRole("heading", { name: "Known applied outputs" })).toBeTruthy();
+    expect(screen.getByText("Current applied state not verified")).toBeTruthy();
+    expect(screen.getByText(/not complete file history/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to current page" }));
+    expect(screen.getByRole("heading", { name: "Applied Knowledge page" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Known applied outputs" }).matches(":focus")).toBe(
+      true
+    );
+  });
+
+  it("aborts in-flight evidence before entering known outputs and ignores its late result", async () => {
+    const navigation = createDeferred<Readonly<KnowledgeAppliedWikiEvidenceOpenResult>>();
+    let navigationSignal: AbortSignal | undefined;
+    const inspector = createInspector(
+      async () => createSession(),
+      async (_session, _ref, signal) => {
+        navigationSignal = signal;
+        return navigation.promise;
+      }
+    );
+    render(
+      <KnowledgeAppliedWikiInspectorContent
+        inspector={inspector}
+        knownOutputs={createKnownOutputsHistory()}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onClose={jest.fn()}
+      />
+    );
+    await flushPromises();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open exact source location 1" }));
+    expect(screen.getByRole("status").textContent).toBe("Opening…");
+    fireEvent.click(screen.getByRole("button", { name: "Known applied outputs" }));
+    expect(navigationSignal?.aborted).toBe(true);
+
+    await act(async () => {
+      navigation.resolve(Object.freeze({ kind: "unavailable" }));
+      await navigation.promise;
+    });
+    await flushPromises();
+    expect(screen.getByRole("heading", { name: "Known applied outputs" })).toBeTruthy();
+    expect(screen.queryByText(/exact source location could not/)).toBeNull();
+  });
 
   it("aborts an obsolete inspection and ignores its late completion when the page changes", async () => {
     const first = createDeferred<Readonly<KnowledgeAppliedWikiPageInspectionSession>>();

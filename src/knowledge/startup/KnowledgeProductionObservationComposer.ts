@@ -46,6 +46,7 @@ import {
   KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import type { KnowledgeKnownAppliedWikiOutputAuthorityIdentity } from "@/knowledge/runtime/KnowledgeKnownAppliedWikiOutputProjector";
 import { KnowledgeProductionCompileReviewHandler } from "@/knowledge/startup/KnowledgeProductionCompileReviewHandler";
 import { KnowledgeProductionReviewedApplyCoordinator } from "@/knowledge/startup/KnowledgeProductionReviewedApplyCoordinator";
 import { KnowledgePluginProductionWorkflowLease } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
@@ -71,6 +72,7 @@ import {
   type KnowledgePreparedIngestHandler,
 } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
 import { KnowledgeProductionAppliedWikiPageInspectorCoordinator } from "@/knowledge/wiki/KnowledgeProductionAppliedWikiPageInspectorCoordinator";
+import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
 
 /** Exact production resources consumed by one observation-only workflow generation. */
 export interface KnowledgeProductionObservationComposerInput {
@@ -195,6 +197,7 @@ interface KnowledgeProductionObservationInternalState {
   lastResult?: KnowledgeProductionObservationResult | KnowledgeProductionObservationReproofResult;
   sourceRecoveryIssues?: readonly KnowledgeSourceObservationRecoverableIssue[];
   appliedWikiInspectorCreated?: boolean;
+  knownAppliedWikiOutputsCreated?: boolean;
   unsubscribeLease?: () => void;
   closeListeners: Set<() => void>;
 }
@@ -1110,6 +1113,57 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
+  /** Creates the one read-only known-output browser for this released generation. */
+  createKnownAppliedWikiOutputsCoordinator(): KnowledgeProductionKnownAppliedWikiOutputsCoordinator {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (
+      !composition ||
+      !state.coordinator ||
+      !state.workerController ||
+      !state.plan ||
+      !state.modelRouteLease ||
+      state.knownAppliedWikiOutputsCreated
+    ) {
+      throw createAbortError();
+    }
+    try {
+      const modelRouteLease = state.modelRouteLease;
+      modelRouteLease.assertCurrent();
+      this.assertHealthy();
+      const assertCurrent = (): void => {
+        assertCompositionCurrent(state, state.generation, composition);
+        modelRouteLease.assertCurrent();
+        this.assertHealthy();
+      };
+      const coordinator = new KnowledgeProductionKnownAppliedWikiOutputsCoordinator({
+        runtime: Object.freeze({
+          readKnownAppliedWikiOutputIndex: (bundleId: string, pagePath: string) =>
+            composition.runtime.readKnownAppliedWikiOutputIndex(bundleId, pagePath),
+          readKnownAppliedWikiOutputDetail: (
+            bundleId: string,
+            pagePath: string,
+            authority: KnowledgeKnownAppliedWikiOutputAuthorityIdentity
+          ) => composition.runtime.readKnownAppliedWikiOutputDetail(bundleId, pagePath, authority),
+        }),
+        bundles: Object.freeze(
+          composition.owners.map(({ config }) =>
+            Object.freeze({
+              bundle: config,
+              targetVisitor: new ObsidianKnowledgeCompilerTargetResolver(composition.app),
+            })
+          )
+        ),
+        assertCurrent,
+      });
+      assertCurrent();
+      state.knownAppliedWikiOutputsCreated = true;
+      return coordinator;
+    } catch {
+      throw createAbortError();
+    }
+  }
+
   /**
    * Subscribes to synchronous generation closure without exposing internal state.
    *
@@ -1152,6 +1206,7 @@ export class KnowledgeProductionObservationComposer {
     state.workerController = undefined;
     state.modelRouteLease = undefined;
     state.appliedWikiInspectorCreated = undefined;
+    state.knownAppliedWikiOutputsCreated = undefined;
     try {
       composition?.eventSink.close();
     } catch {

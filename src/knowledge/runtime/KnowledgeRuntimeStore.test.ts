@@ -1991,6 +1991,54 @@ describe("KnowledgeRuntimeStore", () => {
     expect(projectedCitation.locator).not.toBe(citation.locator);
   });
 
+  it("indexes metadata then rejoins one known applied body from separate Runtime reads", async () => {
+    const manifest = createRegisteredManifest();
+    const proof = createCommittedApplyProof(manifest, "transaction-known-output", 1, [
+      createSourceCitation(),
+    ]);
+    const harness = await createApplyHarness(manifest, proof);
+    await harness.port.recordCommitted(harness.journal, harness.receipt);
+    const pagePath = "Wiki/transaction-known-output.md";
+    const readsBefore = harness.file.getReadCallCount();
+
+    const index = await harness.runtime.readKnownAppliedWikiOutputIndex("personal", pagePath);
+
+    expect(harness.file.getReadCallCount()).toBe(readsBefore + 1);
+    expect(index.outputs).toHaveLength(1);
+    expect(index.outputs[0]).toMatchObject({
+      path: pagePath,
+      contentHash: createFileContentHash("# transaction-known-output\n"),
+      characterCount: 27,
+      newestAppliedAt: proof.receipt.committedAt,
+      verifiedApplyCount: 1,
+      detailAvailability: "available",
+    });
+    expect(index.outputs[0]).not.toHaveProperty("content");
+    expect(index.currentManifestPage).toMatchObject({
+      path: pagePath,
+      contentHash: createFileContentHash("# transaction-known-output\n"),
+    });
+    expect(Object.isFrozen(index)).toBe(true);
+    expect(Object.isFrozen(index.outputs[0]?.authority)).toBe(true);
+
+    const detail = await harness.runtime.readKnownAppliedWikiOutputDetail(
+      "personal",
+      pagePath,
+      index.outputs[0].authority
+    );
+
+    expect(harness.file.getReadCallCount()).toBe(readsBefore + 2);
+    expect(detail).toEqual({
+      kind: "available",
+      runtimeId: index.runtimeId,
+      runtimeRevision: index.runtimeRevision,
+      contentHash: createFileContentHash("# transaction-known-output\n"),
+      content: "# transaction-known-output\n",
+      characterCount: 27,
+    });
+    expect(Object.isFrozen(detail)).toBe(true);
+  });
+
   it("projects one exact latest Apply as detached frozen source freshness authority", async () => {
     const manifest = createRegisteredManifest();
     const proof = createCommittedApplyProof(manifest, "transaction-applied-freshness", 1, [

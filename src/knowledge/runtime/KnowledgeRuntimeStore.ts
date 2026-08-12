@@ -128,7 +128,7 @@ import {
   validateKnowledgeChangeSet,
   validateSourceManifest,
 } from "@/knowledge/model/validation";
-import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import {
   createNoJournalApplyRecoveryReference,
   type NoJournalApplyAbandonReceipt,
@@ -170,6 +170,18 @@ import {
   type KnowledgeRuntimeSourceFreshnessAuthority,
   type KnowledgeRuntimeSourceFreshnessAuthorityPort,
 } from "@/knowledge/runtime/KnowledgeRuntimeSourceFreshness";
+import {
+  KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS,
+  KnowledgeKnownAppliedWikiOutputLimitError,
+  KnowledgeKnownAppliedWikiOutputProjectionError,
+  knowledgeApplyLedgerMatchesAcceptedRecord as ledgerMatchesAcceptedRecord,
+  projectKnowledgeKnownAppliedWikiOutputDetail,
+  projectKnowledgeKnownAppliedWikiOutputIndex,
+  type KnowledgeKnownAppliedWikiOutputAuthorityIdentity,
+  type KnowledgeKnownAppliedWikiCurrentPage,
+  type KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot,
+  type KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot,
+} from "@/knowledge/runtime/KnowledgeKnownAppliedWikiOutputProjector";
 import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
@@ -2367,31 +2379,6 @@ function abandonmentMatchesAcceptedRecord(
 }
 
 /**
- * Compares one exact commit ledger record with an accepted Review outcome.
- *
- * @param ledger - Durable Manifest commit ledger record
- * @param bundleId - Bundle containing the Review record
- * @param record - Exact accepted Review record
- * @returns Whether the ledger proves this accepted source input committed
- */
-function ledgerMatchesAcceptedRecord(
-  ledger: KnowledgeApplyCommitLedgerRecord,
-  bundleId: string,
-  record: AcceptedChangeSetReviewRecord
-): boolean {
-  return (
-    ledger.bundleId === bundleId &&
-    ledger.sourceId === record.jobClaim.sourceId &&
-    ledger.sourceContentHash === record.jobClaim.sourceContentHash &&
-    ledger.pipelineFingerprint === record.jobClaim.pipelineFingerprint &&
-    ledger.inputRevision === record.jobClaim.inputRevision &&
-    ledger.changeSetId === record.changeSetId &&
-    ledger.changeSetDigest === record.acceptedDigest &&
-    ledger.manifestIntentDigest === record.manifestCommitIntentDigest
-  );
-}
-
-/**
  * Finds the latest retained apply ledger for one exact Bundle/source identity.
  *
  * @param records - Complete append-only apply ledger
@@ -2793,6 +2780,70 @@ function projectAppliedManifestPages(
     compareIdentifiers(left.windowsPathKey, right.windowsPathKey)
   );
   return Object.freeze(projectedPages);
+}
+
+/**
+ * Projects one strict current Manifest page without scanning Review history.
+ *
+ * Shared co-owners must retain exactly the same path, ownership, and content
+ * hash. The page scan is bounded before the history index performs any further
+ * work, preventing an oversized Manifest from bypassing the read contract.
+ *
+ * @param manifest - Current strict Bundle Manifest
+ * @param pagePath - Canonical requested Wiki path
+ * @returns Detached current page identity, or undefined when not managed
+ */
+function projectKnownAppliedWikiCurrentManifestPage(
+  manifest: SourceManifest,
+  pagePath: string
+): KnowledgeKnownAppliedWikiCurrentPage | undefined {
+  const requestedKey = toWindowsPathKey(pagePath);
+  if (manifest.entries.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxManifestEntries) {
+    throw new KnowledgeKnownAppliedWikiOutputLimitError("page_outputs");
+  }
+  let pageCount = 0;
+  let matched: KnowledgeKnownAppliedWikiCurrentPage | undefined;
+  for (const entry of manifest.entries) {
+    const sourcePageKeys = new Set<string>();
+    for (const page of entry.lastSuccessful?.generatedPages ?? []) {
+      pageCount += 1;
+      if (pageCount > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPageOutputs) {
+        throw new KnowledgeKnownAppliedWikiOutputLimitError("page_outputs");
+      }
+      if (page.contentHash === undefined) throw new KnowledgeRuntimeStoreCorruptError();
+      if (
+        typeof page.path !== "string" ||
+        page.path.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPagePathCharacters
+      ) {
+        throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+      }
+      const windowsPathKey = toWindowsPathKey(page.path);
+      if (sourcePageKeys.has(windowsPathKey)) throw new KnowledgeRuntimeStoreCorruptError();
+      sourcePageKeys.add(windowsPathKey);
+      if (windowsPathKey !== requestedKey) continue;
+      if (page.path !== pagePath) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const candidate: KnowledgeKnownAppliedWikiCurrentPage = {
+        path: page.path,
+        windowsPathKey,
+        ownership: page.ownership,
+        contentHash: page.contentHash,
+      };
+      if (!matched) {
+        matched = candidate;
+        continue;
+      }
+      if (
+        matched.path !== candidate.path ||
+        matched.ownership !== candidate.ownership ||
+        matched.contentHash !== candidate.contentHash
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+  return matched;
 }
 
 /**
@@ -5632,6 +5683,105 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       runtimeRevision: state.revision,
       manifestRevision: manifest.revision,
       pages: projectAppliedManifestPages(state, manifest, review),
+    });
+  }
+
+  /**
+   * Reads a metadata-only index of known applied outputs for one Wiki path.
+   *
+   * The Runtime envelope is read once. Every item requires a unique exact Apply
+   * ledger ↔ accepted Review join, but accepted body bytes are discarded before
+   * the frozen result crosses this boundary. The private authority on each item
+   * is read-only and must remain behind an upper-layer opaque reference.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param pagePath - Canonical Vault-relative Wiki path
+   * @returns Immutable metadata and private detail-rejoin authorities
+   */
+  async readKnownAppliedWikiOutputIndex(
+    bundleId: string,
+    pagePath: string
+  ): Promise<KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot> {
+    assertIdentifier(bundleId, "bundleId");
+    if (
+      typeof pagePath !== "string" ||
+      pagePath.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPagePathCharacters
+    ) {
+      throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+    }
+    const parsedPagePath = parseVaultPath(pagePath);
+    if (!parsedPagePath.ok || parsedPagePath.path !== pagePath) {
+      throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+    }
+    const state = await this.readState();
+    const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+    const review = reviewRaw === null ? undefined : this.requireReviewSnapshot(bundleId, reviewRaw);
+    const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+    const manifest = manifestRaw === null ? undefined : this.requireManifest(bundleId, manifestRaw);
+    const current = manifest
+      ? projectKnownAppliedWikiCurrentManifestPage(manifest, pagePath)
+      : undefined;
+    return projectKnowledgeKnownAppliedWikiOutputIndex({
+      runtimeId: state.runtimeId,
+      runtimeRevision: state.revision,
+      bundleId,
+      pagePath,
+      applyCommits: state.applyCommits,
+      review,
+      manifestRevision: manifest?.revision ?? 0,
+      ...(current
+        ? {
+            currentManifestPage: {
+              path: current.path,
+              windowsPathKey: current.windowsPathKey,
+              ownership: current.ownership,
+              contentHash: current.contentHash,
+            },
+          }
+        : {}),
+    });
+  }
+
+  /**
+   * Rejoins one private known-output identity against a fresh Runtime envelope.
+   *
+   * At most the selected accepted body is returned, and only after the exact
+   * ledger, Review, ChangeSet digest, Manifest intent, path, and content hash are
+   * re-proved. This method never reads or writes the Vault and grants no Apply
+   * or Restore authority.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @param pagePath - Canonical Vault-relative Wiki path
+   * @param authority - Private identity obtained from the metadata index
+   * @returns Bounded exact body, too-large metadata, or a stale result
+   */
+  async readKnownAppliedWikiOutputDetail(
+    bundleId: string,
+    pagePath: string,
+    authority: KnowledgeKnownAppliedWikiOutputAuthorityIdentity
+  ): Promise<KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot> {
+    assertIdentifier(bundleId, "bundleId");
+    if (
+      typeof pagePath !== "string" ||
+      pagePath.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPagePathCharacters
+    ) {
+      throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+    }
+    const parsedPagePath = parseVaultPath(pagePath);
+    if (!parsedPagePath.ok || parsedPagePath.path !== pagePath) {
+      throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+    }
+    const state = await this.readState();
+    const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+    const review = reviewRaw === null ? undefined : this.requireReviewSnapshot(bundleId, reviewRaw);
+    return projectKnowledgeKnownAppliedWikiOutputDetail({
+      runtimeId: state.runtimeId,
+      runtimeRevision: state.revision,
+      bundleId,
+      pagePath,
+      applyCommits: state.applyCommits,
+      review,
+      authority,
     });
   }
 

@@ -126,4 +126,8 @@ export * from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorGenerationLease
 export * from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 export * from "@/knowledge/wiki/KnowledgeAppliedWikiPageProjector";
 export * from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
+export * from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
+export * from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsGenerationLease";
+export * from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
+export * from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
 export * from "@/knowledge/wiki/KnowledgeProductionAppliedWikiPageInspectorCoordinator";
