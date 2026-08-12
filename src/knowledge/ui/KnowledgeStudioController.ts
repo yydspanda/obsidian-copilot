@@ -7,9 +7,10 @@ import type {
   KnowledgeStudioQueryWritebackPort,
   KnowledgeStudioQueryWritebackResult,
 } from "@/knowledge/query/KnowledgeQueryWritebackCapture";
-import type {
-  KnowledgeReviewCommand,
-  KnowledgeReviewPlan,
+import {
+  snapshotKnowledgeReviewCommand,
+  type KnowledgeReviewCommand,
+  type KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
 import type { KnowledgeReviewEvidenceOpenResult } from "@/knowledge/review/KnowledgeReviewEvidence";
 import type {
@@ -23,6 +24,12 @@ import type {
 } from "@/knowledge/ui/activityModel";
 import type { KnowledgeRecoveryModel } from "@/knowledge/ui/recoveryModel";
 import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";
+import {
+  createKnowledgeReviewDraftIdentity,
+  KnowledgeReviewDraftStore,
+  type KnowledgeReviewActiveEdit,
+  type KnowledgeReviewDraftState,
+} from "@/knowledge/ui/KnowledgeReviewDraftStore";
 import {
   createKnowledgeSourceLifecycleModel,
   type KnowledgeSourceLifecycleModel,
@@ -202,6 +209,10 @@ export interface KnowledgeStudioState {
   query?: Readonly<KnowledgeStudioQueryState>;
   openingReviewEvidenceRef?: string;
   reviewEvidenceError?: string;
+  /** Independent notice for session-only Review text revoked by a new durable snapshot. */
+  reviewDraftNotice?: string;
+  /** Monotonic render hint for private, controller-owned Review draft changes. */
+  reviewDraftRevision?: number;
 }
 
 /** Callback used by a UI binding to observe controller state changes. */
@@ -535,6 +546,7 @@ export class KnowledgeStudioController {
   private queryGeneration = 0;
   private reviewEvidenceGeneration = 0;
   private refreshQueued = false;
+  private readonly reviewDrafts = new KnowledgeReviewDraftStore();
 
   /**
    * Creates a controller over explicit read and command ports.
@@ -668,6 +680,7 @@ export class KnowledgeStudioController {
       activeTab: tab,
       openingReviewEvidenceRef: undefined,
       reviewEvidenceError: undefined,
+      reviewDraftNotice: undefined,
     };
     this.emit();
   }
@@ -954,6 +967,95 @@ export class KnowledgeStudioController {
   }
 
   /**
+   * Reads session-local decisions only when the supplied plan is still exact.
+   *
+   * @param plan - Plan currently rendered by React
+   * @returns Immutable saved decisions, or an empty draft for stale input
+   */
+  getReviewDraft(plan: Readonly<KnowledgeReviewPlan>): KnowledgeReviewDraftState {
+    const bundleId = this.state.bundleId;
+    const current = this.getCurrentReview(plan);
+    if (!bundleId || !current) return Object.freeze({});
+    return this.reviewDrafts.read(createKnowledgeReviewDraftIdentity(bundleId, current));
+  }
+
+  /** Reads the bounded active editor retained for one exact current Review. */
+  getReviewActiveEdit(
+    plan: Readonly<KnowledgeReviewPlan>
+  ): Readonly<KnowledgeReviewActiveEdit> | undefined {
+    const bundleId = this.state.bundleId;
+    const current = this.getCurrentReview(plan);
+    if (!bundleId || !current) return undefined;
+    return this.reviewDrafts.readActiveEdit(createKnowledgeReviewDraftIdentity(bundleId, current));
+  }
+
+  /**
+   * Saves complete decisions without retaining any active textarea buffer.
+   *
+   * @param plan - Exact plan that produced the UI decision
+   * @param draft - Complete replacement decision map
+   */
+  updateReviewDraft(
+    plan: Readonly<KnowledgeReviewPlan>,
+    draft: KnowledgeReviewDraftState
+  ): boolean {
+    const bundleId = this.state.bundleId;
+    const current = this.getCurrentReview(plan);
+    if (!bundleId || !current || this.state.pendingAction !== undefined) return false;
+    try {
+      this.reviewDrafts.write(
+        createKnowledgeReviewDraftIdentity(bundleId, current),
+        current,
+        draft
+      );
+    } catch {
+      return false;
+    }
+    this.state = {
+      ...this.state,
+      reviewDraftNotice: undefined,
+      reviewDraftRevision: (this.state.reviewDraftRevision ?? 0) + 1,
+    };
+    this.emit();
+    return true;
+  }
+
+  /** Saves or closes one bounded active editor for an exact current Review. */
+  updateReviewActiveEdit(
+    plan: Readonly<KnowledgeReviewPlan>,
+    activeEdit: Readonly<KnowledgeReviewActiveEdit> | undefined
+  ): boolean {
+    const bundleId = this.state.bundleId;
+    const current = this.getCurrentReview(plan);
+    if (!bundleId || !current || this.state.pendingAction !== undefined) return false;
+    try {
+      this.reviewDrafts.writeActiveEdit(
+        createKnowledgeReviewDraftIdentity(bundleId, current),
+        current,
+        activeEdit
+      );
+    } catch {
+      return false;
+    }
+    this.state = {
+      ...this.state,
+      reviewDraftNotice: undefined,
+      reviewDraftRevision: (this.state.reviewDraftRevision ?? 0) + 1,
+    };
+    this.emit();
+    return true;
+  }
+
+  /** Resolves a supplied plan only when every exact identity field remains current. */
+  private getCurrentReview(
+    plan: Readonly<KnowledgeReviewPlan>
+  ): Readonly<KnowledgeReviewPlan> | undefined {
+    // React receives these exact frozen plan instances from the current controller snapshot.
+    // Identity comparison avoids reading any property from a caller-owned impostor.
+    return this.state.snapshot?.reviews.find((candidate) => candidate === plan);
+  }
+
+  /**
    * Opens one opaque evidence reference using only identities from the current Review plan.
    *
    * @param evidenceRef - Opaque reference emitted by the current plan projection
@@ -1117,6 +1219,7 @@ export class KnowledgeStudioController {
       ) {
         return;
       }
+      const reviewDraftsRevoked = this.reviewDrafts.reconcile(bundleId, snapshot.reviews);
       const selectedReviewChangeSetId = snapshot.reviews.some(
         (review) => review.changeSetId === this.state.selectedReviewChangeSetId
       )
@@ -1143,6 +1246,10 @@ export class KnowledgeStudioController {
         refreshing: false,
         snapshot,
         selectedReviewChangeSetId,
+        feedback: this.state.feedback,
+        reviewDraftNotice: reviewDraftsRevoked
+          ? "This proposal changed. Its session-only Review draft was cleared."
+          : this.state.reviewDraftNotice,
         error: undefined,
       };
       this.emit();
@@ -1351,19 +1458,33 @@ export class KnowledgeStudioController {
   }
 
   /**
-   * Submits one content-free review command and then reloads durable truth.
+   * Strictly snapshots one identity-bound Review command and reloads durable truth.
    *
    * @param command - Opaque decisions bound to the currently rendered snapshot
    */
   async submitReview(command: KnowledgeReviewCommand): Promise<void> {
     this.cancelReviewEvidenceWork();
     if (this.state.pendingAction) return;
+    let captured: KnowledgeReviewCommand;
+    try {
+      captured = snapshotKnowledgeReviewCommand(command);
+    } catch {
+      this.state = {
+        ...this.state,
+        feedback: {
+          kind: "blocked",
+          message: "This review command is invalid and was not submitted.",
+        },
+      };
+      this.emit();
+      return;
+    }
     const snapshot = this.state.snapshot;
-    const current = snapshot?.reviews.find((review) => review.changeSetId === command.changeSetId);
+    const current = snapshot?.reviews.find((review) => review.changeSetId === captured.changeSetId);
     if (
       !current ||
-      current.proposalDigest !== command.proposalDigest ||
-      current.snapshotToken !== command.expectedSnapshotToken
+      current.proposalDigest !== captured.proposalDigest ||
+      current.snapshotToken !== captured.expectedSnapshotToken
     ) {
       this.state = {
         ...this.state,
@@ -1377,9 +1498,22 @@ export class KnowledgeStudioController {
       return;
     }
 
+    const draftIdentity = createKnowledgeReviewDraftIdentity(current.bundleId, current);
+    if (this.reviewDrafts.readActiveEdit(draftIdentity) !== undefined) {
+      this.state = {
+        ...this.state,
+        feedback: {
+          kind: "blocked",
+          message: "Finish or cancel the active manual edit before submitting this review.",
+        },
+      };
+      this.emit();
+      return;
+    }
+
     const rejectsWholeProposal =
-      command.decisions.length === current.files.length &&
-      command.decisions.every((decision) => decision.decision === "reject");
+      captured.decisions.length === current.files.length &&
+      captured.decisions.every((decision) => decision.decision === "reject");
     const commandAvailable = rejectsWholeProposal
       ? snapshot?.commandCapabilities.reviewReject === true
       : snapshot?.commandCapabilities.reviewAccept === true;
@@ -1393,8 +1527,18 @@ export class KnowledgeStudioController {
     }
 
     await this.executeAction(
-      { kind: "submit_review", targetId: command.changeSetId },
-      (bundleId, signal) => this.commandPort.submitReview(bundleId, command, signal),
+      { kind: "submit_review", targetId: captured.changeSetId },
+      async (bundleId, signal) => {
+        const result = await this.commandPort.submitReview(bundleId, captured, signal);
+        if (
+          result.kind === "applied" ||
+          result.kind === "rejected" ||
+          result.kind === "recovery_required"
+        ) {
+          this.reviewDrafts.delete(draftIdentity);
+        }
+        return result;
+      },
       (result) => {
         switch (result.kind) {
           case "applied":
@@ -1557,6 +1701,7 @@ export class KnowledgeStudioController {
     this.queryGeneration += 1;
     this.reviewEvidenceGeneration += 1;
     this.refreshQueued = false;
+    this.reviewDrafts.clear();
   }
 
   /** Cancels only ephemeral Query and citation-navigation work. */

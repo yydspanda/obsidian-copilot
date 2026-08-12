@@ -433,6 +433,55 @@ describe("DelegatingKnowledgeStudioPort", () => {
     await flushAsync();
   });
 
+  it("returns a resolved Review receipt after delegate replacement", async () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const replacementReview = jest.fn(async () => ({ kind: "applied" as const }));
+    const replacement = new RecordingKnowledgeStudioPort("new", {
+      review: replacementReview,
+    });
+    const committedReceipt = Object.freeze({ kind: "recovery_required" as const });
+    const review = jest.fn(async () => {
+      port.replaceDelegate(replacement);
+      return committedReceipt;
+    });
+    port.replaceDelegate(new RecordingKnowledgeStudioPort("old", { review }));
+
+    await expect(
+      port.submitReview("personal", createReviewCommand(), new AbortController().signal)
+    ).resolves.toBe(committedReceipt);
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(replacementReview).not.toHaveBeenCalled();
+  });
+
+  it("returns a resolved Review receipt after caller cancellation", async () => {
+    const caller = new AbortController();
+    const committedReceipt = Object.freeze({ kind: "rejected" as const });
+    const review = jest.fn(async () => {
+      caller.abort();
+      return committedReceipt;
+    });
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(new RecordingKnowledgeStudioPort("current", { review }));
+
+    await expect(port.submitReview("personal", createReviewCommand(), caller.signal)).resolves.toBe(
+      committedReceipt
+    );
+    expect(review).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invoke Review when caller cancellation is already active", async () => {
+    const caller = new AbortController();
+    caller.abort();
+    const review = jest.fn(async () => ({ kind: "applied" as const }));
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(new RecordingKnowledgeStudioPort("current", { review }));
+
+    await expect(
+      port.submitReview("personal", createReviewCommand(), caller.signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(review).not.toHaveBeenCalled();
+  });
+
   it("revokes stale source lifecycle work and routes new actions only to the current generation", async () => {
     const oldCheck = createDeferred<void>();
     let oldSignal: AbortSignal | undefined;

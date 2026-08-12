@@ -9,6 +9,7 @@ import { createKnowledgeReviewEvidenceRef } from "@/knowledge/review/KnowledgeRe
 import {
   compileKnowledgeReviewSelection,
   createKnowledgeReviewPlan,
+  KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS,
   KnowledgeReviewAbortError,
   KnowledgeReviewDecisionError,
   KnowledgeReviewDecisionService,
@@ -319,6 +320,67 @@ describe("snapshotKnowledgeReviewCommand", () => {
     }
   });
 
+  it("captures exact manually edited content as a frozen data record", () => {
+    const proposal = createProposal([createUpdate()]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const command = createCommand(plan, [
+      {
+        changeId: "change-update",
+        decision: "accept_edited",
+        afterContent: "# Revised\r\n\r\nExact trailing space  \r\n",
+      },
+    ]);
+
+    const captured = snapshotKnowledgeReviewCommand(command);
+
+    expect(captured).toEqual(command);
+    expect(captured).not.toBe(command);
+    expect(captured.decisions[0]).not.toBe(command.decisions[0]);
+    expect(Object.isFrozen(captured.decisions[0])).toBe(true);
+  });
+
+  it("preserves valid Unicode exactly and rejects lone surrogates or unsupported C0 controls", () => {
+    const proposal = createProposal([createUpdate()]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const exactValidContent = "emoji: 😀\tdecomposed: e\u0301\r\n";
+
+    const captured = snapshotKnowledgeReviewCommand(
+      createCommand(plan, [
+        {
+          changeId: "change-update",
+          decision: "accept_edited",
+          afterContent: exactValidContent,
+        },
+      ])
+    );
+
+    expect(captured.decisions[0]).toEqual({
+      changeId: "change-update",
+      decision: "accept_edited",
+      afterContent: exactValidContent,
+    });
+    const invalidContents = [
+      "lone-high-\ud800",
+      "lone-low-\udc00",
+      "bad-pair-\ud800x",
+      "nul-\0",
+      "c0-\u001f",
+    ];
+    for (const afterContent of invalidContents) {
+      let capturedError: unknown;
+      try {
+        snapshotKnowledgeReviewCommand(
+          createCommand(plan, [
+            { changeId: "change-update", decision: "accept_edited", afterContent },
+          ])
+        );
+      } catch (error) {
+        capturedError = error;
+      }
+      expect(decisionErrorCodes(capturedError)).toContain("review_command_edit_content_invalid");
+    }
+  });
+
   it("rejects accessor fields and records with extra keys", () => {
     const proposal = createProposal([createUpdate()]);
     const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
@@ -340,10 +402,92 @@ describe("snapshotKnowledgeReviewCommand", () => {
         path: "Wiki/private.md",
       } as KnowledgeReviewFileDecision,
     ]);
+    let contentAccessorCalls = 0;
+    const accessorDecision = {
+      changeId: "change-update",
+      decision: "accept_edited",
+      afterContent: "unused",
+    };
+    Object.defineProperty(accessorDecision, "afterContent", {
+      enumerable: true,
+      get: () => {
+        contentAccessorCalls += 1;
+        return "must not be read";
+      },
+    });
+    const inheritedDecision = Object.assign(Object.create({ inherited: true }) as object, {
+      changeId: "change-update",
+      decision: "accept_edited",
+      afterContent: "not plain",
+    });
 
-    for (const command of [accessorCommand, extraCommand, extraDecisionCommand]) {
+    for (const command of [
+      accessorCommand,
+      extraCommand,
+      extraDecisionCommand,
+      { ...createCommand(plan, []), decisions: [accessorDecision] },
+      { ...createCommand(plan, []), decisions: [inheritedDecision] },
+    ]) {
       expect(() => snapshotKnowledgeReviewCommand(command)).toThrow(KnowledgeReviewDecisionError);
     }
+    expect(contentAccessorCalls).toBe(0);
+  });
+
+  it("enforces inclusive edit budgets before scanning oversized invalid text", () => {
+    const proposal = createProposal([createUpdate()]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const exactFileLimit = "x".repeat(KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile);
+    const exactTotalCommand = createCommand(
+      plan,
+      Array.from(
+        {
+          length:
+            KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxTotalCharacters /
+            KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile,
+        },
+        (_, index) => ({
+          changeId: `change-${index}`,
+          decision: "accept_edited" as const,
+          afterContent: exactFileLimit,
+        })
+      )
+    );
+
+    expect(snapshotKnowledgeReviewCommand(exactTotalCommand).decisions).toHaveLength(4);
+
+    const oversizedFile = createCommand(plan, [
+      {
+        changeId: "change-update",
+        decision: "accept_edited",
+        afterContent: `\0${exactFileLimit}`,
+      },
+    ]);
+    const oversizedTotal = {
+      ...exactTotalCommand,
+      decisions: [
+        ...exactTotalCommand.decisions,
+        { changeId: "change-extra", decision: "accept_edited" as const, afterContent: "\0" },
+      ],
+    };
+
+    let oversizedFileError: unknown;
+    try {
+      snapshotKnowledgeReviewCommand(oversizedFile);
+    } catch (error) {
+      oversizedFileError = error;
+    }
+    expect(decisionErrorCodes(oversizedFileError)).toContain(
+      "review_command_edit_content_limit_exceeded"
+    );
+    let oversizedTotalError: unknown;
+    try {
+      snapshotKnowledgeReviewCommand(oversizedTotal);
+    } catch (error) {
+      oversizedTotalError = error;
+    }
+    expect(decisionErrorCodes(oversizedTotalError)).toContain(
+      "review_command_edit_total_limit_exceeded"
+    );
   });
 
   it("rejects sparse decision and block-id arrays", () => {
@@ -409,6 +553,181 @@ describe("compileKnowledgeReviewSelection", () => {
     expect(proposal).toEqual(original);
   });
 
+  it("replaces only writable content while preserving every proposal-owned invariant", () => {
+    const excerpt = "Grounded source excerpt";
+    const proposal = createProposal(
+      [
+        createCreate({ id: "change-create-edited", path: "Wiki/Create-edited.md" }),
+        createUpdate({ id: "change-update-edited", path: "Wiki/Update-edited.md" }),
+      ],
+      [
+        {
+          citationId: "citation-1",
+          claimId: "claim-1",
+          relation: "supports",
+          locator: {
+            kind: "quote",
+            sourceId: "source-1",
+            artifactId: "artifact-1",
+            artifactContentHash: "a".repeat(64),
+            excerpt,
+            quoteHash: createQuoteHash(excerpt),
+          },
+        },
+      ]
+    );
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const original = cloneJson(proposal);
+    const editedCreate = "# Manually revised create\n";
+    const editedUpdate = "# Manually revised update\r\n\r\n";
+
+    const result = compileKnowledgeReviewSelection(
+      proposal,
+      plan,
+      createCommand(plan, [
+        {
+          changeId: "change-create-edited",
+          decision: "accept_edited",
+          afterContent: editedCreate,
+        },
+        {
+          changeId: "change-update-edited",
+          decision: "accept_edited",
+          afterContent: editedUpdate,
+        },
+      ])
+    );
+
+    expect(result.kind).toBe("candidate");
+    if (result.kind === "candidate") {
+      expect(result.changeSet).toMatchObject({
+        id: proposal.id,
+        bundleId: proposal.bundleId,
+        operation: proposal.operation,
+        sourceRefs: proposal.sourceRefs,
+        citations: proposal.citations,
+        createdAt: proposal.createdAt,
+        status: "proposed",
+        validation: { okfValid: false, citationsValid: false, linksValid: false },
+      });
+      expect(result.changeSet.changes).toEqual([
+        {
+          ...proposal.changes[0],
+          afterContent: editedCreate,
+          afterHash: createFileContentHash(editedCreate),
+        },
+        {
+          ...proposal.changes[1],
+          afterContent: editedUpdate,
+          afterHash: createFileContentHash(editedUpdate),
+        },
+      ]);
+    }
+    expect(proposal).toEqual(original);
+  });
+
+  it("bounds the final exact and mixed selected candidate before validation", () => {
+    const chunk = "x".repeat(KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile);
+    const chunkHash = createFileContentHash(chunk);
+    /** Creates one large create operation without redundantly hashing shared test text. */
+    const largeCreate = (id: string): KnowledgeFileChange =>
+      createCreate({
+        id,
+        path: `Wiki/${id}.md`,
+        afterContent: chunk,
+        afterHash: chunkHash,
+      });
+    const proposal = createProposal([
+      largeCreate("change-exact-1"),
+      largeCreate("change-exact-2"),
+      largeCreate("change-blocks"),
+      largeCreate("change-edited"),
+      createCreate({ id: "change-overflow", path: "Wiki/Overflow.md", afterContent: "x" }),
+    ]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const acceptedBlockIds = plan.files
+      .find((file) => file.changeId === "change-blocks")!
+      .blocks.filter((block) => block.kind === "change")
+      .map((block) => block.blockId);
+    const exactAtLimit = createCommand(plan, [
+      { changeId: "change-exact-1", decision: "accept_exact" },
+      { changeId: "change-exact-2", decision: "accept_exact" },
+      { changeId: "change-blocks", decision: "accept_exact" },
+      { changeId: "change-edited", decision: "accept_exact" },
+      { changeId: "change-overflow", decision: "reject" },
+    ]);
+    const mixedAtLimit = createCommand(plan, [
+      { changeId: "change-exact-1", decision: "accept_exact" },
+      { changeId: "change-exact-2", decision: "accept_exact" },
+      { changeId: "change-blocks", decision: "accept_blocks", acceptedBlockIds },
+      { changeId: "change-edited", decision: "accept_edited", afterContent: chunk },
+      { changeId: "change-overflow", decision: "reject" },
+    ]);
+
+    expect(compileKnowledgeReviewSelection(proposal, plan, exactAtLimit).kind).toBe("candidate");
+    expect(compileKnowledgeReviewSelection(proposal, plan, mixedAtLimit).kind).toBe("candidate");
+
+    let overLimitError: unknown;
+    try {
+      compileKnowledgeReviewSelection(proposal, plan, {
+        ...mixedAtLimit,
+        decisions: [
+          ...mixedAtLimit.decisions.slice(0, -1),
+          { changeId: "change-overflow", decision: "accept_exact" },
+        ],
+      });
+    } catch (error) {
+      overLimitError = error;
+    }
+    expect(decisionErrorCodes(overLimitError)).toEqual([
+      "review_candidate_total_content_limit_exceeded",
+    ]);
+  });
+
+  it("rejects a block selection that combines into an oversized final file", () => {
+    const largeBeforeBlock = "a".repeat(1_100_000);
+    const largeAfterBlock = "b".repeat(1_100_000);
+    const beforeContent = `${largeBeforeBlock}\nshared context\nold tail\n`;
+    const proposedContent = `new head\nshared context\n${largeAfterBlock}\n`;
+    const proposal = createProposal([
+      createUpdate({
+        beforeHash: createFileContentHash(beforeContent),
+        afterContent: proposedContent,
+        afterHash: createFileContentHash(proposedContent),
+      }),
+    ]);
+    const plan = createKnowledgeReviewPlan(proposal, [
+      { changeId: "change-update", kind: "file", content: beforeContent },
+    ]);
+    const changedBlocks = plan.files[0].blocks.filter((block) => block.kind === "change");
+
+    expect(beforeContent.length).toBeLessThanOrEqual(
+      KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile
+    );
+    expect(proposedContent.length).toBeLessThanOrEqual(
+      KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile
+    );
+    expect(changedBlocks).toHaveLength(2);
+
+    let overLimitError: unknown;
+    try {
+      compileKnowledgeReviewSelection(
+        proposal,
+        plan,
+        createCommand(plan, [
+          {
+            changeId: "change-update",
+            decision: "accept_blocks",
+            acceptedBlockIds: [changedBlocks[1].blockId],
+          },
+        ])
+      );
+    } catch (error) {
+      overLimitError = error;
+    }
+    expect(decisionErrorCodes(overLimitError)).toEqual(["review_candidate_content_limit_exceeded"]);
+  });
+
   it("preserves proposal order for rewritten changes", () => {
     const proposal = createProposal([
       createUpdate({ id: "change-z", path: "Wiki/z.md" }),
@@ -462,6 +781,77 @@ describe("compileKnowledgeReviewSelection", () => {
     );
 
     expect(result).toEqual({ kind: "rejected" });
+  });
+
+  it("skips an edited file whose exact bytes equal its observed before state", () => {
+    const proposal = createProposal([createUpdate(), createCreate()]);
+    const plan = createKnowledgeReviewPlan(proposal, createObservations(proposal));
+    const onlyUpdateProposal = createProposal([createUpdate()]);
+    const onlyUpdatePlan = createKnowledgeReviewPlan(
+      onlyUpdateProposal,
+      createObservations(onlyUpdateProposal)
+    );
+
+    const mixed = compileKnowledgeReviewSelection(
+      proposal,
+      plan,
+      createCommand(plan, [
+        { changeId: "change-update", decision: "accept_edited", afterContent: BEFORE },
+        { changeId: "change-create", decision: "accept_exact" },
+      ])
+    );
+    const onlyNoOp = compileKnowledgeReviewSelection(
+      onlyUpdateProposal,
+      onlyUpdatePlan,
+      createCommand(onlyUpdatePlan, [
+        { changeId: "change-update", decision: "accept_edited", afterContent: BEFORE },
+      ])
+    );
+
+    expect(mixed).toMatchObject({
+      kind: "candidate",
+      changeSet: { changes: [expect.objectContaining({ id: "change-create" })] },
+    });
+    expect(onlyNoOp).toEqual({ kind: "rejected" });
+  });
+
+  it("rejects manual editing for delete and every reject-only snapshot", () => {
+    const deleteProposal = createProposal([createDelete()]);
+    const deletePlan = createKnowledgeReviewPlan(
+      deleteProposal,
+      createObservations(deleteProposal)
+    );
+    const staleProposal = createProposal([createUpdate()]);
+    const stalePlan = createKnowledgeReviewPlan(staleProposal, [
+      { changeId: "change-update", kind: "file", content: "changed elsewhere" },
+    ]);
+
+    const attempts: Array<{
+      proposal: KnowledgeChangeSet;
+      plan: KnowledgeReviewPlan;
+      command: KnowledgeReviewCommand;
+    }> = [
+      {
+        proposal: deleteProposal,
+        plan: deletePlan,
+        command: createCommand(deletePlan, [
+          { changeId: "change-delete", decision: "accept_edited", afterContent: "replacement" },
+        ]),
+      },
+      {
+        proposal: staleProposal,
+        plan: stalePlan,
+        command: createCommand(stalePlan, [
+          { changeId: "change-update", decision: "accept_edited", afterContent: "replacement" },
+        ]),
+      },
+    ];
+
+    for (const attempt of attempts) {
+      expect(() =>
+        compileKnowledgeReviewSelection(attempt.proposal, attempt.plan, attempt.command)
+      ).toThrow(KnowledgeReviewDecisionError);
+    }
   });
 
   it("rejects stale identity, unknown blocks, duplicate decisions, and blocked acceptance", () => {
@@ -554,6 +944,50 @@ describe("KnowledgeReviewDecisionService", () => {
     }
     expect(validator.calls).toBe(1);
     expect(validator.inputs[0].candidate.status).toBe("proposed");
+  });
+
+  it("routes manually edited content through the existing deterministic validator", async () => {
+    const proposal = createProposal([createUpdate()]);
+    const observations = createObservations(proposal);
+    const plan = createKnowledgeReviewPlan(proposal, observations);
+    const validator = new FakeReviewValidator(validCandidate);
+    const service = new KnowledgeReviewDecisionService(validator);
+    const afterContent = "# Human-reviewed candidate\n";
+
+    const result = await service.decide(
+      proposal,
+      observations,
+      createCommand(plan, [{ changeId: "change-update", decision: "accept_edited", afterContent }]),
+      new AbortController().signal
+    );
+
+    expect(result.kind).toBe("accepted");
+    expect(validator.calls).toBe(1);
+    expect(validator.inputs[0]).toMatchObject({
+      proposal,
+      proposalDigest: plan.proposalDigest,
+      snapshotToken: plan.snapshotToken,
+      observations,
+      candidate: {
+        status: "proposed",
+        validation: { okfValid: false, citationsValid: false, linksValid: false },
+        changes: [
+          {
+            id: "change-update",
+            operation: "update",
+            path: proposal.changes[0].path,
+            sourceRefs: proposal.changes[0].sourceRefs,
+            reason: proposal.changes[0].reason,
+            beforeHash:
+              proposal.changes[0].operation === "update"
+                ? proposal.changes[0].beforeHash
+                : undefined,
+            afterContent,
+            afterHash: createFileContentHash(afterContent),
+          },
+        ],
+      },
+    });
   });
 
   it("persists no candidate and skips validation when everything is rejected", async () => {

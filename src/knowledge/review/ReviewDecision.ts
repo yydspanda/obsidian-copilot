@@ -21,6 +21,12 @@ const MAX_REVIEW_DIAGNOSTICS = 256;
 const MAX_REVIEW_COMMAND_ITEMS = 10_000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
+/** Fixed manual-edit budgets aligned with the default compiler output limits. */
+export const KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS = Object.freeze({
+  maxCharactersPerFile: 2_000_000,
+  maxTotalCharacters: 8_000_000,
+});
+
 /** Exact transient observation used to build one review preview. */
 export type KnowledgeReviewTargetObservation =
   | { changeId: string; kind: "missing" }
@@ -88,9 +94,10 @@ export interface KnowledgeReviewPlan {
 export type KnowledgeReviewFileDecision =
   | { changeId: string; decision: "accept_exact" }
   | { changeId: string; decision: "reject" }
+  | { changeId: string; decision: "accept_edited"; afterContent: string }
   | { changeId: string; decision: "accept_blocks"; acceptedBlockIds: readonly string[] };
 
-/** Command emitted by the UI without paths, content, hashes, or status fields. */
+/** Command emitted by the UI without paths, hashes, source metadata, or status fields. */
 export interface KnowledgeReviewCommand {
   changeSetId: string;
   proposalDigest: string;
@@ -169,11 +176,50 @@ function createCommandInputDiagnostic(field: string): KnowledgeDiagnostic {
   };
 }
 
+/** Creates one fixed manual-edit input diagnostic without retaining content. */
+function createManualEditDiagnostic(
+  code:
+    | "review_command_edit_content_invalid"
+    | "review_command_edit_content_limit_exceeded"
+    | "review_command_edit_total_limit_exceeded",
+  field: string,
+  message: string
+): KnowledgeDiagnostic {
+  return { code, severity: "error", field, message };
+}
+
 /**
- * Strictly captures one opaque Review command without reading paths or content.
+ * Checks exact editor text for safely encodable Unicode and supported C0 controls.
+ *
+ * The check is deliberately non-normalizing: valid surrogate pairs, combining
+ * sequences, line endings, and all other code units remain byte-significant.
+ *
+ * @param value - Exact manual editor text
+ * @returns Whether the text contains no lone surrogate or unsupported C0 control
+ */
+export function isValidKnowledgeReviewManualEditText(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit < 0x20 && codeUnit !== 0x09 && codeUnit !== 0x0a && codeUnit !== 0x0d) {
+      return false;
+    }
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= value.length) return false;
+      const nextCodeUnit = value.charCodeAt(index + 1);
+      if (nextCodeUnit < 0xdc00 || nextCodeUnit > 0xdfff) return false;
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return false;
+  }
+  return true;
+}
+
+/**
+ * Strictly captures one Review command without invoking accessors or retaining metadata.
  *
  * @param value - Unknown UI command crossing the production mutation boundary
- * @returns Detached, deeply frozen identifier-only command
+ * @returns Detached, deeply frozen identity-bound command
  */
 export function snapshotKnowledgeReviewCommand(value: unknown): KnowledgeReviewCommand {
   const command = readExactCommandRecord(value, [
@@ -196,12 +242,57 @@ export function snapshotKnowledgeReviewCommand(value: unknown): KnowledgeReviewC
     throw new KnowledgeReviewDecisionError([createCommandInputDiagnostic("command")]);
   }
 
+  let totalEditedCharacters = 0;
   const captured = decisions.map((value, index): KnowledgeReviewFileDecision => {
     const base = readExactCommandRecord(value, ["changeId", "decision"]);
     if (base && isCommandIdentifier(base.changeId)) {
       if (base.decision === "accept_exact" || base.decision === "reject") {
         return Object.freeze({ changeId: base.changeId, decision: base.decision });
       }
+    }
+    const edited = readExactCommandRecord(value, ["changeId", "decision", "afterContent"]);
+    if (
+      edited &&
+      isCommandIdentifier(edited.changeId) &&
+      edited.decision === "accept_edited" &&
+      typeof edited.afterContent === "string"
+    ) {
+      if (edited.afterContent.length > KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile) {
+        throw new KnowledgeReviewDecisionError([
+          createManualEditDiagnostic(
+            "review_command_edit_content_limit_exceeded",
+            `decisions[${index}].afterContent`,
+            "Manual review content exceeds the per-file character limit"
+          ),
+        ]);
+      }
+      if (
+        edited.afterContent.length >
+        KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxTotalCharacters - totalEditedCharacters
+      ) {
+        throw new KnowledgeReviewDecisionError([
+          createManualEditDiagnostic(
+            "review_command_edit_total_limit_exceeded",
+            "decisions",
+            "Manual review content exceeds the total character limit"
+          ),
+        ]);
+      }
+      if (!isValidKnowledgeReviewManualEditText(edited.afterContent)) {
+        throw new KnowledgeReviewDecisionError([
+          createManualEditDiagnostic(
+            "review_command_edit_content_invalid",
+            `decisions[${index}].afterContent`,
+            "Manual review content contains an unsupported control or Unicode sequence"
+          ),
+        ]);
+      }
+      totalEditedCharacters += edited.afterContent.length;
+      return Object.freeze({
+        changeId: edited.changeId,
+        decision: "accept_edited" as const,
+        afterContent: edited.afterContent,
+      });
     }
     const blocks = readExactCommandRecord(value, ["changeId", "decision", "acceptedBlockIds"]);
     const blockIds = snapshotCommandArray(blocks?.acceptedBlockIds);
@@ -701,6 +792,14 @@ function validateReviewCommand(plan: KnowledgeReviewPlan, command: KnowledgeRevi
         "This file is currently available for rejection only"
       );
     }
+    if (decision.decision === "accept_edited" && file.operation === "delete") {
+      addError(
+        diagnostics,
+        "review_command_edit_delete_forbidden",
+        `decisions[${index}].decision`,
+        "Delete operations cannot be replaced with manually edited content"
+      );
+    }
     if (decision.decision === "accept_blocks") {
       if (file.capability !== "blocks_allowed") {
         addError(
@@ -747,6 +846,72 @@ function validateReviewCommand(plan: KnowledgeReviewPlan, command: KnowledgeRevi
   });
   if (diagnostics.length > 0) {
     throw new KnowledgeReviewDecisionError(diagnostics);
+  }
+}
+
+/**
+ * Rebuilds one writable change from trusted proposal metadata and revised text.
+ *
+ * @param change - Exact proposal-owned create or update operation
+ * @param afterContent - Selected or manually edited post-state text
+ * @returns Detached writable change with a recomputed exact content hash
+ */
+function createRevisedWritableChange(
+  change: Exclude<KnowledgeFileChange, { operation: "delete" }>,
+  afterContent: string
+): KnowledgeFileChange {
+  const base = {
+    id: change.id,
+    path: change.path,
+    sourceRefs: [...change.sourceRefs],
+    reason: change.reason,
+    afterContent,
+    afterHash: createFileContentHash(afterContent),
+  };
+  return change.operation === "create"
+    ? { ...base, operation: "create", expectedAbsent: true }
+    : { ...base, operation: "update", beforeHash: change.beforeHash };
+}
+
+/** Deferred writable selection whose content has not been rehashed yet. */
+interface KnowledgeReviewSelectedWritableChange {
+  change: Exclude<KnowledgeFileChange, { operation: "delete" }>;
+  afterContent: string;
+  kind: "exact" | "revised";
+}
+
+/**
+ * Enforces final per-file and total candidate text budgets before any rehash.
+ *
+ * @param selections - All create and update selections in proposal order
+ */
+function assertSelectedCandidateContentBudget(
+  selections: readonly KnowledgeReviewSelectedWritableChange[]
+): void {
+  let remainingCharacters = KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxTotalCharacters;
+  for (let index = 0; index < selections.length; index += 1) {
+    const selection = selections[index];
+    if (selection.afterContent.length > KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile) {
+      throw new KnowledgeReviewDecisionError([
+        {
+          code: "review_candidate_content_limit_exceeded",
+          severity: "error",
+          field: `changes[${index}].afterContent`,
+          message: "Selected review content exceeds the per-file character limit",
+        },
+      ]);
+    }
+    if (selection.afterContent.length > remainingCharacters) {
+      throw new KnowledgeReviewDecisionError([
+        {
+          code: "review_candidate_total_content_limit_exceeded",
+          severity: "error",
+          field: "changes",
+          message: "Selected review content exceeds the total character limit",
+        },
+      ]);
+    }
+    remainingCharacters -= selection.afterContent.length;
   }
 }
 
@@ -811,23 +976,48 @@ export function compileKnowledgeReviewSelection(
     capturedCommand.decisions.map((decision) => [decision.changeId, decision])
   );
   const filesById = new Map(plan.files.map((file) => [file.changeId, file]));
-  const selectedChanges: KnowledgeFileChange[] = [];
+  const selections: KnowledgeReviewSelectedWritableChange[] = [];
   parsedProposal.value.changes.forEach((change) => {
     const decision = decisionsById.get(change.id)!;
     if (decision.decision === "reject") {
       return;
     }
     if (decision.decision === "accept_exact") {
-      selectedChanges.push({
-        ...change,
-        sourceRefs: [...change.sourceRefs],
-      });
+      if (change.operation === "delete") {
+        throw new KnowledgeReviewDecisionError([
+          {
+            code: "review_exact_delete_forbidden",
+            severity: "error",
+            field: change.id,
+            message: "Delete operations cannot be accepted by this Review contract",
+          },
+        ]);
+      }
+      selections.push({ change, afterContent: change.afterContent, kind: "exact" });
       return;
     }
 
     const file = filesById.get(change.id)!;
-    const afterContent = composeSelectedContent(file, new Set(decision.acceptedBlockIds));
     const beforeContent = file.beforeContent ?? "";
+    if (decision.decision === "accept_edited") {
+      if (change.operation === "delete") {
+        throw new KnowledgeReviewDecisionError([
+          {
+            code: "review_manual_edit_delete_forbidden",
+            severity: "error",
+            field: change.id,
+            message: "Delete operations cannot be replaced with manually edited content",
+          },
+        ]);
+      }
+      if (decision.afterContent === beforeContent) {
+        return;
+      }
+      selections.push({ change, afterContent: decision.afterContent, kind: "revised" });
+      return;
+    }
+
+    const afterContent = composeSelectedContent(file, new Set(decision.acceptedBlockIds));
     if (afterContent === beforeContent) {
       return;
     }
@@ -841,25 +1031,18 @@ export function compileKnowledgeReviewSelection(
         },
       ]);
     }
-    const afterHash = createFileContentHash(afterContent);
-    const base = {
-      id: change.id,
-      path: change.path,
-      sourceRefs: [...change.sourceRefs],
-      reason: change.reason,
-      afterContent,
-      afterHash,
-    };
-    selectedChanges.push(
-      change.operation === "create"
-        ? { ...base, operation: "create", expectedAbsent: true }
-        : { ...base, operation: "update", beforeHash: change.beforeHash }
-    );
+    selections.push({ change, afterContent, kind: "revised" });
   });
 
-  if (selectedChanges.length === 0) {
+  if (selections.length === 0) {
     return { kind: "rejected" };
   }
+  assertSelectedCandidateContentBudget(selections);
+  const selectedChanges = selections.map<KnowledgeFileChange>((selection) =>
+    selection.kind === "exact"
+      ? { ...selection.change, sourceRefs: [...selection.change.sourceRefs] }
+      : createRevisedWritableChange(selection.change, selection.afterContent)
+  );
   return {
     kind: "candidate",
     changeSet: {

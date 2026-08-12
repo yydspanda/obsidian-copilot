@@ -524,6 +524,16 @@
 - [ ] Windows Obsidian 有界验收：真实非空 Review 显示 proposal evidence；Markdown / PDF exact jump、stale source、连续点击 latest-visible、Reject 零 Wiki 写与 Validate-and-Apply 原有事务边界均按冻结产物复核。
 - [ ] 功能冻结后一次性解除教程冻结并更新相关手册；在此之前禁止为中间状态修改 `docs/`。
 
+### R2：人工修订候选（自动化完成，实机待验）
+
+- [x] 扩展同一严格 Review command，使用户只能为当前 create/update 候选提交有界 `accept_edited` 正文；Core 保留 proposal-owned path、operation、precondition、reason、sourceRefs 与 citations，重新计算 afterHash，并禁止 delete、reject-only、stale/畸形/超预算输入。每文件最多 2,000,000 个 UTF-16 code units，最终候选及 controller 会话实际保留的全部草稿字符串总量最多 8,000,000；提交前拒绝不完整 surrogate 与不受支持的 C0 控制字符。
+- [x] 在 Review 中提供完整文件编辑、取消、恢复原提案、保存修订与有界 Current/Edited 预览；明确人工文字不会调用模型、proposal evidence 不自动证明新增表述，仍须 fresh deterministic validation 后才进入原有事务 Apply。大文本及恶意长单行不进入词级 diff 热路径；原生编辑器确定性保存 LF 换行，Core 对其他受信调用方提交的原始字符仍逐字精确保留。
+- [x] 将未提交的 Review 选择与正在输入的编辑缓冲绑定 exact Bundle / ChangeSet / proposal digest / snapshot token；同 token 的 tab 往返与 popout React 重建保留，token 漂移会撤销并独立告警，blocked 保留，成功 Apply/Reject、Bundle 换代或卸载清除。
+- [x] 完成严格 command/draft 边界、commit-wins Reject/Apply、真实 reviewed transaction 写入精确人工字节、Controller/UI/Apply 回归与多轮安全/UX 终审；最终 R2 聚焦 8 suites / 173 tests，P0/P1 清零。
+- [x] 完成当前冻结树全仓自动化门禁：278 suites / 4604 tests 全绿；`npm run format`、全仓 `format:check`、全仓 ESLint、production build 与 `git diff --check` 通过；未运行需 API key 的模型 integration。
+- [ ] 完成 Windows Obsidian 有界验收：真实非空 update Review 手工修改 → Validate and apply、blocked 草稿保留、token drift 清稿提示、tab/popout 保留与最终 Wiki exact bytes；本阶段继续冻结教程。
+- [ ] 后续硬化：把正常 production 已限制为 128 targets 的约束统一下沉到 Review command / ChangeSet / block ids / Review records 的显式集合上限；不阻塞当前 production R2。
+
 ## Source Documents
 
 - [`designdocs/PERSONAL_KNOWLEDGE_OS_PRD.md`](./designdocs/PERSONAL_KNOWLEDGE_OS_PRD.md)：产品目标、Golden Flow、需求和验收标准。

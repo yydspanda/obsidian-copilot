@@ -276,13 +276,13 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
-  /** Routes an opaque review decision through the current delegate generation. */
+  /** Routes one Review mutation while preserving any resolved durable receipt. */
   async submitReview(
     bundleId: string,
     command: KnowledgeReviewCommand,
     signal: AbortSignal
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
-    return this.runWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+    return this.runCommitWinsWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       delegate.submitReview(bundleId, command, delegatedSignal)
     );
   }

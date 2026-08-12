@@ -863,6 +863,73 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
     expect(harness.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("durably applies exact manually edited bytes through the reviewed transaction", async () => {
+    const proposal = createProposal([createUpdateChange()], "changeset-atlas-followup");
+    const harness = await createFollowupReviewedApplyHarness(
+      proposal,
+      new Map([[TARGET_PATH, PAGE_CONTENT]])
+    );
+    const runtimeBeforeReview = parseKnowledgeRuntimeStoreSnapshot(
+      JSON.parse(await harness.capabilities.file.read()) as unknown
+    );
+    const context = await loadKnowledgeStudioReviewContext({
+      runtime: harness.capabilities.runtime,
+      bundle: harness.bundle,
+      targetResolver: harness.resolver,
+      changeSetId: harness.changeSetId,
+      signal: new AbortController().signal,
+      assertCurrent: () => undefined,
+    });
+    if (!context) throw new Error("Expected one pending Review context");
+    const manuallyEditedContent = UPDATED_PAGE_CONTENT.replace(
+      "The launch schedule is confirmed.",
+      "The launch schedule is confirmed by the reviewer."
+    );
+    const command = {
+      changeSetId: context.plan.changeSetId,
+      proposalDigest: context.plan.proposalDigest,
+      expectedSnapshotToken: context.plan.snapshotToken,
+      decisions: [
+        {
+          changeId: "change-atlas-followup",
+          decision: "accept_edited" as const,
+          afterContent: manuallyEditedContent,
+        },
+      ],
+    };
+
+    await expect(
+      harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+    ).resolves.toEqual({ kind: "applied" });
+
+    expect(harness.fileStore.files.get(TARGET_PATH)).toBe(manuallyEditedContent);
+    expect(harness.fileStore.compareAndSwapCalls).toBe(1);
+    await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+      outcome: "accepted",
+      acceptedChangeSet: {
+        citations: proposal.citations,
+        sourceRefs: proposal.sourceRefs,
+        changes: [
+          {
+            ...proposal.changes[0],
+            afterContent: manuallyEditedContent,
+            afterHash: createFileContentHash(manuallyEditedContent),
+          },
+        ],
+      },
+    });
+    const runtime = parseKnowledgeRuntimeStoreSnapshot(
+      JSON.parse(await harness.capabilities.file.read()) as unknown
+    );
+    expect(runtime.activeTransaction).toBeNull();
+    expect(runtime.applyCommits).toHaveLength(runtimeBeforeReview.applyCommits.length + 1);
+    expect(runtime.applyCommits.at(-1)).toMatchObject({
+      bundleId: BUNDLE_ID,
+      changeSetId: harness.changeSetId,
+    });
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("applies one mixed block-selected update and exact-selected create atomically", async () => {
     const proposal = createProposal(
       [

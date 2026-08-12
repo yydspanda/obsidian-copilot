@@ -703,6 +703,56 @@ describe("KnowledgeStudioRuntimeCommandAdapter", () => {
     await expect(harness.drains[0]).resolves.toBeUndefined();
   });
 
+  it("returns a committed literal Reject after caller cancellation at storage return", async () => {
+    const fixture = createPendingReviewFixture();
+    const harness = await createAdapterHarness({ fixture });
+    const caller = new AbortController();
+    const process = jest.spyOn(harness.file, "process");
+    process.mockImplementation(async (transform: (currentContent: string) => string) => {
+      process.mockRestore();
+      const committed = await harness.file.process(transform);
+      caller.abort();
+      return committed;
+    });
+
+    await expect(
+      harness.adapter.submitReview(BUNDLE_ID, fixture.command, caller.signal)
+    ).resolves.toEqual({ kind: "rejected" });
+
+    expect(caller.signal.aborted).toBe(true);
+    const durable = await harness.runtime.readStudioBundle(BUNDLE_ID);
+    expect(durable.review.records).toEqual([
+      expect.objectContaining({
+        changeSetId: fixture.command.changeSetId,
+        outcome: "rejected",
+      }),
+    ]);
+  });
+
+  it("keeps a literal Reject receipt when best-effort notifications fail", async () => {
+    const fixture = createPendingReviewFixture();
+    const harness = await createAdapterHarness({ fixture });
+    harness.notifyReviewWorkAvailable.mockImplementation(() => {
+      throw new Error("worker notification failed");
+    });
+    harness.adapter.subscribe(BUNDLE_ID, () => {
+      throw new Error("reload listener failed");
+    });
+
+    await expect(
+      harness.adapter.submitReview(BUNDLE_ID, fixture.command, new AbortController().signal)
+    ).resolves.toEqual({ kind: "rejected" });
+
+    const durable = await harness.runtime.readStudioBundle(BUNDLE_ID);
+    expect(durable.review.records).toEqual([
+      expect.objectContaining({
+        changeSetId: fixture.command.changeSetId,
+        outcome: "rejected",
+      }),
+    ]);
+    expect(harness.notifyReviewWorkAvailable).toHaveBeenCalledTimes(1);
+  });
+
   it.each<{
     result: KnowledgeStudioReviewSubmissionResult;
     expectedNotificationCount: number;
@@ -741,6 +791,29 @@ describe("KnowledgeStudioRuntimeCommandAdapter", () => {
     }
   );
 
+  it("keeps a reviewed Apply receipt when best-effort notifications fail", async () => {
+    const fixture = createPendingReviewFixture();
+    const command: KnowledgeReviewCommand = {
+      ...fixture.command,
+      decisions: [{ changeId: "change-reject", decision: "accept_exact" }],
+    };
+    const receipt = Object.freeze({ kind: "applied" as const });
+    const reviewApply = new KnowledgeStudioReviewedApplyPort(async () => receipt);
+    const harness = await createAdapterHarness({ fixture, reviewApply });
+    harness.notifyReviewWorkAvailable.mockImplementation(() => {
+      throw new Error("worker notification failed");
+    });
+    harness.adapter.subscribe(BUNDLE_ID, () => {
+      throw new Error("reload listener failed");
+    });
+
+    await expect(
+      harness.adapter.submitReview(BUNDLE_ID, command, new AbortController().signal)
+    ).resolves.toBe(receipt);
+    expect(harness.notifyReviewWorkAvailable).toHaveBeenCalledTimes(1);
+    expect(harness.file.processCount).toBe(0);
+  });
+
   it.each([
     {
       name: "accept_exact",
@@ -752,6 +825,14 @@ describe("KnowledgeStudioRuntimeCommandAdapter", () => {
         changeId: "change-reject",
         decision: "accept_blocks",
         acceptedBlockIds: [] as string[],
+      } as const,
+    },
+    {
+      name: "accept_edited",
+      decision: {
+        changeId: "change-reject",
+        decision: "accept_edited",
+        afterContent: "# Human revision\n",
       } as const,
     },
   ])("blocks $name without entering Runtime storage", async ({ decision }) => {
@@ -780,6 +861,82 @@ describe("KnowledgeStudioRuntimeCommandAdapter", () => {
     expect(harness.notifyReviewWorkAvailable).not.toHaveBeenCalled();
     expect(hint).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "block selection",
+      decision: {
+        changeId: "change-reject",
+        decision: "accept_blocks",
+        acceptedBlockIds: [] as string[],
+      } as const,
+    },
+    {
+      name: "manual edit",
+      decision: {
+        changeId: "change-reject",
+        decision: "accept_edited",
+        afterContent: "# Human revision\n",
+      } as const,
+    },
+  ])(
+    "routes $name directly to reviewed Apply without entering the atomic Reject facade",
+    async ({ decision }) => {
+      const fixture = createPendingReviewFixture();
+      const submit = jest.fn<
+        Promise<KnowledgeStudioReviewSubmissionResult>,
+        [string, KnowledgeReviewCommand, AbortSignal]
+      >(async () => ({ kind: "applied" }));
+      const reviewApply = new KnowledgeStudioReviewedApplyPort(submit);
+      const harness = await createAdapterHarness({ fixture, reviewApply });
+      const signal = new AbortController().signal;
+      const command: KnowledgeReviewCommand = { ...fixture.command, decisions: [decision] };
+
+      await expect(harness.adapter.submitReview(BUNDLE_ID, command, signal)).resolves.toEqual({
+        kind: "applied",
+      });
+
+      expect(submit).toHaveBeenCalledWith(BUNDLE_ID, command, signal);
+      expect(harness.file.processCount).toBe(0);
+    }
+  );
+
+  it.each([
+    { name: "pre-aborted", bundleId: BUNDLE_ID, current: true, abort: true },
+    { name: "unknown-Bundle", bundleId: "unknown", current: true, abort: false },
+    { name: "stale-generation", bundleId: BUNDLE_ID, current: false, abort: false },
+  ])(
+    "rejects a $name edited command before reviewed Apply or Runtime mutation",
+    async ({ bundleId, current, abort }) => {
+      const fixture = createPendingReviewFixture();
+      const submit = jest.fn<
+        Promise<KnowledgeStudioReviewSubmissionResult>,
+        [string, KnowledgeReviewCommand, AbortSignal]
+      >(async () => ({ kind: "applied" }));
+      const reviewApply = new KnowledgeStudioReviewedApplyPort(submit);
+      const harness = await createAdapterHarness({ fixture, reviewApply });
+      harness.setCurrent(current);
+      const controller = new AbortController();
+      if (abort) controller.abort();
+      const command: KnowledgeReviewCommand = {
+        ...fixture.command,
+        decisions: [
+          {
+            changeId: "change-reject",
+            decision: "accept_edited",
+            afterContent: "# Human revision\n",
+          },
+        ],
+      };
+
+      await expect(
+        harness.adapter.submitReview(bundleId, command, controller.signal)
+      ).rejects.toMatchObject({ name: "AbortError" });
+
+      expect(submit).not.toHaveBeenCalled();
+      expect(harness.file.processCount).toBe(0);
+    }
+  );
 
   it("maps an exact durable Queue/Review conflict to stale without notifications", async () => {
     const fixture = createPendingReviewFixture();

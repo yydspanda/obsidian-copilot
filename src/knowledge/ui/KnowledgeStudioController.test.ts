@@ -100,7 +100,7 @@ async function flushAsync(): Promise<void> {
 }
 
 /** Creates a compact current review plan for controller identity tests. */
-function createReviewPlan(token = "snapshot-1"): KnowledgeReviewPlan {
+function createReviewPlan(token = "b".repeat(64)): KnowledgeReviewPlan {
   return {
     changeSetId: "changeset-1",
     bundleId: "personal",
@@ -611,7 +611,7 @@ class FakeKnowledgeSourceLifecyclePort implements KnowledgeSourceLifecyclePort {
 }
 
 /** Builds the content-free command expected by the controller boundary. */
-function createReviewCommand(token = "snapshot-1"): KnowledgeReviewCommand {
+function createReviewCommand(token = "b".repeat(64)): KnowledgeReviewCommand {
   return {
     changeSetId: "changeset-1",
     proposalDigest: "a".repeat(64),
@@ -1383,6 +1383,161 @@ describe("KnowledgeStudioController", () => {
       kind: "blocked",
       diagnostics: [{ code: "links_invalid" }],
     });
+  });
+
+  it("retains Review decisions and active text across tabs and same-token blocked refreshes", async () => {
+    const plan = createReviewPlan();
+    const snapshot = createSnapshot("same-token", [plan]);
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshot,
+      undefined,
+      async () => ({ kind: "blocked", diagnostics: [] })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+    controller.openReview(plan.changeSetId);
+    expect(controller.updateReviewDraft(plan, { "change-1": { kind: "accept_exact" } })).toBe(true);
+    expect(
+      controller.updateReviewActiveEdit(plan, {
+        changeId: "change-1",
+        afterContent: "typing across tabs",
+      })
+    ).toBe(true);
+
+    controller.selectTab("activity");
+    controller.selectTab("review");
+    expect(controller.getReviewDraft(plan)).toEqual({
+      "change-1": { kind: "accept_exact" },
+    });
+    expect(controller.getReviewActiveEdit(plan)).toEqual({
+      changeId: "change-1",
+      afterContent: "typing across tabs",
+    });
+
+    await controller.submitReview(createReviewCommand());
+    expect(port.reviewCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toEqual({
+      kind: "blocked",
+      message: "Finish or cancel the active manual edit before submitting this review.",
+    });
+    expect(controller.getReviewDraft(plan)).toEqual({
+      "change-1": { kind: "accept_exact" },
+    });
+    expect(controller.getReviewActiveEdit(plan)?.afterContent).toBe("typing across tabs");
+  });
+
+  it("keeps a separate draft-revocation notice across same-token refreshes", async () => {
+    const before = createReviewPlan("snapshot-1");
+    const after = createReviewPlan("snapshot-2");
+    const snapshots = [
+      createSnapshot("before", [before]),
+      createSnapshot("after", [after]),
+      createSnapshot("same-after", [after]),
+    ];
+    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift() ?? createSnapshot());
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+    controller.updateReviewDraft(before, {
+      "change-1": { kind: "accept_edited", afterContent: "saved" },
+    });
+    controller.updateReviewActiveEdit(before, {
+      changeId: "change-1",
+      afterContent: "typing",
+    });
+    await controller.submitReview({
+      ...createReviewCommand(),
+      extra: true,
+    } as KnowledgeReviewCommand);
+    expect(controller.getState().feedback?.message).toBe(
+      "This review command is invalid and was not submitted."
+    );
+
+    await controller.refresh();
+
+    expect(controller.getReviewDraft(before)).toEqual({});
+    expect(controller.getReviewActiveEdit(before)).toBeUndefined();
+    expect(controller.getState()).toMatchObject({
+      feedback: {
+        kind: "blocked",
+        message: "This review command is invalid and was not submitted.",
+      },
+      reviewDraftNotice: "This proposal changed. Its session-only Review draft was cleared.",
+    });
+
+    await controller.refresh();
+    expect(controller.getState().reviewDraftNotice).toContain("Review draft was cleared");
+    controller.selectTab("review");
+    expect(controller.getState().reviewDraftNotice).toBeUndefined();
+  });
+
+  it("clears the exact draft without a false revocation notice after durable recovery handoff", async () => {
+    const plan = createReviewPlan();
+    const snapshot = createSnapshot("recovery-handoff", [plan]);
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshot,
+      undefined,
+      async () => ({ kind: "recovery_required" })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+    expect(
+      controller.updateReviewDraft(plan, {
+        "change-1": { kind: "accept_edited", afterContent: "# Durable revision\n" },
+      })
+    ).toBe(true);
+
+    await controller.submitReview(createReviewCommand());
+
+    expect(controller.getReviewDraft(plan)).toEqual({});
+    expect(controller.getState()).toMatchObject({
+      feedback: {
+        kind: "blocked",
+        message: "The review is durable, but apply needs recovery before more work can continue.",
+      },
+      reviewDraftNotice: undefined,
+    });
+  });
+
+  it("strictly rejects malformed Review commands before any command-port call", async () => {
+    const port = new FakeKnowledgeStudioPort(async () => createSnapshot());
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+    const command = createReviewCommand();
+    const malformed = { ...command, extra: "not allowed" } as KnowledgeReviewCommand;
+
+    await controller.submitReview(malformed);
+
+    expect(port.reviewCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toEqual({
+      kind: "blocked",
+      message: "This review command is invalid and was not submitted.",
+    });
+  });
+
+  it("does not inspect properties on an impostor Review plan at the draft boundary", async () => {
+    const plan = createReviewPlan();
+    const port = new FakeKnowledgeStudioPort(async () => createSnapshot("current", [plan]));
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+    let getterCalls = 0;
+    const impostor = Object.create(null) as KnowledgeReviewPlan;
+    Object.defineProperty(impostor, "changeSetId", {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        return plan.changeSetId;
+      },
+    });
+
+    expect(controller.getReviewDraft(impostor)).toEqual({});
+    expect(controller.getReviewActiveEdit(impostor)).toBeUndefined();
+    expect(controller.updateReviewDraft(impostor, { "change-1": { kind: "reject" } })).toBe(false);
+    expect(getterCalls).toBe(0);
   });
 
   it("allows literal rejection while keeping acceptance behind its separate capability", async () => {

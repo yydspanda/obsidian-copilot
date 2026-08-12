@@ -2,6 +2,7 @@ import { IngestQueue, type IngestQueueActivityCommand } from "@/knowledge/ingest
 import {
   KnowledgeLiteralRejectCommandError,
   KnowledgeReviewRejectConflictError,
+  parseKnowledgeLiteralRejectCommand,
 } from "@/knowledge/review/ReviewRejectTransition";
 import { KnowledgeRuntimeReviewRejectPort } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { KnowledgeStudioReviewedApplyPort } from "@/knowledge/ui/KnowledgeStudioReviewedApplyPort";
@@ -120,6 +121,15 @@ function publishCommandHint(
   }
 }
 
+/** Requests Review worker attention without changing a durable command result. */
+function notifyReviewWorkAvailable(state: KnowledgeStudioRuntimeCommandAdapterState): void {
+  try {
+    state.notifyReviewWorkAvailable?.();
+  } catch {
+    // Worker notifications are non-authoritative and may be retried by durable observation.
+  }
+}
+
 /** Retains one command until its already-entered atomic mutation settles. */
 function retainCommandDrain<T>(
   state: KnowledgeStudioRuntimeCommandAdapterState,
@@ -150,9 +160,9 @@ function createRejectOnlyDiagnostic() {
  * Generation-owned mutation adapter for exact Activity and Review commands.
  *
  * Queue, Runtime, worker, and lifecycle authority remain hidden in a WeakMap.
- * React receives only this content-free command interface; optional acceptance
- * crosses a narrow reviewed-apply port, while no model, Vault, transaction, or
- * direct storage method crosses the boundary.
+ * React receives only the strict Review decision interface; optional accepted
+ * content crosses the narrow reviewed-apply port, while no model, Vault,
+ * transaction, or direct storage method crosses the boundary.
  */
 export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioCommandPort {
   /** Captures the exact production Queue and atomic Reject facade for one generation. */
@@ -280,25 +290,31 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     const state = requireCommandAdapterState(this);
     const operation = (async (): Promise<KnowledgeStudioReviewSubmissionResult> => {
+      assertInvocation(state, bundleId, signal);
+      let literalReject;
+      try {
+        literalReject = parseKnowledgeLiteralRejectCommand(command);
+      } catch (error) {
+        if (!(error instanceof KnowledgeLiteralRejectCommandError)) throw error;
+      }
+      if (!literalReject) {
+        if (!state.reviewApply) {
+          return { kind: "blocked", diagnostics: [createRejectOnlyDiagnostic()] };
+        }
+        const result = await state.reviewApply.submit(bundleId, command, signal);
+        if (result.kind === "applied" || result.kind === "rejected") {
+          notifyReviewWorkAvailable(state);
+        }
+        publishCommandHint(state, bundleId);
+        return result;
+      }
       try {
         assertInvocation(state, bundleId, signal);
-        await state.reviewReject.rejectReviewAtomically(bundleId, command);
-        assertInvocation(state, bundleId, signal);
-        state.notifyReviewWorkAvailable?.();
+        await state.reviewReject.rejectReviewAtomically(bundleId, literalReject);
+        notifyReviewWorkAvailable(state);
         publishCommandHint(state, bundleId);
         return { kind: "rejected" };
       } catch (error) {
-        if (error instanceof KnowledgeLiteralRejectCommandError) {
-          if (!state.reviewApply) {
-            return { kind: "blocked", diagnostics: [createRejectOnlyDiagnostic()] };
-          }
-          const result = await state.reviewApply.submit(bundleId, command, signal);
-          if (result.kind === "applied" || result.kind === "rejected") {
-            state.notifyReviewWorkAvailable?.();
-          }
-          publishCommandHint(state, bundleId);
-          return result;
-        }
         if (error instanceof KnowledgeReviewRejectConflictError) {
           return { kind: "stale" };
         }

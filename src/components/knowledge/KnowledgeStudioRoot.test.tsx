@@ -456,6 +456,26 @@ class TestKnowledgeStudioController {
     this.submitted = command;
   }
 
+  /** Returns no retained Review decisions from this focused composition fake. */
+  getReviewDraft(_plan: Readonly<KnowledgeReviewPlan>): Readonly<Record<string, never>> {
+    return Object.freeze({});
+  }
+
+  /** Returns no active textarea from this focused composition fake. */
+  getReviewActiveEdit(_plan: Readonly<KnowledgeReviewPlan>): undefined {
+    return undefined;
+  }
+
+  /** Accepts a Review draft update without simulating content-bearing state. */
+  updateReviewDraft(_plan: Readonly<KnowledgeReviewPlan>, _draft: unknown): boolean {
+    return true;
+  }
+
+  /** Accepts an active-editor update without simulating content-bearing state. */
+  updateReviewActiveEdit(_plan: Readonly<KnowledgeReviewPlan>, _activeEdit: unknown): boolean {
+    return true;
+  }
+
   /** Records one opaque Review evidence reference without receiving a source path or locator. */
   async openReviewEvidence(evidenceRef: string): Promise<void> {
     this.calls.push(`review-evidence:${evidenceRef}`);
@@ -879,6 +899,23 @@ describe("KnowledgeStudioRoot", () => {
     expect(alert.textContent).toContain("did not pass deterministic validation");
     expect(screen.getByRole("list", { name: "Validation diagnostics" }).textContent).toContain(
       "links_invalid · links: Unsafe link"
+    );
+  });
+
+  it("renders a draft-revocation notice without hiding durable action feedback", () => {
+    const controller = new TestKnowledgeStudioController({
+      ...createReadyState(),
+      feedback: { kind: "blocked", message: "The durable action remains blocked." },
+      reviewDraftNotice: "This proposal changed. Its session-only Review draft was cleared.",
+    });
+    renderStudio(controller);
+
+    const alerts = screen.getAllByRole("alert").map((alert) => alert.textContent);
+    expect(alerts).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("durable action remains blocked"),
+        expect.stringContaining("Review draft was cleared"),
+      ])
     );
   });
 });

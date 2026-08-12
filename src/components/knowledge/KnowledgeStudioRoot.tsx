@@ -324,18 +324,24 @@ function ReviewWorkspace({
 
       {selectedReview ? (
         <KnowledgeReviewPanel
+          activeEdit={controller.getReviewActiveEdit(selectedReview)}
           busy={state.pendingAction !== undefined}
           acceptCommandsEnabled={state.snapshot?.commandCapabilities.reviewAccept === true}
           rejectCommandsEnabled={state.snapshot?.commandCapabilities.reviewReject === true}
+          draft={controller.getReviewDraft(selectedReview)}
           plan={selectedReview}
           evidenceError={state.reviewEvidenceError}
           openingEvidenceRef={state.openingReviewEvidenceRef}
           onBack={() => controller.selectTab("activity")}
+          onActiveEditChange={(activeEdit) =>
+            controller.updateReviewActiveEdit(selectedReview, activeEdit)
+          }
           onOpenEvidence={
             state.snapshot?.reviewEvidenceAvailable === true
               ? (evidenceRef) => controller.openReviewEvidence(evidenceRef)
               : undefined
           }
+          onDraftChange={(draft) => controller.updateReviewDraft(selectedReview, draft)}
           onSubmit={(command) => controller.submitReview(command)}
         />
       ) : (
@@ -553,6 +559,15 @@ export function KnowledgeStudioRoot({
         <LoadError controller={controller} fullPage={false} message={state.error} />
       ) : null}
       <FeedbackBanner feedback={state.feedback} />
+      {state.reviewDraftNotice ? (
+        <aside
+          aria-live="polite"
+          className="tw-rounded-lg tw-bg-error tw-p-3 tw-text-error"
+          role="alert"
+        >
+          <p className="tw-m-0 tw-text-sm tw-font-medium">{state.reviewDraftNotice}</p>
+        </aside>
+      ) : null}
       <ReconciliationStatus state={state} />
 
       <section
