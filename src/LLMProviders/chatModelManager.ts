@@ -50,6 +50,7 @@ import {
   isModelReferenceRunnable,
   isSavedModelReferenceError,
 } from "@/LLMProviders/modelSelectionPolicy";
+import { hasChatModelLocalCredentials } from "@/LLMProviders/chatModelLocalReadiness";
 import type { SafetySetting } from "@google/generative-ai";
 
 const GOOGLE_SAFETY_SETTINGS_BLOCK_NONE: SafetySetting[] = [
@@ -143,27 +144,6 @@ export default class ChatModelManager {
   >;
 
   private static readonly ANTHROPIC_THINKING_BUDGET_TOKENS = 2048;
-
-  private readonly providerApiKeyMap: Record<ChatModelProviders, () => string> = {
-    [ChatModelProviders.OPENAI]: () => getSettings().openAIApiKey,
-    [ChatModelProviders.GOOGLE]: () => getSettings().googleApiKey,
-    [ChatModelProviders.AZURE_OPENAI]: () => getSettings().azureOpenAIApiKey,
-    [ChatModelProviders.ANTHROPIC]: () => getSettings().anthropicApiKey,
-    [ChatModelProviders.COHEREAI]: () => getSettings().cohereApiKey,
-    [ChatModelProviders.OPENROUTERAI]: () => getSettings().openRouterAiApiKey,
-    [ChatModelProviders.GROQ]: () => getSettings().groqApiKey,
-    [ChatModelProviders.XAI]: () => getSettings().xaiApiKey,
-    [ChatModelProviders.OLLAMA]: () => "default-key",
-    [ChatModelProviders.LM_STUDIO]: () => "default-key",
-    [ChatModelProviders.OPENAI_FORMAT]: () => "default-key",
-    [ChatModelProviders.COPILOT_PLUS]: () => getSettings().plusLicenseKey,
-    [ChatModelProviders.MISTRAL]: () => getSettings().mistralApiKey,
-    [ChatModelProviders.DEEPSEEK]: () => getSettings().deepseekApiKey,
-    [ChatModelProviders.AMAZON_BEDROCK]: () => getSettings().amazonBedrockApiKey,
-    [ChatModelProviders.SILICONFLOW]: () => getSettings().siliconflowApiKey,
-    [ChatModelProviders.GITHUB_COPILOT]: () =>
-      getSettings().githubCopilotToken || getSettings().githubCopilotAccessToken,
-  } as const;
 
   private constructor() {
     this.buildModelMap();
@@ -691,19 +671,7 @@ export default class ChatModelManager {
    * @returns True when the provider requirements are satisfied, otherwise false.
    */
   private hasProviderCredentials(model: CustomModel): boolean {
-    if ((model.provider as ChatModelProviders) === ChatModelProviders.AMAZON_BEDROCK) {
-      const settings = getSettings();
-      const apiKey = model.apiKey || settings.amazonBedrockApiKey;
-      // Region defaults to us-east-1 if not specified, so API key is the only requirement
-      return Boolean(apiKey);
-    }
-
-    const getDefaultApiKey = this.providerApiKeyMap[model.provider as ChatModelProviders];
-    if (!getDefaultApiKey) {
-      return Boolean(model.apiKey);
-    }
-
-    return Boolean(model.apiKey || getDefaultApiKey());
+    return hasChatModelLocalCredentials(model, getSettings());
   }
 
   getProviderConstructor(model: CustomModel): ChatConstructorType {

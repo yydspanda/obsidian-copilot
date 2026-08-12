@@ -1,5 +1,7 @@
 import { KnowledgeStudioRoot } from "@/components/knowledge/KnowledgeStudioRoot";
 import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
+import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
+import type { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
 import { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
 import type { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
@@ -24,12 +26,16 @@ export class KnowledgeStudioView extends ItemView {
    * @param controller - Read/command controller for one Bundle session
    * @param sessionStore - Dynamic validated Bundle selection for this plugin lifecycle
    * @param folderImportPort - Stable, revocable folder import capability
+   * @param setupReadiness - Stable local-only setup/readiness observation
+   * @param setupNavigation - Least-authority setup navigation actions
    */
   constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: KnowledgeStudioController,
     private readonly sessionStore: KnowledgeStudioSessionStore,
-    private readonly folderImportPort: KnowledgeFolderImportPort
+    private readonly folderImportPort: KnowledgeFolderImportPort,
+    private readonly setupReadiness: KnowledgeSetupReadinessStore,
+    private readonly setupNavigation: KnowledgeSetupNavigationPort
   ) {
     super(leaf);
   }
@@ -104,7 +110,12 @@ export class KnowledgeStudioView extends ItemView {
     const rootEl = contentEl.createDiv({ cls: "copilot-knowledge-studio-root tw-h-full" });
     this.root = createPluginRoot(rootEl, this.app);
     this.root.render(
-      <KnowledgeStudioRoot controller={this.controller} folderImportPort={this.folderImportPort} />
+      <KnowledgeStudioRoot
+        controller={this.controller}
+        folderImportPort={this.folderImportPort}
+        setupNavigation={this.setupNavigation}
+        setupReadiness={this.setupReadiness}
+      />
     );
   }
 

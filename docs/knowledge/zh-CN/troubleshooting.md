@@ -8,6 +8,16 @@
 
 ## Knowledge Studio 启动、刷新与不可用
 
+### 先读哪一张卡
+
+Studio 不能进入主界面时会先显示 `Setup & status`，不要再只凭一句 `unavailable` 猜原因：
+
+- `Workspace`：Project、Bundle、本地 Runtime 或持久状态。
+- `Knowledge model`：Project 为 Knowledge 单独选择的模型和本地凭证。
+- `Chat model (optional)`：普通 Chat 模型；它显示 **Needs setup** 不会阻断 Knowledge 主流程。
+
+**Configured locally** 不是联网测试结果。它不证明 Key 有效、账户有余额、服务在线或本地模型服务器可达。Setup 页被动检查不会联系模型 provider、ping 或调用模型。
+
 ### 显示 Refreshing Knowledge Studio…
 
 这是中性、无操作的安全过渡页，不是红色 unavailable 故障。它通常出现在启动核对，或 `Check again`、`Remove`、导入、Project/设置变化促使插件撤销旧 generation 并建立新代时。
@@ -16,15 +26,15 @@
 - 这不表示前一步失败；不要立即重复点击、导入或重载插件。
 - 正常情况下，完成持久状态和配置验证后会自动返回 Studio。
 
-如果长时间停在这里，按下方“Studio 一直显示加载或 Refreshing”处理。只有系统已判定存在需要处理的持久配置、Runtime 或 Recovery 等终态问题时，才应显示红色 `Knowledge Studio unavailable`。
+如果长时间停在这里，按下方“Studio 一直显示加载或 Refreshing”处理。只有系统已判定存在需要处理的持久配置或 Runtime 等终态问题时，才会停在三卡 Setup 页面。Recovery 与可恢复的 Sources 缺失仍由原来的专用面板处理。
 
-### 显示 Knowledge Studio unavailable，正文提示 No project has a Knowledge Bundle configuration
+### Workspace 提示没有 Project 或 Bundle
 
-原因：当前 Project 没有 `copilot-project-knowledge-bundle`。
+原因：可能尚未创建 Copilot Project，或者已有 Project 但没有 `copilot-project-knowledge-bundle`。
 
-处理：按 [Bundle 配置](bundle-configuration.md) 创建配置、目录和 Schema，然后等待插件自动重新验证。
+处理：使用卡片提供的 Chat / Project 文件入口，再按 [Bundle 配置](bundle-configuration.md) **手工**创建所需目录、Schema 和配置，然后等待插件自动重新验证。按钮本身不会创建这些内容，也不会改 YAML。
 
-### 显示 Knowledge Studio unavailable，正文提示 invalid 或 adapter unavailable
+### Workspace 提示 Bundle invalid、多个 Bundle 或 adapter unavailable
 
 依次检查：
 
@@ -35,7 +45,28 @@
 5. DeepSeek V4 模型、官方 endpoint 和 API Key 是否可用。
 6. Recovery 页是否有阻断项。
 
-修改设置或 Project 后，系统会自动重建 generation；中间可能短暂显示 `Refreshing Knowledge Studio…`，通常不需要反复重载插件。
+修改设置或 Project 后，系统会自动重建 generation；中间可能短暂显示 `Refreshing Knowledge Studio…`，通常不需要反复重载插件。Setup 顶部的 **Refresh displayed status** 只刷新当前本地状态展示，不会改文件或测试 provider。
+
+### Knowledge model 提示 Needs setup
+
+这张卡只管拥有 Bundle 的 Project 所选 Knowledge 模型，不管普通 Chat。按具体提示检查：
+
+1. Project 是否选择了精确、受支持的 DeepSeek V4 模型。
+2. 模型是否 Enabled 并允许用于 Project。
+3. endpoint 与模型参数是否仍为当前支持配置。
+4. DeepSeek Key 是否已保存在 Copilot 设置中。
+
+卡片按钮只会打开当前可唯一确定的 Project 文件或 Copilot 设置，不会切模型、写 Key 或修 YAML。显示 **Configured locally** 后，如果第一次后台编译仍报 401、余额、网络或服务错误，再按本页“DeepSeek 问题”排查；不要把本地绿灯当成在线成功证明。
+
+### 只有 Chat model (optional) 提示 Needs setup
+
+Knowledge 的 Sources → Activity → Review → Apply 主流程仍可使用。只有你要运行普通 Chat、通过新 Chat 回答整理材料或使用当前 Chat 模式时，才需要修复这张卡。打开 Chat 或设置后由你明确选择、启用模型并保存凭证；Setup 不会自动改动。
+
+### 点击卡片动作后没有自动修好
+
+这是预期行为。`Open Chat`、`Open Copilot settings`、`Open Project file` 和 `Open Knowledge rules` 都只是导航或打开文件。多个 Project 时，**Open selected Project file** 只会使用你在 Chat 中当前精确选择的 Project；没有这种唯一选择时，插件不会猜。`Refresh displayed status` 只刷新展示。你仍需自己完成配置并保存。
+
+打开 Copilot 设置页时，已有设置界面可能执行插件版本更新检查；这不是模型连通性测试，也不会验证 API Key。
 
 ### Studio 一直显示加载或 Refreshing
 
@@ -44,7 +75,7 @@
 1. 停止新的导入、Project/设置修改和来源文件编辑，不要重复提交刚才的动作。
 2. 查看 Obsidian 错误控制台，但不要复制密钥、来源内容或请求/响应正文。
 3. 如果页面始终没有恢复，你此时无法从 Studio 证明是否存在 Apply/Finalizing；按未知状态处理，先停止并备份完整 Vault，再禁用并启用插件一次。
-4. 重新启动后，若 Recovery 页签出现，先按其中明确允许的动作处理；若出现红色 unavailable，则按它的正文继续排查。仍不恢复时保留备份并停止操作，不要编辑私有 Runtime。
+4. 重新启动后，若 Recovery 页签出现，先按其中明确允许的动作处理；若停在 Setup 页，则按三张卡的具体状态继续排查。仍不恢复时保留备份并停止操作，不要编辑私有 Runtime。
 
 ## 文件夹导入问题
 
@@ -249,7 +280,7 @@ Query 只搜索已接受、已 Apply、且哈希仍验证通过的 Wiki。未审
 
 ## 数据、网络与费用影响
 
-排查 Studio 配置、Recovery、路径和本地文件通常不需要模型。Retry、重新编译、Query 和 Save 后的编译可能调用 DeepSeek；确认状态后再操作。
+排查 Studio 配置、Recovery、路径和本地文件通常不需要模型。查看 Setup 三卡不会联系模型 provider；打开现有 Copilot 设置可能触发插件更新检查。Retry、重新编译、Query 和 Save 后的编译可能调用 DeepSeek；确认状态后再操作。
 
 ## 相关页面
 

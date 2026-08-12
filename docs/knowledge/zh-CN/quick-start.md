@@ -12,11 +12,26 @@
 
 - 已完成 [安装、升级与 DeepSeek V4](installation-and-model.md)。
 - 已完成 [Bundle 配置](bundle-configuration.md)。
-- 打开 Knowledge Studio 后显示真实 Bundle ID，Activity、Review、Query 已连接，且没有 Recovery 阻断。
+- Knowledge Studio 的 `Workspace` 与 `Knowledge model` 卡都显示 **Configured locally**；普通 Chat 不是本次 Knowledge 主流程的必需条件。
+- 返回 Studio 后显示真实 Bundle ID，Activity、Review、Query 已连接，且没有 Recovery 阻断。
 - DeepSeek 账户有可用额度，网络可以访问 DeepSeek 官方 API。
 - 先用一份不含秘密、体积很小的测试资料；不要把唯一原件作为第一次验收材料。
 
 ## 操作步骤
+
+### 0. 先做本地就绪检查
+
+打开 **Knowledge Studio**。如果配置还没完成，Studio 会直接显示 `Setup & status`；如果主界面已经打开，点击右上角同名按钮也能回看。
+
+先分别检查：
+
+- `Workspace`：Project、唯一 Bundle 和持久环境是否通过本地检查。
+- `Knowledge model`：这个 Project 专用于 Knowledge 的模型与凭证是否已在本地配置。
+- `Chat model (optional)`：普通 Chat 是否已配置。它用于临时解释、对话和 Chat → Source，但即使未配置，也不阻断本页的 Knowledge 主流程。
+
+**Configured locally 不等于联网成功。** 这个页面不会 ping DeepSeek、验证余额或调用模型；第一次来源编译才会真正验证服务可达性并可能产生费用。卡片按钮只会带你去现有设置、Chat、Project 文件或 Schema，或者刷新显示；它不会自动创建 Project、文件夹、Schema 或 API Key，也不会替你修改 Bundle YAML。
+
+修正配置后，等待正常的 `Refreshing Knowledge Studio…` 结束。若 Studio 已就绪，点击 **Back to Studio**；若出现 Recovery 或 Sources 缺失界面，先按原面板处理，不要继续导入。
 
 ### 1. 准备一个可人工核对的来源文件夹
 
@@ -116,6 +131,7 @@ Query 只搜索当前 Bundle 已接受并应用的 Wiki，不会退回整个 Vau
 
 完成一次正常快速验收时，你应该能确认：
 
+- `Workspace` 和 `Knowledge model` 先通过本地检查；`Chat model (optional)` 不会错误阻断 Knowledge。
 - 外部测试文件保持不变，Vault 中出现一份受管理的来源副本。
 - Activity 展示真实持久任务，而不是演示数据。
 - 有修改时，系统停在 Review，只有你的显式接受才会 Apply。
@@ -143,6 +159,7 @@ Query 只搜索当前 Bundle 已接受并应用的 Wiki，不会退回整个 Vau
 
 ## 数据、网络与费用
 
+- 打开 `Setup & status` 和阅读三张卡片不会调用模型或联系模型 provider。卡片中的 **Open Copilot settings** 会打开现有设置页；该设置页可能执行插件版本更新检查，但这不是模型连通性测试。
 - 文件夹导入在本地读取选中的文件，并把合格文件复制到 Vault；不会保存外部绝对路径，也不会修改外部原件。
 - `.md`、`.markdown`、`.txt` 和带文本的 PDF 在本地解析。当前没有 OCR；扫描版、加密或损坏 PDF 会失败关闭。
 - 一个成功进入完整 Knowledge 编译的来源通常产生两次 DeepSeek 请求，来源正文、Schema 和必要的现有 Wiki 内容会离开本机。

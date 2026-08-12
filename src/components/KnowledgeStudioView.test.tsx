@@ -51,6 +51,9 @@ jest.mock("obsidian", () => {
 
 import { KNOWLEDGE_STUDIO_VIEW_TYPE, KnowledgeStudioView } from "@/components/KnowledgeStudioView";
 import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
+import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
+import { projectKnowledgeSetupReadiness } from "@/knowledge/setup/KnowledgeSetupReadiness";
+import { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
 import type { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
 import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
@@ -88,6 +91,28 @@ function createFolderImportPort(): KnowledgeFolderImportPort {
   return { importFolder: jest.fn() };
 }
 
+/** Creates the local setup props retained across popout root rebuilds. */
+function createSetupProps(): {
+  readiness: KnowledgeSetupReadinessStore;
+  navigation: KnowledgeSetupNavigationPort;
+} {
+  return {
+    readiness: new KnowledgeSetupReadinessStore(
+      projectKnowledgeSetupReadiness(
+        { generation: 0, status: "waiting_for_layout" },
+        { projectCount: 0, chatModel: { reason: "missing" } }
+      )
+    ),
+    navigation: {
+      openCopilotSettings: jest.fn(),
+      openProjectFile: jest.fn(),
+      openSchema: jest.fn(),
+      openChat: jest.fn(),
+      refreshDisplayedStatus: jest.fn(),
+    },
+  };
+}
+
 describe("KnowledgeStudioView", () => {
   const roots: Root[] = [];
 
@@ -109,7 +134,15 @@ describe("KnowledgeStudioView", () => {
     const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
     sessionStore.replaceSelection("bundle-1", "Workflow adapters remain unavailable.");
     const folderImportPort = createFolderImportPort();
-    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore, folderImportPort);
+    const setup = createSetupProps();
+    const view = new KnowledgeStudioView(
+      createLeaf(),
+      controller,
+      sessionStore,
+      folderImportPort,
+      setup.readiness,
+      setup.navigation
+    );
 
     await view.onOpen();
 
@@ -120,18 +153,26 @@ describe("KnowledgeStudioView", () => {
     expect(controller.showUnavailable).not.toHaveBeenCalled();
     expect(roots[0].render).toHaveBeenCalledTimes(1);
     expect(jest.mocked(roots[0].render).mock.calls[0]?.[0]).toMatchObject({
-      props: { controller, folderImportPort },
+      props: {
+        controller,
+        folderImportPort,
+        setupReadiness: setup.readiness,
+        setupNavigation: setup.navigation,
+      },
     });
   });
 
   it("moves between unavailable and exact Bundle sessions without a shell Bundle identity", async () => {
     const controller = createController();
     const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
+    const setup = createSetupProps();
     const view = new KnowledgeStudioView(
       createLeaf(),
       controller,
       sessionStore,
-      createFolderImportPort()
+      createFolderImportPort(),
+      setup.readiness,
+      setup.navigation
     );
 
     await view.onOpen();
@@ -165,7 +206,15 @@ describe("KnowledgeStudioView", () => {
     const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
     sessionStore.replaceSelection("bundle-2", "Workflow adapters remain unavailable.");
     const folderImportPort = createFolderImportPort();
-    const view = new KnowledgeStudioView(createLeaf(), controller, sessionStore, folderImportPort);
+    const setup = createSetupProps();
+    const view = new KnowledgeStudioView(
+      createLeaf(),
+      controller,
+      sessionStore,
+      folderImportPort,
+      setup.readiness,
+      setup.navigation
+    );
     const container = view.containerEl as TestContainer;
     await view.onOpen();
     const firstHost = view.containerEl.children[1].firstElementChild;
@@ -177,7 +226,12 @@ describe("KnowledgeStudioView", () => {
     expect(view.containerEl.children[1].firstElementChild).not.toBe(firstHost);
     expect(controller.start).toHaveBeenCalledTimes(1);
     expect(jest.mocked(roots[1].render).mock.calls[0]?.[0]).toMatchObject({
-      props: { controller, folderImportPort },
+      props: {
+        controller,
+        folderImportPort,
+        setupReadiness: setup.readiness,
+        setupNavigation: setup.navigation,
+      },
     });
 
     await view.onClose();
@@ -191,11 +245,14 @@ describe("KnowledgeStudioView", () => {
     const controller = createController();
     const sessionStore = new KnowledgeStudioSessionStore("Waiting for project configuration.");
     sessionStore.replaceSelection("bundle-2", "Ready.");
+    const setup = createSetupProps();
     const view = new KnowledgeStudioView(
       createLeaf(),
       controller,
       sessionStore,
-      createFolderImportPort()
+      createFolderImportPort(),
+      setup.readiness,
+      setup.navigation
     );
     await view.onOpen();
 

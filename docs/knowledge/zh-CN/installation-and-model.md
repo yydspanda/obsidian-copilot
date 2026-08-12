@@ -80,13 +80,28 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 所选模型，而不�
 
 下一步在这个 Project 的 `project.md` 中加入 Bundle 配置，详见 [Bundle 配置](bundle-configuration.md)。
 
+### 5. 用 Setup & status 核对三条独立状态
+
+运行 **Open Knowledge Studio**。配置未完成时，Studio 会直接显示引导页；已经就绪时，可点击 Studio 右上角 **Setup & status** 再打开。
+
+这里故意分成三张卡：
+
+- `Workspace` 检查 Project、Bundle 和本地持久环境。
+- `Knowledge model` 检查 Project 为 Knowledge 单独选择的模型、受支持配置和凭证存在性。
+- `Chat model (optional)` 检查当前普通 Chat 模型。它与 Knowledge 模型相互独立，未配置不会阻断 Knowledge 主流程。
+
+如果你还没完成 Bundle 配置，`Workspace` 显示 **Needs setup**、`Knowledge model` 显示等待上一步是正常的。卡片会提供打开现有 Chat、Copilot 设置、Project 文件或 Schema 等安全入口；它不会创建目录、Schema、Project 或 Key，也不会改写 `project.md` 中的 Bundle YAML。
+
+配置完成后的 **Configured locally** 只证明本机设置能够通过当前预检，不证明 API Key 真能登录、账户有余额、DeepSeek 在线或网络可达。真正的联网验证仍发生在你明确启动 Chat、来源编译或 Query 等在线工作时。
+
 ## 预期结果
 
 - **设置 → Copilot → Model** 中至少有一个已启用的 DeepSeek V4 模型。
 - 新建或编辑 Project 时，**Default Model** 列表能选中该模型。
 - 命令面板能找到 **Open Knowledge Studio**。
-- 打开 Studio 后可能暂时显示 **Knowledge Studio unavailable**，正文为 `No project has a Knowledge Bundle configuration...`；在尚未配置 Bundle 时，这是正确结果。
-- 仅打开 Studio 不会测试 API，也不会产生模型费用。真正的网络验证发生在来源进入后台编译后。
+- 尚未配置 Bundle 时，打开 Studio 会显示三卡引导页，`Workspace` 提示先完成 Project / Bundle；这不是模型服务失败。
+- 完成 Bundle 后，`Workspace` 与 `Knowledge model` 应显示 **Configured locally**；`Chat model (optional)` 单独反映普通 Chat，不决定 Knowledge 是否可用。
+- 仅打开 Studio 或查看三卡状态不会测试 API，也不会产生模型费用。真正的模型网络验证发生在来源进入后台编译、运行 Chat 或执行有证据 Query 后。
 
 ## 如果结果不同
 
@@ -120,7 +135,8 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 所选模型，而不�
 
 ## 数据、网络与费用
 
-- 安装插件、保存 Bundle、打开 Studio、启动恢复检查和配置预检都在本地完成，预检不调用 DeepSeek。
+- 安装插件、保存 Bundle、打开 Studio、查看三卡状态、启动恢复检查和配置预检都在本地完成；这些被动检查不调用模型，也不向模型 provider 发请求。
+- 点击卡片中的 **Open Copilot settings** 会进入插件已有的设置页；该页面可能触发插件版本更新检查。它仍不等于 DeepSeek 连通性测试，也不能让 **Configured locally** 变成“在线可用”的证明。
 - API Key 应保存在 Obsidian Keychain。它不会写入 Knowledge 的提示词、Review 记录、日志或持久 Runtime 文件。
 - 启用模型本身不等于发起 Knowledge 编译。展开在线模型导入、执行模型验证、运行 Chat 或处理来源时，可能产生网络请求。
 - 每个成功进入完整编译的来源通常会发出两次 DeepSeek 请求：一次分析、一次生成。

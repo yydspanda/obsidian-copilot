@@ -88,6 +88,14 @@ export * from "@/knowledge/sourceLifecycle/KnowledgeProductionSourceLifecycleCoo
 export * from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 export * from "@/knowledge/sourceLifecycle/KnowledgeSourcePathIndex";
 export * from "@/knowledge/sourceLifecycle/KnowledgeSourceIssueNotificationSink";
+export * from "@/knowledge/setup/KnowledgeSetupNavigationPort";
+export * from "@/knowledge/setup/KnowledgeSetupNavigation";
+export * from "@/knowledge/setup/KnowledgeChatModelReadiness";
+export * from "@/knowledge/setup/KnowledgeChatModelReadinessComposition";
+export * from "@/knowledge/setup/KnowledgeSetupReadiness";
+export * from "@/knowledge/setup/KnowledgeSetupReadinessStore";
+export * from "@/knowledge/setup/KnowledgeSetupSelectionSubscription";
+export * from "@/knowledge/setup/KnowledgeSetupStartupPublication";
 export * from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
 export * from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 export * from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";

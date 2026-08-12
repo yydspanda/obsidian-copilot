@@ -16,12 +16,15 @@ import { KnowledgeFolderImportButton } from "@/components/knowledge/KnowledgeFol
 import { KnowledgeRecoveryPanel } from "@/components/knowledge/KnowledgeRecoveryPanel";
 import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
 import { KnowledgeQueryPanel } from "@/components/knowledge/KnowledgeQueryPanel";
+import { KnowledgeSetupPanel } from "@/components/knowledge/KnowledgeSetupPanel";
 import { KnowledgeSourceLifecyclePanel } from "@/components/knowledge/KnowledgeSourceLifecyclePanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
 import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 import type { KnowledgeReviewPlan } from "@/knowledge/review/ReviewDecision";
+import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
+import type { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
 import type {
   KnowledgeStudioController,
   KnowledgeStudioFeedback,
@@ -34,6 +37,8 @@ import type {
 export interface KnowledgeStudioRootProps {
   controller: KnowledgeStudioController;
   folderImportPort: KnowledgeFolderImportPort;
+  setupReadiness: KnowledgeSetupReadinessStore;
+  setupNavigation: KnowledgeSetupNavigationPort;
 }
 
 interface TabDefinition {
@@ -366,8 +371,11 @@ function openJobReview(controller: KnowledgeStudioController, jobId: string): vo
 export function KnowledgeStudioRoot({
   controller,
   folderImportPort,
+  setupReadiness,
+  setupNavigation,
 }: KnowledgeStudioRootProps): React.ReactElement {
   const state = useKnowledgeStudioState(controller);
+  const [setupOpen, setSetupOpen] = React.useState(false);
   const activityTabId = React.useId();
   const queryTabId = React.useId();
   const reviewTabId = React.useId();
@@ -408,26 +416,24 @@ export function KnowledgeStudioRoot({
 
   if (state.status === "unavailable") {
     return (
-      <main className="tw-flex tw-h-full tw-items-center tw-justify-center tw-p-6">
-        <section
-          className="tw-max-w-xl tw-rounded-xl tw-border tw-border-solid tw-border-border tw-bg-error tw-p-5 tw-text-error"
-          role="alert"
-        >
-          <div className="tw-flex tw-items-start tw-gap-3">
-            <ShieldAlert aria-hidden="true" className="tw-mt-0.5 tw-size-5 tw-shrink-0" />
-            <div>
-              <h1 className="tw-m-0 tw-text-base tw-font-semibold">Knowledge Studio unavailable</h1>
-              <p className="tw-m-0 tw-mt-2 tw-text-sm">
-                {state.unavailableNotice ??
-                  "Knowledge Studio cannot select a validated project Bundle yet."}
-              </p>
-              <p className="tw-m-0 tw-mt-2 tw-text-xs">
-                No knowledge files were changed and no model work was started.
-              </p>
-            </div>
-          </div>
-        </section>
-      </main>
+      <KnowledgeSetupPanel
+        navigation={setupNavigation}
+        readiness={setupReadiness}
+        unavailableNotice={
+          state.unavailableNotice ??
+          "Knowledge Studio cannot select a validated project Bundle yet."
+        }
+      />
+    );
+  }
+
+  if (setupOpen) {
+    return (
+      <KnowledgeSetupPanel
+        navigation={setupNavigation}
+        readiness={setupReadiness}
+        onBack={() => setSetupOpen(false)}
+      />
     );
   }
 
@@ -487,6 +493,9 @@ export function KnowledgeStudioRoot({
           </p>
         </div>
         <div className="tw-flex tw-flex-wrap tw-items-start tw-justify-end tw-gap-2">
+          <Button size="sm" variant="secondary" onClick={() => setSetupOpen(true)}>
+            Setup &amp; status
+          </Button>
           <KnowledgeFolderImportButton port={folderImportPort} />
           <div aria-label="Knowledge Studio sections" className="tw-flex tw-gap-1" role="tablist">
             {STUDIO_TABS.filter(

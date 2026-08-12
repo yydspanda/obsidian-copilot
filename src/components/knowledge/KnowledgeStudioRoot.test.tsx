@@ -7,6 +7,9 @@ import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
+import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
+import type { KnowledgeSetupReadinessProjection } from "@/knowledge/setup/KnowledgeSetupReadiness";
+import { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
 import type {
   KnowledgeStudioCommandCapabilities,
   KnowledgeStudioController,
@@ -493,12 +496,37 @@ const FOLDER_IMPORT_PORT: KnowledgeFolderImportPort = {
   importFolder: jest.fn(),
 };
 
+const READY_SETUP_PROJECTION: KnowledgeSetupReadinessProjection = {
+  startupStatus: "workflow_read_ready",
+  workspace: { level: "locally_ready", reason: "workspace_ready" },
+  knowledgeModel: { level: "locally_ready", reason: "knowledge_model_configured" },
+  chatModel: { level: "locally_ready", reason: "chat_model_configured" },
+  networkVerification: "not_tested",
+};
+
+/** Creates inert setup navigation for Root composition tests. */
+function createSetupNavigation(): KnowledgeSetupNavigationPort {
+  return {
+    openCopilotSettings: jest.fn(),
+    openProjectFile: jest.fn(),
+    openSchema: jest.fn(),
+    openChat: jest.fn(),
+    refreshDisplayedStatus: jest.fn(),
+  };
+}
+
 /** Renders Knowledge Studio with the suite's inert folder import boundary. */
-function renderStudio(controller: TestKnowledgeStudioController): ReturnType<typeof render> {
+function renderStudio(
+  controller: TestKnowledgeStudioController,
+  setupReadiness = new KnowledgeSetupReadinessStore(READY_SETUP_PROJECTION),
+  setupNavigation = createSetupNavigation()
+): ReturnType<typeof render> {
   return render(
     <KnowledgeStudioRoot
       controller={asController(controller)}
       folderImportPort={FOLDER_IMPORT_PORT}
+      setupNavigation={setupNavigation}
+      setupReadiness={setupReadiness}
     />
   );
 }
@@ -522,20 +550,44 @@ describe("KnowledgeStudioRoot", () => {
     expect(screen.queryByText("Knowledge Studio unavailable")).toBeNull();
   });
 
-  it("renders startup unavailability without displaying a fabricated Bundle identity", () => {
+  it("renders guided startup setup without displaying a fabricated Bundle identity", () => {
     const controller = new TestKnowledgeStudioController({
       status: "unavailable",
       activeTab: "activity",
       refreshing: false,
       unavailableNotice: "No project has a Knowledge Bundle configuration.",
     });
-    renderStudio(controller);
+    const setupReadiness = new KnowledgeSetupReadinessStore({
+      startupStatus: "bundle_unconfigured",
+      workspace: { level: "needs_action", reason: "no_project" },
+      knowledgeModel: { level: "not_applicable", reason: "workspace_unavailable" },
+      chatModel: { level: "locally_ready", reason: "chat_model_configured" },
+      networkVerification: "not_tested",
+    });
+    renderStudio(controller, setupReadiness);
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "No project has a Knowledge Bundle configuration."
-    );
+    expect(screen.queryByText("No project has a Knowledge Bundle configuration.")).toBeNull();
+    expect(screen.getByText(/Create a Copilot Project first/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Set up Knowledge Studio" })).toBeTruthy();
+    expect(screen.getByText("Chat model (optional)")).toBeTruthy();
     expect(screen.queryByText(/Bundle knowledge-studio-unconfigured/)).toBeNull();
     expect(screen.queryByTestId("activity-panel")).toBeNull();
+  });
+
+  it("opens and closes local setup status without changing controller state", () => {
+    const initialState = createReadyState([]);
+    const controller = new TestKnowledgeStudioController(initialState);
+    renderStudio(controller);
+
+    fireEvent.click(screen.getByRole("button", { name: "Setup & status" }));
+    expect(screen.getByRole("heading", { name: "Knowledge Studio setup & status" })).toBeTruthy();
+    expect(screen.getByText("Knowledge model")).toBeTruthy();
+    expect(controller.getState()).toBe(initialState);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Studio" }));
+    expect(screen.getByRole("heading", { name: "Knowledge Studio" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Knowledge Studio setup & status" })).toBeNull();
+    expect(controller.getState()).toBe(initialState);
   });
 
   it("subscribes to controller state and replaces loading only after publication", () => {

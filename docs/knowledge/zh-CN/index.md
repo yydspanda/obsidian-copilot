@@ -95,6 +95,7 @@ Vault 外部文件夹 ─────── Import folder（复制 + 登记）�
 
 ## 从哪里开始
 
+- 第一次打开 Studio：先看自动出现的 **Setup & status**；如果 Studio 已经可用，也可以从右上角再次打开它。
 - 第一次使用：阅读 [15 分钟快速开始](quick-start.md)。
 - 还没有配置模型：阅读 [安装、升级与 DeepSeek V4](installation-and-model.md)。
 - 需要创建目录、Schema 和 Bundle：阅读 [Bundle 配置](bundle-configuration.md)。
@@ -135,14 +136,28 @@ Vault 外部文件夹 ─────── Import folder（复制 + 登记）�
 
 ## 如何判断系统已就绪
 
-打开 Knowledge Studio 后，以下四点同时满足才算可用：
+第一次打开 Knowledge Studio，如果配置还没完成，页面不会只丢给你一句笼统的 `unavailable`。它会把本机能判断的状态拆成三张卡：
 
-1. 顶部显示你的真实 Bundle ID，而不是 `unavailable`。
+| 卡片                    | 它回答的问题                                                                | 是否阻断 Knowledge 主流程 |
+| ----------------------- | --------------------------------------------------------------------------- | ------------------------- |
+| `Workspace`             | Project、Bundle 和持久运行环境是否已经通过本地检查                          | 是                        |
+| `Knowledge model`       | Project 单独选择的 Knowledge 模型与凭证是否已经在本地配置                   | 是                        |
+| `Chat model (optional)` | 当前普通 Chat 模型是否已在本地配置；用于聊天、解释和 Chat → Source 辅助流程 | 否                        |
+
+`Chat model (optional)` 即使显示 **Needs setup**，也不会把已经就绪的 Knowledge 编译、Review、Apply 或 Query 判为不可用。反过来，普通 Chat 能回答问题，也不能证明 Knowledge Project 使用的模型已经配好；两条模型链必须分开看。
+
+卡片显示 **Configured locally** 只代表本地选择、启用状态、受支持配置和凭证存在性已经通过检查，**不代表模型服务在线、API Key 有效、账户有余额或本地模型服务器可连接**。这个页面的被动检查不 ping provider、不调用模型，也不产生模型费用。
+
+当 `Workspace` 与 `Knowledge model` 都显示 **Configured locally** 后，返回 Studio，再确认：
+
+1. 顶部显示你的真实 Bundle ID。
 2. 能看到 durable revision（持久版本号）。
-3. 活动（`Activity`）页已连接，能够显示队列状态。
-4. 页面没有 `Knowledge Studio unavailable`、`adapter unavailable` 或需要处理的 Recovery 阻断。
+3. `Activity` 已连接，能够显示真实队列状态。
+4. 没有需要处理的 Recovery 阻断。
 
-如果不满足，请先按 [故障排查](troubleshooting.md) 中的“Studio 不可用”处理，不要尝试编辑插件的私有运行文件。
+卡片上的按钮只会打开现有 Chat、Copilot 设置、当前可唯一确定的 Project 文件或 Schema，或者刷新当前显示。它们不会替你创建 Project、目录或 Schema，不会改 Bundle YAML、切换模型、写 API Key 或自动修复配置。打开现有 Copilot 设置页本身可能触发插件的版本更新检查；这与 Setup 页的零 provider、零模型被动检查不是一回事。
+
+如果不满足，请先按 [故障排查](troubleshooting.md) 中的“Knowledge Studio 启动、刷新与不可用”处理，不要尝试编辑插件的私有运行文件。
 
 ## 规范词语
 
@@ -154,6 +169,8 @@ Vault 外部文件夹 ─────── Import folder（复制 + 登记）�
 ## 版本与验收说明
 
 本手册按当前 Windows 个人版行为编写。当前版本的 folder import production path、Activity、独立 Review/Apply、Query、Save to Wiki、PDF 和恢复链路已有自动化与有界 Windows 实机证据，足以在本手册约定范围内作为个人知识库正常使用。来源缺失隔离、单一 Notice、零覆盖复查、精确恢复和一次性来源退役已经实测。Chat → Knowledge Draft 也已通过真实 Chat UI 的有界 Windows 验收：从一条已保存的完整非错误 AI 回复进入编辑器，完全替换为一次性草稿后创建 Source，并以 completed / `no_changes` 收敛；Wiki 没有变化。该验收没有声称当前 Chat provider 成功联网生成了新回答。
+
+三卡 `Setup & status` 已有自动化覆盖，并通过 Windows Obsidian 主窗口的已配置路径有界验收：Workspace / Knowledge 本地就绪、可选 Chat 缺 Key、刷新展示和返回 Studio 均符合预期，且三卡交互没有模型请求，也没有修改 Sources、Wiki、Knowledge、Projects 或 `data.json`。插件启动本身按既有设计推进了私有 Runtime observation bookkeeping；启动收敛后三卡刷新与返回保持 Runtime 精确不变。为避免破坏真实配置，本轮没有现场制造 no Project / invalid Bundle、Recovery、Sources-only、自然 generation `Refreshing` 或 popout Setup；这些边界仍以自动化为证据，不能写成已全部实机验证。
 
 这不等于所有能力已在一次完整 Golden Flow 中验收：物理系统文件夹对话框的人工点击、同一文件夹批次产生非空 Review、不同字节冲突、物理右键提示或完整 Golden Flow 仍未写成已完成验收。它是 Windows 个人版，不是多用户、多 Bundle、跨平台或无人值守自动写入系统。手册会说明这些边界，但不会把它们冒充故障或已经支持的扩展能力。
 

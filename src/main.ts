@@ -2,9 +2,14 @@ import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
 import ProjectManager from "@/LLMProviders/projectManager";
 import {
   CustomModel,
+  getChainType,
   getCurrentProject,
+  getModelKey,
   setSelectedTextContexts,
   getSelectedTextContexts,
+  subscribeToChainTypeChange,
+  subscribeToModelKeyChange,
+  subscribeToProjectChange,
 } from "@/aiParams";
 import { NoteSelectedTextContext, SelectedTextContext } from "@/types/message";
 import { registerCommands } from "@/commands";
@@ -45,6 +50,16 @@ import type {
   KnowledgeSourceLifecyclePort,
   KnowledgeSourceRetirementRequest,
 } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
+import { type KnowledgeChatModelReadiness } from "@/knowledge/setup/KnowledgeChatModelReadiness";
+import { composeKnowledgeChatModelReadiness } from "@/knowledge/setup/KnowledgeChatModelReadinessComposition";
+import { KnowledgeSetupNavigation } from "@/knowledge/setup/KnowledgeSetupNavigation";
+import {
+  createKnowledgeSetupUnloadedProjection,
+  projectKnowledgeSetupReadiness,
+} from "@/knowledge/setup/KnowledgeSetupReadiness";
+import { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
+import { subscribeKnowledgeSetupSelectionChanges } from "@/knowledge/setup/KnowledgeSetupSelectionSubscription";
+import { publishKnowledgeSetupThenStudioAuthority } from "@/knowledge/setup/KnowledgeSetupStartupPublication";
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
 import {
@@ -73,6 +88,7 @@ import {
   type KnowledgePluginBundleConfigLoadResult,
   type KnowledgePluginObservationStartupPort,
   type KnowledgePluginRecoveryStartupPort,
+  type KnowledgePluginStartupState,
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 import { KnowledgeStudioStartupAvailabilityAdapter } from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
 import {
@@ -111,6 +127,7 @@ import {
   setSettings,
   subscribeToSettingsChange,
 } from "@/settings/model";
+import { ChainType } from "@/chainType";
 import { ChatUIState } from "@/state/ChatUIState";
 import { VaultDataManager } from "@/state/vaultDataAtoms";
 import { FileParserManager } from "@/tools/FileParserManager";
@@ -213,6 +230,7 @@ export default class CopilotPlugin extends Plugin {
   private knowledgeProductionObservation?: KnowledgePluginObservationStartupPort;
   private knowledgeProductionRelease?: KnowledgeProductionRecoveryComposer;
   private knowledgeProjectRecordsUnsubscriber?: () => void;
+  private knowledgeSetupSelectionUnsubscriber?: () => void;
   private readonly knowledgeRendererFetchPort = captureKnowledgeRendererFetchPort();
   private readonly knowledgeProductionPreflightLifecycle =
     new KnowledgePluginProductionPreflightLifecycle({
@@ -231,6 +249,29 @@ export default class CopilotPlugin extends Plugin {
       new Notice(message);
     });
   private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
+  private knowledgeSetupStartupState: KnowledgePluginStartupState = Object.freeze({
+    generation: 0,
+    status: "waiting_for_layout",
+  });
+  private readonly knowledgeSetupReadinessStore = new KnowledgeSetupReadinessStore(
+    projectKnowledgeSetupReadiness(this.knowledgeSetupStartupState, {
+      projectCount: 0,
+      chatModel: Object.freeze({ reason: "missing" }),
+    })
+  );
+  private readonly knowledgeSetupNavigation = new KnowledgeSetupNavigation({
+    getProjectRecords: () => getCachedProjectRecords(),
+    getCurrentProjectId: () => getCurrentProject()?.id,
+    openCopilotSettings: () => this.openCopilotSettingsForKnowledgeSetup(),
+    openVaultFile: (path) => this.openKnowledgeSetupVaultFile(path),
+    openChat: () => {
+      if (!this.knowledgeLifecycleClosed) return this.activateView();
+    },
+    refreshDisplayedStatus: () => this.refreshKnowledgeSetupReadiness(),
+    notify: (message) => {
+      if (!this.knowledgeLifecycleClosed) new Notice(message);
+    },
+  });
   private readonly knowledgeStudioStartupAvailability =
     new KnowledgeStudioStartupAvailabilityAdapter(
       this.knowledgeStudioPort,
@@ -282,6 +323,12 @@ export default class CopilotPlugin extends Plugin {
       })();
     });
     this.addSettingTab(new CopilotSettingTab(this.app, this));
+    this.knowledgeSetupSelectionUnsubscriber = subscribeKnowledgeSetupSelectionChanges({
+      subscribeModelKey: subscribeToModelKeyChange,
+      subscribeChainType: subscribeToChainTypeChange,
+      subscribeProject: subscribeToProjectChange,
+      refresh: () => this.refreshKnowledgeSetupReadiness(),
+    });
 
     // Core plugin initialization
 
@@ -387,7 +434,9 @@ export default class CopilotPlugin extends Plugin {
           leaf,
           controller,
           this.knowledgeStudioSessionStore,
-          this.knowledgeFolderImportPort
+          this.knowledgeFolderImportPort,
+          this.knowledgeSetupReadinessStore,
+          this.knowledgeSetupNavigation
         );
       });
       this.addRibbonIcon("library-big", "Open Knowledge Studio", () => {
@@ -519,6 +568,80 @@ export default class CopilotPlugin extends Plugin {
   }
 
   /**
+   * Projects the exact ordinary Chat selection into a secret-free local status.
+   *
+   * Credential material is inspected only for one unambiguous selected model
+   * and immediately reduced to a boolean. No provider, model instance, or
+   * network operation is created by this check.
+   */
+  private projectKnowledgeChatReadiness(): KnowledgeChatModelReadiness {
+    const settings = getSettings();
+    const projectMode = getChainType() === ChainType.PROJECT_CHAIN;
+    const project = getCurrentProject();
+    return composeKnowledgeChatModelReadiness({
+      mode: projectMode ? "project" : "default",
+      defaultModelKey: getModelKey(),
+      projectModelKey: project?.projectModelKey,
+      activeModels: settings.activeModels,
+      credentialSettings: settings,
+    });
+  }
+
+  /** Publishes one typed startup observation and the independent local Chat lane. */
+  private publishKnowledgeSetupReadiness(state: KnowledgePluginStartupState): void {
+    if (this.knowledgeLifecycleClosed) return;
+    this.knowledgeSetupStartupState = state;
+    this.knowledgeSetupReadinessStore.publishStartup(state, {
+      projectCount: getCachedProjectRecords().length,
+      chatModel: this.projectKnowledgeChatReadiness(),
+    });
+  }
+
+  /** Reprojects current local state without rebuilding a workflow or contacting a provider. */
+  private refreshKnowledgeSetupReadiness(): void {
+    if (this.knowledgeLifecycleClosed) return;
+    this.publishKnowledgeSetupReadiness(this.knowledgeSetupStartupState);
+  }
+
+  /** Opens the existing Copilot settings page without changing a setting. */
+  private openCopilotSettingsForKnowledgeSetup(): void {
+    if (this.knowledgeLifecycleClosed) return;
+    try {
+      const settingsApp = this.app as unknown as {
+        setting?: { openTabById?: (id: string) => { display?: () => void } | undefined };
+      };
+      const tab = settingsApp.setting?.openTabById?.("copilot");
+      if (!tab || typeof tab.display !== "function") {
+        throw new TypeError("Copilot settings are unavailable");
+      }
+      tab.display();
+    } catch {
+      if (!this.knowledgeLifecycleClosed) {
+        new Notice("Copilot settings could not be opened. Use Obsidian Settings → Copilot.");
+      }
+    }
+  }
+
+  /** Opens one currently re-proved Vault file for setup inspection. */
+  private async openKnowledgeSetupVaultFile(path: string): Promise<void> {
+    if (this.knowledgeLifecycleClosed || typeof path !== "string" || path.trim().length === 0) {
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.path !== path) {
+      new Notice("That setup file is not available at its current Vault path.");
+      return;
+    }
+    try {
+      await this.app.workspace.getLeaf(true).openFile(file);
+    } catch {
+      if (!this.knowledgeLifecycleClosed) {
+        new Notice("That setup file could not be opened. No file was changed.");
+      }
+    }
+  }
+
+  /**
    * Creates the plugin-level fail-closed barrier over Runtime, Projects, and Bundle config.
    *
    * The barrier composes the recovery-only Gate and, after a fresh
@@ -548,25 +671,41 @@ export default class CopilotPlugin extends Plugin {
           if (this.knowledgeLifecycleClosed) {
             return;
           }
-          this.knowledgeStudioStartupAvailability.setUnavailable(state);
+          publishKnowledgeSetupThenStudioAuthority(
+            state,
+            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
+            (nextState) => this.knowledgeStudioStartupAvailability.setUnavailable(nextState)
+          );
         },
         setReadReady: (state) => {
           if (this.knowledgeLifecycleClosed) {
             return;
           }
-          this.knowledgeStudioStartupAvailability.setReadReady(state);
+          publishKnowledgeSetupThenStudioAuthority(
+            state,
+            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
+            (nextState) => this.knowledgeStudioStartupAvailability.setReadReady(nextState)
+          );
         },
         setRecoveryReady: (state) => {
           if (this.knowledgeLifecycleClosed) {
             return;
           }
-          this.knowledgeStudioStartupAvailability.setRecoveryReady(state);
+          publishKnowledgeSetupThenStudioAuthority(
+            state,
+            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
+            (nextState) => this.knowledgeStudioStartupAvailability.setRecoveryReady(nextState)
+          );
         },
         setSourceRecoveryReady: (state) => {
           if (this.knowledgeLifecycleClosed) {
             return;
           }
-          this.knowledgeStudioStartupAvailability.setSourceRecoveryReady(state);
+          publishKnowledgeSetupThenStudioAuthority(
+            state,
+            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
+            (nextState) => this.knowledgeStudioStartupAvailability.setSourceRecoveryReady(nextState)
+          );
         },
       },
     });
@@ -1095,6 +1234,14 @@ export default class CopilotPlugin extends Plugin {
     // Fail-close synchronously before the first await so no old startup
     // continuation can publish or initialize services during persistence flush.
     this.knowledgeLifecycleClosed = true;
+    try {
+      this.knowledgeSetupReadinessStore.publish(createKnowledgeSetupUnloadedProjection());
+    } catch {
+      // The lifecycle is already closed; a stale/disposed presentation store cannot reopen it.
+    }
+    this.knowledgeSetupSelectionUnsubscriber?.();
+    this.knowledgeSetupSelectionUnsubscriber = undefined;
+    this.knowledgeSetupReadinessStore.dispose();
     this.knowledgeRuntimeStartupGeneration += 1;
     this.closeKnowledgeProductionObservation();
     this.closeKnowledgeProductionRecovery();

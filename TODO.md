@@ -450,7 +450,7 @@
 - 二次综合建议分为 6.8/10；分别保留 UX 6.6、已配置目标用户 7.5、首次普通用户 4.7、工程安全 8.8、核心闭环 7.6、商业成熟 4.2，避免用单一总分掩盖体验与工程差距。
 - Plus 只按可核验英文定价、功能文档、隐私和条款评价；明确 V4 英文首页与现有定价/文档尚未完全对齐，多 Agent、Symposium、Miyo 只作为官方宣传方向，不冒充稳定权益。
 - 当前 3.3.3 仓库边界限定为开源客户端中的 Plus UI、Agent/Projects/Composer/Miyo 连接与远端调用适配；不把 Brevilabs/Miyo 服务端、计费许可或官网宣传的 V4 多 Agent/Symposium 描述成仓库已证明包含的能力，也不把 semver 3.3.3 等同于产品代际 V3。
-- 下一阶段先投资首配/模型 readiness、Review 修正与证据、Wiki 版本回滚、统一 Source 入口和 Draft 原始材料绑定；Web、OCR、Explorer 单文件、Graph、多 Agent、多人和跨平台保持后置。
+- 原定下一阶段中的首个本地 readiness 基础切片已在下一节实现，并通过已配置主窗口的 Windows 有界验收；随后优先 Review 修正与证据、Wiki 版本回滚、统一 Source 入口和 Draft 原始材料绑定。Web、OCR、Explorer 单文件、Graph、多 Agent、多人和跨平台保持后置。
 
 ### Task Tracking
 
@@ -467,6 +467,41 @@
 - [x] 验证二次评估报告中的 5 个仓库内 Markdown 链接全部可解析。
 - [x] 执行 scoped `git diff --check`；本次复评子任务只编辑评估报告与 TODO，未修改代码或其他文档。
 - [x] 将二次复评冻结后的 14 篇中文手册同步到 Windows Vault；文件名集合与逐文件 SHA-256 完全一致，127 个本地链接、0 broken，验证后清理同步备份并在 Obsidian 聚焦复评报告；未触碰 Sources/Wiki/Runtime/data.json 或插件产物，也未调用模型。
+
+## Knowledge 设置与就绪检查（2026-08-12）
+
+### Session Goal
+
+把首次使用时分散的 Project / Bundle、Knowledge 模型和普通 Chat 模型状态汇总为 Knowledge Studio 内可理解、可操作的本地检查页；明确“本地已配置”不等于“服务在线”，并让用户只通过安全导航修正配置，不再从统一的红色 unavailable 页面猜问题。
+
+### Architecture Decisions
+
+- 采用 workflow vertical slice：本刀交付只读诊断、三个独立状态卡和安全导航；自动创建 Project、目录、Schema、写 Bundle YAML、切模型、写 API Key及联网 Test connection 留到后续独立切片。
+- Readiness 是独立 presentation authority：只消费现有 Startup Barrier 的 typed、secret-free 状态与普通 Chat 的本地模型投影；不重新运行 preflight，不持有 workflow/model/Queue/Review/Apply 权限。
+- Knowledge 与 Chat 分开判断。Chat 未配置只影响新聊天及从新回答创建 Knowledge Draft，不得把已就绪的 Knowledge 工作流判为不可用。
+- 所有被动检查严格零模型/零 provider 网络；`workflow_read_ready` 只能表述为本地准入完成且网络尚未测试，不能显示 Online、Connected 或 API Key valid。
+- 修正入口仅允许打开现有 Copilot Settings、Chat、当前重新解析的 project.md / Schema，以及通过 `Refresh displayed status` 刷新当前展示；失去当前精确身份时 fail closed 并给固定 Notice。Setup 本身不重新运行 preflight 或 provider 检查。
+- 正常 generation 换代继续使用中性的 Refreshing；Recovery / Source Recovery 继续走既有专用界面，不被 Setup 页面覆盖。
+
+### Task Tracking
+
+- [x] 新增 secret-free readiness projector、普通 Chat 本地模型 projector 与单调生命周期 Store。
+- [x] 在 Knowledge Studio unavailable 状态渲染 `Setup & status`，并在 ready 页提供可返回的状态入口。
+- [x] 接入 Startup Barrier、Settings / Projects / Chat selection 变更与插件 unload，保证当前状态投影和旧生命周期关闭。
+- [x] 实现只读导航 port；不自动写配置、目录、凭据，也不调用模型。
+- [x] 更新中文手册、英文技术真值和本轮架构/边界说明；明确打开既有 Settings 可能触发插件更新检查，但被动 readiness 为零模型/零 provider 请求。
+- [x] 回写产品复评：三卡 readiness 已实现且有聚焦自动化证据，不再列为待开发项；精确区分已通过的 Windows 主窗口就绪路径与仍未现场制造的配置失败 / Recovery / popout 边界。
+
+### Testing Checklist
+
+- [x] 覆盖所有 Startup status、已知/未知诊断映射，以及 Knowledge 与 Chat 独立状态。
+- [x] 覆盖 Chat 选中模型 0/1/多匹配、disabled / retired / project-disabled / credential missing / locally configured。
+- [x] 覆盖 Store revision、listener isolation、dispose 和 caller-owned 数据隔离；本切片没有异步 projector 结果可回写。
+- [x] 覆盖 unavailable Setup、ready→Setup→Back、Recovery 仍由原面板呈现、popout 重建与导航回调。
+- [x] 断言 readiness snapshot / DOM / Notice 不含 key、原始 YAML、私有路径或 raw error；被动 composition 直接覆盖零 fetch，生产接线只调用同步纯投影且不构造 provider / model。日志边界继续由固定、无输入日志策略保证，本切片不新增 readiness 日志。
+- [x] 聚焦门禁为 12 个 Jest suites / 150 tests（Chat local/composition、readiness/store/navigation/subscription/publication、Panel/Root/View 与 availability adapter）；最终全仓为 271 suites / 4503 tests。TypeScript `noEmit`、`npm run format`、全仓 `format:check`、全仓 ESLint、production build、文档 16 文件 / 134 本地链接、`git diff --check` 与变更集敏感信息/个人路径扫描均通过；未运行真实模型 integration。
+- [x] Windows Obsidian 主窗口有界验收已通过：final production artifact 真正 disable/enable 后，已就绪 Studio → `Setup & status` → 三卡 → `Refresh displayed status` → `Back to Studio` 两轮正常；Workspace / Knowledge 为 locally ready，缺 OpenRouter Key 的可选 Chat 单独为 credential missing 且不阻断 Studio。UI 明示本次状态检查零模型请求，Key 真伪、license entitlement、账单、额度、网络与本地 server 均未测试；刷新前后 `data.json`、Sources / Wiki / Knowledge / Projects 树保持精确不变，UI 资源请求为 0，最终 console 无 error / warn。
+- [ ] Setup/readiness 剩余 Windows 现场边界：不为验收而破坏配置或 durable state，因此尚未人工制造 no Project / no Bundle / invalid Bundle、Recovery / Sources-only、自然 generation `Refreshing` 与 popout Setup；这些路径保留自动化覆盖，不冒充本轮现场结果。
 
 ## Source Documents
 

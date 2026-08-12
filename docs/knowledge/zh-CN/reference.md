@@ -7,6 +7,10 @@
 | 英文界面               | 中文含义                                         |
 | ---------------------- | ------------------------------------------------ |
 | Knowledge Studio       | 个人知识工作台                                   |
+| Setup & status         | 本地设置与状态检查                               |
+| Configured locally     | 本地配置通过；没有验证联网、余额或服务可用性     |
+| Needs setup            | 需要用户完成本地配置                             |
+| Needs attention        | 持久环境或运行状态需要处理，不会自动修复         |
 | Query                  | 查询                                             |
 | Activity               | 活动/后台任务                                    |
 | Review                 | 审核                                             |
@@ -21,6 +25,26 @@
 | Supported              | 证据足以支持回答                                 |
 | Partial                | 只能支持部分回答                                 |
 | Insufficient evidence  | 证据不足，不生成无根据结论                       |
+
+## Setup & status 三张卡
+
+| 卡片                  | 检查什么                                                | 是否阻断 Knowledge |
+| --------------------- | ------------------------------------------------------- | ------------------ |
+| Workspace             | Project、Bundle、唯一选择、本地 Runtime 与持久状态      | 是                 |
+| Knowledge model       | Project 的 Knowledge 模型、支持配置、启用状态与本地凭证 | 是                 |
+| Chat model (optional) | 当前普通或 Project Chat 模型的本地配置                  | 否                 |
+
+这些卡片是只读投影。被动检查不会调用模型或向 provider 发请求；**Configured locally** 不代表 Online、Connected、Key 有效、有余额或本地模型服务可达。
+
+| Setup 动作                                     | 作用                                                                     | 不会做什么                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| Open Chat                                      | 打开已有 Chat                                                            | 不创建 Project，不自动选择模型                                |
+| Open Copilot settings                          | 打开已有 Copilot 设置                                                    | 不写 Key、不验证 provider；设置页本身可能做插件版本更新检查   |
+| Open Project file / Open selected Project file | 打开唯一 Bundle 所属、唯一 Project 或 Chat 中当前精确选中的 Project 文件 | 不改 Bundle YAML；没有精确当前选择时不在多个 Project 中猜一个 |
+| Open Knowledge rules                           | 仅在当前有效 Bundle 可唯一确定时打开 Schema                              | 不创建或修复 Schema                                           |
+| Refresh displayed status                       | 刷新当前本地状态展示                                                     | 不 ping provider，不自动建目录、写配置或修复持久状态          |
+
+正常 generation 换代继续显示中性的 `Refreshing Knowledge Studio…`。Recovery 与 Sources 缺失继续使用各自的专用面板，不由 Setup 卡片替代。
 
 ## Activity 任务状态
 
@@ -113,44 +137,46 @@
 
 ## 能力矩阵
 
-| 能力                                               | 当前状态                                |
-| -------------------------------------------------- | --------------------------------------- |
-| Windows Obsidian Desktop                           | 支持                                    |
-| 单人、一个有效 Bundle、一个 sourceRoot             | 支持                                    |
-| `.md` / `.markdown` / `.txt` / 可提取文本 PDF 摄入 | 支持                                    |
-| 文件夹一次性快照                                   | 支持                                    |
-| Vault 文件 Add to Knowledge                        | 支持                                    |
-| 完整 AI 回答 Create Knowledge Draft                | 已实现，并通过自动化与有界 Windows 实测 |
-| Activity / Review / 显式 Apply / Limited Recovery  | 支持                                    |
-| Grounded answer Source evidence                    | 当前只支持 `.md`                        |
-| PDF 检索引用与精确页跳转                           | 支持；不进入综合回答 evidence           |
-| Save to Wiki → no_changes 或 Review/Apply          | 支持                                    |
-| Sources Missing / 精确原路径复查                   | 已接入并通过 Windows 有界实测           |
-| 来源退役                                           | 已接入并通过 Windows 有界实测           |
-| 物理右键提示                                       | 已接入；Windows 实机待验收              |
-| 文件夹持续同步                                     | 不支持                                  |
-| URL / 浏览器 / 单文件 Explorer Knowledge 导入      | 不支持                                  |
-| OCR / 扫描 PDF                                     | 不支持                                  |
-| 自动 Review / 自动 Apply                           | 不支持                                  |
-| 新路径替换来源 / 自动删除来源或 Wiki               | 不支持                                  |
-| 多 Bundle 自动选择                                 | 不支持                                  |
-| 跨平台 Knowledge Studio                            | 不支持                                  |
-| 多实例 / OneDrive / 网络文件系统                   | 未验收                                  |
+| 能力                                               | 当前状态                                                                                |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Windows Obsidian Desktop                           | 支持                                                                                    |
+| 单人、一个有效 Bundle、一个 sourceRoot             | 支持                                                                                    |
+| `.md` / `.markdown` / `.txt` / 可提取文本 PDF 摄入 | 支持                                                                                    |
+| 文件夹一次性快照                                   | 支持                                                                                    |
+| Vault 文件 Add to Knowledge                        | 支持                                                                                    |
+| 完整 AI 回答 Create Knowledge Draft                | 已实现，并通过自动化与有界 Windows 实测                                                 |
+| Activity / Review / 显式 Apply / Limited Recovery  | 支持                                                                                    |
+| Grounded answer Source evidence                    | 当前只支持 `.md`                                                                        |
+| PDF 检索引用与精确页跳转                           | 支持；不进入综合回答 evidence                                                           |
+| Save to Wiki → no_changes 或 Review/Apply          | 支持                                                                                    |
+| Sources Missing / 精确原路径复查                   | 已接入并通过 Windows 有界实测                                                           |
+| 来源退役                                           | 已接入并通过 Windows 有界实测                                                           |
+| Setup & status 三卡本地诊断                        | 已实现并有自动化；Windows 主窗口已配置路径已验收，配置失败 / Recovery / popout 实机待补 |
+| 物理右键提示                                       | 已接入；Windows 实机待验收                                                              |
+| 文件夹持续同步                                     | 不支持                                                                                  |
+| URL / 浏览器 / 单文件 Explorer Knowledge 导入      | 不支持                                                                                  |
+| OCR / 扫描 PDF                                     | 不支持                                                                                  |
+| 自动 Review / 自动 Apply                           | 不支持                                                                                  |
+| 新路径替换来源 / 自动删除来源或 Wiki               | 不支持                                                                                  |
+| 多 Bundle 自动选择                                 | 不支持                                                                                  |
+| 跨平台 Knowledge Studio                            | 不支持                                                                                  |
+| 多实例 / OneDrive / 网络文件系统                   | 未验收                                                                                  |
 
 ## 网络调用速查
 
-| 操作                                         | 是否调用 DeepSeek                               |
-| -------------------------------------------- | ----------------------------------------------- |
-| 打开 Studio、启动预检、Recovery 核对         | 否                                              |
-| 枚举/复制文件夹、本地 PDF 提取、SHA-256 校验 | 否                                              |
-| 新 Source 编译                               | 通常是，分析与生成两个阶段                      |
-| 已有持久证明且输入/输出精确未变化            | 否                                              |
-| 有合格证据的 Grounded Query                  | 是，单独回答请求                                |
-| 无合格证据的 Query                           | 否，返回 Insufficient evidence                  |
-| Save to Wiki 点击本身                        | 创建本地 managed source；随后编译可能调用       |
-| Create Knowledge Draft 点击本身              | 创建并登记本地 managed source；随后编译可能调用 |
-| Review 选择                                  | 否                                              |
-| Apply                                        | 否，执行本地确定性事务                          |
+| 操作                                             | 是否调用 DeepSeek                               |
+| ------------------------------------------------ | ----------------------------------------------- |
+| 打开 Studio、查看 Setup、启动预检、Recovery 核对 | 否                                              |
+| 从 Setup 打开 Copilot 设置                       | 不调用 DeepSeek；设置页可能执行插件更新检查     |
+| 枚举/复制文件夹、本地 PDF 提取、SHA-256 校验     | 否                                              |
+| 新 Source 编译                                   | 通常是，分析与生成两个阶段                      |
+| 已有持久证明且输入/输出精确未变化                | 否                                              |
+| 有合格证据的 Grounded Query                      | 是，单独回答请求                                |
+| 无合格证据的 Query                               | 否，返回 Insufficient evidence                  |
+| Save to Wiki 点击本身                            | 创建本地 managed source；随后编译可能调用       |
+| Create Knowledge Draft 点击本身                  | 创建并登记本地 managed source；随后编译可能调用 |
+| Review 选择                                      | 否                                              |
+| Apply                                            | 否，执行本地确定性事务                          |
 
 ## 术语
 

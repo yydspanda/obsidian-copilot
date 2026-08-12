@@ -1,6 +1,6 @@
 # Knowledge Studio 与 Activity
 
-> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-11。
+> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-12。
 
 ## 本页目标
 
@@ -32,6 +32,7 @@ Knowledge Studio 是个人知识库的控制台；`Activity` 是其中的持久�
 | 英文界面           | 本手册中的中文 | 用途                              |
 | ------------------ | -------------- | --------------------------------- |
 | `Knowledge Studio` | 知识工作台     | 管理 Knowledge 全流程             |
+| `Setup & status`   | 设置与状态     | 分开查看本地 Workspace/模型就绪度 |
 | `Import folder`    | 导入文件夹     | 把外部文件夹复制为 Vault 来源快照 |
 | `Query`            | 查询           | 只查询已接受、已应用的 Wiki       |
 | `Activity`         | 活动/任务      | 查看后台摄入、编译与应用状态      |
@@ -41,24 +42,40 @@ Knowledge Studio 是个人知识库的控制台；`Activity` 是其中的持久�
 
 `Recovery` 只有存在需要处理的恢复项时才显示；`Query` 只有当前适配器提供了查询能力时才显示。
 
+### 先看 Setup & status
+
+Studio 还不能打开主界面时，会先显示三张本地诊断卡；主界面已经可用时，也可以点击右上角 **Setup & status** 查看，并用 **Back to Studio** 返回。
+
+| 卡片                    | 检查范围                                                                     | 对主流程的影响 |
+| ----------------------- | ---------------------------------------------------------------------------- | -------------- |
+| `Workspace`             | Project、唯一 Bundle、本地 Runtime / 持久状态                                | 未就绪会阻断   |
+| `Knowledge model`       | Project 单独选择的 Knowledge 模型、支持范围、启用状态和本地凭证存在性        | 未就绪会阻断   |
+| `Chat model (optional)` | 当前普通或 Project Chat 所选模型；用于普通对话和从新 Chat 回答衔接 Knowledge | 不阻断主流程   |
+
+卡片之间互不冒充。例如，普通 Chat 模型缺 Key，不会把已经就绪的 Knowledge 模型判成失败；Knowledge 模型已配置，也不会替普通 Chat 选择模型。
+
+**Configured locally** 的准确含义是“当前本地配置通过检查”，不是 **Online** 或 **Connected**。Setup 页不会 ping provider、验证 Key 真伪、查询余额、检查网络或探测本地模型服务器，也不会调用模型。卡片上的动作只打开现有 Chat、Copilot 设置、当前可唯一确定的 Project 文件或 Schema，或者刷新页面状态；不会自动创建 Project、目录或 Schema，不会修改 Bundle YAML、切换模型或写 API Key。打开现有 Copilot 设置页可能触发插件自己的版本更新检查，这与模型 provider 检查无关。
+
+`Recovery` 和 Sources 缺失属于持久操作/来源处理，不是首配向导。出现时仍使用 Studio 原有的 Recovery 或 Sources 专用面板；Setup 页不会把它们改写成普通配置错误，也不会自动修复。
+
 ### 正常刷新与真正不可用的区别
 
-点击 `Check again`、完成 `Remove`、导入新来源，或修改 Project/设置后，插件可能需要撤销旧 generation 并重建当前运行代。这个正常间隙会显示中性的 `Refreshing Knowledge Studio…`：
+完成 `Remove`、导入新来源，或修改 Project/设置后，插件可能需要撤销旧 generation 并重建当前运行代。这个正常间隙会显示中性的 `Refreshing Knowledge Studio…`：
 
 - Studio 正在重新核对配置和持久状态；
 - 旧代的操作、Query 和引用权限已撤销，界面按钮会暂时停用；
 - 这不表示刚才的操作失败，也不需要立即重复点击或重载插件。
 
-等待新代完成验证后，Studio 会自动返回可用界面。只有系统已判定存在需要处理的持久配置、Runtime 或 Recovery 等终态问题时，才会显示红色 `Knowledge Studio unavailable`；此时应阅读红色页面的具体原因。
+等待新代完成验证后，Studio 会自动返回可用界面。只有系统已判定存在需要处理的持久配置或 Runtime 等终态问题时，才会停在三卡 Setup 页面并显示对应原因。Setup 页顶部的 **Refresh displayed status** 只刷新当前本地状态展示；它不是 provider 测试，也不会自动修复配置。
 
 ### 就绪标准
 
-以下四点同时满足，才说明当前 Studio 可用于日常操作：
+先确认 `Workspace` 与 `Knowledge model` 都显示 **Configured locally**。`Chat model (optional)` 可以稍后配置，不影响 Knowledge 主流程。然后以下四点同时满足，才说明当前 Studio 可用于日常操作：
 
 1. 顶部显示你的真实 Bundle ID。
 2. Bundle ID 后显示 durable revision（持久版本号）。
 3. `Activity` 打开后能看到 Bundle 状态和任务统计，而不是未连接占位页。
-4. 页面没有 `Knowledge Studio unavailable`、`adapter unavailable` 或未处理的 Recovery 阻断。
+4. 页面没有 adapter、Sources 或未处理的 Recovery 阻断。
 
 durable revision 是当前持久状态的版本标识。它会随任务或事务状态改变，不是文件数量，也不需要你手工编辑。`Refreshing Knowledge Studio…` 期间还未达到这个就绪标准，但它是正常过渡，不是红色故障结论。
 
@@ -164,7 +181,7 @@ No queue state is inferred while the Windows adapter is unavailable.
 - 不应尝试 Review、Apply 或导入新资料；
 - 应先修复 Bundle、模型、密钥、平台或启动恢复问题，然后重新加载插件状态。
 
-红色 `Knowledge Studio unavailable` 不是正常 generation 换代提示。它表示启动已收敛到需要处理的持久配置、Runtime 或 Recovery 等问题；在修复前不会启动未授权的模型工作或修改 Knowledge 文件。
+三卡 Setup 页面不是正常 generation 换代提示。它表示本地启动已经收敛到需要处理的配置或 Runtime 状态；在修复前不会启动未授权的模型工作或修改 Knowledge 文件。Recovery 和可恢复的 Sources 缺失仍由各自的专用面板呈现。
 
 ## 你应该看到什么
 
@@ -188,7 +205,7 @@ Completed（no_changes）             Awaiting review
 
 - Studio 一直 `Loading durable knowledge state`：等待当前启动恢复；若长期不变，重新打开视图并查故障排查。
 - Studio 短暂显示 `Refreshing Knowledge Studio…`：正常等待，不要重复提交刚才的操作；只在长时间不恢复时转到故障排查。
-- 顶部是 `unavailable`：检查是否恰好一个有效 Bundle、一个 `sourceRoot`，以及 DeepSeek 配置是否符合要求。
+- 打开后停在 Setup 页：按 `Workspace` 与 `Knowledge model` 两张卡分别处理；不要把可选 Chat 卡的问题误当成 Knowledge 故障。
 - Activity 未连接：不要把它当成空队列；先解决适配器不可用。
 - 一直 `Queued`：检查 Bundle 是否被暂停、是否 rate limited，或是否有 Recovery/Finalizing 阻断。
 - `Failed` 没有 `Retry`：该失败不适合盲目重跑，或已有更新的同源任务；按失败阶段处理来源、配置或恢复状态。
