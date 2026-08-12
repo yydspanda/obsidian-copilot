@@ -39,6 +39,9 @@ import {
   type KnowledgePluginProductionPreflightAdmission,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import { DelegatingKnowledgeAppliedWikiPageInspectorPort } from "@/knowledge/wiki/DelegatingKnowledgeAppliedWikiPageInspectorPort";
+import { KnowledgeAppliedWikiPageInspectorGenerationLease } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorGenerationLease";
+import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 import {
   KnowledgePluginStartupBarrier,
   type KnowledgePluginObservationStartupPort,
@@ -1019,6 +1022,74 @@ describe("KnowledgeProductionObservationComposer", () => {
     composer.close();
     await worker.whenSettled();
     lifecycle.close();
+  });
+
+  it("mints one least-authority applied-Wiki inspector only for the released worker generation", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const signal = new AbortController().signal;
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+    });
+
+    await expect(composer.start(signal)).resolves.toMatchObject({
+      kind: "observation_converged",
+    });
+    expect(() => composer.createAppliedWikiPageInspectorCoordinator()).toThrow("aborted");
+
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => undefined
+    );
+    const inspector = composer.createAppliedWikiPageInspectorCoordinator();
+
+    const indexRows = await inspector.listAppliedWikiPathIndexRows(signal);
+    expect(indexRows).toEqual([]);
+    expect(Reflect.ownKeys(inspector)).toEqual([]);
+    expect(Object.isFrozen(inspector)).toBe(true);
+    expect(() => composer.createAppliedWikiPageInspectorCoordinator()).toThrow("aborted");
+
+    const stablePort = new DelegatingKnowledgeAppliedWikiPageInspectorPort();
+    const pathIndex = new KnowledgeAppliedWikiPathIndex();
+    const generation = new KnowledgeAppliedWikiPageInspectorGenerationLease({
+      delegate: inspector,
+      indexRows,
+      subscribeInvalidation: (listener) => composer.subscribeClose(listener),
+      replaceDelegate: (delegate) => stablePort.replaceDelegate(delegate),
+      revokeDelegate: (delegate) => stablePort.revokeDelegate(delegate),
+      installPathIndex: (rows) => pathIndex.install(rows),
+      revokePathIndex: (lease) => pathIndex.revoke(lease),
+      assertCurrent: () => composer.assertHealthy(),
+    });
+    await expect(
+      stablePort.inspectPage(Object.freeze({ pagePath: "Wiki/personal/Missing.md" }), signal)
+    ).rejects.toMatchObject({ code: "not_applied" });
+    expect(() => generation.assertCurrent()).not.toThrow();
+
+    composer.close();
+    expect(() => generation.assertCurrent()).toThrow("aborted");
+    await expect(
+      stablePort.inspectPage(Object.freeze({ pagePath: "Wiki/personal/Missing.md" }), signal)
+    ).rejects.toMatchObject({ code: "unavailable" });
+    expect(pathIndex.lookupExact("Wiki/personal/Missing.md")).toEqual([]);
+    await expect(inspector.listAppliedWikiPathIndexRows(signal)).rejects.toMatchObject({
+      name: "KnowledgeAppliedWikiPageInspectorError",
+      code: "unavailable",
+    });
+    generation.close();
+    stablePort.dispose();
+    pathIndex.dispose();
+    await worker.whenSettled();
+    lifecycle.close();
+    expect(fetchPort).not.toHaveBeenCalled();
   });
 
   it("returns a fixed plan diagnostic without installing listeners when schema bytes are absent", async () => {

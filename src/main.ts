@@ -16,10 +16,13 @@ import { registerCommands } from "@/commands";
 import CopilotView from "@/components/CopilotView";
 import { APPLY_VIEW_TYPE, ApplyView } from "@/components/composer/ApplyView";
 import { KNOWLEDGE_STUDIO_VIEW_TYPE, KnowledgeStudioView } from "@/components/KnowledgeStudioView";
+import { KnowledgeAppliedWikiInspectorModal } from "@/components/knowledge/KnowledgeAppliedWikiInspectorModal";
 import { LoadChatHistoryModal } from "@/components/modals/LoadChatHistoryModal";
 
 import { registerContextMenu } from "@/commands/contextMenu";
+import { checkKnowledgeWikiInspectionCommand } from "@/commands/knowledgeWikiCommand";
 import { registerKnowledgeSourceMenu } from "@/commands/knowledgeSourceMenu";
+import { registerKnowledgeWikiMenu } from "@/commands/knowledgeWikiMenu";
 import { CustomCommandRegister } from "@/commands/customCommandRegister";
 import { migrateCommands, suggestDefaultCommands } from "@/commands/migrator";
 import { migrateSystemPromptsFromSettings } from "@/system-prompts/migration";
@@ -33,6 +36,10 @@ import { DelegatingKnowledgeFolderImportPort } from "@/knowledge/capture/Delegat
 import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
 import { KnowledgeChatCaptureGenerationLease } from "@/knowledge/capture/KnowledgeChatCaptureGenerationLease";
 import { KnowledgeFolderImportGenerationLease } from "@/knowledge/capture/KnowledgeFolderImportGenerationLease";
+import { DelegatingKnowledgeAppliedWikiPageInspectorPort } from "@/knowledge/wiki/DelegatingKnowledgeAppliedWikiPageInspectorPort";
+import { KnowledgeAppliedWikiPageInspectorGenerationLease } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorGenerationLease";
+import type { KnowledgeAppliedWikiPageInspectionRequest } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
+import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 import { ObsidianKnowledgeFolderImportFileStore } from "@/knowledge/capture/ObsidianKnowledgeFolderImportFileStore";
 import {
   KnowledgeProductionChatCaptureCoordinator,
@@ -74,6 +81,7 @@ import {
 import { KnowledgeProductionRecoveryComposer } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
 import { KnowledgeProductionRecoveryActionCoordinator } from "@/knowledge/startup/KnowledgeProductionRecoveryActionCoordinator";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import { tryPublishKnowledgeAppliedWikiPageInspectorGeneration } from "@/knowledge/startup/KnowledgeAppliedWikiPageInspectorPublication";
 import { createSourceObservationPreReleaseResult } from "@/knowledge/startup/KnowledgeSourceObservationPreRelease";
 import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgePluginProductionRecoveryPort } from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
@@ -243,6 +251,11 @@ export default class CopilotPlugin extends Plugin {
   private readonly knowledgeChatCapturePort = new DelegatingKnowledgeChatCapturePort();
   private readonly knowledgeFolderImportPort = new DelegatingKnowledgeFolderImportPort();
   private readonly knowledgeSourcePathIndex = new KnowledgeSourcePathIndex();
+  private readonly knowledgeAppliedWikiPageInspectorPort =
+    new DelegatingKnowledgeAppliedWikiPageInspectorPort();
+  private readonly knowledgeAppliedWikiPathIndex = new KnowledgeAppliedWikiPathIndex();
+  private readonly knowledgeAppliedWikiInspectorModals =
+    new Set<KnowledgeAppliedWikiInspectorModal>();
   private readonly knowledgeSourceIssueNotificationSink =
     createKnowledgeSourceIssueNotificationSink((message) => {
       if (this.knowledgeLifecycleClosed) return;
@@ -448,6 +461,15 @@ export default class CopilotPlugin extends Plugin {
       name: "Open Knowledge Studio",
       callback: () => void this.activateKnowledgeStudio(),
     });
+    this.addCommand({
+      id: "inspect-applied-knowledge-page",
+      name: "Inspect applied Knowledge page",
+      editorCheckCallback: (checking, _editor, context) =>
+        checkKnowledgeWikiInspectionCommand(checking, context.file, {
+          index: this.knowledgeAppliedWikiPathIndex,
+          openInspector: (request) => this.openKnowledgeAppliedWikiInspector(request),
+        }),
+    });
 
     this.initActiveLeafChangeHandler();
 
@@ -470,6 +492,10 @@ export default class CopilotPlugin extends Plugin {
         registerKnowledgeSourceMenu(menu, file, {
           index: this.knowledgeSourcePathIndex,
           openKnowledgeStudio: () => void this.activateKnowledgeStudio(),
+        });
+        registerKnowledgeWikiMenu(menu, file, {
+          index: this.knowledgeAppliedWikiPathIndex,
+          openInspector: (request) => this.openKnowledgeAppliedWikiInspector(request),
         });
       })
     );
@@ -816,6 +842,46 @@ export default class CopilotPlugin extends Plugin {
     });
   }
 
+  /** Opens and lifecycle-tracks one value-only applied-Wiki inspection Modal. */
+  private openKnowledgeAppliedWikiInspector(
+    request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>
+  ): void {
+    if (this.knowledgeLifecycleClosed) return;
+    let modal: KnowledgeAppliedWikiInspectorModal | undefined;
+    try {
+      modal = new KnowledgeAppliedWikiInspectorModal(
+        this.app,
+        request,
+        this.knowledgeAppliedWikiPageInspectorPort,
+        (closedModal) => this.knowledgeAppliedWikiInspectorModals.delete(closedModal)
+      );
+      this.knowledgeAppliedWikiInspectorModals.add(modal);
+      modal.open();
+    } catch {
+      if (modal) {
+        this.knowledgeAppliedWikiInspectorModals.delete(modal);
+        try {
+          modal.close();
+        } catch {
+          // A partially opened presentation retains no production authority.
+        }
+      }
+    }
+  }
+
+  /** Synchronously closes every active applied-Wiki inspector presentation. */
+  private closeKnowledgeAppliedWikiInspectorModals(): void {
+    const modals = [...this.knowledgeAppliedWikiInspectorModals];
+    this.knowledgeAppliedWikiInspectorModals.clear();
+    for (const modal of modals) {
+      try {
+        modal.close();
+      } catch {
+        // The stable delegate is revoked separately, so presentation cleanup is best-effort.
+      }
+    }
+  }
+
   /** Creates the long-lived observation port bound to the exact preflight generation. */
   private createKnowledgeProductionObservationPort(
     admission: KnowledgePluginProductionPreflightAdmission,
@@ -845,6 +911,9 @@ export default class CopilotPlugin extends Plugin {
     let preReleaseStudioGeneration: KnowledgeStudioReadGenerationLease | undefined;
     let captureGeneration: KnowledgeChatCaptureGenerationLease | undefined;
     let folderImportGeneration: KnowledgeFolderImportGenerationLease | undefined;
+    let appliedWikiInspectorGeneration:
+      | KnowledgeAppliedWikiPageInspectorGenerationLease
+      | undefined;
     let sourcePathIndexLease: Readonly<KnowledgeSourcePathIndexLease> | undefined;
     try {
       throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
@@ -1000,6 +1069,20 @@ export default class CopilotPlugin extends Plugin {
               scheduler,
               deferGenerationRefresh
             );
+            appliedWikiInspectorGeneration =
+              await tryPublishKnowledgeAppliedWikiPageInspectorGeneration({
+                signal,
+                createDelegate: () => candidate.createAppliedWikiPageInspectorCoordinator(),
+                subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
+                replaceDelegate: (delegate) =>
+                  this.knowledgeAppliedWikiPageInspectorPort.replaceDelegate(delegate),
+                revokeDelegate: (delegate) =>
+                  this.knowledgeAppliedWikiPageInspectorPort.revokeDelegate(delegate),
+                installPathIndex: (rows) => this.knowledgeAppliedWikiPathIndex.install(rows),
+                revokePathIndex: (lease) => this.knowledgeAppliedWikiPathIndex.revoke(lease),
+                assertCurrent,
+                closePresentations: () => this.closeKnowledgeAppliedWikiInspectorModals(),
+              });
             const studioAdapter = candidate.createKnowledgeStudioRuntimeReadAdapter(
               admission.modelRouteLease,
               (drain) => retainKnowledgeProductionDrain(this.app.vault, drain),
@@ -1096,6 +1179,9 @@ export default class CopilotPlugin extends Plugin {
           captureGeneration = undefined;
           folderImportGeneration?.close();
           folderImportGeneration = undefined;
+          appliedWikiInspectorGeneration?.close();
+          appliedWikiInspectorGeneration = undefined;
+          this.closeKnowledgeAppliedWikiInspectorModals();
           if (sourcePathIndexLease) {
             this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
             sourcePathIndexLease = undefined;
@@ -1115,6 +1201,9 @@ export default class CopilotPlugin extends Plugin {
         captureGeneration = undefined;
         folderImportGeneration?.close();
         folderImportGeneration = undefined;
+        appliedWikiInspectorGeneration?.close();
+        appliedWikiInspectorGeneration = undefined;
+        this.closeKnowledgeAppliedWikiInspectorModals();
         if (sourcePathIndexLease) {
           this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
           sourcePathIndexLease = undefined;
@@ -1234,6 +1323,7 @@ export default class CopilotPlugin extends Plugin {
     // Fail-close synchronously before the first await so no old startup
     // continuation can publish or initialize services during persistence flush.
     this.knowledgeLifecycleClosed = true;
+    this.closeKnowledgeAppliedWikiInspectorModals();
     try {
       this.knowledgeSetupReadinessStore.publish(createKnowledgeSetupUnloadedProjection());
     } catch {
@@ -1252,6 +1342,8 @@ export default class CopilotPlugin extends Plugin {
     this.knowledgeChatCapturePort.dispose();
     this.knowledgeFolderImportPort.dispose();
     this.knowledgeSourcePathIndex.clear();
+    this.knowledgeAppliedWikiPageInspectorPort.dispose();
+    this.knowledgeAppliedWikiPathIndex.dispose();
     this.knowledgeProjectRecordsUnsubscriber?.();
     this.knowledgeProjectRecordsUnsubscriber = undefined;
     // Unsubscribe ProjectManager before releasing project state. Reversing

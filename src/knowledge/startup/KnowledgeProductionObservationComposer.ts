@@ -70,6 +70,7 @@ import {
   KnowledgeProductionPreparationExecutor,
   type KnowledgePreparedIngestHandler,
 } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
+import { KnowledgeProductionAppliedWikiPageInspectorCoordinator } from "@/knowledge/wiki/KnowledgeProductionAppliedWikiPageInspectorCoordinator";
 
 /** Exact production resources consumed by one observation-only workflow generation. */
 export interface KnowledgeProductionObservationComposerInput {
@@ -193,6 +194,7 @@ interface KnowledgeProductionObservationInternalState {
   plan?: KnowledgeSourceExecutionPlan;
   lastResult?: KnowledgeProductionObservationResult | KnowledgeProductionObservationReproofResult;
   sourceRecoveryIssues?: readonly KnowledgeSourceObservationRecoverableIssue[];
+  appliedWikiInspectorCreated?: boolean;
   unsubscribeLease?: () => void;
   closeListeners: Set<() => void>;
 }
@@ -1054,6 +1056,61 @@ export class KnowledgeProductionObservationComposer {
   }
 
   /**
+   * Creates the read-only applied-Wiki inspector for this released worker generation.
+   *
+   * Each Bundle receives its own bounded target visitor, while one shared citation
+   * navigator remains the coordinator's only workspace side-effect capability.
+   * Runtime, Vault bytes, workflow plans, and model authority stay private.
+   *
+   * @returns One exact-generation inspector and advisory path-row listing port
+   */
+  createAppliedWikiPageInspectorCoordinator(): KnowledgeProductionAppliedWikiPageInspectorCoordinator {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (
+      !composition ||
+      !state.coordinator ||
+      !state.workerController ||
+      !state.plan ||
+      !state.modelRouteLease ||
+      state.appliedWikiInspectorCreated
+    ) {
+      throw createAbortError();
+    }
+    try {
+      const modelRouteLease = state.modelRouteLease;
+      modelRouteLease.assertCurrent();
+      this.assertHealthy();
+      const assertCurrent = (): void => {
+        assertCompositionCurrent(state, state.generation, composition);
+        modelRouteLease.assertCurrent();
+        this.assertHealthy();
+      };
+      const coordinator = new KnowledgeProductionAppliedWikiPageInspectorCoordinator({
+        runtime: Object.freeze({
+          readAppliedProvenance: (bundleId: string) =>
+            composition.runtime.readAppliedProvenance(bundleId),
+        }),
+        bundles: Object.freeze(
+          composition.owners.map(({ config }) =>
+            Object.freeze({
+              bundle: config,
+              targetVisitor: new ObsidianKnowledgeCompilerTargetResolver(composition.app),
+            })
+          )
+        ),
+        navigator: new ObsidianKnowledgeCitationNavigator(composition.app),
+        assertCurrent,
+      });
+      assertCurrent();
+      state.appliedWikiInspectorCreated = true;
+      return coordinator;
+    } catch {
+      throw createAbortError();
+    }
+  }
+
+  /**
    * Subscribes to synchronous generation closure without exposing internal state.
    *
    * @param listener - Best-effort callback used to revoke downstream capabilities
@@ -1094,6 +1151,7 @@ export class KnowledgeProductionObservationComposer {
     state.worker = undefined;
     state.workerController = undefined;
     state.modelRouteLease = undefined;
+    state.appliedWikiInspectorCreated = undefined;
     try {
       composition?.eventSink.close();
     } catch {

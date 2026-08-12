@@ -534,6 +534,16 @@
 - [ ] 完成 Windows Obsidian 有界验收：真实非空 update Review 手工修改 → Validate and apply、blocked 草稿保留、token drift 清稿提示、tab/popout 保留与最终 Wiki exact bytes；本阶段继续冻结教程。
 - [ ] 后续硬化：把正常 production 已限制为 128 targets 的约束统一下沉到 Review command / ChangeSet / block ids / Review records 的显式集合上限；不阻塞当前 production R2。
 
+### R3a：当前已应用 Wiki 页面检查器（完成）
+
+- [x] 将“Wiki 版本回滚”拆成安全的首个只读纵切：仅对当前精确 applied 的 Markdown 页面开放命令和文件右键入口，展示有界 contributing Sources 与 accepted proposal-level evidence；明确 evidence 不逐句或逐块证明页面，不提供 Restore / Revert / Rollback，也不修改 AI prompt。
+- [x] Inspector 通过 Runtime → 单页 2 MB bounded Vault read → Runtime sandwich 重证页面；Evidence 点击仅携 opaque ref，并在导航前后重新证明 page / Source / citation、sourceRoot 与当前 bytes。Path index 只作同步 advisory，production delegate、session 与 evidence authority 均按 generation 撤销；插件 reload / disable / unload 同步关闭 Modal。可选 inspector 发布失败只让该入口 unavailable，不阻断 Studio 或 worker。
+- [x] 完成资源与 hostile-input 门禁：Runtime 浅扫最多 10,000 pages，选中页才深投影；最多 256 Sources、每 Source 4,096 citations、总计 8,192 citations / 8,000,000 字符；Bundle / path / DTO 先限长再解析，跨 Bundle wiki / source / schema 冲突 fail closed，所有外部 record 使用 descriptor-safe exact snapshot，install / replace 同步重入不会留下旧 index 或 delegate。
+- [x] 自动化与发布门禁通过：R3a 聚焦 10 suites / 96 tests；最终全仓 287 suites / 4,687 tests。`npm run format`、全仓 `format:check`、全仓 ESLint、TypeScript `noEmit`、production build、敏感信息/个人路径扫描与 `git diff --check` 全绿；安全终审 P0 / P1 清零。未运行需 API key 的模型 integration。
+- [x] Windows Obsidian 1.13.6 有界验收通过：current applied Wiki 页显示命令、真实右键入口、Current applied version、1 个 contributing PDF Source、3 条 evidence 与正确免责声明；unrelated Markdown 入口为 0。Evidence 1/2/3 均打开 exact Source，连续 2 → 3 后公开 canonical target 为第 3 页；Obsidian headless 私有 PDF viewport 状态未同步，因此不冒充“肉眼滚到第 3 页”证据。
+- [x] Windows 对抗与清理通过：exact backup 后制造 Wiki drift，Inspector 返回认证 drifted、零 evidence 按钮，再恢复原 SHA；reload / disable 关闭 Modal，旧 inspect 为 AbortError、旧 evidence session 为 stale。最终 Sources / Wiki / Schema / Project / data 逐文件 SHA 与基线一致，active transaction 为空、Review / apply ledger 不变、Queue 无 pending / processing / awaiting-review；探针 fetch / XHR 为 0，console error / warn 为空，所有探针与备份已删除。启动期仅推进 observation / deterministic no-changes bookkeeping，不归因于 Inspector 写入。
+- [ ] R3b-a（下一只读纵切）：只从唯一 Apply ledger ↔ accepted Review 联结投影 `Known applied outputs`，支持有界列表、单条详情和与当前文件只读比较；明确不是完整历史、File Recovery 或备份，不提供任何 Restore / Propose 写动作。本阶段继续冻结教程。
+
 ## Source Documents
 
 - [`designdocs/PERSONAL_KNOWLEDGE_OS_PRD.md`](./designdocs/PERSONAL_KNOWLEDGE_OS_PRD.md)：产品目标、Golden Flow、需求和验收标准。
