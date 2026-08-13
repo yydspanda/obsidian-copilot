@@ -39,11 +39,18 @@ import {
   type KnowledgeForwardRevisionIntent,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
 import {
+  createKnowledgeForwardRevisionValidationAuthority,
+  snapshotKnowledgeForwardRevisionValidationAuthorityQuery,
+  type KnowledgeForwardRevisionValidationAuthorityQueryV1,
+  type KnowledgeForwardRevisionValidationAuthorityV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationAuthority";
+import {
   KNOWLEDGE_FORWARD_REVISION_PROPOSAL_AUTHORITY_VERSION,
   snapshotKnowledgeForwardRevisionProposalAuthorityQuery,
   type KnowledgeForwardRevisionProposalAuthorityQueryV1,
   type KnowledgeForwardRevisionProposalAuthorityV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalAuthority";
+import type { KnowledgeForwardRevisionAcceptanceAuthority } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
 import {
   TransactionStorageRevisionConflictError,
   TransactionStorageAuthorityError,
@@ -5520,6 +5527,264 @@ function projectForwardRevisionProposalAuthority(
   });
 }
 
+/** Projects the exact decision-time acceptance tuple from a current Runtime envelope. */
+function projectForwardRevisionAcceptanceAuthority(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  source: SourceManifestEntry,
+  vaultObservedBeforeHash: string
+): Readonly<KnowledgeForwardRevisionAcceptanceAuthority> | null {
+  const freshness = projectRuntimeSourceFreshnessAuthority(state, manifest, source);
+  if (!freshness) return null;
+  const common = {
+    runtimeId: freshness.runtimeId,
+    runtimeRevision: freshness.runtimeRevision,
+    runtimeDigest: freshness.runtimeDigest,
+    bundleId: freshness.bundleId,
+    sourceId: freshness.sourceId,
+    sourceContentHash: freshness.sourceContentHash,
+    pipelineFingerprint: freshness.pipelineFingerprint,
+    inputRevision: freshness.inputRevision,
+    manifestRevision: freshness.manifestRevision,
+    manifestDigest: freshness.manifestDigest,
+    committedManifestRevision: freshness.committedManifestRevision,
+    completedAt: freshness.completedAt,
+  } as const;
+  return Object.freeze({
+    runtimeId: freshness.runtimeId,
+    runtimeRevision: freshness.runtimeRevision,
+    runtimeDigest: freshness.runtimeDigest,
+    manifestRevision: freshness.manifestRevision,
+    manifestDigest: freshness.manifestDigest,
+    manifestBaseHash: vaultObservedBeforeHash,
+    vaultObservedBeforeHash,
+    currentSourceFreshness:
+      freshness.kind === "applied"
+        ? Object.freeze({
+            ...common,
+            kind: "applied" as const,
+            transactionId: freshness.transactionId,
+            changeSetId: freshness.changeSetId,
+            changeSetDigest: freshness.changeSetDigest,
+            manifestIntentDigest: freshness.manifestIntentDigest,
+            committedManifestDigest: freshness.committedManifestDigest,
+          })
+        : Object.freeze({
+            ...common,
+            kind: "no_changes" as const,
+            noChangesId: freshness.noChangesId,
+            reason: freshness.reason,
+            planDigest: freshness.planDigest,
+            jobId: freshness.jobId,
+            attempt: freshness.attempt,
+          }),
+  });
+}
+
+/**
+ * Projects complete validation proof for one exact pending v2 proposal.
+ *
+ * The Runtime revision/digest are current at this read. Manifest/source facts
+ * must still equal the proposal-time tuple; the Vault hash remains external and
+ * is only correlated here, never freshly observed or authenticated.
+ */
+function projectForwardRevisionValidationAuthority(
+  state: KnowledgeRuntimeStoreSnapshot,
+  query: Readonly<KnowledgeForwardRevisionValidationAuthorityQueryV1>
+): Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null {
+  if (query.runtimeId !== state.runtimeId || state.activeTransaction !== null) return null;
+  const rawForward = findForwardRevisionReviewSlot(state, query.bundleId);
+  if (rawForward === null) return null;
+  const forward = snapshotKnowledgeForwardRevisionReviewSnapshotV2(rawForward);
+  const pending = forward.records.filter(
+    (record) =>
+      record.state === "pending" &&
+      record.proposal.proposalId === query.proposalId &&
+      record.proposalDigest === query.proposalDigest
+  );
+  if (pending.length !== 1) return null;
+  const entry = pending[0];
+  if (entry.state !== "pending") return null;
+  const proposal = entry.proposal;
+  const request = proposal.request;
+  const intent = request.intent;
+  if (
+    request.runtimeId !== query.runtimeId ||
+    request.bundleId !== query.bundleId ||
+    request.pagePath !== query.pagePath ||
+    request.requestId !== query.requestId ||
+    proposal.requestDigest !== query.requestDigest ||
+    intent.intentId !== query.intentId ||
+    request.intentDigest !== query.intentDigest ||
+    proposal.recordRevision !== query.expectedRecordRevision
+  ) {
+    return null;
+  }
+  try {
+    assertForwardRevisionPublicationAuthority(state, {
+      intent,
+      intentDigest: request.intentDigest,
+      historicalReviewAuthority: request.historicalReviewAuthority,
+      selectedContent: request.selectedContent,
+      selectedContentHash: request.selectedContentHash,
+      vaultObservedBeforeHash: intent.current.vaultObservedBeforeHash,
+    });
+  } catch {
+    return null;
+  }
+
+  const manifestRaw = findBundleSlot(state, "manifests", query.bundleId);
+  const reviewRaw = findBundleSlot(state, "reviews", query.bundleId);
+  if (manifestRaw === null || reviewRaw === null) return null;
+  const manifest = thisOrNullManifest(manifestRaw);
+  const review = thisOrNullReview(reviewRaw);
+  if (!manifest || !review) return null;
+  const current = intent.current;
+  if (
+    manifest.revision !== current.manifestRevision ||
+    createSourceManifestDigest(manifest) !== current.manifestDigest ||
+    current.manifestBaseHash !== current.vaultObservedBeforeHash
+  ) {
+    return null;
+  }
+  const requestedKey = toWindowsPathKey(query.pagePath);
+  const owners = manifest.entries.flatMap((candidate) =>
+    (candidate.lastSuccessful?.generatedPages ?? [])
+      .filter((page) => toWindowsPathKey(page.path) === requestedKey)
+      .map((page) => ({ source: candidate, page }))
+  );
+  if (owners.length !== 1) return null;
+  const { source, page } = owners[0];
+  if (
+    source.sourceId !== current.primarySourceId ||
+    current.sourceIds.length !== 1 ||
+    current.sourceIds[0] !== source.sourceId ||
+    page.path !== query.pagePath ||
+    page.ownership !== "generated" ||
+    page.contentHash !== current.manifestBaseHash ||
+    findKnowledgeSourceRetirement(manifest, source.sourceId)
+  ) {
+    return null;
+  }
+  let origin: ReturnType<typeof deriveKnowledgeSourceCompileAuthority>;
+  try {
+    origin = deriveKnowledgeSourceCompileAuthority(source);
+  } catch {
+    return null;
+  }
+  if (origin.operation !== "ingest") return null;
+  const acceptanceAuthority = projectForwardRevisionAcceptanceAuthority(
+    state,
+    manifest,
+    source,
+    current.vaultObservedBeforeHash
+  );
+  if (
+    !acceptanceAuthority ||
+    acceptanceAuthority.currentSourceFreshness.sourceContentHash !== current.sourceContentHash ||
+    acceptanceAuthority.currentSourceFreshness.pipelineFingerprint !==
+      current.pipelineFingerprint ||
+    acceptanceAuthority.currentSourceFreshness.inputRevision !== current.inputRevision
+  ) {
+    return null;
+  }
+
+  const historical = intent.historical;
+  const ledgers = state.applyCommits.filter(
+    (record) =>
+      record.transactionId === historical.transactionId &&
+      record.bundleId === query.bundleId &&
+      record.sourceId === source.sourceId &&
+      record.sourceContentHash === historical.sourceContentHash &&
+      record.pipelineFingerprint === historical.pipelineFingerprint &&
+      record.inputRevision === historical.inputRevision &&
+      record.changeSetId === historical.changeSetId &&
+      record.changeSetDigest === historical.changeSetDigest &&
+      record.manifestIntentDigest === historical.manifestIntentDigest &&
+      record.manifestAfterRevision === historical.manifestAfterRevision &&
+      record.manifestAfterDigest === historical.manifestAfterDigest &&
+      record.recordedAt === historical.appliedAt
+  );
+  if (ledgers.length !== 1) return null;
+  const accepted = review.records.filter(
+    (record): record is AcceptedChangeSetReviewRecord =>
+      record.outcome === "accepted" &&
+      ledgerMatchesAcceptedRecord(ledgers[0], query.bundleId, record)
+  );
+  if (accepted.length !== 1) return null;
+  const record = accepted[0];
+  const historicalAuthority = request.historicalReviewAuthority;
+  const changes = record.acceptedChangeSet.changes.filter(
+    (change) => toWindowsPathKey(change.path) === requestedKey
+  );
+  const pages = record.manifestCommitIntent.generatedPages.filter(
+    (candidate) => toWindowsPathKey(candidate.path) === requestedKey
+  );
+  const change = changes[0];
+  const historicalPage = pages[0];
+  if (
+    record.acceptedDigest !== historicalAuthority.acceptedDigest ||
+    record.proposalDigest !== historicalAuthority.proposalDigest ||
+    record.manifestCommitIntentDigest !== historicalAuthority.manifestCommitIntentDigest ||
+    record.acceptedAt !== historicalAuthority.acceptedAt ||
+    changes.length !== 1 ||
+    !change ||
+    (change.operation !== "create" && change.operation !== "update") ||
+    change.id !== historicalAuthority.targetChange.changeId ||
+    change.path !== query.pagePath ||
+    change.afterContent !== request.selectedContent ||
+    change.afterHash !== request.selectedContentHash ||
+    createFileContentHash(change.afterContent) !== change.afterHash ||
+    change.sourceRefs.length !== 1 ||
+    change.sourceRefs[0] !== source.sourceId ||
+    !exactJsonValuesEqual(change.sourceRefs, historicalAuthority.targetChange.sourceRefs) ||
+    record.acceptedChangeSet.sourceRefs.length !== 1 ||
+    record.acceptedChangeSet.sourceRefs[0] !== source.sourceId ||
+    record.acceptedChangeSet.citations.some(
+      (citation) => citation.locator.sourceId !== source.sourceId
+    ) ||
+    pages.length !== 1 ||
+    !historicalPage ||
+    !exactJsonValuesEqual(historicalPage, historicalAuthority.manifestPage)
+  ) {
+    return null;
+  }
+  try {
+    return createKnowledgeForwardRevisionValidationAuthority({
+      query,
+      proposal,
+      proposalDigest: entry.proposalDigest,
+      publishedRuntimeRevision: entry.publishedRuntimeRevision,
+      proposalStoreRevision: entry.proposalStoreRevision,
+      forwardReviewStoreRevision: forward.revision,
+      acceptanceAuthority,
+      historicalAcceptedDigest: record.acceptedDigest,
+      historicalSourceRefs: record.acceptedChangeSet.sourceRefs,
+      historicalCitations: record.acceptedChangeSet.citations,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Parses one strict Manifest during semantic projection. */
+function thisOrNullManifest(value: unknown): SourceManifest | null {
+  const parsed = parseSourceManifest(value);
+  if (!parsed.ok || !validateSourceManifest(parsed.value).valid) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return parsed.value;
+}
+
+/** Parses one strict legacy accepted Review namespace during semantic projection. */
+function thisOrNullReview(value: unknown): ChangeSetReviewSnapshot | null {
+  const parsed = parseChangeSetReviewSnapshot(value);
+  if (!parsed.ok || !validateChangeSetReviewSnapshot(parsed.value).valid) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return parsed.value;
+}
+
 /** Requires exact current and historical authority for one pending forward proposal. */
 function assertForwardRevisionPublicationAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
@@ -6609,6 +6874,25 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     const query = snapshotKnowledgeForwardRevisionProposalAuthorityQuery(value);
     const state = await this.readState();
     return projectForwardRevisionProposalAuthority(state, query);
+  }
+
+  /**
+   * Reads complete deterministic-validation proof from one Runtime envelope.
+   *
+   * The returned Runtime revision/digest are current for this read while the
+   * Manifest/source tuple must still exactly equal the proposal-time current
+   * tuple. The proposal's Vault hash remains an external observation and is not
+   * made fresh or self-authentic by this Runtime-only projection.
+   *
+   * @param value - Strict identity of one exact pending v2 proposal
+   * @returns Detached complete proof, or null for semantic staleness
+   */
+  async readForwardRevisionValidationAuthority(
+    value: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null> {
+    const query = snapshotKnowledgeForwardRevisionValidationAuthorityQuery(value);
+    const state = await this.readState();
+    return projectForwardRevisionValidationAuthority(state, query);
   }
 
   /** Reads one detached dedicated forward-revision Review snapshot or an empty view. */
@@ -9321,13 +9605,25 @@ interface RuntimeForwardRevisionProposalPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>>;
 }
 
+/** Hidden canonical read retained by one validation-only facade. */
+interface RuntimeForwardRevisionValidationPortState {
+  readonly readAuthority: (
+    value: unknown
+  ) => Promise<Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null>;
+}
+
 const runtimeForwardRevisionPublicationPortStates = new WeakMap<
   object,
   Readonly<RuntimeForwardRevisionProposalPortState>
 >();
+const runtimeForwardRevisionValidationPortStates = new WeakMap<
+  object,
+  Readonly<RuntimeForwardRevisionValidationPortState>
+>();
 
 const FORWARD_REVISION_PINNED_RUNTIME_METHOD_NAMES = [
   "readForwardRevisionProposalAuthority",
+  "readForwardRevisionValidationAuthority",
   "readForwardRevisionReview",
   "publishForwardRevisionProposalAtomically",
   "updateState",
@@ -9373,6 +9669,10 @@ const runtimeForwardRevisionAuthorityReadMethod = runtimeForwardRevisionPublicat
 const runtimeForwardRevisionReviewReadMethod = runtimeForwardRevisionPublicationMethods.get(
   "readForwardRevisionReview"
 ) as KnowledgeRuntimeStore["readForwardRevisionReview"];
+const runtimeForwardRevisionValidationAuthorityReadMethod =
+  runtimeForwardRevisionPublicationMethods.get(
+    "readForwardRevisionValidationAuthority"
+  ) as KnowledgeRuntimeStore["readForwardRevisionValidationAuthority"];
 
 /** Reads one own data field without invoking a possibly forged accessor. */
 function readRuntimeOwnDataField(value: object, name: string): unknown {
@@ -9506,6 +9806,53 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
 
 Object.freeze(KnowledgeRuntimeForwardRevisionProposalPublicationPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionProposalPublicationPort);
+
+/** Returns hidden state only for an authentic validation-only Runtime facade. */
+function requireRuntimeForwardRevisionValidationPortState(
+  value: unknown
+): Readonly<RuntimeForwardRevisionValidationPortState> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Object.getPrototypeOf(value) !== KnowledgeRuntimeForwardRevisionValidationPort.prototype
+  ) {
+    throw new TypeError("The Runtime forward-revision validation port is invalid");
+  }
+  const state = runtimeForwardRevisionValidationPortStates.get(value);
+  if (!state) throw new TypeError("The Runtime forward-revision validation port is invalid");
+  return state;
+}
+
+/** Genuine narrow facade exposing only the complete Runtime validation-authority read. */
+export class KnowledgeRuntimeForwardRevisionValidationPort {
+  /** Captures one canonical read without exposing or duck-typing its Runtime receiver. */
+  constructor(runtime: KnowledgeRuntimeStore) {
+    sealForwardRevisionPublicationRuntimeStore(runtime);
+    runtimeForwardRevisionValidationPortStates.set(
+      this,
+      Object.freeze({
+        readAuthority: (value: unknown) =>
+          Reflect.apply(runtimeForwardRevisionValidationAuthorityReadMethod, runtime, [value]),
+      })
+    );
+    Object.freeze(this);
+  }
+
+  /** Requires one exact-prototype process-local genuine validation facade. */
+  static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionValidationPort {
+    requireRuntimeForwardRevisionValidationPortState(value);
+  }
+
+  /** Reads complete validation proof from one exact current Runtime envelope. */
+  readForwardRevisionValidationAuthority(
+    value: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null> {
+    return requireRuntimeForwardRevisionValidationPortState(this).readAuthority(value);
+  }
+}
+
+Object.freeze(KnowledgeRuntimeForwardRevisionValidationPort.prototype);
+Object.freeze(KnowledgeRuntimeForwardRevisionValidationPort);
 
 /** SourceManifestStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {

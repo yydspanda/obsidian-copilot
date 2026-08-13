@@ -564,10 +564,9 @@ function snapshotSourceFreshness(
   });
 }
 
-/** Strictly captures one coherent current Runtime/base acceptance tuple. */
-function snapshotAcceptanceAuthority(
-  value: unknown,
-  proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>
+/** Strictly captures one exact internally coherent acceptance-authority value. */
+export function snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue(
+  value: unknown
 ): Readonly<KnowledgeForwardRevisionAcceptanceAuthority> {
   const record = snapshotRecord(value, AUTHORITY_KEYS);
   if (
@@ -583,25 +582,13 @@ function snapshotAcceptanceAuthority(
     invalid();
   }
   const freshness = snapshotSourceFreshness(record.currentSourceFreshness);
-  const request = proposal.request;
-  const current = request.intent.current;
   if (
-    record.runtimeId !== request.runtimeId ||
     Number(record.runtimeRevision) !== freshness.runtimeRevision ||
     record.runtimeDigest !== freshness.runtimeDigest ||
     Number(record.manifestRevision) !== freshness.manifestRevision ||
     record.manifestDigest !== freshness.manifestDigest ||
     record.manifestBaseHash !== record.vaultObservedBeforeHash ||
-    record.manifestBaseHash !== current.manifestBaseHash ||
-    record.vaultObservedBeforeHash !== current.vaultObservedBeforeHash ||
-    Number(record.manifestRevision) !== current.manifestRevision ||
-    record.manifestDigest !== current.manifestDigest ||
-    freshness.runtimeId !== request.runtimeId ||
-    freshness.bundleId !== request.bundleId ||
-    freshness.sourceId !== current.primarySourceId ||
-    freshness.sourceContentHash !== current.sourceContentHash ||
-    freshness.pipelineFingerprint !== current.pipelineFingerprint ||
-    freshness.inputRevision !== current.inputRevision
+    record.runtimeId !== freshness.runtimeId
   ) {
     invalid();
   }
@@ -615,6 +602,40 @@ function snapshotAcceptanceAuthority(
     vaultObservedBeforeHash: record.vaultObservedBeforeHash,
     currentSourceFreshness: freshness,
   });
+}
+
+/**
+ * Captures one coherent current Runtime tuple and correlates it to a proposal.
+ *
+ * The Runtime revision and digest identify the current decision-time envelope;
+ * the Manifest, source, and completion tuple must remain exactly the proposal's
+ * proposal-time current state. The Vault-observed hash remains externally
+ * observed and is not made self-authentic by this structural snapshot.
+ */
+export function snapshotKnowledgeForwardRevisionAcceptanceAuthority(
+  value: unknown,
+  proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>
+): Readonly<KnowledgeForwardRevisionAcceptanceAuthority> {
+  const authority = snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue(value);
+  const request = proposal.request;
+  const current = request.intent.current;
+  const freshness = authority.currentSourceFreshness;
+  if (
+    authority.runtimeId !== request.runtimeId ||
+    authority.manifestBaseHash !== current.manifestBaseHash ||
+    authority.vaultObservedBeforeHash !== current.vaultObservedBeforeHash ||
+    authority.manifestRevision !== current.manifestRevision ||
+    authority.manifestDigest !== current.manifestDigest ||
+    freshness.runtimeId !== request.runtimeId ||
+    freshness.bundleId !== request.bundleId ||
+    freshness.sourceId !== current.primarySourceId ||
+    freshness.sourceContentHash !== current.sourceContentHash ||
+    freshness.pipelineFingerprint !== current.pipelineFingerprint ||
+    freshness.inputRevision !== current.inputRevision
+  ) {
+    invalid();
+  }
+  return authority;
 }
 
 /** Derives immutable proposal/original-source evidence with fixed scope semantics. */
@@ -812,7 +833,10 @@ export function createKnowledgeForwardRevisionAcceptedDecisionRecord(
     ) {
       invalid();
     }
-    const authority = snapshotAcceptanceAuthority(record.acceptanceAuthority, proposal);
+    const authority = snapshotKnowledgeForwardRevisionAcceptanceAuthority(
+      record.acceptanceAuthority,
+      proposal
+    );
     const acceptedAt = Number(record.acceptedAt);
     if (
       acceptedAt < proposal.recordedAt ||
@@ -881,7 +905,10 @@ export function snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(
     ) {
       invalid();
     }
-    const authority = snapshotAcceptanceAuthority(record.acceptanceAuthority, proposal);
+    const authority = snapshotKnowledgeForwardRevisionAcceptanceAuthority(
+      record.acceptanceAuthority,
+      proposal
+    );
     const acceptedAt = Number(record.acceptedAt);
     if (
       acceptedAt < proposal.recordedAt ||

@@ -32,6 +32,10 @@ import {
 import { migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
 import { createKnowledgeForwardRevisionProposalAuthorityQuery } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalAuthority";
 import {
+  createKnowledgeForwardRevisionValidationAuthorityQuery,
+  snapshotKnowledgeForwardRevisionValidationAuthority,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationAuthority";
+import {
   IngestQueue,
   type IngestExecutor,
   type IngestSourceFreshnessAdmissionPort,
@@ -103,6 +107,7 @@ import {
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
   KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+  KnowledgeRuntimeForwardRevisionValidationPort,
   KnowledgeForwardRevisionPublicationConflictError,
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeIngestExecutionProofError,
@@ -1610,7 +1615,13 @@ function projectKnowledgeKnownAppliedWikiOutputIndexForTest(state: KnowledgeRunt
 }
 
 /** Creates clean exact historical/current Apply authority for forward publication tests. */
-async function createForwardPublicationHarness(clock: () => number = () => 1) {
+async function createForwardPublicationHarness(
+  clock: () => number = () => 1,
+  createPublicationPort: (
+    runtime: KnowledgeRuntimeStore
+  ) => KnowledgeRuntimeForwardRevisionProposalPublicationPort = (runtime) =>
+    new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime)
+) {
   const historicalManifest = createRegisteredManifest();
   const historicalProof = createCommittedApplyProof(
     historicalManifest,
@@ -1658,7 +1669,7 @@ async function createForwardPublicationHarness(clock: () => number = () => 1) {
   return {
     file: current.file,
     runtime,
-    port: new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime),
+    port: createPublicationPort(runtime),
     evidence: createForwardPublicationEvidence(clean),
     currentJournal: current.journal,
   };
@@ -9319,6 +9330,208 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
       ],
     });
     expect(targetVisits.length).toBeGreaterThan(0);
+  });
+});
+
+describe("KnowledgeRuntimeStore forward revision validation authority", () => {
+  /** Publishes one pending proposal and derives its exact validation query. */
+  async function publishForValidation(
+    harness: Awaited<ReturnType<typeof createForwardPublicationHarness>>,
+    evidence: KnowledgeForwardRevisionProposalPublicationEvidence = harness.evidence
+  ) {
+    const receipt = await harness.port.publishForwardRevisionProposalAtomically(evidence);
+    const review = await harness.port.readForwardRevisionReview("personal");
+    const pending = review.records[0];
+    if (!pending || pending.state !== "pending") throw new Error("Expected pending proposal");
+    return {
+      receipt,
+      pending,
+      query: createKnowledgeForwardRevisionValidationAuthorityQuery({
+        proposal: pending.proposal,
+        proposalDigest: pending.proposalDigest,
+      }),
+    };
+  }
+
+  it("projects exact pending/current/history/citations from one read without writing", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const published = await publishForValidation(harness);
+    const port = new KnowledgeRuntimeForwardRevisionValidationPort(harness.runtime);
+    const before = await harness.file.read();
+    const readsBefore = harness.file.getReadCallCount();
+
+    const authority = await port.readForwardRevisionValidationAuthority(published.query);
+
+    expect(authority).toMatchObject({
+      query: published.query,
+      proposal: { proposalId: published.receipt.proposalId },
+      proposalDigest: published.receipt.proposalDigest,
+      proposalRecordRevision: 0,
+      publishedRuntimeRevision: published.receipt.runtimeRevision,
+      proposalStoreRevision: published.receipt.proposalStoreRevision,
+      forwardReviewStoreRevision: 1,
+      runtimeRevision: published.receipt.runtimeRevision,
+      historicalAcceptedDigest:
+        published.pending.proposal.request.historicalReviewAuthority.acceptedDigest,
+      historicalSourceRefs: ["source-1"],
+      historicalCitations: [
+        {
+          citationId: "citation-source-1",
+          locator: { sourceId: "source-1", artifactContentHash: HASH_A },
+        },
+      ],
+      acceptanceAuthority: {
+        manifestBaseHash: published.pending.proposal.request.intent.current.manifestBaseHash,
+        currentSourceFreshness: { kind: "applied", inputRevision: 2 },
+      },
+    });
+    expect(snapshotKnowledgeForwardRevisionValidationAuthority(authority)).toEqual(authority);
+    expect(harness.file.getReadCallCount()).toBe(readsBefore + 1);
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("permits an unrelated Runtime advance while keeping the proposal-time tuple exact", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const published = await publishForValidation(harness);
+    const port = new KnowledgeRuntimeForwardRevisionValidationPort(harness.runtime);
+    const before = await port.readForwardRevisionValidationAuthority(published.query);
+    if (!before) throw new Error("Expected initial validation authority");
+
+    await new KnowledgeRuntimeQueueStorage(harness.runtime).write(
+      "unrelated",
+      createQueueSnapshot(1, "unrelated"),
+      null
+    );
+    const after = await port.readForwardRevisionValidationAuthority(published.query);
+
+    expect(after).not.toBeNull();
+    expect(after?.runtimeRevision).toBe(before.runtimeRevision + 1);
+    expect(after?.runtimeDigest).not.toBe(before.runtimeDigest);
+    expect(after?.acceptanceAuthority.manifestDigest).toBe(
+      before.acceptanceAuthority.manifestDigest
+    );
+    expect(after?.acceptanceAuthority.currentSourceFreshness.completedAt).toBe(
+      before.acceptanceAuthority.currentSourceFreshness.completedAt
+    );
+  });
+
+  it("returns null for identity staleness and decision-time Manifest/source tuple drift", async () => {
+    const identity = await createForwardPublicationHarness(() => 500);
+    const published = await publishForValidation(identity);
+    const identityPort = new KnowledgeRuntimeForwardRevisionValidationPort(identity.runtime);
+    for (const stale of [
+      { ...published.query, proposalDigest: HASH_C },
+      { ...published.query, requestDigest: HASH_C },
+      { ...published.query, intentDigest: HASH_C },
+    ]) {
+      await expect(identityPort.readForwardRevisionValidationAuthority(stale)).resolves.toBeNull();
+    }
+
+    const drifted = await createForwardPublicationHarness(() => 500);
+    const driftedPublished = await publishForValidation(drifted);
+    await commitForwardNoChanges(drifted, HASH_C);
+    await expect(
+      new KnowledgeRuntimeForwardRevisionValidationPort(
+        drifted.runtime
+      ).readForwardRevisionValidationAuthority(driftedPublished.query)
+    ).resolves.toBeNull();
+  });
+
+  it("accepts latest same-input no-changes freshness and retains historical citations", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    await commitForwardNoChanges(harness, HASH_A);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const published = await publishForValidation(harness, createForwardPublicationEvidence(state));
+    const authority = await new KnowledgeRuntimeForwardRevisionValidationPort(
+      harness.runtime
+    ).readForwardRevisionValidationAuthority(published.query);
+
+    expect(authority).toMatchObject({
+      historicalCitations: [{ citationId: "citation-source-1" }],
+      acceptanceAuthority: {
+        currentSourceFreshness: {
+          kind: "no_changes",
+          inputRevision: 3,
+          attempt: 1,
+        },
+      },
+    });
+  });
+
+  it("shares one pinned Runtime call graph in both facade construction orders", async () => {
+    let firstValidation: KnowledgeRuntimeForwardRevisionValidationPort | undefined;
+    const first = await createForwardPublicationHarness(
+      () => 500,
+      (runtime) => {
+        firstValidation = new KnowledgeRuntimeForwardRevisionValidationPort(runtime);
+        return new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime);
+      }
+    );
+    if (!firstValidation) throw new Error("Expected validation-first facade");
+    KnowledgeRuntimeForwardRevisionValidationPort.assert(firstValidation);
+    const firstPublished = await publishForValidation(first);
+    await expect(
+      firstValidation.readForwardRevisionValidationAuthority(firstPublished.query)
+    ).resolves.toMatchObject({ proposalDigest: firstPublished.pending.proposalDigest });
+
+    const second = await createForwardPublicationHarness(() => 500);
+    const secondValidation = new KnowledgeRuntimeForwardRevisionValidationPort(second.runtime);
+    KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(second.port);
+    KnowledgeRuntimeForwardRevisionValidationPort.assert(secondValidation);
+    const secondPublished = await publishForValidation(second);
+    await expect(
+      secondValidation.readForwardRevisionValidationAuthority(secondPublished.query)
+    ).resolves.toMatchObject({ proposalDigest: secondPublished.pending.proposalDigest });
+  });
+
+  it("pins the canonical read and rejects own tampering, subclasses, proxies, and forgeries", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const published = await publishForValidation(harness);
+    const port = new KnowledgeRuntimeForwardRevisionValidationPort(harness.runtime);
+    const prototype = KnowledgeRuntimeStore.prototype;
+    const original = Object.getOwnPropertyDescriptor(
+      prototype,
+      "readForwardRevisionValidationAuthority"
+    );
+    if (!original) throw new Error("Expected canonical validation read");
+    Object.defineProperty(prototype, "readForwardRevisionValidationAuthority", {
+      configurable: true,
+      value: () => Promise.resolve({ kind: "forged" }),
+    });
+    try {
+      await expect(
+        port.readForwardRevisionValidationAuthority(published.query)
+      ).resolves.toMatchObject({ kind: "forward_revision_validation_authority" });
+    } finally {
+      Object.defineProperty(prototype, "readForwardRevisionValidationAuthority", original);
+    }
+
+    const tampered = new KnowledgeRuntimeStore(harness.file, { clock: () => 500 });
+    Object.defineProperty(tampered, "readForwardRevisionValidationAuthority", {
+      configurable: true,
+      value: () => Promise.resolve(null),
+    });
+    expect(() => new KnowledgeRuntimeForwardRevisionValidationPort(tampered)).toThrow(TypeError);
+    class RuntimeSubclass extends KnowledgeRuntimeStore {}
+    expect(
+      () => new KnowledgeRuntimeForwardRevisionValidationPort(new RuntimeSubclass(harness.file))
+    ).toThrow(TypeError);
+    expect(
+      () => new KnowledgeRuntimeForwardRevisionValidationPort(new Proxy(harness.runtime, {}))
+    ).toThrow(TypeError);
+
+    class PortSubclass extends KnowledgeRuntimeForwardRevisionValidationPort {}
+    expect(() =>
+      KnowledgeRuntimeForwardRevisionValidationPort.assert(new PortSubclass(harness.runtime))
+    ).toThrow(TypeError);
+    expect(() =>
+      KnowledgeRuntimeForwardRevisionValidationPort.assert(
+        Object.create(KnowledgeRuntimeForwardRevisionValidationPort.prototype)
+      )
+    ).toThrow(TypeError);
+    expect(() => KnowledgeRuntimeForwardRevisionValidationPort.assert(new Proxy(port, {}))).toThrow(
+      TypeError
+    );
   });
 });
 
