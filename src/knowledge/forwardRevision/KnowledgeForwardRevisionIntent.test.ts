@@ -362,6 +362,56 @@ describe("KnowledgeForwardRevisionIntent", () => {
     }
   });
 
+  it("keeps authentic errors frozen when a hostile Proxy trap throws them again", () => {
+    const validIntent = createKnowledgeForwardRevisionIntent(createInput());
+    let authenticError: unknown;
+    try {
+      snapshotKnowledgeForwardRevisionIntent({});
+    } catch (error) {
+      authenticError = error;
+    }
+
+    expect(authenticError).toBeInstanceOf(KnowledgeForwardRevisionIntentValidationError);
+    expect(Object.isFrozen(authenticError)).toBe(true);
+    expect(Reflect.set(authenticError as object, "message", "secret-user-value")).toBe(false);
+
+    const valuesSpy = jest.spyOn(Object, "values").mockImplementationOnce(() => {
+      throw authenticError;
+    });
+    let rethrown: unknown;
+    try {
+      snapshotKnowledgeForwardRevisionIntent(validIntent);
+    } catch (error) {
+      rethrown = error;
+    } finally {
+      valuesSpy.mockRestore();
+    }
+    expect(rethrown).toBe(authenticError);
+
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw authenticError;
+        },
+      }
+    );
+    let observed: unknown;
+    try {
+      snapshotKnowledgeForwardRevisionIntent(hostile);
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).not.toBe(authenticError);
+    expect(Object.isFrozen(observed)).toBe(true);
+    expect(observed).toMatchObject({
+      name: "KnowledgeForwardRevisionIntentValidationError",
+      message: "The knowledge forward revision intent is invalid",
+    });
+    expect(JSON.stringify(observed)).not.toContain("secret-user-value");
+  });
+
   it("returns sanitized validation diagnostics without rejected values", () => {
     const secret = "secret-user-value";
     const result = validateKnowledgeForwardRevisionIntent({ secret });

@@ -157,7 +157,9 @@ export class KnowledgeForwardRevisionIntentValidationError extends TypeError {
 function createValidationError(
   diagnostics: readonly Readonly<KnowledgeDiagnostic>[]
 ): KnowledgeForwardRevisionIntentValidationError {
-  return new KnowledgeForwardRevisionIntentValidationError(diagnostics, VALIDATION_ERROR_TOKEN);
+  return Object.freeze(
+    new KnowledgeForwardRevisionIntentValidationError(diagnostics, VALIDATION_ERROR_TOKEN)
+  );
 }
 
 /** Reports whether an unknown throw is an authentic module-issued failure. */
