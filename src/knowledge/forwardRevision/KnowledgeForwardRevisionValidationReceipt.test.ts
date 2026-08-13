@@ -17,14 +17,20 @@ import {
   createKnowledgeForwardRevisionValidationReceiptDigest,
   parseKnowledgeForwardRevisionValidationReceipt,
   snapshotKnowledgeForwardRevisionValidationReceipt,
+  snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate,
   snapshotKnowledgeForwardRevisionValidationReceiptForCandidate,
   validateKnowledgeForwardRevisionValidationReceipt,
   type CreateKnowledgeForwardRevisionValidationReceiptInput,
   type KnowledgeForwardRevisionValidationArtifactIdentityV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
 import * as validationReceiptModule from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
-import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
+import {
+  canonicalizeJson,
+  createFileContentHash,
+  createQuoteHash,
+} from "@/knowledge/model/fingerprint";
 import type { ClaimCitation } from "@/knowledge/model/types";
+import { sha256 } from "@/utils/hash";
 
 const HISTORICAL_CONTENT = "# Historical output\n";
 const CURRENT_CONTENT = "# Current output\n";
@@ -314,6 +320,15 @@ describe("KnowledgeForwardRevisionValidationReceipt", () => {
         fixture.afterContent
       )
     ).toEqual(receipt);
+    expect(
+      snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+        receipt,
+        fixture.proposal,
+        fixture.proposalDigest,
+        fixture.afterContent,
+        fixture.acceptanceAuthority
+      )
+    ).toEqual(receipt);
     expect(parseKnowledgeForwardRevisionValidationReceipt(receipt)).toEqual({
       ok: true,
       value: receipt,
@@ -322,6 +337,122 @@ describe("KnowledgeForwardRevisionValidationReceipt", () => {
       valid: true,
       diagnostics: [],
     });
+  });
+
+  it("rejoins persisted acceptance without duplicating the full command body", () => {
+    const fixture = createFixture();
+    const receipt = createKnowledgeForwardRevisionValidationReceipt(fixture.input);
+    const forgedCommand = clone(receipt);
+    forgedCommand.commandDigest = HASH_F;
+    const forgedPayload = Object.fromEntries(
+      Object.entries(forgedCommand).filter(
+        ([key]) => key !== "receiptId" && key !== "receiptDigest"
+      )
+    );
+    const forgedDigest = sha256(
+      `knowledge-forward-revision-validation-receipt-v1\n${canonicalizeJson(forgedPayload)}`
+    );
+    forgedCommand.receiptDigest = forgedDigest;
+    forgedCommand.receiptId = `forward-revision-validation-receipt-${forgedDigest}`;
+
+    expect(snapshotKnowledgeForwardRevisionValidationReceipt(forgedCommand)).toEqual(forgedCommand);
+    expect(() =>
+      snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+        forgedCommand,
+        fixture.proposal,
+        fixture.proposalDigest,
+        fixture.afterContent,
+        fixture.acceptanceAuthority
+      )
+    ).toThrow(KnowledgeForwardRevisionValidationReceiptError);
+
+    expect(() =>
+      snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+        receipt,
+        fixture.proposal,
+        fixture.proposalDigest,
+        "# Different candidate\n",
+        fixture.acceptanceAuthority
+      )
+    ).toThrow(KnowledgeForwardRevisionValidationReceiptError);
+
+    const advancedAuthority = clone(fixture.acceptanceAuthority);
+    advancedAuthority.runtimeRevision += 1;
+    advancedAuthority.runtimeDigest = HASH_D;
+    advancedAuthority.currentSourceFreshness.runtimeRevision += 1;
+    advancedAuthority.currentSourceFreshness.runtimeDigest = HASH_D;
+    expect(
+      snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+        receipt,
+        fixture.proposal,
+        fixture.proposalDigest,
+        fixture.afterContent,
+        advancedAuthority
+      )
+    ).toEqual(receipt);
+
+    const rolledBackAuthority = clone(fixture.acceptanceAuthority);
+    rolledBackAuthority.runtimeRevision -= 1;
+    rolledBackAuthority.runtimeDigest = HASH_D;
+    rolledBackAuthority.currentSourceFreshness.runtimeRevision -= 1;
+    rolledBackAuthority.currentSourceFreshness.runtimeDigest = HASH_D;
+    expect(() =>
+      snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+        receipt,
+        fixture.proposal,
+        fixture.proposalDigest,
+        fixture.afterContent,
+        rolledBackAuthority
+      )
+    ).toThrow(KnowledgeForwardRevisionValidationReceiptError);
+
+    const rewrittenSameRevision = clone(fixture.acceptanceAuthority);
+    rewrittenSameRevision.runtimeDigest = HASH_D;
+    rewrittenSameRevision.currentSourceFreshness.runtimeDigest = HASH_D;
+    expect(() =>
+      snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+        receipt,
+        fixture.proposal,
+        fixture.proposalDigest,
+        fixture.afterContent,
+        rewrittenSameRevision
+      )
+    ).toThrow(KnowledgeForwardRevisionValidationReceiptError);
+
+    for (const mutate of [
+      (value: Mutable<KnowledgeForwardRevisionAcceptanceAuthority>) => {
+        value.manifestDigest = HASH_A;
+        value.currentSourceFreshness.manifestDigest = HASH_A;
+      },
+      (value: Mutable<KnowledgeForwardRevisionAcceptanceAuthority>) => {
+        value.manifestBaseHash = HASH_C;
+        value.vaultObservedBeforeHash = HASH_C;
+      },
+      (value: Mutable<KnowledgeForwardRevisionAcceptanceAuthority>) => {
+        value.currentSourceFreshness.pipelineFingerprint = HASH_A;
+      },
+    ]) {
+      const changed = clone(advancedAuthority);
+      mutate(changed);
+      expect(() =>
+        snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+          receipt,
+          fixture.proposal,
+          fixture.proposalDigest,
+          fixture.afterContent,
+          changed
+        )
+      ).toThrow(KnowledgeForwardRevisionValidationReceiptError);
+    }
+    expect(() =>
+      snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+        receipt,
+        fixture.proposal,
+        fixture.proposalDigest,
+        fixture.afterContent,
+        { ...fixture.acceptanceAuthority, runtimeDigest: HASH_F }
+      )
+    ).toThrow(KnowledgeForwardRevisionValidationReceiptError);
   });
 
   it("supports exact acceptance and an empty structural historical citation set", () => {
@@ -635,6 +766,19 @@ describe("KnowledgeForwardRevisionValidationReceipt", () => {
     const revoked = Proxy.revocable(clone(receipt), {});
     revoked.revoke();
     expect(() => snapshotKnowledgeForwardRevisionValidationReceipt(revoked.proxy)).toThrow(
+      KnowledgeForwardRevisionValidationReceiptError
+    );
+
+    class CitationArray extends Array<ClaimCitation> {}
+    const subclassed = clone(receipt);
+    subclassed.historicalCitations = new CitationArray(...subclassed.historicalCitations);
+    expect(() => snapshotKnowledgeForwardRevisionValidationReceipt(subclassed)).toThrow(
+      KnowledgeForwardRevisionValidationReceiptError
+    );
+
+    const nullPrototype = clone(receipt);
+    Object.setPrototypeOf(nullPrototype.validationReadSet, null);
+    expect(() => snapshotKnowledgeForwardRevisionValidationReceipt(nullPrototype)).toThrow(
       KnowledgeForwardRevisionValidationReceiptError
     );
     expect(parseKnowledgeForwardRevisionValidationReceipt(hostile)).toEqual({

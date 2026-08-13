@@ -1,7 +1,7 @@
 import {
   snapshotKnowledgeForwardRevisionAcceptanceAuthority,
   type KnowledgeForwardRevisionAcceptanceAuthority,
-} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionAcceptanceAuthority";
 import {
   createKnowledgeForwardRevisionPendingProposalRecordDigest,
   snapshotKnowledgeForwardRevisionPendingProposalRecord,

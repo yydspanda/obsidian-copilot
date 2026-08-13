@@ -1,6 +1,6 @@
 import {
   KnowledgeForwardRevisionDecisionValidationError,
-  createKnowledgeForwardRevisionAcceptedDecisionRecord,
+  createKnowledgeForwardRevisionAcceptedDecisionRecord as createStrictAcceptedDecisionRecord,
   createKnowledgeForwardRevisionApplyClaimDigest,
   createKnowledgeForwardRevisionRejectedDecisionRecord,
   createKnowledgeForwardRevisionTerminalDecisionRecordDigest,
@@ -20,6 +20,11 @@ import {
   createKnowledgeForwardRevisionIntent,
   createKnowledgeForwardRevisionIntentDigest,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
+import { createKnowledgeForwardRevisionReviewCommand } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
+import {
+  createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest,
+  createKnowledgeForwardRevisionValidationReceipt,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 
 const HISTORICAL_CONTENT = "# Historical output\n";
@@ -34,14 +39,14 @@ const HASH_E = "e".repeat(64);
 const HASH_F = "f".repeat(64);
 
 /** Creates one strict independently published proposal payload. */
-function createProposal(selectedContent = HISTORICAL_CONTENT) {
+function createProposal(selectedContent = HISTORICAL_CONTENT, pagePath = "Wiki/Topic.md") {
   const selectedContentHash = createFileContentHash(selectedContent);
   const intent = createKnowledgeForwardRevisionIntent({
     bundleId: "personal",
-    pagePath: "Wiki/Topic.md",
+    pagePath,
     historical: {
       bundleId: "personal",
-      pagePath: "Wiki/Topic.md",
+      pagePath,
       transactionId: "transaction-historical",
       sourceId: "source-1",
       sourceContentHash: HASH_A,
@@ -75,7 +80,7 @@ function createProposal(selectedContent = HISTORICAL_CONTENT) {
     requestRevision: 1,
     runtimeId: "runtime-1",
     bundleId: "personal",
-    pagePath: "Wiki/Topic.md",
+    pagePath,
     intent,
     intentDigest: createKnowledgeForwardRevisionIntentDigest(intent),
     historicalReviewAuthority: {
@@ -86,13 +91,13 @@ function createProposal(selectedContent = HISTORICAL_CONTENT) {
       acceptedAt: 90,
       targetChange: {
         changeId: "change-historical",
-        path: "Wiki/Topic.md",
+        path: pagePath,
         operation: "update",
         afterHash: selectedContentHash,
         sourceRefs: ["source-1"],
       },
       manifestPage: {
-        path: "Wiki/Topic.md",
+        path: pagePath,
         ownership: "generated",
         contentHash: selectedContentHash,
       },
@@ -165,9 +170,102 @@ function createNoChangesAuthority(): KnowledgeForwardRevisionAcceptanceAuthority
   };
 }
 
+/** Creates genuine strict command and receipt material for one acceptance body. */
+function createValidationMaterial(
+  proposal: ReturnType<typeof createProposal>,
+  proposalDigest: string,
+  afterContent: string,
+  acceptanceAuthority: unknown
+) {
+  const action =
+    afterContent === proposal.request.selectedContent ? "accept_exact" : "accept_edited";
+  const command = createKnowledgeForwardRevisionReviewCommand(
+    action === "accept_exact"
+      ? { action, proposal, proposalDigest }
+      : { action, proposal, proposalDigest, afterContent }
+  );
+  const validationReadSet = [
+    {
+      version: 1,
+      kind: "forward_revision_validation_artifact_identity",
+      artifactKind: "markdown",
+      sourceId: proposal.request.intent.current.primarySourceId,
+      artifactId: "artifact-1",
+      artifactContentHash: HASH_A,
+    },
+  ];
+  const validationReceipt = createKnowledgeForwardRevisionValidationReceipt({
+    proposal,
+    proposalDigest,
+    command,
+    afterContent,
+    validation: { okfValid: true, citationsValid: true, linksValid: true },
+    validationProfile: {
+      version: 1,
+      kind: "forward_revision_validation_profile",
+      profileId: "profile-1",
+      profileVersion: 1,
+      profileConfigurationDigest: HASH_A,
+      bundleConfigurationDigest: HASH_B,
+      validatorImplementationId: "deterministic-validator",
+      validatorImplementationVersion: 1,
+      validatorImplementationDigest: HASH_C,
+    },
+    acceptanceAuthority,
+    historicalCitations: [],
+    validationReadSet,
+    sourceArtifactObservationBindingDigest:
+      createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest(
+        acceptanceAuthority,
+        validationReadSet
+      ),
+    warningSummary: null,
+    validatedAt: 125,
+  });
+  return Object.freeze({
+    command,
+    validationReceipt,
+    validationReceiptDigest: validationReceipt.receiptDigest,
+  });
+}
+
+/** Adapts concise test inputs to the now receipt-bound production creator. */
+function createKnowledgeForwardRevisionAcceptedDecisionRecord(value: {
+  readonly proposal: ReturnType<typeof createProposal>;
+  readonly proposalDigest: string;
+  readonly afterContent: string;
+  readonly acceptanceAuthority: unknown;
+  readonly acceptedAt: number;
+}) {
+  let material: ReturnType<typeof createValidationMaterial>;
+  try {
+    material = createValidationMaterial(
+      value.proposal,
+      value.proposalDigest,
+      value.afterContent,
+      value.acceptanceAuthority
+    );
+  } catch {
+    material = createValidationMaterial(
+      value.proposal,
+      value.proposalDigest,
+      value.proposal.request.selectedContent,
+      createAppliedAuthority()
+    );
+  }
+  return createStrictAcceptedDecisionRecord({ ...value, ...material });
+}
+
+/** Recursively removes readonly modifiers for persisted-state adversarial checks. */
+type Mutable<T> = T extends readonly (infer Item)[]
+  ? Mutable<Item>[]
+  : T extends object
+    ? { -readonly [Key in keyof T]: Mutable<T[Key]> }
+    : T;
+
 /** Creates a mutable JSON clone for adversarial persisted-state checks. */
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+function clone<T>(value: T): Mutable<T> {
+  return JSON.parse(JSON.stringify(value)) as Mutable<T>;
 }
 
 describe("KnowledgeForwardRevisionDecision", () => {
@@ -203,6 +301,8 @@ describe("KnowledgeForwardRevisionDecision", () => {
       selectedHistoricalHash: HISTORICAL_HASH,
       acceptedAfterHash: HISTORICAL_HASH,
       manualOverride: false,
+      validationReceiptId: accepted.validationReceipt.receiptId,
+      validationReceiptDigest: accepted.validationReceiptDigest,
     });
     expect("afterContent" in accepted.applyClaim).toBe(false);
     expect(accepted.applyClaimDigest).toBe(
@@ -214,7 +314,80 @@ describe("KnowledgeForwardRevisionDecision", () => {
     expect(createKnowledgeForwardRevisionTerminalDecisionRecordDigest(accepted)).toHaveLength(64);
     expect(Object.isFrozen(accepted)).toBe(true);
     expect(Object.isFrozen(accepted.applyClaim)).toBe(true);
+    expect(Object.isFrozen(accepted.validationReceipt)).toBe(true);
+    expect(Object.isFrozen(accepted.validationReceipt.validationReadSet)).toBe(true);
     expect(Object.isFrozen(accepted.sourceEvidence.sourceRefs)).toBe(true);
+  });
+
+  it("digests claims for canonical page paths beyond the identifier budget", () => {
+    const pagePath = `Wiki/${Array.from({ length: 40 }, (_, index) => `section-${index}`).join(
+      "/"
+    )}/Topic.md`;
+    expect(pagePath.length).toBeGreaterThan(256);
+    expect(pagePath.length).toBeLessThanOrEqual(1_024);
+    const proposal = createProposal(HISTORICAL_CONTENT, pagePath);
+    const accepted = createKnowledgeForwardRevisionAcceptedDecisionRecord({
+      proposal,
+      proposalDigest: createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal),
+      afterContent: HISTORICAL_CONTENT,
+      acceptanceAuthority: createAppliedAuthority(),
+      acceptedAt: 130,
+    });
+
+    expect(accepted.applyClaim.pagePath).toBe(pagePath);
+    expect(createKnowledgeForwardRevisionApplyClaimDigest(accepted.applyClaim)).toBe(
+      accepted.applyClaimDigest
+    );
+  });
+
+  it("requires the exact command, receipt digest, candidate body, and authority at creation", () => {
+    const proposal = createProposal();
+    const proposalDigest = createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal);
+    const authority = createAppliedAuthority();
+    const afterContent = "# Edited candidate\n";
+    const material = createValidationMaterial(proposal, proposalDigest, afterContent, authority);
+    const wrongCommand = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal,
+      proposalDigest,
+    });
+    const base = {
+      proposal,
+      proposalDigest,
+      afterContent,
+      acceptanceAuthority: authority,
+      acceptedAt: 130,
+      ...material,
+    };
+    const advancedAuthority = clone(authority);
+    advancedAuthority.runtimeRevision += 1;
+    advancedAuthority.runtimeDigest = HASH_D;
+    advancedAuthority.currentSourceFreshness.runtimeRevision += 1;
+    advancedAuthority.currentSourceFreshness.runtimeDigest = HASH_D;
+    const acceptedAfterUnrelatedRevision = createStrictAcceptedDecisionRecord({
+      ...base,
+      acceptanceAuthority: advancedAuthority,
+    });
+
+    expect(
+      acceptedAfterUnrelatedRevision.validationReceipt.acceptanceAuthority.runtimeRevision
+    ).toBe(20);
+    expect(acceptedAfterUnrelatedRevision.acceptanceAuthority.runtimeRevision).toBe(21);
+    expect(acceptedAfterUnrelatedRevision.applyClaim.runtimeRevision).toBe(21);
+
+    for (const value of [
+      { ...base, command: wrongCommand },
+      { ...base, validationReceiptDigest: HASH_A },
+      { ...base, afterContent: "# Different candidate\n" },
+      {
+        ...base,
+        acceptanceAuthority: { ...authority, runtimeDigest: HASH_F },
+      },
+    ]) {
+      expect(() => createStrictAcceptedDecisionRecord(value)).toThrow(
+        KnowledgeForwardRevisionDecisionValidationError
+      );
+    }
   });
 
   it("retains exact edited bytes while keeping evidence scoped to the historical proposal", () => {
@@ -408,7 +581,20 @@ describe("KnowledgeForwardRevisionDecision", () => {
         value.acceptedDecisionDigest = HASH_A;
       },
       (value) => {
+        value.validationReceiptDigest = HASH_A;
+      },
+      (value) => {
+        (value.validationReceipt as Record<string, unknown>).acceptedAfterHash = HASH_A;
+      },
+      (value) => {
         (value.applyClaim as Record<string, unknown>).acceptedDecisionDigest = HASH_A;
+      },
+      (value) => {
+        (value.applyClaim as Record<string, unknown>).validationReceiptId =
+          `forward-revision-validation-receipt-${HASH_A}`;
+      },
+      (value) => {
+        (value.applyClaim as Record<string, unknown>).validationReceiptDigest = HASH_A;
       },
       (value) => {
         value.applyClaimDigest = HASH_A;
@@ -448,8 +634,13 @@ describe("KnowledgeForwardRevisionDecision", () => {
     });
     const revoked = Proxy.revocable(accepted, {});
     revoked.revoke();
+    class SourceRefArray extends Array<string> {}
+    const subclassed = clone(accepted) as unknown as Record<string, unknown>;
+    (subclassed.sourceEvidence as Record<string, unknown>).sourceRefs = new SourceRefArray(
+      "source-1"
+    );
 
-    for (const value of [{ ...accepted, extra: true }, accessor, revoked.proxy]) {
+    for (const value of [{ ...accepted, extra: true }, accessor, revoked.proxy, subclassed]) {
       expect(() => snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(value)).toThrow(
         KnowledgeForwardRevisionDecisionValidationError
       );

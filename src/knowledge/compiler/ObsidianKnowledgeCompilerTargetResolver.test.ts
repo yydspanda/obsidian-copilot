@@ -20,6 +20,7 @@ import {
   ObsidianKnowledgeCompilerTargetResolverError,
   type ObsidianKnowledgeCompilerTargetResolverErrorCode,
 } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
+import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import { ObsidianKnowledgeOutputObservationReader } from "@/knowledge/ingest/ObsidianKnowledgeOutputObservationReader";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
@@ -489,5 +490,65 @@ describe("ObsidianKnowledgeCompilerTargetResolver", () => {
     );
     expect(harness.getAllLoadedFiles).not.toHaveBeenCalled();
     expect(harness.read).not.toHaveBeenCalled();
+  });
+
+  it("asserts only exact genuine resolvers and rejects every wrapper or forged shape", () => {
+    const harness = new ResolverHarness();
+    const resolver = harness.createResolver();
+    class ResolverSubclass extends ObsidianKnowledgeCompilerTargetResolver {}
+    const ownShadow = Object.create(ObsidianKnowledgeCompilerTargetResolver.prototype) as object;
+    Object.defineProperty(ownShadow, "visit", {
+      value: resolver.visit,
+      enumerable: true,
+    });
+
+    expect(() => ObsidianKnowledgeCompilerTargetResolver.assert(resolver)).not.toThrow();
+    for (const value of [
+      {
+        visit: (): Promise<void> => Promise.resolve(),
+        resolve: (): Promise<unknown> => Promise.resolve([]),
+      },
+      Object.create(ObsidianKnowledgeCompilerTargetResolver.prototype),
+      new ResolverSubclass(harness.app),
+      new Proxy(resolver, {}),
+      ownShadow,
+    ]) {
+      try {
+        ObsidianKnowledgeCompilerTargetResolver.assert(value);
+        throw new Error("Expected a forged target resolver to be rejected");
+      } catch (error) {
+        expect(ObsidianKnowledgeCompilerTargetResolverError.inspect(error)).toBe(
+          "dependency_invalid"
+        );
+      }
+    }
+  });
+
+  it("binds an optional production resolver to one exact App/Vault execution owner", () => {
+    const harness = new ResolverHarness();
+    const owner = createKnowledgeExecutionOwner();
+    const alternateOwner = createKnowledgeExecutionOwner();
+    const resolver = new ObsidianKnowledgeCompilerTargetResolver(harness.app, owner);
+
+    expect(ObsidianKnowledgeCompilerTargetResolver.matchesExecutionOwner(resolver, owner)).toBe(
+      true
+    );
+    expect(
+      ObsidianKnowledgeCompilerTargetResolver.matchesExecutionOwner(resolver, alternateOwner)
+    ).toBe(false);
+    expect(
+      ObsidianKnowledgeCompilerTargetResolver.matchesExecutionOwner(harness.createResolver(), owner)
+    ).toBe(false);
+    expect(
+      ObsidianKnowledgeCompilerTargetResolver.matchesExecutionOwner(new Proxy(resolver, {}), owner)
+    ).toBe(false);
+
+    const otherHarness = new ResolverHarness();
+    expect(() => new ObsidianKnowledgeCompilerTargetResolver(otherHarness.app, owner)).toThrow();
+
+    harness.appOwner.vault = otherHarness.vault;
+    expect(ObsidianKnowledgeCompilerTargetResolver.matchesExecutionOwner(resolver, owner)).toBe(
+      false
+    );
   });
 });

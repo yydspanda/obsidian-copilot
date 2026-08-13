@@ -1,14 +1,16 @@
-import type { KnowledgeForwardRevisionAcceptanceAuthority } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
 import {
+  createKnowledgeForwardRevisionAcceptanceAuthorityDigest,
   snapshotKnowledgeForwardRevisionAcceptanceAuthority,
   snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue,
-} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
+  type KnowledgeForwardRevisionAcceptanceAuthority,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionAcceptanceAuthority";
 import {
   createKnowledgeForwardRevisionPendingProposalRecordDigest,
   snapshotKnowledgeForwardRevisionPendingProposalRecord,
   type KnowledgeForwardRevisionPendingProposalRecordV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposal";
 import {
+  createKnowledgeForwardRevisionReviewCommand,
   createKnowledgeForwardRevisionReviewCommandDigest,
   snapshotKnowledgeForwardRevisionReviewCommandForProposal,
   type KnowledgeForwardRevisionReviewCommandV1,
@@ -280,7 +282,7 @@ function snapshotRecord(
 /** Captures one bounded dense array without invoking indexed accessors. */
 function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
   try {
-    if (!Array.isArray(value)) return undefined;
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
     const length = Object.getOwnPropertyDescriptor(value, "length");
     if (
       !length ||
@@ -489,13 +491,6 @@ function createValidationProfileDigest(
   value: Readonly<KnowledgeForwardRevisionValidationProfileV1>
 ): string {
   return digestValue("knowledge-forward-revision-validation-profile-v1", value);
-}
-
-/** Computes the canonical digest of one strict acceptance prestate. */
-function createAcceptanceAuthorityDigest(
-  value: Readonly<KnowledgeForwardRevisionAcceptanceAuthority>
-): string {
-  return digestValue("knowledge-forward-revision-acceptance-authority-v1", value);
 }
 
 /** Counts every retained historical locator string against the aggregate budget. */
@@ -834,6 +829,55 @@ function snapshotCandidateContent(
   });
 }
 
+/**
+ * Projects the semantic prestate that must remain stable between validation
+ * and the acceptance CAS, excluding only the duplicated Runtime envelope.
+ */
+function projectStableAcceptanceAuthority(
+  value: Readonly<KnowledgeForwardRevisionAcceptanceAuthority>
+): JsonValue {
+  const freshness = value.currentSourceFreshness;
+  const commonFreshness = Object.freeze({
+    kind: freshness.kind,
+    runtimeId: freshness.runtimeId,
+    bundleId: freshness.bundleId,
+    sourceId: freshness.sourceId,
+    sourceContentHash: freshness.sourceContentHash,
+    pipelineFingerprint: freshness.pipelineFingerprint,
+    inputRevision: freshness.inputRevision,
+    manifestRevision: freshness.manifestRevision,
+    manifestDigest: freshness.manifestDigest,
+    committedManifestRevision: freshness.committedManifestRevision,
+    completedAt: freshness.completedAt,
+  });
+  const stableFreshness =
+    freshness.kind === "applied"
+      ? Object.freeze({
+          ...commonFreshness,
+          transactionId: freshness.transactionId,
+          changeSetId: freshness.changeSetId,
+          changeSetDigest: freshness.changeSetDigest,
+          manifestIntentDigest: freshness.manifestIntentDigest,
+          committedManifestDigest: freshness.committedManifestDigest,
+        })
+      : Object.freeze({
+          ...commonFreshness,
+          noChangesId: freshness.noChangesId,
+          reason: freshness.reason,
+          planDigest: freshness.planDigest,
+          jobId: freshness.jobId,
+          attempt: freshness.attempt,
+        });
+  return Object.freeze({
+    runtimeId: value.runtimeId,
+    manifestRevision: value.manifestRevision,
+    manifestDigest: value.manifestDigest,
+    manifestBaseHash: value.manifestBaseHash,
+    vaultObservedBeforeHash: value.vaultObservedBeforeHash,
+    currentSourceFreshness: stableFreshness,
+  });
+}
+
 /** Constructs the exact receipt payload whose digest excludes id and digest fields. */
 function createReceiptPayload(value: {
   runtimeId: string;
@@ -942,7 +986,8 @@ export function snapshotKnowledgeForwardRevisionValidationReceipt(
       Number(record.validatedAt) < acceptanceAuthority.currentSourceFreshness.completedAt ||
       record.acceptedAfterHash === acceptanceAuthority.manifestBaseHash ||
       record.validationProfileDigest !== createValidationProfileDigest(validationProfile) ||
-      record.acceptanceAuthorityDigest !== createAcceptanceAuthorityDigest(acceptanceAuthority) ||
+      record.acceptanceAuthorityDigest !==
+        createKnowledgeForwardRevisionAcceptanceAuthorityDigest(acceptanceAuthority) ||
       record.historicalCitationSetDigest !==
         createKnowledgeForwardRevisionHistoricalCitationSetDigest(
           historicalCitations,
@@ -1089,7 +1134,8 @@ export function createKnowledgeForwardRevisionValidationReceipt(
       validationProfile,
       validationProfileDigest: createValidationProfileDigest(validationProfile),
       acceptanceAuthority,
-      acceptanceAuthorityDigest: createAcceptanceAuthorityDigest(acceptanceAuthority),
+      acceptanceAuthorityDigest:
+        createKnowledgeForwardRevisionAcceptanceAuthorityDigest(acceptanceAuthority),
       historicalAcceptedDigest: request.historicalReviewAuthority.acceptedDigest,
       historicalCitations,
       historicalCitationSetDigest: createKnowledgeForwardRevisionHistoricalCitationSetDigest(
@@ -1164,6 +1210,80 @@ export function snapshotKnowledgeForwardRevisionValidationReceiptForCandidate(
       receipt.sourceArtifactObservationBindingDigest !== expectedObservationBindingDigest ||
       receipt.validatedAt < proposal.recordedAt ||
       receipt.validatedAt < request.historicalReviewAuthority.acceptedAt
+    ) {
+      invalidReceipt();
+    }
+    return receipt;
+  } catch (error) {
+    if (isAuthenticReceiptError(error)) throw error;
+    invalidReceipt();
+  }
+}
+
+/**
+ * Rejoins a persisted receipt to the exact accepted body and authority without
+ * requiring the original command body to be duplicated in terminal storage.
+ *
+ * The receipt's strict command id and digest remain durable identity fields;
+ * replay boundaries must separately correlate an incoming command to them.
+ */
+export function snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+  receiptValue: unknown,
+  proposalValue: unknown,
+  proposalDigestValue: unknown,
+  afterContent: unknown,
+  acceptanceAuthorityValue: unknown
+): Readonly<KnowledgeForwardRevisionValidationReceiptV1> {
+  try {
+    const receipt = snapshotKnowledgeForwardRevisionValidationReceipt(receiptValue);
+    const proposal = snapshotKnowledgeForwardRevisionPendingProposalRecord(proposalValue);
+    if (
+      !isDigest(proposalDigestValue) ||
+      proposalDigestValue !== createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal) ||
+      typeof afterContent !== "string"
+    ) {
+      invalidReceipt();
+    }
+    const acceptanceAuthority = snapshotKnowledgeForwardRevisionAcceptanceAuthority(
+      acceptanceAuthorityValue,
+      proposal
+    );
+    const request = proposal.request;
+    const acceptedAfterHash = createFileContentHash(afterContent);
+    const expectedCommand = createKnowledgeForwardRevisionReviewCommand(
+      receipt.action === "accept_exact"
+        ? { action: receipt.action, proposal, proposalDigest: proposalDigestValue }
+        : {
+            action: receipt.action,
+            proposal,
+            proposalDigest: proposalDigestValue,
+            afterContent,
+          }
+    );
+    assertEvidenceForProposal(receipt.historicalCitations, receipt.validationReadSet, proposal);
+    if (
+      receipt.runtimeId !== request.runtimeId ||
+      receipt.bundleId !== request.bundleId ||
+      receipt.pagePath !== request.pagePath ||
+      receipt.proposalId !== proposal.proposalId ||
+      receipt.proposalDigest !== proposalDigestValue ||
+      receipt.requestId !== request.requestId ||
+      receipt.requestDigest !== proposal.requestDigest ||
+      receipt.intentId !== request.intent.intentId ||
+      receipt.intentDigest !== request.intentDigest ||
+      receipt.commandId !== expectedCommand.commandId ||
+      receipt.commandDigest !==
+        createKnowledgeForwardRevisionReviewCommandDigest(expectedCommand) ||
+      receipt.selectedHistoricalHash !== request.selectedContentHash ||
+      receipt.acceptedAfterHash !== acceptedAfterHash ||
+      receipt.manualOverride !== (acceptedAfterHash !== request.selectedContentHash) ||
+      (receipt.action === "accept_exact" && afterContent !== request.selectedContent) ||
+      receipt.historicalAcceptedDigest !== request.historicalReviewAuthority.acceptedDigest ||
+      acceptanceAuthority.runtimeRevision < receipt.acceptanceAuthority.runtimeRevision ||
+      (acceptanceAuthority.runtimeRevision === receipt.acceptanceAuthority.runtimeRevision &&
+        acceptanceAuthority.runtimeDigest !== receipt.acceptanceAuthority.runtimeDigest) ||
+      canonicalizeJson(projectStableAcceptanceAuthority(receipt.acceptanceAuthority)) !==
+        canonicalizeJson(projectStableAcceptanceAuthority(acceptanceAuthority))
     ) {
       invalidReceipt();
     }

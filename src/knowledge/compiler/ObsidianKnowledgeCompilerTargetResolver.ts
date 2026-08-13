@@ -5,6 +5,7 @@ import type {
   CompilerTargetRequest,
   CompilerTargetResolver,
 } from "@/knowledge/compiler/CompilerModelPort";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 const MAX_TARGET_REQUESTS = 10_000;
@@ -95,6 +96,7 @@ interface CapturedResolverDependencies {
   app: App;
   vault: Vault;
   adapter: DataAdapter;
+  executionOwner?: KnowledgeExecutionOwner;
   getAllLoadedFiles: () => unknown;
   stat: (path: string) => Promise<unknown>;
   read: (path: string) => Promise<unknown>;
@@ -137,6 +139,20 @@ class TargetVisitorFailure extends Error {
 type UnknownDataMethod = (this: unknown, ...args: unknown[]) => unknown;
 
 const resolverStates = new WeakMap<object, Readonly<CapturedResolverDependencies>>();
+
+/** Returns hidden state only for one exact module-constructed resolver instance. */
+function requireResolverState(value: unknown): Readonly<CapturedResolverDependencies> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Object.getPrototypeOf(value) !== ObsidianKnowledgeCompilerTargetResolver.prototype
+  ) {
+    throw createResolverError("dependency_invalid");
+  }
+  const state = resolverStates.get(value);
+  if (!state) throw createResolverError("dependency_invalid");
+  return state;
+}
 
 /** Compares text by code unit so target order never depends on the host locale. */
 function compareText(left: string, right: string): number {
@@ -224,7 +240,17 @@ function captureDependencies(app: App): Readonly<CapturedResolverDependencies> {
 /** Re-proves that the captured App still owns the same exact Vault and adapter. */
 function assertOwnerCurrent(state: Readonly<CapturedResolverDependencies>): void {
   try {
-    if (state.app.vault !== state.vault || state.vault.adapter !== state.adapter) {
+    if (
+      state.app.vault !== state.vault ||
+      state.vault.adapter !== state.adapter ||
+      (state.executionOwner !== undefined &&
+        !KnowledgeExecutionOwner.matchesVaultLifecycle(
+          state.executionOwner,
+          state.app,
+          state.vault,
+          state.adapter
+        ))
+    ) {
       throw createResolverError("owner_changed");
     }
   } catch (error) {
@@ -775,15 +801,59 @@ export class ObsidianKnowledgeCompilerTargetResolver
   implements CompilerTargetResolver, ObsidianKnowledgeCompilerTargetVisitPort
 {
   /** Captures the exact App, Vault, adapter, and method receivers for this lifecycle. */
-  constructor(app: App) {
-    resolverStates.set(this, captureDependencies(app));
+  constructor(app: App, executionOwner?: KnowledgeExecutionOwner) {
+    const captured = captureDependencies(app);
+    if (executionOwner !== undefined) {
+      try {
+        KnowledgeExecutionOwner.assert(executionOwner);
+        KnowledgeExecutionOwner.bindVaultLifecycle(
+          executionOwner,
+          captured.app,
+          captured.vault,
+          captured.adapter
+        );
+      } catch {
+        throw createResolverError("dependency_invalid");
+      }
+    }
+    resolverStates.set(
+      this,
+      Object.freeze({
+        ...captured,
+        ...(executionOwner === undefined ? {} : { executionOwner }),
+      })
+    );
     Object.freeze(this);
+  }
+
+  /** Requires one exact-prototype module-constructed bounded Vault target reader. */
+  static assert(value: unknown): asserts value is ObsidianKnowledgeCompilerTargetResolver {
+    requireResolverState(value);
+  }
+
+  /** Reports whether this genuine resolver belongs to one exact opaque execution lifecycle. */
+  static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
+    try {
+      const state = requireResolverState(value);
+      KnowledgeExecutionOwner.assert(executionOwner);
+      assertOwnerCurrent(state);
+      return (
+        state.executionOwner === executionOwner &&
+        KnowledgeExecutionOwner.matchesVaultLifecycle(
+          executionOwner,
+          state.app,
+          state.vault,
+          state.adapter
+        )
+      );
+    } catch {
+      return false;
+    }
   }
 
   /** Resolves a strict target batch without mutating the Vault or reading unapproved content. */
   async resolve(targets: readonly CompilerTargetRequest[], signal: AbortSignal): Promise<unknown> {
-    const state = resolverStates.get(this);
-    if (!state) throw createResolverError("dependency_invalid");
+    const state = requireResolverState(this);
     try {
       if (typeof signal !== "object" || signal === null) {
         throw createResolverError("request_invalid");
@@ -812,8 +882,7 @@ export class ObsidianKnowledgeCompilerTargetResolver
     options: Readonly<ObsidianKnowledgeCompilerTargetVisitOptions>,
     visitor: ObsidianKnowledgeCompilerTargetVisitor
   ): Promise<void> {
-    const state = resolverStates.get(this);
-    if (!state) throw createResolverError("dependency_invalid");
+    const state = requireResolverState(this);
     try {
       if (typeof signal !== "object" || signal === null || typeof visitor !== "function") {
         throw createResolverError("request_invalid");

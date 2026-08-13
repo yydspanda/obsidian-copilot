@@ -128,6 +128,10 @@ import {
   type KnowledgePluginProductionPreflightAdmission,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import {
+  createKnowledgeProductionWorkflowExecutionPairing,
+  type KnowledgeProductionWorkflowExecutionRuntimeClaim,
+} from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import { KnowledgeProductionRecoveryActionCoordinator } from "@/knowledge/startup/KnowledgeProductionRecoveryActionCoordinator";
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 
@@ -279,8 +283,11 @@ function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
 async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
   lifecycle: KnowledgePluginProductionPreflightLifecycle;
   admission: KnowledgePluginProductionPreflightAdmission;
+  runtimeClaim: KnowledgeProductionWorkflowExecutionRuntimeClaim;
 }> {
+  const { runtimeClaim, preflightClaim } = createKnowledgeProductionWorkflowExecutionPairing();
   const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
+    executionPreflightClaim: preflightClaim,
     getProjectRecords: () => [
       {
         project: {
@@ -297,7 +304,7 @@ async function createAdmission(fetchPort: KnowledgeDeepSeekFetchPort): Promise<{
   });
   const result = await lifecycle.load(new AbortController().signal);
   if (result.kind !== "configured") throw new Error("Expected configured production preflight");
-  return { lifecycle, admission: result.admission };
+  return { lifecycle, admission: result.admission, runtimeClaim };
 }
 
 /** Creates the clean registered-source Manifest read-set. */
@@ -404,13 +411,15 @@ interface RecoveryActionHarness {
 /** Seeds an accepted-not-started or requires-decision production recovery state. */
 async function createHarness(startApply: boolean): Promise<RecoveryActionHarness> {
   const fetchPort = createFetchPort();
-  const { lifecycle, admission } = await createAdmission(fetchPort);
+  const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
   const vault = new RecoveryVaultHarness();
   vault.add(SCHEMA_PATH, "# Knowledge schema\n");
   vault.add(SOURCE_PATH, SOURCE_TEXT);
   const app = vault.createApp();
   const runtimeFile = new KnowledgeExecutionMemoryRuntimeFile();
-  const runtime = new KnowledgeRuntimeStore(runtimeFile);
+  const runtime = new KnowledgeRuntimeStore(runtimeFile, {
+    productionExecutionClaim: runtimeClaim,
+  });
   await runtime.initialize();
   const manifest = createManifest();
   await new KnowledgeRuntimeManifestStorage(runtime).write(BUNDLE_ID, manifest, null);

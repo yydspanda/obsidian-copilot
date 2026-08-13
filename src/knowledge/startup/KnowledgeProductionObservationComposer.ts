@@ -5,7 +5,9 @@ import { ObsidianKnowledgeCompilerTargetResolver } from "@/knowledge/compiler/Ob
 import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledgeFileStore";
 import { KnowledgeProductionCandidateValidator } from "@/knowledge/compiler/KnowledgeProductionCandidateValidator";
 import { KnowledgeProductionModelRouteLease } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
-import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import { KnowledgeProductionForwardRevisionDecisionCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionDecisionCoordinator";
+import { KnowledgeProductionForwardRevisionValidationCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
   KnowledgeSourceWorkflowPlanLoader,
   type KnowledgeSourceExecutionPlan,
@@ -39,6 +41,8 @@ import { KnowledgeProductionReviewEvidenceSourceAuthority } from "@/knowledge/re
 import {
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
+  KnowledgeRuntimeForwardRevisionDecisionPort,
+  KnowledgeRuntimeForwardRevisionValidationPort,
   KnowledgeRuntimeIngestExecutionProofPort,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeQueueStorage,
@@ -49,7 +53,10 @@ import {
 import type { KnowledgeKnownAppliedWikiOutputAuthorityIdentity } from "@/knowledge/runtime/KnowledgeKnownAppliedWikiOutputProjector";
 import { KnowledgeProductionCompileReviewHandler } from "@/knowledge/startup/KnowledgeProductionCompileReviewHandler";
 import { KnowledgeProductionReviewedApplyCoordinator } from "@/knowledge/startup/KnowledgeProductionReviewedApplyCoordinator";
-import { KnowledgePluginProductionWorkflowLease } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
+import {
+  KnowledgePluginProductionWorkflowCompositionClaim,
+  KnowledgePluginProductionWorkflowLease,
+} from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import {
   KnowledgeSourceObservationStartupCoordinator,
   type KnowledgeSourceObservationRecoverableIssue,
@@ -82,6 +89,8 @@ export interface KnowledgeProductionObservationComposerInput {
   runtime: KnowledgeRuntimeStore;
   /** Same-snapshot, secret-free capability minted by production preflight. */
   workflowLease: KnowledgePluginProductionWorkflowLease;
+  /** One-shot exact preflight bridge for this composition. */
+  workflowCompositionClaim: KnowledgePluginProductionWorkflowCompositionClaim;
   /** Best-effort path-free host notification capability for source issues. */
   notificationSink?: VaultSourceWatcherNotificationSink;
 }
@@ -169,7 +178,7 @@ class StartupHeldObservationEventSink implements EventSink {
 interface KnowledgeProductionObservationComposition {
   app: App;
   runtime: KnowledgeRuntimeStore;
-  executionOwner: ReturnType<typeof createKnowledgeExecutionOwner>;
+  executionOwner: KnowledgeExecutionOwner;
   workflowLease: KnowledgePluginProductionWorkflowLease;
   loader: KnowledgeSourceWorkflowPlanLoader;
   owners: ReturnType<KnowledgePluginProductionWorkflowLease["getOwners"]>;
@@ -198,6 +207,8 @@ interface KnowledgeProductionObservationInternalState {
   sourceRecoveryIssues?: readonly KnowledgeSourceObservationRecoverableIssue[];
   appliedWikiInspectorCreated?: boolean;
   knownAppliedWikiOutputsCreated?: boolean;
+  forwardRevisionValidationCoordinatorCreated?: boolean;
+  forwardRevisionDecisionCoordinatorCreated?: boolean;
   unsubscribeLease?: () => void;
   closeListeners: Set<() => void>;
 }
@@ -340,6 +351,7 @@ function composeObservation(
   const app = readDataProperty(input, "app");
   const runtime = readDataProperty(input, "runtime");
   const workflowLease = readDataProperty(input, "workflowLease");
+  const workflowCompositionClaim = readDataProperty(input, "workflowCompositionClaim");
   const notificationSink = snapshotNotificationSink(
     readOptionalDataProperty(input, "notificationSink")
   );
@@ -351,7 +363,17 @@ function composeObservation(
 
   const owners = workflowLease.getOwners();
   const parsers = workflowLease.getParsers();
-  const executionOwner = createKnowledgeExecutionOwner();
+  const appOwner = app as App;
+  const executionOwner = KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+    workflowLease,
+    workflowCompositionClaim
+  );
+  KnowledgeExecutionOwner.bindVaultLifecycle(
+    executionOwner,
+    appOwner,
+    appOwner.vault,
+    appOwner.vault.adapter
+  );
   const queueStorage = new KnowledgeRuntimeQueueStorage(runtime, executionOwner);
   const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queueStorage);
   const heldExecutor = new StartupHeldObservationIngestExecutor();
@@ -1164,6 +1186,98 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
+  /** Creates one deterministic forward-revision validator for this exact released generation. */
+  createForwardRevisionValidationCoordinator(): KnowledgeProductionForwardRevisionValidationCoordinator {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    const plan = state.plan;
+    if (
+      !composition ||
+      !state.coordinator ||
+      !state.workerController ||
+      !plan ||
+      state.forwardRevisionValidationCoordinatorCreated
+    ) {
+      throw createAbortError();
+    }
+    try {
+      const assertCurrent = (): void => {
+        assertCompositionCurrent(state, state.generation, composition);
+        this.assertHealthy();
+      };
+      assertCurrent();
+      const coordinator = new KnowledgeProductionForwardRevisionValidationCoordinator(
+        new KnowledgeRuntimeForwardRevisionValidationPort(
+          composition.runtime,
+          composition.proofPort
+        ),
+        plan,
+        new ObsidianKnowledgeCompilerTargetResolver(composition.app, composition.executionOwner),
+        composition.executionOwner,
+        assertCurrent
+      );
+      assertCurrent();
+      state.forwardRevisionValidationCoordinatorCreated = true;
+      return coordinator;
+    } catch {
+      throw createAbortError();
+    }
+  }
+
+  /** Creates one high-level forward decision boundary for this exact released generation. */
+  createForwardRevisionDecisionCoordinator(): KnowledgeProductionForwardRevisionDecisionCoordinator {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    const plan = state.plan;
+    if (
+      !composition ||
+      !state.coordinator ||
+      !state.workerController ||
+      !plan ||
+      state.forwardRevisionValidationCoordinatorCreated ||
+      state.forwardRevisionDecisionCoordinatorCreated
+    ) {
+      throw createAbortError();
+    }
+    try {
+      const assertCurrent = (): void => {
+        assertCompositionCurrent(state, state.generation, composition);
+        this.assertHealthy();
+      };
+      assertCurrent();
+      const validator = new KnowledgeProductionForwardRevisionValidationCoordinator(
+        new KnowledgeRuntimeForwardRevisionValidationPort(
+          composition.runtime,
+          composition.proofPort
+        ),
+        plan,
+        new ObsidianKnowledgeCompilerTargetResolver(composition.app, composition.executionOwner),
+        composition.executionOwner,
+        assertCurrent
+      );
+      const decisions = new KnowledgeRuntimeForwardRevisionDecisionPort(
+        composition.runtime,
+        composition.proofPort,
+        KnowledgePluginProductionWorkflowLease.getExecutionLease(
+          composition.workflowLease,
+          composition.executionOwner
+        )
+      );
+      const coordinator = new KnowledgeProductionForwardRevisionDecisionCoordinator(
+        validator,
+        decisions,
+        composition.executionOwner,
+        assertCurrent
+      );
+      assertCurrent();
+      state.forwardRevisionValidationCoordinatorCreated = true;
+      state.forwardRevisionDecisionCoordinatorCreated = true;
+      return coordinator;
+    } catch {
+      throw createAbortError();
+    }
+  }
+
   /**
    * Subscribes to synchronous generation closure without exposing internal state.
    *
@@ -1207,6 +1321,8 @@ export class KnowledgeProductionObservationComposer {
     state.modelRouteLease = undefined;
     state.appliedWikiInspectorCreated = undefined;
     state.knownAppliedWikiOutputsCreated = undefined;
+    state.forwardRevisionValidationCoordinatorCreated = undefined;
+    state.forwardRevisionDecisionCoordinatorCreated = undefined;
     try {
       composition?.eventSink.close();
     } catch {

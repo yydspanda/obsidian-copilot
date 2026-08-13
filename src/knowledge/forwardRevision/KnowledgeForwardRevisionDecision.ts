@@ -1,12 +1,36 @@
 import {
+  snapshotKnowledgeForwardRevisionAcceptanceAuthority,
+  type KnowledgeForwardRevisionAcceptanceAuthority,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionAcceptanceAuthority";
+import {
   KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS,
   createKnowledgeForwardRevisionPendingProposalRecordDigest,
   snapshotKnowledgeForwardRevisionPendingProposalRecord,
   type KnowledgeForwardRevisionPendingProposalRecordV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposal";
+import {
+  snapshotKnowledgeForwardRevisionValidationReceiptForCandidate,
+  snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate,
+  type KnowledgeForwardRevisionValidationReceiptV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
 import type { JsonValue, KnowledgeValidationResult } from "@/knowledge/model/types";
+import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
+
+export {
+  createKnowledgeForwardRevisionAcceptanceAuthorityDigest,
+  snapshotKnowledgeForwardRevisionAcceptanceAuthority,
+  snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionAcceptanceAuthority";
+export type {
+  KnowledgeForwardRevisionAcceptanceAuthority,
+  KnowledgeForwardRevisionAppliedFreshness,
+  KnowledgeForwardRevisionNoChangesFreshness,
+  KnowledgeForwardRevisionNoChangesReason,
+  KnowledgeForwardRevisionSourceFreshness,
+  KnowledgeForwardRevisionSourceFreshnessBase,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionAcceptanceAuthority";
 
 /** Current strict terminal forward-Review decision version. */
 export const KNOWLEDGE_FORWARD_REVISION_DECISION_VERSION = 1 as const;
@@ -17,71 +41,11 @@ export const KNOWLEDGE_FORWARD_REVISION_APPLY_CLAIM_VERSION = 1 as const;
 /** Defensive limits for terminal forward-Review material. */
 export const KNOWLEDGE_FORWARD_REVISION_DECISION_LIMITS = Object.freeze({
   maxIdentifierCharacters: 256,
+  maxPagePathCharacters: KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS.maxPagePathCharacters,
   maxAfterContentCharacters:
     KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS.maxSelectedContentCharacters,
   maxAfterContentBytes: KNOWLEDGE_FORWARD_REVISION_PROPOSAL_LIMITS.maxSelectedContentBytes,
 });
-
-/** Supported exact Runtime no-changes completion reasons. */
-export type KnowledgeForwardRevisionNoChangesReason =
-  | "analysis_no_targets"
-  | "resolved_no_targets"
-  | "all_targets_unchanged";
-
-/** Fields shared by exact current source-freshness completion projections. */
-export interface KnowledgeForwardRevisionSourceFreshnessBase {
-  readonly runtimeId: string;
-  readonly runtimeRevision: number;
-  readonly runtimeDigest: string;
-  readonly bundleId: string;
-  readonly sourceId: string;
-  readonly sourceContentHash: string;
-  readonly pipelineFingerprint: string;
-  readonly inputRevision: number;
-  readonly manifestRevision: number;
-  readonly manifestDigest: string;
-  readonly committedManifestRevision: number;
-  readonly completedAt: number;
-}
-
-/** Exact latest applied-source completion identity captured at acceptance. */
-export interface KnowledgeForwardRevisionAppliedFreshness
-  extends KnowledgeForwardRevisionSourceFreshnessBase {
-  readonly kind: "applied";
-  readonly transactionId: string;
-  readonly changeSetId: string;
-  readonly changeSetDigest: string;
-  readonly manifestIntentDigest: string;
-  readonly committedManifestDigest: string;
-}
-
-/** Exact latest no-changes source completion identity captured at acceptance. */
-export interface KnowledgeForwardRevisionNoChangesFreshness
-  extends KnowledgeForwardRevisionSourceFreshnessBase {
-  readonly kind: "no_changes";
-  readonly noChangesId: string;
-  readonly reason: KnowledgeForwardRevisionNoChangesReason;
-  readonly planDigest: string;
-  readonly jobId: string;
-  readonly attempt: number;
-}
-
-/** Exact latest source completion selected from one coherent Runtime snapshot. */
-export type KnowledgeForwardRevisionSourceFreshness =
-  | KnowledgeForwardRevisionAppliedFreshness
-  | KnowledgeForwardRevisionNoChangesFreshness;
-
-/** Current base and completion tuple that a Runtime CAS must freshly re-prove. */
-export interface KnowledgeForwardRevisionAcceptanceAuthority {
-  readonly runtimeId: string;
-  readonly runtimeRevision: number;
-  readonly runtimeDigest: string;
-  readonly manifestRevision: number;
-  readonly manifestDigest: string;
-  readonly manifestBaseHash: string;
-  readonly vaultObservedBeforeHash: string;
-  readonly currentSourceFreshness: Readonly<KnowledgeForwardRevisionSourceFreshness>;
-}
 
 /** Immutable evidence inherited from the selected proposal and original source. */
 export interface KnowledgeForwardRevisionSourceEvidence {
@@ -122,6 +86,8 @@ export interface KnowledgeForwardRevisionApplyClaimV1 {
   readonly selectedHistoricalHash: string;
   readonly acceptedAfterHash: string;
   readonly manualOverride: boolean;
+  readonly validationReceiptId: string;
+  readonly validationReceiptDigest: string;
   readonly acceptedDecisionDigest: string;
   readonly acceptedAt: number;
 }
@@ -140,6 +106,8 @@ export interface KnowledgeForwardRevisionAcceptedDecisionRecordV1 {
   readonly manualOverride: boolean;
   readonly sourceEvidence: Readonly<KnowledgeForwardRevisionSourceEvidence>;
   readonly acceptanceAuthority: Readonly<KnowledgeForwardRevisionAcceptanceAuthority>;
+  readonly validationReceipt: Readonly<KnowledgeForwardRevisionValidationReceiptV1>;
+  readonly validationReceiptDigest: string;
   readonly acceptedAt: number;
   readonly acceptedDecisionDigest: string;
   readonly applyClaim: Readonly<KnowledgeForwardRevisionApplyClaimV1>;
@@ -168,8 +136,11 @@ export type KnowledgeForwardRevisionTerminalDecisionRecordV1 =
 export interface CreateKnowledgeForwardRevisionAcceptedDecisionInput {
   readonly proposal: unknown;
   readonly proposalDigest: string;
+  readonly command: unknown;
   readonly afterContent: string;
   readonly acceptanceAuthority: unknown;
+  readonly validationReceipt: unknown;
+  readonly validationReceiptDigest: string;
   readonly acceptedAt: number;
 }
 
@@ -182,12 +153,15 @@ export interface CreateKnowledgeForwardRevisionRejectedDecisionInput {
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const CLAIM_ID_PATTERN = /^forward-revision-apply-claim-[a-f0-9]{64}$/;
-const NO_CHANGES_ID_PATTERN = /^knowledge-no-changes-[a-f0-9]{64}$/;
+const VALIDATION_RECEIPT_ID_PATTERN = /^forward-revision-validation-receipt-[a-f0-9]{64}$/;
 const ACCEPT_CREATE_KEYS = [
   "proposal",
   "proposalDigest",
+  "command",
   "afterContent",
   "acceptanceAuthority",
+  "validationReceipt",
+  "validationReceiptDigest",
   "acceptedAt",
 ] as const;
 const REJECT_CREATE_KEYS = ["proposal", "proposalDigest", "rejectedAt"] as const;
@@ -204,6 +178,8 @@ const ACCEPTED_KEYS = [
   "manualOverride",
   "sourceEvidence",
   "acceptanceAuthority",
+  "validationReceipt",
+  "validationReceiptDigest",
   "acceptedAt",
   "acceptedDecisionDigest",
   "applyClaim",
@@ -219,47 +195,6 @@ const REJECTED_KEYS = [
   "rejectionReason",
   "rejectedAt",
   "rejectedDecisionDigest",
-] as const;
-const AUTHORITY_KEYS = [
-  "runtimeId",
-  "runtimeRevision",
-  "runtimeDigest",
-  "manifestRevision",
-  "manifestDigest",
-  "manifestBaseHash",
-  "vaultObservedBeforeHash",
-  "currentSourceFreshness",
-] as const;
-const FRESHNESS_COMMON_KEYS = [
-  "kind",
-  "runtimeId",
-  "runtimeRevision",
-  "runtimeDigest",
-  "bundleId",
-  "sourceId",
-  "sourceContentHash",
-  "pipelineFingerprint",
-  "inputRevision",
-  "manifestRevision",
-  "manifestDigest",
-  "committedManifestRevision",
-  "completedAt",
-] as const;
-const APPLIED_FRESHNESS_KEYS = [
-  ...FRESHNESS_COMMON_KEYS,
-  "transactionId",
-  "changeSetId",
-  "changeSetDigest",
-  "manifestIntentDigest",
-  "committedManifestDigest",
-] as const;
-const NO_CHANGES_FRESHNESS_KEYS = [
-  ...FRESHNESS_COMMON_KEYS,
-  "noChangesId",
-  "reason",
-  "planDigest",
-  "jobId",
-  "attempt",
 ] as const;
 const EVIDENCE_KEYS = [
   "version",
@@ -297,15 +232,11 @@ const CLAIM_KEYS = [
   "selectedHistoricalHash",
   "acceptedAfterHash",
   "manualOverride",
+  "validationReceiptId",
+  "validationReceiptDigest",
   "acceptedDecisionDigest",
   "acceptedAt",
 ] as const;
-const NO_CHANGES_REASONS: readonly KnowledgeForwardRevisionNoChangesReason[] = Object.freeze([
-  "analysis_no_targets",
-  "resolved_no_targets",
-  "all_targets_unchanged",
-]);
-
 /** Fixed value-free failure for malformed terminal forward-Review material. */
 export class KnowledgeForwardRevisionDecisionValidationError extends TypeError {
   /** Creates a sanitized strict-contract failure. */
@@ -356,7 +287,13 @@ function snapshotRecord(
 /** Captures one exact single-string tuple without invoking accessors. */
 function snapshotSingleStringTuple(value: unknown): readonly [string] | undefined {
   try {
-    if (!Array.isArray(value) || Reflect.ownKeys(value).length !== 2) return undefined;
+    if (
+      !Array.isArray(value) ||
+      Object.getPrototypeOf(value) !== Array.prototype ||
+      Reflect.ownKeys(value).length !== 2
+    ) {
+      return undefined;
+    }
     const length = Object.getOwnPropertyDescriptor(value, "length");
     const item = Object.getOwnPropertyDescriptor(value, "0");
     if (
@@ -428,6 +365,25 @@ function isIdentifier(value: unknown): value is string {
   );
 }
 
+/** Captures one canonical bounded Vault-relative page path. */
+function snapshotPagePath(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > KNOWLEDGE_FORWARD_REVISION_DECISION_LIMITS.maxPagePathCharacters ||
+    !isUnicodeScalarText(value) ||
+    hasControlCharacter(value)
+  ) {
+    return undefined;
+  }
+  try {
+    const parsed = parseVaultPath(value);
+    return parsed.ok && parsed.path === value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reports whether one value is a lowercase SHA-256 digest. */
 function isDigest(value: unknown): value is string {
   return typeof value === "string" && SHA256_PATTERN.test(value);
@@ -477,165 +433,6 @@ function readDataDiscriminant(value: unknown, key: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-/** Strictly captures a projected latest source-freshness completion. */
-function snapshotSourceFreshness(
-  value: unknown
-): Readonly<KnowledgeForwardRevisionSourceFreshness> {
-  const kind = readDataDiscriminant(value, "kind");
-  const expectedKeys =
-    kind === "applied"
-      ? APPLIED_FRESHNESS_KEYS
-      : kind === "no_changes"
-        ? NO_CHANGES_FRESHNESS_KEYS
-        : undefined;
-  const record = expectedKeys ? snapshotRecord(value, expectedKeys) : undefined;
-  if (
-    !record ||
-    !isIdentifier(record.runtimeId) ||
-    !isPositiveInteger(record.runtimeRevision) ||
-    !isDigest(record.runtimeDigest) ||
-    !isIdentifier(record.bundleId) ||
-    !isIdentifier(record.sourceId) ||
-    !isDigest(record.sourceContentHash) ||
-    !isDigest(record.pipelineFingerprint) ||
-    !isPositiveInteger(record.inputRevision) ||
-    !isNonNegativeInteger(record.manifestRevision) ||
-    !isDigest(record.manifestDigest) ||
-    !isNonNegativeInteger(record.committedManifestRevision) ||
-    Number(record.committedManifestRevision) > Number(record.manifestRevision) ||
-    !isNonNegativeInteger(record.completedAt)
-  ) {
-    invalid();
-  }
-  const common = Object.freeze({
-    runtimeId: record.runtimeId,
-    runtimeRevision: Number(record.runtimeRevision),
-    runtimeDigest: record.runtimeDigest,
-    bundleId: record.bundleId,
-    sourceId: record.sourceId,
-    sourceContentHash: record.sourceContentHash,
-    pipelineFingerprint: record.pipelineFingerprint,
-    inputRevision: Number(record.inputRevision),
-    manifestRevision: Number(record.manifestRevision),
-    manifestDigest: record.manifestDigest,
-    committedManifestRevision: Number(record.committedManifestRevision),
-    completedAt: Number(record.completedAt),
-  });
-  if (kind === "applied") {
-    if (
-      !isIdentifier(record.transactionId) ||
-      !isIdentifier(record.changeSetId) ||
-      !isDigest(record.changeSetDigest) ||
-      !isDigest(record.manifestIntentDigest) ||
-      !isDigest(record.committedManifestDigest)
-    ) {
-      invalid();
-    }
-    return Object.freeze({
-      ...common,
-      kind: "applied" as const,
-      transactionId: record.transactionId,
-      changeSetId: record.changeSetId,
-      changeSetDigest: record.changeSetDigest,
-      manifestIntentDigest: record.manifestIntentDigest,
-      committedManifestDigest: record.committedManifestDigest,
-    });
-  }
-  if (
-    !isIdentifier(record.noChangesId) ||
-    !NO_CHANGES_ID_PATTERN.test(record.noChangesId) ||
-    !NO_CHANGES_REASONS.includes(record.reason as KnowledgeForwardRevisionNoChangesReason) ||
-    !isDigest(record.planDigest) ||
-    !isIdentifier(record.jobId) ||
-    !isPositiveInteger(record.attempt)
-  ) {
-    invalid();
-  }
-  return Object.freeze({
-    ...common,
-    kind: "no_changes" as const,
-    noChangesId: record.noChangesId,
-    reason: record.reason as KnowledgeForwardRevisionNoChangesReason,
-    planDigest: record.planDigest,
-    jobId: record.jobId,
-    attempt: Number(record.attempt),
-  });
-}
-
-/** Strictly captures one exact internally coherent acceptance-authority value. */
-export function snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue(
-  value: unknown
-): Readonly<KnowledgeForwardRevisionAcceptanceAuthority> {
-  const record = snapshotRecord(value, AUTHORITY_KEYS);
-  if (
-    !record ||
-    !isIdentifier(record.runtimeId) ||
-    !isPositiveInteger(record.runtimeRevision) ||
-    !isDigest(record.runtimeDigest) ||
-    !isNonNegativeInteger(record.manifestRevision) ||
-    !isDigest(record.manifestDigest) ||
-    !isDigest(record.manifestBaseHash) ||
-    !isDigest(record.vaultObservedBeforeHash)
-  ) {
-    invalid();
-  }
-  const freshness = snapshotSourceFreshness(record.currentSourceFreshness);
-  if (
-    Number(record.runtimeRevision) !== freshness.runtimeRevision ||
-    record.runtimeDigest !== freshness.runtimeDigest ||
-    Number(record.manifestRevision) !== freshness.manifestRevision ||
-    record.manifestDigest !== freshness.manifestDigest ||
-    record.manifestBaseHash !== record.vaultObservedBeforeHash ||
-    record.runtimeId !== freshness.runtimeId
-  ) {
-    invalid();
-  }
-  return Object.freeze({
-    runtimeId: record.runtimeId,
-    runtimeRevision: Number(record.runtimeRevision),
-    runtimeDigest: record.runtimeDigest,
-    manifestRevision: Number(record.manifestRevision),
-    manifestDigest: record.manifestDigest,
-    manifestBaseHash: record.manifestBaseHash,
-    vaultObservedBeforeHash: record.vaultObservedBeforeHash,
-    currentSourceFreshness: freshness,
-  });
-}
-
-/**
- * Captures one coherent current Runtime tuple and correlates it to a proposal.
- *
- * The Runtime revision and digest identify the current decision-time envelope;
- * the Manifest, source, and completion tuple must remain exactly the proposal's
- * proposal-time current state. The Vault-observed hash remains externally
- * observed and is not made self-authentic by this structural snapshot.
- */
-export function snapshotKnowledgeForwardRevisionAcceptanceAuthority(
-  value: unknown,
-  proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>
-): Readonly<KnowledgeForwardRevisionAcceptanceAuthority> {
-  const authority = snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue(value);
-  const request = proposal.request;
-  const current = request.intent.current;
-  const freshness = authority.currentSourceFreshness;
-  if (
-    authority.runtimeId !== request.runtimeId ||
-    authority.manifestBaseHash !== current.manifestBaseHash ||
-    authority.vaultObservedBeforeHash !== current.vaultObservedBeforeHash ||
-    authority.manifestRevision !== current.manifestRevision ||
-    authority.manifestDigest !== current.manifestDigest ||
-    freshness.runtimeId !== request.runtimeId ||
-    freshness.bundleId !== request.bundleId ||
-    freshness.sourceId !== current.primarySourceId ||
-    freshness.sourceContentHash !== current.sourceContentHash ||
-    freshness.pipelineFingerprint !== current.pipelineFingerprint ||
-    freshness.inputRevision !== current.inputRevision
-  ) {
-    invalid();
-  }
-  return authority;
 }
 
 /** Derives immutable proposal/original-source evidence with fixed scope semantics. */
@@ -701,6 +498,8 @@ function acceptedDecisionPayload(
   proposalDigest: string,
   afterContent: string,
   authority: Readonly<KnowledgeForwardRevisionAcceptanceAuthority>,
+  validationReceipt: Readonly<KnowledgeForwardRevisionValidationReceiptV1>,
+  validationReceiptDigest: string,
   acceptedAt: number
 ) {
   const selectedHistoricalHash = proposal.request.selectedContentHash;
@@ -718,6 +517,8 @@ function acceptedDecisionPayload(
     manualOverride: acceptedAfterHash !== selectedHistoricalHash,
     sourceEvidence: deriveSourceEvidence(proposal, proposalDigest),
     acceptanceAuthority: authority,
+    validationReceipt,
+    validationReceiptDigest,
     acceptedAt,
   });
 }
@@ -750,6 +551,8 @@ function applyClaimPayload(
     selectedHistoricalHash: accepted.selectedHistoricalHash,
     acceptedAfterHash: accepted.acceptedAfterHash,
     manualOverride: accepted.manualOverride,
+    validationReceiptId: accepted.validationReceipt.receiptId,
+    validationReceiptDigest: accepted.validationReceiptDigest,
     acceptedDecisionDigest,
     acceptedAt: accepted.acceptedAt,
   });
@@ -817,6 +620,7 @@ export function createKnowledgeForwardRevisionAcceptedDecisionRecord(
       !isUnicodeScalarText(record.afterContent) ||
       new TextEncoder().encode(record.afterContent).byteLength >
         KNOWLEDGE_FORWARD_REVISION_DECISION_LIMITS.maxAfterContentBytes ||
+      !isDigest(record.validationReceiptDigest) ||
       !isNonNegativeInteger(record.acceptedAt)
     ) {
       invalid();
@@ -837,10 +641,26 @@ export function createKnowledgeForwardRevisionAcceptedDecisionRecord(
       record.acceptanceAuthority,
       proposal
     );
+    const receiptForCommand = snapshotKnowledgeForwardRevisionValidationReceiptForCandidate(
+      record.validationReceipt,
+      proposal,
+      record.proposalDigest,
+      record.command,
+      record.afterContent
+    );
+    const validationReceipt = snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+      receiptForCommand,
+      proposal,
+      record.proposalDigest,
+      record.afterContent,
+      authority
+    );
     const acceptedAt = Number(record.acceptedAt);
     if (
+      record.validationReceiptDigest !== validationReceipt.receiptDigest ||
       acceptedAt < proposal.recordedAt ||
-      acceptedAt < authority.currentSourceFreshness.completedAt
+      acceptedAt < authority.currentSourceFreshness.completedAt ||
+      acceptedAt < validationReceipt.validatedAt
     ) {
       invalid();
     }
@@ -849,6 +669,8 @@ export function createKnowledgeForwardRevisionAcceptedDecisionRecord(
       record.proposalDigest,
       record.afterContent,
       authority,
+      validationReceipt,
+      record.validationReceiptDigest,
       acceptedAt
     );
     const acceptedDecisionDigest = digestAcceptedDecisionPayload(payload);
@@ -887,6 +709,7 @@ export function snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(
         KNOWLEDGE_FORWARD_REVISION_DECISION_LIMITS.maxAfterContentBytes ||
       !isDigest(record.acceptedAfterHash) ||
       typeof record.manualOverride !== "boolean" ||
+      !isDigest(record.validationReceiptDigest) ||
       !isNonNegativeInteger(record.acceptedAt) ||
       !isDigest(record.acceptedDecisionDigest) ||
       !isDigest(record.applyClaimDigest)
@@ -909,10 +732,19 @@ export function snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(
       record.acceptanceAuthority,
       proposal
     );
+    const validationReceipt = snapshotKnowledgeForwardRevisionValidationReceiptForAcceptedCandidate(
+      record.validationReceipt,
+      proposal,
+      record.proposalDigest,
+      record.afterContent,
+      authority
+    );
     const acceptedAt = Number(record.acceptedAt);
     if (
+      record.validationReceiptDigest !== validationReceipt.receiptDigest ||
       acceptedAt < proposal.recordedAt ||
-      acceptedAt < authority.currentSourceFreshness.completedAt
+      acceptedAt < authority.currentSourceFreshness.completedAt ||
+      acceptedAt < validationReceipt.validatedAt
     ) {
       invalid();
     }
@@ -921,6 +753,8 @@ export function snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(
       record.proposalDigest,
       record.afterContent,
       authority,
+      validationReceipt,
+      record.validationReceiptDigest,
       acceptedAt
     );
     if (
@@ -989,7 +823,7 @@ export function createKnowledgeForwardRevisionApplyClaimDigest(value: unknown): 
     !isPositiveInteger(claim.runtimeRevision) ||
     !isDigest(claim.runtimeDigest) ||
     !isIdentifier(claim.bundleId) ||
-    !isIdentifier(claim.pagePath) ||
+    !snapshotPagePath(claim.pagePath) ||
     !isIdentifier(claim.proposalId) ||
     !isDigest(claim.proposalDigest) ||
     !isIdentifier(claim.requestId) ||
@@ -999,6 +833,9 @@ export function createKnowledgeForwardRevisionApplyClaimDigest(value: unknown): 
     !isDigest(claim.selectedHistoricalHash) ||
     !isDigest(claim.acceptedAfterHash) ||
     typeof claim.manualOverride !== "boolean" ||
+    !isIdentifier(claim.validationReceiptId) ||
+    !VALIDATION_RECEIPT_ID_PATTERN.test(claim.validationReceiptId) ||
+    !isDigest(claim.validationReceiptDigest) ||
     !isDigest(claim.acceptedDecisionDigest) ||
     !isNonNegativeInteger(claim.acceptedAt)
   ) {
@@ -1021,6 +858,8 @@ export function createKnowledgeForwardRevisionApplyClaimDigest(value: unknown): 
     selectedHistoricalHash: claim.selectedHistoricalHash,
     acceptedAfterHash: claim.acceptedAfterHash,
     manualOverride: claim.manualOverride,
+    validationReceiptId: claim.validationReceiptId,
+    validationReceiptDigest: claim.validationReceiptDigest,
     acceptedDecisionDigest: claim.acceptedDecisionDigest,
     acceptedAt: claim.acceptedAt,
   });

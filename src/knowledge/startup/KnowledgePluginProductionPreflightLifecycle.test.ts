@@ -11,6 +11,7 @@ import { ProjectKnowledgePipelineProfileSource } from "@/knowledge/config/Projec
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import {
   KnowledgePluginProductionPreflightLifecycle,
+  KnowledgePluginProductionWorkflowCompositionClaim,
   KnowledgePluginProductionWorkflowLease,
   type KnowledgePluginProductionPreflightLifecycleDependencies,
   type KnowledgePluginProductionPreflightPort,
@@ -19,6 +20,7 @@ import {
   createKnowledgeProductionPipelineResources,
   type KnowledgeProductionPipelineResources,
 } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import { createKnowledgeProductionWorkflowExecutionPairing } from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 
 const PROJECT_ID = "project-personal";
 const MODEL_NAME = "deepseek-v4-pro";
@@ -130,6 +132,7 @@ function createDependencies(
   overrides: Partial<KnowledgePluginProductionPreflightLifecycleDependencies> = {}
 ): KnowledgePluginProductionPreflightLifecycleDependencies {
   return {
+    executionPreflightClaim: createKnowledgeProductionWorkflowExecutionPairing().preflightClaim,
     getProjectRecords: jest.fn(() => [createProjectRecord()]),
     getSettings: jest.fn(() => createSettings()),
     fetchPort: createFetchPort(),
@@ -143,6 +146,7 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
   it("runs the real production composer without invoking the captured renderer fetch", async () => {
     const fetchPort = createFetchPort();
     const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
+      executionPreflightClaim: createKnowledgeProductionWorkflowExecutionPairing().preflightClaim,
       getProjectRecords: () => [createProjectRecord()],
       getSettings: () => createSettings(),
       fetchPort,
@@ -161,8 +165,10 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     const events: string[] = [];
     const fetchPort = createFetchPort();
     const candidate = createCandidate();
+    const pairing = createKnowledgeProductionWorkflowExecutionPairing();
     let preflightInput: KnowledgeProductionPreflightComposerInput | undefined;
     const dependencies = createDependencies({
+      executionPreflightClaim: pairing.preflightClaim,
       getProjectRecords: () => {
         events.push("projects");
         return [createProjectRecord()];
@@ -207,6 +213,24 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     expect(Object.isFrozen(result.admission.owners[0]?.config.sourceRoots)).toBe(true);
     expect(result.admission.workflowLease.getOwners()).toBe(result.admission.owners);
     expect(Object.isFrozen(result.admission.workflowLease.getParsers())).toBe(true);
+    const reflected = [
+      lifecycle,
+      result.admission,
+      result.admission.workflowLease,
+      result.admission.workflowCompositionClaim,
+    ];
+    for (const value of reflected) {
+      expect(
+        Reflect.ownKeys(value).some((key) =>
+          String(key).toLowerCase().includes("executionpreflightclaim")
+        )
+      ).toBe(false);
+      expect(
+        Reflect.ownKeys(value).map(
+          (key) => Object.getOwnPropertyDescriptor(value, key)?.value as unknown
+        )
+      ).not.toContain(pairing.preflightClaim);
+    }
     expect(result.admission.modelRouteLease.isCurrent()).toBe(true);
     expect(result.admission.modelRouteLease.coversBundleIds(["personal"])).toBe(true);
     expect(Reflect.ownKeys(result.admission.modelRouteLease)).toEqual([]);
@@ -356,6 +380,72 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
         {},
       ]);
     }).toThrow(TypeError);
+  });
+
+  it("mints one frozen exact composition claim and consumes it only for its live lease", async () => {
+    const firstLifecycle = new KnowledgePluginProductionPreflightLifecycle(createDependencies());
+    const secondLifecycle = new KnowledgePluginProductionPreflightLifecycle(createDependencies());
+    const first = await firstLifecycle.load(new AbortController().signal);
+    const second = await secondLifecycle.load(new AbortController().signal);
+    if (first.kind !== "configured" || second.kind !== "configured") {
+      throw new Error("Expected configured preflight");
+    }
+    const claim = first.admission.workflowCompositionClaim;
+
+    expect(Object.getPrototypeOf(claim)).toBe(
+      KnowledgePluginProductionWorkflowCompositionClaim.prototype
+    );
+    expect(Object.isFrozen(claim)).toBe(true);
+    expect(Object.isFrozen(KnowledgePluginProductionWorkflowCompositionClaim.prototype)).toBe(true);
+    expect(Object.isFrozen(KnowledgePluginProductionWorkflowCompositionClaim)).toBe(true);
+    expect(Reflect.ownKeys(claim)).toEqual([]);
+    expect(() =>
+      KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+        second.admission.workflowLease,
+        claim
+      )
+    ).toThrow("The operation was aborted");
+
+    const owner = KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+      first.admission.workflowLease,
+      claim
+    );
+    expect(
+      KnowledgePluginProductionWorkflowLease.matchesExecutionOwner(
+        first.admission.workflowLease,
+        owner
+      )
+    ).toBe(true);
+    expect(() =>
+      KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+        first.admission.workflowLease,
+        claim
+      )
+    ).toThrow("The operation was aborted");
+    expect(() =>
+      KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+        first.admission.workflowLease,
+        Object.create(KnowledgePluginProductionWorkflowCompositionClaim.prototype)
+      )
+    ).toThrow("The operation was aborted");
+    expect(() =>
+      KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+        first.admission.workflowLease,
+        new Proxy(claim, {})
+      )
+    ).toThrow("The operation was aborted");
+    expect(() => new KnowledgePluginProductionWorkflowCompositionClaim(Symbol("wrong"))).toThrow(
+      TypeError
+    );
+
+    secondLifecycle.invalidate();
+    expect(() =>
+      KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+        second.admission.workflowLease,
+        second.admission.workflowCompositionClaim
+      )
+    ).toThrow("The operation was aborted");
+    firstLifecycle.close();
   });
 
   it("rejects a forged model-route owner without invoking it or blocking candidate cleanup", async () => {

@@ -11,6 +11,7 @@ import {
   createKnowledgeForwardRevisionPendingProposalRecord,
   createKnowledgeForwardRevisionRequest,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposal";
+import { createKnowledgeForwardRevisionReviewCommand } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
 import {
   createKnowledgeForwardRevisionPublishedProposal,
   snapshotKnowledgeForwardRevisionReviewSnapshot,
@@ -31,6 +32,10 @@ import {
   validateKnowledgeForwardRevisionReviewSnapshotV2,
   type KnowledgeForwardRevisionReviewEntryV2,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
+import {
+  createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest,
+  createKnowledgeForwardRevisionValidationReceipt,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 
 const HISTORICAL_CONTENT = "# Historical output\n";
@@ -157,6 +162,61 @@ function createAppliedAuthority(
   };
 }
 
+/** Creates strict command and validation receipt material for one accepted body. */
+function createValidationMaterial(
+  proposal: ReturnType<typeof createProposal>,
+  proposalDigest: string,
+  afterContent: string,
+  acceptanceAuthority: KnowledgeForwardRevisionAcceptanceAuthority
+) {
+  const action =
+    afterContent === proposal.request.selectedContent ? "accept_exact" : "accept_edited";
+  const command = createKnowledgeForwardRevisionReviewCommand(
+    action === "accept_exact"
+      ? { action, proposal, proposalDigest }
+      : { action, proposal, proposalDigest, afterContent }
+  );
+  const validationReadSet = [
+    {
+      version: 1,
+      kind: "forward_revision_validation_artifact_identity",
+      artifactKind: "markdown",
+      sourceId: proposal.request.intent.current.primarySourceId,
+      artifactId: "artifact-1",
+      artifactContentHash: HASH_A,
+    },
+  ];
+  const validationReceipt = createKnowledgeForwardRevisionValidationReceipt({
+    proposal,
+    proposalDigest,
+    command,
+    afterContent,
+    validation: { okfValid: true, citationsValid: true, linksValid: true },
+    validationProfile: {
+      version: 1,
+      kind: "forward_revision_validation_profile",
+      profileId: "profile-1",
+      profileVersion: 1,
+      profileConfigurationDigest: HASH_A,
+      bundleConfigurationDigest: HASH_B,
+      validatorImplementationId: "deterministic-validator",
+      validatorImplementationVersion: 1,
+      validatorImplementationDigest: HASH_C,
+    },
+    acceptanceAuthority,
+    historicalCitations: [],
+    validationReadSet,
+    sourceArtifactObservationBindingDigest:
+      createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest(
+        acceptanceAuthority,
+        validationReadSet
+      ),
+    warningSummary: null,
+    validatedAt: 125,
+  });
+  return { command, validationReceipt, validationReceiptDigest: validationReceipt.receiptDigest };
+}
+
 /** Creates one pending v2 entry at exact Store and Runtime revisions. */
 function createPendingEntry(
   proposal: ReturnType<typeof createProposal>,
@@ -179,15 +239,24 @@ function createAcceptedEntry(
   decidedRuntimeRevision: number,
   afterContent = `${proposal.request.selectedContent}\nEdited\n`
 ) {
+  const proposalDigest = createKnowledgeForwardRevisionPendingReviewEntryV2({
+    proposal,
+    proposalStoreRevision,
+    publishedRuntimeRevision,
+  }).proposalDigest;
+  const acceptanceAuthority = createAppliedAuthority(proposal, decidedRuntimeRevision - 1);
+  const validationMaterial = createValidationMaterial(
+    proposal,
+    proposalDigest,
+    afterContent,
+    acceptanceAuthority
+  );
   const decision = createKnowledgeForwardRevisionAcceptedDecisionRecord({
     proposal,
-    proposalDigest: createKnowledgeForwardRevisionPendingReviewEntryV2({
-      proposal,
-      proposalStoreRevision,
-      publishedRuntimeRevision,
-    }).proposalDigest,
+    proposalDigest,
     afterContent,
-    acceptanceAuthority: createAppliedAuthority(proposal, decidedRuntimeRevision - 1),
+    acceptanceAuthority,
+    ...validationMaterial,
     acceptedAt: 140 + proposal.request.requestRevision,
   });
   return createKnowledgeForwardRevisionTerminalReviewEntryV2({

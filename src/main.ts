@@ -76,6 +76,7 @@ import {
   type KnowledgePluginProductionPreflightAdmission,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import { createKnowledgeProductionWorkflowExecutionPairing } from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import {
   awaitKnowledgeProductionDrain,
   retainKnowledgeProductionDrain,
@@ -214,6 +215,11 @@ function createKnowledgeWorkerScheduler(win: Window): KnowledgeProductionWorkerS
   });
 }
 
+const {
+  runtimeClaim: knowledgeProductionRuntimeExecutionClaim,
+  preflightClaim: knowledgeProductionPreflightExecutionClaim,
+} = createKnowledgeProductionWorkflowExecutionPairing();
+
 export default class CopilotPlugin extends Plugin {
   // Plugin components
   projectManager: ProjectManager;
@@ -244,6 +250,7 @@ export default class CopilotPlugin extends Plugin {
   private readonly knowledgeRendererFetchPort = captureKnowledgeRendererFetchPort();
   private readonly knowledgeProductionPreflightLifecycle =
     new KnowledgePluginProductionPreflightLifecycle({
+      executionPreflightClaim: knowledgeProductionPreflightExecutionClaim,
       getProjectRecords: () => getCachedProjectRecords(),
       getSettings: () => getSettings(),
       fetchPort: this.knowledgeRendererFetchPort,
@@ -562,7 +569,9 @@ export default class CopilotPlugin extends Plugin {
             this.app.vault.adapter,
             `${pluginDirectory}/knowledge-runtime-v1.json`
           );
-          return new KnowledgeRuntimeStore(runtimeFile);
+          return new KnowledgeRuntimeStore(runtimeFile, {
+            productionExecutionClaim: knowledgeProductionRuntimeExecutionClaim,
+          });
         },
         async (candidate) => candidate.initialize()
       );
@@ -900,6 +909,7 @@ export default class CopilotPlugin extends Plugin {
       app: this.app,
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
       notificationSink: this.knowledgeSourceIssueNotificationSink,
     });
     const releaseComposer = new KnowledgeProductionRecoveryComposer({

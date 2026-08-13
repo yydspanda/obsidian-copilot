@@ -21,6 +21,7 @@ import {
 } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgeProductionChatCaptureCoordinator } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
+import { KnowledgeForwardRevisionValidationCoordinatorError } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
 import type { KnowledgeProductionPreflightSettingsInput } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import { parseIngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
@@ -51,6 +52,10 @@ import {
 import { createSourceObservationPreReleaseResult } from "@/knowledge/startup/KnowledgeSourceObservationPreRelease";
 import { KnowledgeStudioReadGenerationLease } from "@/knowledge/startup/KnowledgeStudioReadGenerationLease";
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import {
+  createKnowledgeProductionWorkflowExecutionPairing,
+  type KnowledgeProductionWorkflowExecutionRuntimeClaim,
+} from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
@@ -333,8 +338,11 @@ async function createAdmission(
 ): Promise<{
   lifecycle: KnowledgePluginProductionPreflightLifecycle;
   admission: KnowledgePluginProductionPreflightAdmission;
+  runtimeClaim: KnowledgeProductionWorkflowExecutionRuntimeClaim;
 }> {
+  const { runtimeClaim, preflightClaim } = createKnowledgeProductionWorkflowExecutionPairing();
   const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
+    executionPreflightClaim: preflightClaim,
     getProjectRecords: () => [
       {
         project: {
@@ -353,14 +361,17 @@ async function createAdmission(
   if (result.kind !== "configured") {
     throw new Error("Expected a configured production preflight");
   }
-  return { lifecycle, admission: result.admission };
+  return { lifecycle, admission: result.admission, runtimeClaim };
 }
 
 /** Creates an initialized Runtime whose Manifest registers the exact source. */
 async function createRuntime(
+  runtimeClaim?: KnowledgeProductionWorkflowExecutionRuntimeClaim,
   file: KnowledgeExecutionMemoryRuntimeFile = new KnowledgeExecutionMemoryRuntimeFile()
 ): Promise<KnowledgeRuntimeStore> {
-  const runtime = new KnowledgeRuntimeStore(file);
+  const runtime = new KnowledgeRuntimeStore(file, {
+    ...(runtimeClaim ? { productionExecutionClaim: runtimeClaim } : {}),
+  });
   await runtime.initialize();
   const manifests = new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime));
   await manifests.registerSource("personal", {
@@ -392,8 +403,8 @@ describe("KnowledgeProductionObservationComposer", () => {
 
   it("loads the same preflight generation and converges a real Runtime observation without fetch", async () => {
     const fetchPort = createFetchPort();
-    const { lifecycle, admission } = await createAdmission(fetchPort);
-    const runtime = await createRuntime();
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+    const runtime = await createRuntime(runtimeClaim);
     const vault = new ProductionVaultHarness();
     vault.addFile(SCHEMA_PATH, encodeText("# Wiki schema\r\n保持引用。\n"));
     const source = vault.addFile(SOURCE_PATH, encodeText("# 原始资料\r\n精确字节。\n"));
@@ -402,6 +413,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
 
     await expect(composer.start(controller.signal)).resolves.toEqual({
@@ -466,8 +478,8 @@ describe("KnowledgeProductionObservationComposer", () => {
 
   it("routes a real startup-missing pending observation through the source-only Barrier state", async () => {
     const fetchPort = createFetchPort();
-    const { lifecycle, admission } = await createAdmission(fetchPort);
-    const runtime = await createRuntime();
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+    const runtime = await createRuntime(runtimeClaim);
     await new KnowledgeRuntimeInputRevisionAllocator(runtime).allocate({
       bundleId: "personal",
       sourceId: "source-1",
@@ -479,6 +491,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     let active = true;
     let sourceOnly: KnowledgeStudioSourceLifecycleOnlyAdapter | undefined;
@@ -583,8 +596,8 @@ describe("KnowledgeProductionObservationComposer", () => {
 
   it("synchronously closes the live watcher when the preflight lease is invalidated", async () => {
     const fetchPort = createFetchPort();
-    const { lifecycle, admission } = await createAdmission(fetchPort);
-    const runtime = await createRuntime();
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+    const runtime = await createRuntime(runtimeClaim);
     const vault = new ProductionVaultHarness();
     vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
     vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
@@ -592,6 +605,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     await composer.start(new AbortController().signal);
     expect(vault.activeListenerCount()).toBe(4);
@@ -607,8 +621,8 @@ describe("KnowledgeProductionObservationComposer", () => {
 
   it("publishes a least-authority live Studio command adapter for the exact worker generation", async () => {
     const fetchPort = createFetchPort();
-    const { lifecycle, admission } = await createAdmission(fetchPort);
-    const runtime = await createRuntime();
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+    const runtime = await createRuntime(runtimeClaim);
     const vault = new ProductionVaultHarness();
     vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
     vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
@@ -616,6 +630,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     await composer.start(new AbortController().signal);
 
@@ -906,6 +921,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     await composer.start(new AbortController().signal);
     const worker = composer.createCompileReviewWorkerController(
@@ -957,6 +973,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
       notificationSink: { emit },
     });
     await composer.start(controller.signal);
@@ -1038,6 +1055,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
 
     await expect(composer.start(signal)).resolves.toMatchObject({
@@ -1094,6 +1112,98 @@ describe("KnowledgeProductionObservationComposer", () => {
     expect(fetchPort).not.toHaveBeenCalled();
   });
 
+  it("mints one owner-bound forward validator only for the exact released generation", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const runtime = await createRuntime();
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const signal = new AbortController().signal;
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
+    });
+
+    await expect(composer.start(signal)).resolves.toMatchObject({
+      kind: "observation_converged",
+    });
+    expect(() => composer.createForwardRevisionValidationCoordinator()).toThrow("aborted");
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => undefined
+    );
+    const validator = composer.createForwardRevisionValidationCoordinator();
+
+    expect(Reflect.ownKeys(validator)).toEqual([]);
+    expect(Object.isFrozen(validator)).toBe(true);
+    expect(() => composer.createForwardRevisionValidationCoordinator()).toThrow("aborted");
+    try {
+      await validator.validate({}, signal);
+      throw new Error("Expected an invalid forward validation request to reject");
+    } catch (error) {
+      expect(KnowledgeForwardRevisionValidationCoordinatorError.inspect(error)).toBe(
+        "request_invalid"
+      );
+    }
+    lifecycle.invalidate();
+    try {
+      await validator.validate({}, signal);
+      throw new Error("Expected the closed generation validator to reject");
+    } catch (error) {
+      expect(KnowledgeForwardRevisionValidationCoordinatorError.inspect(error)).toBe(
+        "dependency_invalid"
+      );
+    }
+    await worker.whenSettled();
+    lifecycle.close();
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("mints and revokes one owner-bound high-level forward decision coordinator", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+    const runtime = await createRuntime(runtimeClaim);
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const signal = new AbortController().signal;
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
+    });
+
+    await expect(composer.start(signal)).resolves.toMatchObject({
+      kind: "observation_converged",
+    });
+    expect(() => composer.createForwardRevisionDecisionCoordinator()).toThrow("aborted");
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => undefined
+    );
+    const decisions = composer.createForwardRevisionDecisionCoordinator();
+
+    expect(Reflect.ownKeys(decisions)).toEqual([]);
+    expect(Object.isFrozen(decisions)).toBe(true);
+    expect(() => composer.createForwardRevisionDecisionCoordinator()).toThrow("aborted");
+    expect(() => composer.createForwardRevisionValidationCoordinator()).toThrow("aborted");
+    await expect(decisions.decide({}, signal)).resolves.toEqual({ kind: "stale" });
+
+    composer.close();
+    await expect(decisions.decide({}, signal)).rejects.toMatchObject({ name: "AbortError" });
+    await worker.whenSettled();
+    lifecycle.close();
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
   it("mints one least-authority known-output browser only for the released worker generation", async () => {
     const fetchPort = createFetchPort();
     const { lifecycle, admission } = await createAdmission(fetchPort);
@@ -1106,6 +1216,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
 
     await expect(composer.start(signal)).resolves.toMatchObject({
@@ -1169,6 +1280,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
 
     await expect(composer.start(new AbortController().signal)).resolves.toEqual({
@@ -1214,6 +1326,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     await expect(composer.start(new AbortController().signal)).resolves.toEqual({
       kind: "observation_converged",
@@ -1275,6 +1388,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     await composer.start(new AbortController().signal);
     const worker = composer.createCompileReviewWorkerController(
@@ -1326,6 +1440,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     await composer.start(new AbortController().signal);
     const worker = composer.createCompileReviewWorkerController(
@@ -1359,7 +1474,9 @@ describe("KnowledgeProductionObservationComposer", () => {
       return createNoChangesResponse();
     });
     const firstAdmission = await createAdmission(fetchPort);
-    const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+    const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile(), {
+      productionExecutionClaim: firstAdmission.runtimeClaim,
+    });
     await runtime.initialize();
     const manifests = new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime));
     const vault = new ProductionVaultHarness();
@@ -1425,6 +1542,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: nextAdmission.admission.workflowLease,
+      workflowCompositionClaim: nextAdmission.admission.workflowCompositionClaim,
     });
     await expect(composer.start(new AbortController().signal)).resolves.toEqual({
       kind: "observation_converged",
@@ -1487,6 +1605,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: firstAdmission.admission.workflowLease,
+      workflowCompositionClaim: firstAdmission.admission.workflowCompositionClaim,
     });
     await expect(firstComposer.start(new AbortController().signal)).resolves.toEqual({
       kind: "observation_converged",
@@ -1534,6 +1653,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: secondAdmission.admission.workflowLease,
+      workflowCompositionClaim: secondAdmission.admission.workflowCompositionClaim,
     });
     await expect(secondComposer.start(new AbortController().signal)).resolves.toEqual({
       kind: "observation_converged",
@@ -1580,9 +1700,9 @@ describe("KnowledgeProductionObservationComposer", () => {
       fetchStarted.resolve();
       return createNoChangesResponse();
     });
-    const { lifecycle, admission } = await createAdmission(fetchPort);
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
     const file = new PostCommitThrowRuntimeFile();
-    const runtime = await createRuntime(file);
+    const runtime = await createRuntime(runtimeClaim, file);
     const vault = new ProductionVaultHarness();
     vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
     vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
@@ -1590,6 +1710,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       app: vault.createApp(),
       runtime,
       workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
     });
     await composer.start(new AbortController().signal);
     const worker = composer.createCompileReviewWorkerController(

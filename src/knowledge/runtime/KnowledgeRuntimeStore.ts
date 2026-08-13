@@ -15,6 +15,7 @@ import type {
 } from "@/knowledge/changeset/ApplyCommitCoordinator";
 import { deriveKnowledgeSourceCompileAuthority } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
+  type KnowledgeForwardRevisionPendingProposalRecordV1,
   createKnowledgeForwardRevisionPendingProposalRecord,
   createKnowledgeForwardRevisionPublicationReceipt,
   createKnowledgeForwardRevisionRequest,
@@ -26,12 +27,20 @@ import {
   KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_V2_LIMITS,
   createEmptyKnowledgeForwardRevisionReviewSnapshotV2,
   createKnowledgeForwardRevisionPendingReviewEntryV2,
+  createKnowledgeForwardRevisionTerminalReviewEntryV2,
   migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2,
   parseKnowledgeForwardRevisionReviewSnapshotV2,
   projectKnowledgeForwardRevisionReviewEntryProposalV2,
   snapshotKnowledgeForwardRevisionReviewSnapshotV2,
+  type KnowledgeForwardRevisionTerminalReviewEntryV2,
   type KnowledgeForwardRevisionReviewSnapshotV2,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
+import {
+  createKnowledgeForwardRevisionAcceptedDecisionRecord,
+  createKnowledgeForwardRevisionRejectedDecisionRecord,
+  createKnowledgeForwardRevisionTerminalDecisionRecordDigest,
+  type KnowledgeForwardRevisionTerminalDecisionRecordV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
 import {
   createKnowledgeForwardRevisionIntentDigest,
   createKnowledgeForwardRevisionIntent,
@@ -39,6 +48,7 @@ import {
   type KnowledgeForwardRevisionIntent,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
 import {
+  createKnowledgeForwardRevisionValidationAuthorityQuery,
   createKnowledgeForwardRevisionValidationAuthority,
   snapshotKnowledgeForwardRevisionValidationAuthorityQuery,
   type KnowledgeForwardRevisionValidationAuthorityQueryV1,
@@ -50,7 +60,17 @@ import {
   type KnowledgeForwardRevisionProposalAuthorityQueryV1,
   type KnowledgeForwardRevisionProposalAuthorityV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalAuthority";
-import type { KnowledgeForwardRevisionAcceptanceAuthority } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
+import type { KnowledgeForwardRevisionAcceptanceAuthority } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionAcceptanceAuthority";
+import {
+  createKnowledgeForwardRevisionReviewCommandDigest,
+  snapshotKnowledgeForwardRevisionReviewCommand,
+  snapshotKnowledgeForwardRevisionReviewCommandForProposal,
+  type KnowledgeForwardRevisionReviewCommandV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
+import {
+  KnowledgeForwardRevisionValidationCapability,
+  type KnowledgeForwardRevisionValidationCapabilityProjectionV1,
+} from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
 import {
   TransactionStorageRevisionConflictError,
   TransactionStorageAuthorityError,
@@ -82,6 +102,12 @@ import {
   KnowledgeExecutionOwner,
   createKnowledgeExecutionOwner,
 } from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import {
+  consumeKnowledgeProductionWorkflowExecutionRuntimeClaim,
+  KnowledgeProductionWorkflowExecutionRuntimeBinding,
+  KnowledgeProductionWorkflowExecutionRuntimeClaim,
+  KnowledgeProductionWorkflowExecutionLease,
+} from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import {
   KNOWLEDGE_INGEST_EXECUTION_PROOF_VERSION,
   verifyKnowledgeIngestExecutionProofRequest,
@@ -555,6 +581,7 @@ interface PreviousKnowledgeRuntimeInputRevisionBundle {
 }
 
 type RuntimeBundleCollection = "queues" | "reviews" | "manifests";
+type StudioHintBundleCollection = RuntimeBundleCollection | "forwardRevisionReviews";
 
 interface RuntimeMutation<T> {
   next?: KnowledgeRuntimeStoreSnapshot;
@@ -1262,6 +1289,8 @@ export interface KnowledgeRuntimeStoreOptions {
   clock?: () => number;
   maxTextCharacters?: number;
   opaqueIdFactory?: () => string;
+  /** One-shot opaque half of the exact Runtime/preflight production pairing. */
+  productionExecutionClaim?: KnowledgeProductionWorkflowExecutionRuntimeClaim;
 }
 
 /** Maximum persisted Runtime text accepted before any JSON parser allocation. */
@@ -5767,6 +5796,101 @@ function projectForwardRevisionValidationAuthority(
   }
 }
 
+/** Requires a validated capability projection to match current CAS authority exactly. */
+function assertForwardRevisionDecisionValidationProjection(
+  projection: Readonly<KnowledgeForwardRevisionValidationCapabilityProjectionV1>,
+  proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>,
+  proposalDigest: string,
+  command: Readonly<KnowledgeForwardRevisionReviewCommandV1>,
+  current: Readonly<KnowledgeForwardRevisionValidationAuthorityV1>
+): void {
+  try {
+    if (
+      projection.proposalDigest !== proposalDigest ||
+      !exactJsonValuesEqual(projection.proposal, proposal) ||
+      projection.commandDigest !== createKnowledgeForwardRevisionReviewCommandDigest(command) ||
+      !exactJsonValuesEqual(projection.command, command) ||
+      projection.receiptDigest !== projection.receipt.receiptDigest ||
+      current.runtimeRevision < projection.receipt.acceptanceAuthority.runtimeRevision ||
+      (current.runtimeRevision === projection.receipt.acceptanceAuthority.runtimeRevision &&
+        current.runtimeDigest !== projection.receipt.acceptanceAuthority.runtimeDigest)
+    ) {
+      throw new TypeError();
+    }
+    createKnowledgeForwardRevisionAcceptedDecisionRecord({
+      proposal,
+      proposalDigest,
+      command,
+      afterContent: projection.afterContent,
+      acceptanceAuthority: current.acceptanceAuthority,
+      validationReceipt: projection.receipt,
+      validationReceiptDigest: projection.receiptDigest,
+      acceptedAt: Math.max(
+        proposal.recordedAt,
+        current.acceptanceAuthority.currentSourceFreshness.completedAt,
+        projection.receipt.validatedAt
+      ),
+    });
+  } catch {
+    throw createForwardRevisionDecisionPortError("authority_unavailable");
+  }
+}
+
+/** Creates one detached frozen decision result without widening terminal authority. */
+function createForwardRevisionDecisionResult(
+  outcome: KnowledgeForwardRevisionDecisionResult["outcome"],
+  decision: Readonly<KnowledgeForwardRevisionTerminalDecisionRecordV1>,
+  runtimeRevision: number,
+  decisionStoreRevision: number
+): Readonly<KnowledgeForwardRevisionDecisionResult> {
+  return Object.freeze({
+    kind: decision.state,
+    outcome,
+    decision,
+    decisionDigest: createKnowledgeForwardRevisionTerminalDecisionRecordDigest(decision),
+    runtimeRevision,
+    decisionStoreRevision,
+  });
+}
+
+/** Projects exact accepted/rejected command replay from a terminal entry. */
+function projectForwardRevisionDecisionReplay(
+  entry: Readonly<KnowledgeForwardRevisionTerminalReviewEntryV2>,
+  command: Readonly<KnowledgeForwardRevisionReviewCommandV1>
+): Readonly<KnowledgeForwardRevisionDecisionResult> | null {
+  try {
+    const proposal = entry.decision.proposal;
+    snapshotKnowledgeForwardRevisionReviewCommandForProposal(
+      command,
+      proposal,
+      entry.decision.proposalDigest
+    );
+    if (entry.state === "rejected") {
+      if (command.action !== "reject") return null;
+    } else {
+      if (command.action === "reject") return null;
+      const expectedContent =
+        command.action === "accept_exact" ? proposal.request.selectedContent : command.afterContent;
+      if (
+        entry.decision.afterContent !== expectedContent ||
+        entry.decision.validationReceipt.commandId !== command.commandId ||
+        entry.decision.validationReceipt.commandDigest !==
+          createKnowledgeForwardRevisionReviewCommandDigest(command)
+      ) {
+        return null;
+      }
+    }
+    return createForwardRevisionDecisionResult(
+      "already_decided",
+      entry.decision,
+      entry.decidedRuntimeRevision,
+      entry.decisionStoreRevision
+    );
+  } catch {
+    return null;
+  }
+}
+
 /** Parses one strict Manifest during semantic projection. */
 function thisOrNullManifest(value: unknown): SourceManifest | null {
   const parsed = parseSourceManifest(value);
@@ -6000,7 +6124,12 @@ function findStudioChangedBundleIds(
   next: KnowledgeRuntimeStoreSnapshot
 ): string[] {
   const bundleIds = new Set<string>();
-  for (const collection of ["queues", "reviews", "manifests"] as const) {
+  for (const collection of [
+    "queues",
+    "reviews",
+    "forwardRevisionReviews",
+    "manifests",
+  ] as const satisfies readonly StudioHintBundleCollection[]) {
     for (const slot of current[collection]) bundleIds.add(slot.bundleId);
     for (const slot of next[collection]) bundleIds.add(slot.bundleId);
   }
@@ -6014,6 +6143,10 @@ function findStudioChangedBundleIds(
         !exactJsonValuesEqual(
           findBundleSlot(current, "reviews", bundleId),
           findBundleSlot(next, "reviews", bundleId)
+        ) ||
+        !exactJsonValuesEqual(
+          findBundleSlot(current, "forwardRevisionReviews", bundleId),
+          findBundleSlot(next, "forwardRevisionReviews", bundleId)
         ) ||
         !exactJsonValuesEqual(
           findBundleSlot(current, "manifests", bundleId),
@@ -6083,7 +6216,7 @@ function throwIfRuntimeExecutionProofAborted(signal: AbortSignal): void {
  */
 function findBundleSlot(
   state: KnowledgeRuntimeStoreSnapshot,
-  collection: RuntimeBundleCollection,
+  collection: StudioHintBundleCollection,
   bundleId: string
 ): object | null {
   return state[collection].find((slot) => slot.bundleId === bundleId)?.value ?? null;
@@ -6329,6 +6462,7 @@ interface AuthenticForwardRevisionPublicationRuntimeStoreState {
   readonly maxTextCharacters: number;
   readonly opaqueIdFactory: () => string;
   readonly studioListeners: Map<string, Set<() => void>>;
+  readonly productionExecutionBinding?: KnowledgeProductionWorkflowExecutionRuntimeBinding;
 }
 
 const authenticForwardRevisionPublicationRuntimeStores = new WeakMap<
@@ -6358,6 +6492,14 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       throw new TypeError("Knowledge Runtime text limit is invalid");
     }
     this.opaqueIdFactory = options.opaqueIdFactory ?? createSecureOpaqueId;
+    const productionExecutionClaim = options.productionExecutionClaim;
+    if (productionExecutionClaim !== undefined && new.target !== KnowledgeRuntimeStore) {
+      throw new TypeError("The production Runtime execution claim is invalid");
+    }
+    const productionExecutionBinding =
+      productionExecutionClaim === undefined
+        ? undefined
+        : consumeKnowledgeProductionWorkflowExecutionRuntimeClaim(productionExecutionClaim);
     if (new.target === KnowledgeRuntimeStore) {
       authenticForwardRevisionPublicationRuntimeStores.set(
         this,
@@ -6367,6 +6509,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
           maxTextCharacters: this.maxTextCharacters,
           opaqueIdFactory: this.opaqueIdFactory,
           studioListeners: this.studioListeners,
+          productionExecutionBinding,
         })
       );
     }
@@ -6907,6 +7050,42 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       : snapshotKnowledgeForwardRevisionReviewSnapshotV2(raw);
   }
 
+  /** Reads one exact pending proposal selected by a strict decision command. */
+  async readForwardRevisionPendingForDecision(
+    commandValue: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionDecisionAdmission> | null> {
+    const command = snapshotKnowledgeForwardRevisionReviewCommand(commandValue);
+    const state = await this.readState();
+    if (state.runtimeId !== command.runtimeId) return null;
+    const raw = findForwardRevisionReviewSlot(state, command.bundleId);
+    if (raw === null) return null;
+    const store = snapshotKnowledgeForwardRevisionReviewSnapshotV2(raw);
+    const matches = store.records.filter((entry) => {
+      const projection = projectKnowledgeForwardRevisionReviewEntryProposalV2(entry);
+      return (
+        projection.proposal.proposalId === command.proposalId &&
+        projection.proposalDigest === command.proposalDigest
+      );
+    });
+    if (matches.length !== 1) return null;
+    if (matches[0].state !== "pending") {
+      const result = projectForwardRevisionDecisionReplay(matches[0], command);
+      if (!result) throw createForwardRevisionDecisionPortError("conflict");
+      return Object.freeze({ kind: "terminal" as const, result });
+    }
+    const projection = projectKnowledgeForwardRevisionReviewEntryProposalV2(matches[0]);
+    snapshotKnowledgeForwardRevisionReviewCommandForProposal(
+      command,
+      projection.proposal,
+      projection.proposalDigest
+    );
+    return Object.freeze({
+      kind: "pending" as const,
+      proposal: projection.proposal,
+      proposalDigest: projection.proposalDigest,
+    });
+  }
+
   /**
    * Atomically publishes one dedicated pending forward-revision proposal.
    *
@@ -7080,6 +7259,200 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         if (confirmed) return attemptedReceipt;
       }
       throw error;
+    }
+  }
+
+  /** Atomically changes one exact pending forward Review entry into terminal state. */
+  async decideForwardRevisionAtomically(
+    authorizationValue: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionDecisionResult>> {
+    const authorization = requireForwardRevisionDecisionMutationAuthorization(authorizationValue);
+    const { command, validationProjection } = authorization;
+    const decidedAt = this.now();
+    return this.updateState((state) => {
+      try {
+        authorization.workflowLease.assertCurrent();
+        if (
+          !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+            authorization.workflowLease,
+            authorization.executionOwner
+          )
+        ) {
+          throw new TypeError();
+        }
+        if (validationProjection) {
+          KnowledgeForwardRevisionValidationCapability.assertExecutionOwner(
+            authorization.validationCapability,
+            authorization.executionOwner
+          );
+          const currentProjection = KnowledgeForwardRevisionValidationCapability.project(
+            authorization.validationCapability
+          );
+          if (!exactJsonValuesEqual(currentProjection, validationProjection)) {
+            throw new TypeError();
+          }
+        } else if (authorization.validationCapability !== undefined) {
+          throw new TypeError();
+        }
+      } catch {
+        throw createForwardRevisionDecisionPortError("aborted");
+      }
+      if (state.runtimeId !== command.runtimeId || state.activeTransaction !== null) {
+        throw createForwardRevisionDecisionPortError("authority_unavailable");
+      }
+      const raw = findForwardRevisionReviewSlot(state, command.bundleId);
+      if (raw === null) throw createForwardRevisionDecisionPortError("conflict");
+      const store = snapshotKnowledgeForwardRevisionReviewSnapshotV2(raw);
+      const matches = store.records.filter((entry) => {
+        const proposal = projectKnowledgeForwardRevisionReviewEntryProposalV2(entry);
+        return (
+          proposal.proposal.proposalId === command.proposalId &&
+          proposal.proposalDigest === command.proposalDigest
+        );
+      });
+      if (matches.length !== 1) throw createForwardRevisionDecisionPortError("conflict");
+      const existing = matches[0];
+      const publication = projectKnowledgeForwardRevisionReviewEntryProposalV2(existing);
+      const strictCommand = snapshotKnowledgeForwardRevisionReviewCommandForProposal(
+        command,
+        publication.proposal,
+        publication.proposalDigest
+      );
+      if (existing.state !== "pending") {
+        const replay = projectForwardRevisionDecisionReplay(existing, strictCommand);
+        if (!replay) throw createForwardRevisionDecisionPortError("conflict");
+        return { value: replay };
+      }
+
+      const retainedCharacters = store.records.reduce(
+        (total, entry) =>
+          total +
+          projectKnowledgeForwardRevisionReviewEntryProposalV2(entry).proposal.request
+            .selectedContent.length +
+          (entry.state === "accepted" ? entry.decision.afterContent.length : 0),
+        strictCommand.action === "reject" ? 0 : (validationProjection?.afterContent.length ?? 0)
+      );
+      if (
+        !Number.isSafeInteger(retainedCharacters) ||
+        retainedCharacters >
+          KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_V2_LIMITS.maxTotalRetainedBodyCharacters
+      ) {
+        throw createForwardRevisionDecisionPortError("resource_limit");
+      }
+
+      if (state.revision === Number.MAX_SAFE_INTEGER) {
+        throw createForwardRevisionDecisionPortError("resource_limit");
+      }
+      const nextRuntimeRevision = nextStoreRevision(state);
+      const nextDecisionStoreRevision = store.revision + 1;
+      if (!Number.isSafeInteger(nextDecisionStoreRevision)) {
+        throw createForwardRevisionDecisionPortError("resource_limit");
+      }
+      let decision: Readonly<KnowledgeForwardRevisionTerminalDecisionRecordV1>;
+      if (strictCommand.action === "reject") {
+        if (validationProjection !== undefined) {
+          throw createForwardRevisionDecisionPortError("request_invalid");
+        }
+        decision = createKnowledgeForwardRevisionRejectedDecisionRecord({
+          proposal: publication.proposal,
+          proposalDigest: publication.proposalDigest,
+          rejectedAt: Math.max(publication.proposal.recordedAt, decidedAt),
+        });
+      } else {
+        if (!validationProjection) {
+          throw createForwardRevisionDecisionPortError("request_invalid");
+        }
+        const query = createKnowledgeForwardRevisionValidationAuthorityQuery({
+          proposal: publication.proposal,
+          proposalDigest: publication.proposalDigest,
+        });
+        const authority = projectForwardRevisionValidationAuthority(state, query);
+        if (!authority) {
+          throw createForwardRevisionDecisionPortError("authority_unavailable");
+        }
+        assertForwardRevisionDecisionValidationProjection(
+          validationProjection,
+          publication.proposal,
+          publication.proposalDigest,
+          strictCommand,
+          authority
+        );
+        const acceptedAt = Math.max(
+          publication.proposal.recordedAt,
+          authority.acceptanceAuthority.currentSourceFreshness.completedAt,
+          validationProjection.receipt.validatedAt,
+          decidedAt
+        );
+        decision = createKnowledgeForwardRevisionAcceptedDecisionRecord({
+          proposal: publication.proposal,
+          proposalDigest: publication.proposalDigest,
+          command: strictCommand,
+          afterContent: validationProjection.afterContent,
+          acceptanceAuthority: authority.acceptanceAuthority,
+          validationReceipt: validationProjection.receipt,
+          validationReceiptDigest: validationProjection.receiptDigest,
+          acceptedAt,
+        });
+      }
+      const terminal = createKnowledgeForwardRevisionTerminalReviewEntryV2({
+        decision,
+        publishedRuntimeRevision: publication.publishedRuntimeRevision,
+        proposalStoreRevision: publication.proposalStoreRevision,
+        decidedRuntimeRevision: nextRuntimeRevision,
+        decisionStoreRevision: nextDecisionStoreRevision,
+      });
+      const records = store.records.map((entry) => (entry === existing ? terminal : entry));
+      const nextStore = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+        ...store,
+        revision: nextDecisionStoreRevision,
+        records,
+      });
+      const next: KnowledgeRuntimeStoreSnapshot = {
+        ...state,
+        revision: nextRuntimeRevision,
+        forwardRevisionReviews: replaceBundleSlot(
+          state.forwardRevisionReviews,
+          command.bundleId,
+          nextStore
+        ),
+      };
+      if (serializedRuntimeValueExceedsLimit(next, this.maxTextCharacters)) {
+        throw createForwardRevisionDecisionPortError("resource_limit");
+      }
+      return {
+        next,
+        value: createForwardRevisionDecisionResult(
+          "decided",
+          decision,
+          nextRuntimeRevision,
+          nextDecisionStoreRevision
+        ),
+      };
+    });
+  }
+
+  /** Re-reads and proves one exact terminal decision after an ambiguous atomic write result. */
+  async confirmForwardRevisionDecision(
+    commandValue: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionDecisionResult> | undefined> {
+    try {
+      const command = snapshotKnowledgeForwardRevisionReviewCommand(commandValue);
+      const state = await this.readState();
+      if (state.runtimeId !== command.runtimeId) return undefined;
+      const raw = findForwardRevisionReviewSlot(state, command.bundleId);
+      if (raw === null) return undefined;
+      const store = snapshotKnowledgeForwardRevisionReviewSnapshotV2(raw);
+      const matches = store.records.filter((entry) => {
+        const proposal = projectKnowledgeForwardRevisionReviewEntryProposalV2(entry);
+        return (
+          proposal.proposal.proposalId === command.proposalId &&
+          proposal.proposalDigest === command.proposalDigest
+        );
+      });
+      if (matches.length !== 1 || matches[0].state === "pending") return undefined;
+      return projectForwardRevisionDecisionReplay(matches[0], command) ?? undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -9607,9 +9980,166 @@ interface RuntimeForwardRevisionProposalPortState {
 
 /** Hidden canonical read retained by one validation-only facade. */
 interface RuntimeForwardRevisionValidationPortState {
+  readonly executionOwner: KnowledgeExecutionOwner;
   readonly readAuthority: (
     value: unknown
   ) => Promise<Readonly<KnowledgeForwardRevisionValidationAuthorityV1> | null>;
+}
+
+/** Exact request accepted only by the genuine decision facade. */
+export interface KnowledgeForwardRevisionDecisionRequest {
+  readonly command: unknown;
+  readonly validationCapability?: unknown;
+}
+
+/** Strict pending proposal projection used immediately before genuine validation. */
+export interface KnowledgeForwardRevisionPendingDecisionProjection {
+  readonly proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>;
+  readonly proposalDigest: string;
+}
+
+/** Closed strict admission used before validation or exact terminal replay. */
+export type KnowledgeForwardRevisionDecisionAdmission =
+  | Readonly<{
+      kind: "pending";
+      proposal: Readonly<KnowledgeForwardRevisionPendingProposalRecordV1>;
+      proposalDigest: string;
+    }>
+  | Readonly<{
+      kind: "terminal";
+      result: Readonly<KnowledgeForwardRevisionDecisionResult>;
+    }>;
+
+/** Stable terminal result of one atomic forward decision or exact replay. */
+export interface KnowledgeForwardRevisionDecisionResult {
+  readonly kind: "accepted" | "rejected";
+  readonly outcome: "decided" | "already_decided";
+  readonly decision: Readonly<KnowledgeForwardRevisionTerminalDecisionRecordV1>;
+  readonly decisionDigest: string;
+  readonly runtimeRevision: number;
+  readonly decisionStoreRevision: number;
+}
+
+/** Sanitized failure categories exposed by the narrow decision facade. */
+export type KnowledgeForwardRevisionDecisionPortErrorCode =
+  | "dependency_invalid"
+  | "request_invalid"
+  | "authority_unavailable"
+  | "conflict"
+  | "resource_limit"
+  | "aborted"
+  | "commit_uncertain";
+
+const forwardRevisionDecisionErrorCodes = new WeakMap<
+  object,
+  KnowledgeForwardRevisionDecisionPortErrorCode
+>();
+const FORWARD_REVISION_DECISION_ERROR_TOKEN = Symbol("KnowledgeForwardRevisionDecisionPortError");
+
+/** Value-free genuine error returned by the Runtime decision boundary. */
+export class KnowledgeForwardRevisionDecisionPortError extends Error {
+  /** Creates one module-authentic sanitized failure. */
+  constructor(token: symbol, code: KnowledgeForwardRevisionDecisionPortErrorCode) {
+    if (token !== FORWARD_REVISION_DECISION_ERROR_TOKEN) throw new TypeError();
+    super("Forward revision decision could not be completed");
+    this.name = code === "aborted" ? "AbortError" : "KnowledgeForwardRevisionDecisionPortError";
+    forwardRevisionDecisionErrorCodes.set(this, code);
+    Object.freeze(this);
+  }
+
+  /** Returns a stable category only for genuine module-minted failures. */
+  static inspect(value: unknown): KnowledgeForwardRevisionDecisionPortErrorCode | undefined {
+    return typeof value === "object" && value !== null
+      ? forwardRevisionDecisionErrorCodes.get(value)
+      : undefined;
+  }
+}
+
+/** Mints one sanitized failure without exposing error authenticity authority. */
+function createForwardRevisionDecisionPortError(
+  code: KnowledgeForwardRevisionDecisionPortErrorCode
+): KnowledgeForwardRevisionDecisionPortError {
+  return new KnowledgeForwardRevisionDecisionPortError(FORWARD_REVISION_DECISION_ERROR_TOKEN, code);
+}
+
+Object.freeze(KnowledgeForwardRevisionDecisionPortError.prototype);
+Object.freeze(KnowledgeForwardRevisionDecisionPortError);
+
+/** Hidden canonical operations and lifecycle authority retained by one decision facade. */
+interface RuntimeForwardRevisionDecisionPortState {
+  readonly executionOwner: KnowledgeExecutionOwner;
+  readonly workflowLease: KnowledgeProductionWorkflowExecutionLease;
+  readonly readPending: (
+    command: Readonly<KnowledgeForwardRevisionReviewCommandV1>
+  ) => Promise<Readonly<KnowledgeForwardRevisionDecisionAdmission> | null>;
+  readonly decide: (
+    authorization: ForwardRevisionDecisionMutationAuthorization
+  ) => Promise<Readonly<KnowledgeForwardRevisionDecisionResult>>;
+  readonly confirm: (
+    command: Readonly<KnowledgeForwardRevisionReviewCommandV1>
+  ) => Promise<Readonly<KnowledgeForwardRevisionDecisionResult> | undefined>;
+}
+
+/** Opaque process-local authorization injected only by a genuine decision facade. */
+class ForwardRevisionDecisionMutationAuthorization {
+  /** Construction is nominally private and authenticated again by hidden WeakMap state. */
+  private constructor() {
+    Object.freeze(this);
+  }
+
+  /** Creates one empty carrier whose authority lives only in module-private state. */
+  static create(): ForwardRevisionDecisionMutationAuthorization {
+    return new ForwardRevisionDecisionMutationAuthorization();
+  }
+}
+
+interface ForwardRevisionDecisionMutationAuthorizationState {
+  readonly executionOwner: KnowledgeExecutionOwner;
+  readonly workflowLease: KnowledgeProductionWorkflowExecutionLease;
+  readonly command: Readonly<KnowledgeForwardRevisionReviewCommandV1>;
+  readonly validationProjection?: Readonly<KnowledgeForwardRevisionValidationCapabilityProjectionV1>;
+  readonly validationCapability?: KnowledgeForwardRevisionValidationCapability;
+}
+
+const forwardRevisionDecisionMutationAuthorizationStates = new WeakMap<
+  object,
+  Readonly<ForwardRevisionDecisionMutationAuthorizationState>
+>();
+
+/** Requires a one-shot live authorization created by the exact facade invocation. */
+function requireForwardRevisionDecisionMutationAuthorization(
+  value: unknown
+): Readonly<ForwardRevisionDecisionMutationAuthorizationState> {
+  let prototype: object | null;
+  try {
+    prototype = typeof value === "object" && value !== null ? Object.getPrototypeOf(value) : null;
+  } catch {
+    throw createForwardRevisionDecisionPortError("dependency_invalid");
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    prototype !== ForwardRevisionDecisionMutationAuthorization.prototype
+  ) {
+    throw createForwardRevisionDecisionPortError("dependency_invalid");
+  }
+  const state = forwardRevisionDecisionMutationAuthorizationStates.get(value);
+  if (!state) throw createForwardRevisionDecisionPortError("dependency_invalid");
+  forwardRevisionDecisionMutationAuthorizationStates.delete(value);
+  try {
+    state.workflowLease.assertCurrent();
+    if (
+      !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+        state.workflowLease,
+        state.executionOwner
+      )
+    ) {
+      throw new TypeError();
+    }
+  } catch {
+    throw createForwardRevisionDecisionPortError("aborted");
+  }
+  return state;
 }
 
 const runtimeForwardRevisionPublicationPortStates = new WeakMap<
@@ -9620,12 +10150,19 @@ const runtimeForwardRevisionValidationPortStates = new WeakMap<
   object,
   Readonly<RuntimeForwardRevisionValidationPortState>
 >();
+const runtimeForwardRevisionDecisionPortStates = new WeakMap<
+  object,
+  Readonly<RuntimeForwardRevisionDecisionPortState>
+>();
 
 const FORWARD_REVISION_PINNED_RUNTIME_METHOD_NAMES = [
   "readForwardRevisionProposalAuthority",
   "readForwardRevisionValidationAuthority",
   "readForwardRevisionReview",
   "publishForwardRevisionProposalAtomically",
+  "readForwardRevisionPendingForDecision",
+  "decideForwardRevisionAtomically",
+  "confirmForwardRevisionDecision",
   "updateState",
   "now",
   "confirmForwardRevisionPublication",
@@ -9673,6 +10210,16 @@ const runtimeForwardRevisionValidationAuthorityReadMethod =
   runtimeForwardRevisionPublicationMethods.get(
     "readForwardRevisionValidationAuthority"
   ) as KnowledgeRuntimeStore["readForwardRevisionValidationAuthority"];
+const runtimeForwardRevisionPendingDecisionReadMethod =
+  runtimeForwardRevisionPublicationMethods.get(
+    "readForwardRevisionPendingForDecision"
+  ) as KnowledgeRuntimeStore["readForwardRevisionPendingForDecision"];
+const runtimeForwardRevisionDecisionMethod = runtimeForwardRevisionPublicationMethods.get(
+  "decideForwardRevisionAtomically"
+) as KnowledgeRuntimeStore["decideForwardRevisionAtomically"];
+const runtimeForwardRevisionDecisionConfirmMethod = runtimeForwardRevisionPublicationMethods.get(
+  "confirmForwardRevisionDecision"
+) as KnowledgeRuntimeStore["confirmForwardRevisionDecision"];
 
 /** Reads one own data field without invoking a possibly forged accessor. */
 function readRuntimeOwnDataField(value: object, name: string): unknown {
@@ -9683,7 +10230,7 @@ function readRuntimeOwnDataField(value: object, name: string): unknown {
 /** Proves one exact base Runtime still matches the state minted by its constructor. */
 function requireAuthenticForwardRevisionPublicationRuntimeStore(
   runtime: KnowledgeRuntimeStore
-): void {
+): Readonly<AuthenticForwardRevisionPublicationRuntimeStoreState> {
   try {
     if (Object.getPrototypeOf(runtime) !== KnowledgeRuntimeStore.prototype) {
       throw new TypeError();
@@ -9707,6 +10254,7 @@ function requireAuthenticForwardRevisionPublicationRuntimeStore(
     ) {
       throw new TypeError();
     }
+    return state;
   } catch {
     throw new TypeError("The Runtime forward-revision publication dependency is invalid");
   }
@@ -9825,12 +10373,20 @@ function requireRuntimeForwardRevisionValidationPortState(
 
 /** Genuine narrow facade exposing only the complete Runtime validation-authority read. */
 export class KnowledgeRuntimeForwardRevisionValidationPort {
-  /** Captures one canonical read without exposing or duck-typing its Runtime receiver. */
-  constructor(runtime: KnowledgeRuntimeStore) {
+  /** Captures one canonical read from an exact Runtime/Queue workflow lifecycle. */
+  constructor(runtime: KnowledgeRuntimeStore, proofPort: KnowledgeRuntimeIngestExecutionProofPort) {
+    const proofState = requireRuntimeIngestExecutionProofPortState(proofPort);
+    if (
+      Object.getPrototypeOf(proofPort) !== KnowledgeRuntimeIngestExecutionProofPort.prototype ||
+      proofState.runtime !== runtime
+    ) {
+      throw new TypeError("The Runtime forward-revision validation dependency is invalid");
+    }
     sealForwardRevisionPublicationRuntimeStore(runtime);
     runtimeForwardRevisionValidationPortStates.set(
       this,
       Object.freeze({
+        executionOwner: proofState.executionOwner,
         readAuthority: (value: unknown) =>
           Reflect.apply(runtimeForwardRevisionValidationAuthorityReadMethod, runtime, [value]),
       })
@@ -9843,6 +10399,17 @@ export class KnowledgeRuntimeForwardRevisionValidationPort {
     requireRuntimeForwardRevisionValidationPortState(value);
   }
 
+  /** Reports whether this exact Runtime facade belongs to one opaque execution lifecycle. */
+  static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
+    try {
+      const state = requireRuntimeForwardRevisionValidationPortState(value);
+      KnowledgeExecutionOwner.assert(executionOwner);
+      return state.executionOwner === executionOwner;
+    } catch {
+      return false;
+    }
+  }
+
   /** Reads complete validation proof from one exact current Runtime envelope. */
   readForwardRevisionValidationAuthority(
     value: unknown
@@ -9853,6 +10420,228 @@ export class KnowledgeRuntimeForwardRevisionValidationPort {
 
 Object.freeze(KnowledgeRuntimeForwardRevisionValidationPort.prototype);
 Object.freeze(KnowledgeRuntimeForwardRevisionValidationPort);
+
+/** Returns hidden authority only for one exact-prototype genuine decision facade. */
+function requireRuntimeForwardRevisionDecisionPortState(
+  value: unknown
+): Readonly<RuntimeForwardRevisionDecisionPortState> {
+  let prototype: object | null;
+  try {
+    prototype = typeof value === "object" && value !== null ? Object.getPrototypeOf(value) : null;
+  } catch {
+    throw createForwardRevisionDecisionPortError("dependency_invalid");
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    prototype !== KnowledgeRuntimeForwardRevisionDecisionPort.prototype
+  ) {
+    throw createForwardRevisionDecisionPortError("dependency_invalid");
+  }
+  const state = runtimeForwardRevisionDecisionPortStates.get(value);
+  if (!state) throw createForwardRevisionDecisionPortError("dependency_invalid");
+  return state;
+}
+
+/** Genuine lifecycle-bound facade for pending reads and atomic terminal decisions. */
+export class KnowledgeRuntimeForwardRevisionDecisionPort {
+  /** Captures canonical Runtime operations for one exact production workflow generation. */
+  constructor(
+    runtime: KnowledgeRuntimeStore,
+    proofPort: KnowledgeRuntimeIngestExecutionProofPort,
+    workflowLease: KnowledgeProductionWorkflowExecutionLease
+  ) {
+    try {
+      const proofState = requireRuntimeIngestExecutionProofPortState(proofPort);
+      const runtimeState = requireAuthenticForwardRevisionPublicationRuntimeStore(runtime);
+      KnowledgeProductionWorkflowExecutionLease.assert(workflowLease);
+      if (
+        Object.getPrototypeOf(proofPort) !== KnowledgeRuntimeIngestExecutionProofPort.prototype ||
+        proofState.runtime !== runtime ||
+        !runtimeState.productionExecutionBinding?.ownsWorkflowExecutionLease(workflowLease) ||
+        !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+          workflowLease,
+          proofState.executionOwner
+        )
+      ) {
+        throw new TypeError();
+      }
+      sealForwardRevisionPublicationRuntimeStore(runtime);
+      runtimeForwardRevisionDecisionPortStates.set(
+        this,
+        Object.freeze({
+          executionOwner: proofState.executionOwner,
+          workflowLease,
+          readPending: (command: Readonly<KnowledgeForwardRevisionReviewCommandV1>) =>
+            Reflect.apply(runtimeForwardRevisionPendingDecisionReadMethod, runtime, [command]),
+          decide: (authorization: ForwardRevisionDecisionMutationAuthorization) =>
+            Reflect.apply(runtimeForwardRevisionDecisionMethod, runtime, [authorization]),
+          confirm: (command: Readonly<KnowledgeForwardRevisionReviewCommandV1>) =>
+            Reflect.apply(runtimeForwardRevisionDecisionConfirmMethod, runtime, [command]),
+        })
+      );
+      Object.freeze(this);
+    } catch {
+      throw createForwardRevisionDecisionPortError("dependency_invalid");
+    }
+  }
+
+  /** Requires one live exact-prototype process-local decision facade. */
+  static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionDecisionPort {
+    const state = requireRuntimeForwardRevisionDecisionPortState(value);
+    try {
+      state.workflowLease.assertCurrent();
+    } catch {
+      throw createForwardRevisionDecisionPortError("aborted");
+    }
+  }
+
+  /** Reports whether this facade belongs to one exact current execution lifecycle. */
+  static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
+    try {
+      const state = requireRuntimeForwardRevisionDecisionPortState(value);
+      KnowledgeExecutionOwner.assert(executionOwner);
+      return (
+        state.executionOwner === executionOwner &&
+        KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+          state.workflowLease,
+          executionOwner
+        )
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Reads one strict current pending proposal for immediate validation. */
+  async readPending(
+    commandValue: unknown,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeForwardRevisionDecisionAdmission> | null> {
+    const state = requireRuntimeForwardRevisionDecisionPortState(this);
+    assertForwardRevisionDecisionCurrent(state, signal);
+    let command: Readonly<KnowledgeForwardRevisionReviewCommandV1>;
+    try {
+      command = snapshotKnowledgeForwardRevisionReviewCommand(commandValue);
+    } catch {
+      throw createForwardRevisionDecisionPortError("request_invalid");
+    }
+    const pending = await state.readPending(command);
+    assertForwardRevisionDecisionCurrent(state, signal);
+    return pending;
+  }
+
+  /** Atomically accepts or rejects one exact pending proposal, with exact replay recovery. */
+  async decide(
+    requestValue: unknown,
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeForwardRevisionDecisionResult>> {
+    const state = requireRuntimeForwardRevisionDecisionPortState(this);
+    assertForwardRevisionDecisionCurrent(state, signal);
+    let command: Readonly<KnowledgeForwardRevisionReviewCommandV1>;
+    let capability: unknown;
+    try {
+      const request = snapshotForwardRevisionDecisionRequest(requestValue);
+      command = snapshotKnowledgeForwardRevisionReviewCommand(request.command);
+      capability = request.validationCapability;
+    } catch {
+      throw createForwardRevisionDecisionPortError("request_invalid");
+    }
+    const admission = await state.readPending(command);
+    assertForwardRevisionDecisionCurrent(state, signal);
+    if (!admission) throw createForwardRevisionDecisionPortError("conflict");
+    if (admission.kind === "terminal") return admission.result;
+    let projection: Readonly<KnowledgeForwardRevisionValidationCapabilityProjectionV1> | undefined;
+    let validatedCapability: KnowledgeForwardRevisionValidationCapability | undefined;
+    if (command.action === "reject") {
+      if (capability !== undefined) {
+        throw createForwardRevisionDecisionPortError("request_invalid");
+      }
+    } else {
+      try {
+        KnowledgeForwardRevisionValidationCapability.assertExecutionOwner(
+          capability,
+          state.executionOwner
+        );
+        projection = KnowledgeForwardRevisionValidationCapability.project(capability);
+        validatedCapability = capability as KnowledgeForwardRevisionValidationCapability;
+        if (!exactJsonValuesEqual(projection.command, command)) throw new TypeError();
+      } catch {
+        throw createForwardRevisionDecisionPortError("dependency_invalid");
+      }
+    }
+    assertForwardRevisionDecisionCurrent(state, signal);
+    try {
+      const authorization = ForwardRevisionDecisionMutationAuthorization.create();
+      forwardRevisionDecisionMutationAuthorizationStates.set(
+        authorization,
+        Object.freeze({
+          executionOwner: state.executionOwner,
+          workflowLease: state.workflowLease,
+          command,
+          ...(projection ? { validationProjection: projection } : {}),
+          ...(validatedCapability ? { validationCapability: validatedCapability } : {}),
+        })
+      );
+      return await state.decide(authorization);
+    } catch (error) {
+      const confirmed = await state.confirm(command);
+      if (confirmed) return confirmed;
+      if (KnowledgeForwardRevisionDecisionPortError.inspect(error)) throw error;
+      throw createForwardRevisionDecisionPortError("commit_uncertain");
+    }
+  }
+}
+
+/** Captures the exact two-key decision request without invoking accessors. */
+function snapshotForwardRevisionDecisionRequest(
+  value: unknown
+): Readonly<KnowledgeForwardRevisionDecisionRequest> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError();
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
+  const keys = Reflect.ownKeys(value);
+  const allowed = new Set(["command", "validationCapability"]);
+  if (
+    keys.length < 1 ||
+    keys.length > 2 ||
+    keys.some((key) => typeof key !== "string" || !allowed.has(key))
+  ) {
+    throw new TypeError();
+  }
+  const command = Object.getOwnPropertyDescriptor(value, "command");
+  const capability = Object.getOwnPropertyDescriptor(value, "validationCapability");
+  if (!command?.enumerable || !("value" in command)) throw new TypeError();
+  if (capability && (!capability.enumerable || !("value" in capability))) throw new TypeError();
+  return Object.freeze({
+    command: command.value,
+    ...(capability ? { validationCapability: capability.value } : {}),
+  });
+}
+
+/** Re-proves signal, authentic lease, and exact owner before and after each await. */
+function assertForwardRevisionDecisionCurrent(
+  state: Readonly<RuntimeForwardRevisionDecisionPortState>,
+  signal: AbortSignal
+): void {
+  try {
+    if (signal.aborted) throw new TypeError();
+    state.workflowLease.assertCurrent();
+    if (
+      !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+        state.workflowLease,
+        state.executionOwner
+      )
+    ) {
+      throw new TypeError();
+    }
+  } catch {
+    throw createForwardRevisionDecisionPortError("aborted");
+  }
+}
+
+Object.freeze(KnowledgeRuntimeForwardRevisionDecisionPort.prototype);
+Object.freeze(KnowledgeRuntimeForwardRevisionDecisionPort);
 
 /** SourceManifestStorage facade backed by one shared atomic runtime envelope. */
 export class KnowledgeRuntimeManifestStorage implements SourceManifestStorage {
@@ -10005,6 +10794,7 @@ export class KnowledgeRuntimeInputObservationBinder implements SourceInputObserv
 
 /** Hidden captured capability retained by one Runtime execution-proof facade. */
 interface KnowledgeRuntimeIngestExecutionProofPortState {
+  runtime: KnowledgeRuntimeStore;
   queueStorage: KnowledgeRuntimeQueueStorage;
   executionOwner: KnowledgeExecutionOwner;
   prove: (
@@ -10071,6 +10861,7 @@ export class KnowledgeRuntimeIngestExecutionProofPort implements KnowledgeIngest
     runtimeIngestExecutionProofPortStates.set(
       this,
       Object.freeze({
+        runtime,
         queueStorage,
         executionOwner: queueState.executionOwner,
         prove: (request: Readonly<KnowledgeIngestExecutionProofRequest>, signal: AbortSignal) =>

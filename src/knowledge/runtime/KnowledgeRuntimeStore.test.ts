@@ -3,7 +3,10 @@ import {
   createTransactionCommitReceipt,
   type TransactionCommitReceipt,
 } from "@/knowledge/changeset/ChangeSetTransaction";
-import type { ObsidianKnowledgeCompilerTargetVisitPort } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
+import {
+  ObsidianKnowledgeCompilerTargetResolver,
+  type ObsidianKnowledgeCompilerTargetVisitPort,
+} from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
 import {
   ALL_KNOWLEDGE_FILE_MUTATIONS,
   type ChangeSetValidator,
@@ -20,6 +23,8 @@ import {
   createKnowledgeForwardRevisionIntentDigest,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
 import { KnowledgeProductionForwardRevisionProposalCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionProposalCoordinator";
+import { KnowledgeProductionForwardRevisionDecisionCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionDecisionCoordinator";
+import { KnowledgeProductionForwardRevisionValidationCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
 import { KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   createKnowledgeForwardRevisionPendingProposalRecord,
@@ -35,11 +40,17 @@ import {
   createKnowledgeForwardRevisionValidationAuthorityQuery,
   snapshotKnowledgeForwardRevisionValidationAuthority,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationAuthority";
+import { createKnowledgeForwardRevisionReviewCommand } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
 import {
   IngestQueue,
   type IngestExecutor,
   type IngestSourceFreshnessAdmissionPort,
 } from "@/knowledge/ingest/queue/IngestQueue";
+import {
+  KnowledgeSourceWorkflowPlanLoader,
+  type KnowledgeExactArtifactReaderPort,
+} from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
+import { buildKnowledgeSourceWatchPlan } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import { SourceObservationHandoff } from "@/knowledge/ingest/SourceObservationHandoff";
 import {
   KnowledgeIngestExecutionAuthorityBinder,
@@ -48,6 +59,7 @@ import {
   type KnowledgeIngestExecutionProof,
   type KnowledgeIngestExecutionProofRequest,
 } from "@/knowledge/ingest/KnowledgeIngestExecutionAuthority";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
   INGEST_QUEUE_VERSION,
   IngestQueueRevisionConflictError,
@@ -75,7 +87,11 @@ import {
   parseKnowledgeSourceRetirements,
   projectKnowledgeSourceRetirement,
 } from "@/knowledge/manifest/SourceRetirement";
-import { createFileContentHash, createQuoteHash } from "@/knowledge/model/fingerprint";
+import {
+  createFileContentHash,
+  createQuoteHash,
+  createSourceContentHash,
+} from "@/knowledge/model/fingerprint";
 import type {
   JsonValue,
   KnowledgeBundleConfig,
@@ -107,6 +123,8 @@ import {
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
   KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+  KnowledgeRuntimeForwardRevisionDecisionPort,
+  KnowledgeForwardRevisionDecisionPortError,
   KnowledgeRuntimeForwardRevisionValidationPort,
   KnowledgeForwardRevisionPublicationConflictError,
   KnowledgeRuntimeInputObservationBinder,
@@ -142,8 +160,20 @@ import {
   type KnowledgeRuntimeStudioBundleSnapshot,
   type KnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import {
+  KnowledgePluginProductionPreflightLifecycle,
+  KnowledgePluginProductionWorkflowLease,
+} from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
+import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import {
+  createKnowledgeProductionWorkflowExecutionPairing,
+  type KnowledgeProductionWorkflowExecutionPreflightClaim,
+  type KnowledgeProductionWorkflowExecutionRuntimeClaim,
+} from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
+import type { App, DataAdapter, Vault } from "obsidian";
+import { TFile } from "obsidian";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -165,6 +195,8 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private repeatNextTransform = false;
   private skipNextTransform = false;
   private throwAfterCommitCountdown = 0;
+  private beforeNextTransform?: () => void;
+  private afterNextCommit?: () => void;
 
   /** Creates the initial content only when the memory file is absent. */
   async initialize(initialContent: string): Promise<void> {
@@ -203,12 +235,18 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
         this.skipNextTransform = false;
         return this.content;
       }
+      const beforeTransform = this.beforeNextTransform;
+      this.beforeNextTransform = undefined;
+      beforeTransform?.();
       const next = transform(this.content);
       if (this.repeatNextTransform) {
         this.repeatNextTransform = false;
         transform(this.content);
       }
       this.content = next;
+      const afterCommit = this.afterNextCommit;
+      this.afterNextCommit = undefined;
+      afterCommit?.();
       if (this.throwAfterCommitCountdown > 0) {
         this.throwAfterCommitCountdown -= 1;
       }
@@ -244,6 +282,16 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   /** Makes the next process boundary resolve without invoking its transform. */
   skipTransformOnNextWrite(): void {
     this.skipNextTransform = true;
+  }
+
+  /** Runs one synchronous test hook immediately before the next atomic transform. */
+  runBeforeNextTransform(callback: () => void): void {
+    this.beforeNextTransform = callback;
+  }
+
+  /** Runs one synchronous test hook after the next commit and before its acknowledgement. */
+  runAfterNextCommit(callback: () => void): void {
+    this.afterNextCommit = callback;
   }
 
   /** Commits the next transformed bytes and then rejects the caller. */
@@ -497,7 +545,11 @@ function createBundle(): KnowledgeBundleConfig {
 }
 
 /** Creates one valid source citation for applied-provenance tests. */
-function createSourceCitation(sourceId = "source-1"): KnowledgeChangeSet["citations"][number] {
+function createSourceCitation(
+  sourceId = "source-1",
+  artifactContentHash = HASH_A,
+  artifactId = `artifact-${sourceId}`
+): KnowledgeChangeSet["citations"][number] {
   const excerpt = `Grounded evidence for ${sourceId}`;
   return {
     citationId: `citation-${sourceId}`,
@@ -506,8 +558,8 @@ function createSourceCitation(sourceId = "source-1"): KnowledgeChangeSet["citati
     locator: {
       kind: "markdown_lines",
       sourceId,
-      artifactId: `artifact-${sourceId}`,
-      artifactContentHash: HASH_A,
+      artifactId,
+      artifactContentHash,
       excerpt,
       quoteHash: createQuoteHash(excerpt),
       startLine: 1,
@@ -516,12 +568,34 @@ function createSourceCitation(sourceId = "source-1"): KnowledgeChangeSet["citati
   };
 }
 
+/** Creates one text-parser-backed quote citation for genuine production validation. */
+function createSourceQuoteCitation(
+  sourceId: string,
+  artifactContentHash: string,
+  artifactId: string
+): KnowledgeChangeSet["citations"][number] {
+  const excerpt = `Grounded evidence for ${sourceId}`;
+  return {
+    citationId: `citation-${sourceId}`,
+    claimId: `claim-${sourceId}`,
+    relation: "supports",
+    locator: {
+      kind: "quote",
+      sourceId,
+      artifactId,
+      artifactContentHash,
+      excerpt,
+      quoteHash: createQuoteHash(excerpt),
+    },
+  };
+}
+
 /** Creates one accepted create-only ChangeSet for transaction storage tests. */
 function createAcceptedChangeSet(
   transactionId = "transaction-1",
-  citations: KnowledgeChangeSet["citations"] = []
+  citations: KnowledgeChangeSet["citations"] = [],
+  afterContent = `# ${transactionId}\n`
 ): KnowledgeChangeSet {
-  const content = `# ${transactionId}\n`;
   return {
     id: `changeset-${transactionId}`,
     bundleId: "personal",
@@ -535,8 +609,8 @@ function createAcceptedChangeSet(
         sourceRefs: ["source-1"],
         reason: "Create one grounded page",
         expectedAbsent: true,
-        afterContent: content,
-        afterHash: createFileContentHash(content),
+        afterContent,
+        afterHash: createFileContentHash(afterContent),
       },
     ],
     citations,
@@ -549,9 +623,10 @@ function createAcceptedChangeSet(
 /** Creates a valid prepared journal at revision zero. */
 function createPreparedJournal(
   transactionId = "transaction-1",
-  citations: KnowledgeChangeSet["citations"] = []
+  citations: KnowledgeChangeSet["citations"] = [],
+  afterContent?: string
 ): ChangeSetTransactionJournal {
-  const changeSet = createAcceptedChangeSet(transactionId, citations);
+  const changeSet = createAcceptedChangeSet(transactionId, citations, afterContent);
   const change = changeSet.changes[0];
   if (change.operation !== "create") {
     throw new Error("Expected a create fixture");
@@ -674,7 +749,9 @@ function createRuntimeNoChangesPlan(
 function createManifestCommitPlanFixture(
   manifest: SourceManifest,
   changeSet: KnowledgeChangeSet,
-  inputRevision: number
+  inputRevision: number,
+  sourceContentHash = HASH_A,
+  pipelineFingerprint = HASH_B
 ): ManifestCommitPlan {
   const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
   if (!source) {
@@ -691,8 +768,8 @@ function createManifestCommitPlanFixture(
     kind: "source_compile",
     bundleId: manifest.bundleId,
     sourceId: source.sourceId,
-    sourceContentHash: HASH_A,
-    pipelineFingerprint: HASH_B,
+    sourceContentHash,
+    pipelineFingerprint,
     inputRevision,
     changeSetId: changeSet.id,
     expectedManifestRevision: manifest.revision,
@@ -719,12 +796,19 @@ function createCommittedApplyProof(
   manifest: SourceManifest,
   transactionId = "transaction-apply",
   inputRevision = 1,
-  citations: KnowledgeChangeSet["citations"] = []
+  citations: KnowledgeChangeSet["citations"] = [],
+  fixture?: Readonly<{
+    afterContent?: string;
+    sourceContentHash?: string;
+    pipelineFingerprint?: string;
+  }>
 ): {
   journal: ChangeSetTransactionJournal & { phase: "committed" };
   receipt: TransactionCommitReceipt;
 } {
-  const prepared = createPreparedJournal(transactionId, citations);
+  const sourceContentHash = fixture?.sourceContentHash ?? HASH_A;
+  const pipelineFingerprint = fixture?.pipelineFingerprint ?? HASH_B;
+  const prepared = createPreparedJournal(transactionId, citations, fixture?.afterContent);
   const change = prepared.changeSet.changes[0];
   if (change.operation !== "create") {
     throw new Error("Expected a create fixture");
@@ -742,15 +826,17 @@ function createCommittedApplyProof(
   const manifestCommitPlan = createManifestCommitPlanFixture(
     manifest,
     prepared.changeSet,
-    inputRevision
+    inputRevision,
+    sourceContentHash,
+    pipelineFingerprint
   );
   const manifestCommitIntent: ManifestCommitIntent = {
     version: 1,
     kind: "source_compile",
     bundleId: "personal",
     sourceId: "source-1",
-    sourceContentHash: HASH_A,
-    pipelineFingerprint: HASH_B,
+    sourceContentHash,
+    pipelineFingerprint,
     inputRevision,
     manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
     changeSetId: prepared.changeSetId,
@@ -772,7 +858,12 @@ function createCommittedApplyProof(
     revision: 4,
     manifestCommitIntent,
     manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
-    jobClaim: { ...prepared.jobClaim, inputRevision },
+    jobClaim: {
+      ...prepared.jobClaim,
+      sourceContentHash,
+      pipelineFingerprint,
+      inputRevision,
+    },
     appliedCount: prepared.targets.length,
     phase: "committed",
     committedAt: 240,
@@ -786,7 +877,9 @@ function createForwardCurrentUpdateProof(
   manifest: SourceManifest,
   pagePath: string,
   beforeContent: string,
-  afterContent = "# Current forward target\n"
+  afterContent = "# Current forward target\n",
+  sourceContentHash = HASH_A,
+  pipelineFingerprint = HASH_B
 ): {
   journal: ChangeSetTransactionJournal & { phase: "committed" };
   receipt: TransactionCommitReceipt;
@@ -819,7 +912,13 @@ function createForwardCurrentUpdateProof(
     status: "accepted",
     createdAt: 330,
   };
-  const plan = createManifestCommitPlanFixture(manifest, changeSet, 2);
+  const plan = createManifestCommitPlanFixture(
+    manifest,
+    changeSet,
+    2,
+    sourceContentHash,
+    pipelineFingerprint
+  );
   const generatedPages = (source.lastSuccessful?.generatedPages ?? [])
     .map((page) => ({
       path: page.path,
@@ -835,8 +934,8 @@ function createForwardCurrentUpdateProof(
     kind: "source_compile",
     bundleId: manifest.bundleId,
     sourceId: source.sourceId,
-    sourceContentHash: HASH_A,
-    pipelineFingerprint: HASH_B,
+    sourceContentHash,
+    pipelineFingerprint,
     inputRevision: 2,
     manifestCommitPlanDigest: createManifestCommitPlanDigest(plan),
     changeSetId: changeSet.id,
@@ -859,8 +958,8 @@ function createForwardCurrentUpdateProof(
       attempt: 1,
       startedAt: 330,
       sourceId: source.sourceId,
-      sourceContentHash: HASH_A,
-      pipelineFingerprint: HASH_B,
+      sourceContentHash,
+      pipelineFingerprint,
       inputRevision: 2,
     },
     changeSet,
@@ -1204,7 +1303,13 @@ function createApplyAuthoritySlots(
   journal: ChangeSetTransactionJournal
 ): Pick<KnowledgeRuntimeStoreSnapshot, "queues" | "reviews" | "inputRevisions"> {
   const proposal: KnowledgeChangeSet = { ...journal.changeSet, status: "proposed" };
-  const plan = createManifestCommitPlanFixture(manifest, proposal, journal.jobClaim.inputRevision);
+  const plan = createManifestCommitPlanFixture(
+    manifest,
+    proposal,
+    journal.jobClaim.inputRevision,
+    journal.jobClaim.sourceContentHash,
+    journal.jobClaim.pipelineFingerprint
+  );
   const planDigest = createManifestCommitPlanDigest(plan);
   if (planDigest !== journal.manifestCommitIntent.manifestCommitPlanDigest) {
     throw new Error("Expected journal fixture to retain its exact Review plan digest");
@@ -1449,10 +1554,10 @@ async function createApplyHarness(
 
 /** Reconstructs exact forward-publication evidence from a two-Apply Runtime history. */
 function createForwardPublicationEvidence(
-  state: KnowledgeRuntimeStoreSnapshot
+  state: KnowledgeRuntimeStoreSnapshot,
+  selectedContent = "# transaction-forward-historical\n"
 ): KnowledgeForwardRevisionProposalPublicationEvidence {
   const pagePath = "Wiki/transaction-forward-historical.md";
-  const selectedContent = "# transaction-forward-historical\n";
   const selectedContentHash = createFileContentHash(selectedContent);
   const historical = state.applyCommits.find(
     (record) => record.transactionId === "transaction-forward-historical"
@@ -1620,14 +1725,36 @@ async function createForwardPublicationHarness(
   createPublicationPort: (
     runtime: KnowledgeRuntimeStore
   ) => KnowledgeRuntimeForwardRevisionProposalPublicationPort = (runtime) =>
-    new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime)
+    new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime),
+  fixture?: Readonly<{
+    historicalContent?: string;
+    currentContent?: string;
+    sourceContentHash?: string;
+    pipelineFingerprint?: string;
+    citationArtifactContentHash?: string;
+    citationArtifactId?: string;
+    historicalCitation?: KnowledgeChangeSet["citations"][number];
+    productionExecutionClaim?: KnowledgeProductionWorkflowExecutionRuntimeClaim;
+  }>
 ) {
+  const historicalContent = fixture?.historicalContent ?? "# transaction-forward-historical\n";
+  const currentContent = fixture?.currentContent ?? "# Current forward target\n";
+  const sourceContentHash = fixture?.sourceContentHash ?? HASH_A;
+  const pipelineFingerprint = fixture?.pipelineFingerprint ?? HASH_B;
   const historicalManifest = createRegisteredManifest();
   const historicalProof = createCommittedApplyProof(
     historicalManifest,
     "transaction-forward-historical",
     1,
-    [createSourceCitation()]
+    [
+      fixture?.historicalCitation ??
+        createSourceCitation(
+          "source-1",
+          fixture?.citationArtifactContentHash ?? HASH_A,
+          fixture?.citationArtifactId ?? "artifact-source-1"
+        ),
+    ],
+    { afterContent: historicalContent, sourceContentHash, pipelineFingerprint }
   );
   const first = await createApplyHarness(historicalManifest, historicalProof);
   await first.port.recordCommitted(first.journal, first.receipt);
@@ -1636,7 +1763,10 @@ async function createForwardPublicationHarness(
   const currentProof = createForwardCurrentUpdateProof(
     firstCommittedManifest,
     "Wiki/transaction-forward-historical.md",
-    "# transaction-forward-historical\n"
+    historicalContent,
+    currentContent,
+    sourceContentHash,
+    pipelineFingerprint
   );
   const current = await createApplyHarness(firstCommittedManifest, currentProof);
   const currentState = JSON.parse(await current.file.read()) as KnowledgeRuntimeStoreSnapshot;
@@ -1665,14 +1795,260 @@ async function createForwardPublicationHarness(
     },
   ];
   current.file.replaceContent(JSON.stringify(clean));
-  const runtime = new KnowledgeRuntimeStore(current.file, { clock });
+  const runtime = new KnowledgeRuntimeStore(current.file, {
+    clock,
+    productionExecutionClaim: fixture?.productionExecutionClaim,
+  });
   return {
     file: current.file,
     runtime,
     port: createPublicationPort(runtime),
-    evidence: createForwardPublicationEvidence(clean),
+    evidence: createForwardPublicationEvidence(clean, historicalContent),
     currentJournal: current.journal,
   };
+}
+
+/** Creates one authentic preflight lease and consumes its exact composition owner. */
+async function createForwardDecisionExecutionLease(
+  executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim
+) {
+  const modelName = "deepseek-v4-pro";
+  const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
+    executionPreflightClaim,
+    getProjectRecords: () => [
+      {
+        project: {
+          id: "project-personal",
+          knowledgeBundle: {
+            version: 1,
+            id: "personal",
+            sourceRoots: ["Sources"],
+            wikiRoot: "Wiki",
+            schemaRef: "Knowledge/schema.md",
+            reviewMode: "always",
+          },
+          projectModelKey: `${modelName}|deepseek`,
+          modelConfigs: {},
+        },
+      },
+    ],
+    getSettings: () => ({
+      temperature: 0,
+      maxTokens: 8_192,
+      reasoningEffort: "high",
+      verbosity: "medium",
+      activeModels: [
+        {
+          name: modelName,
+          provider: "deepseek",
+          enabled: true,
+          projectEnabled: true,
+          temperature: 0,
+          reasoningEffort: "high",
+          apiKey: "test-only-model-key",
+        },
+      ],
+      deepseekApiKey: "test-only-provider-key",
+    }),
+    fetchPort: async () => {
+      throw new Error("Decision tests must not invoke the model route");
+    },
+    createResources: () => createKnowledgeProductionPipelineResources(),
+  });
+  const result = await lifecycle.load(new AbortController().signal);
+  if (result.kind !== "configured") throw new Error("Expected configured preflight");
+  const { workflowLease, workflowCompositionClaim } = result.admission;
+  const executionOwner = KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+    workflowLease,
+    workflowCompositionClaim
+  );
+  const executionLease = KnowledgePluginProductionWorkflowLease.getExecutionLease(
+    workflowLease,
+    executionOwner
+  );
+  return { lifecycle, workflowLease, executionOwner, executionLease };
+}
+
+/** Creates one genuine decision facade whose hidden pairing matches its Runtime. */
+async function createPairedForwardDecisionPort(
+  runtime: KnowledgeRuntimeStore,
+  executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim
+) {
+  const lifecycle = await createForwardDecisionExecutionLease(executionPreflightClaim);
+  const queue = new KnowledgeRuntimeQueueStorage(runtime, lifecycle.executionOwner);
+  const proof = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queue);
+  return {
+    ...lifecycle,
+    port: new KnowledgeRuntimeForwardRevisionDecisionPort(runtime, proof, lifecycle.executionLease),
+  };
+}
+
+const FORWARD_DECISION_SOURCE_TEXT = "Grounded evidence for source-1";
+const FORWARD_DECISION_SCHEMA_TEXT = "type: schema\n";
+const FORWARD_DECISION_HISTORICAL_CONTENT = `---
+type: topic
+title: Historical revision
+tags: [knowledge]
+confidence: 0.9
+---
+
+# Historical revision
+
+Grounded evidence for source-1
+`;
+const FORWARD_DECISION_CURRENT_CONTENT = `---
+type: topic
+title: Current revision
+tags: [knowledge]
+confidence: 0.9
+---
+
+# Current revision
+
+Grounded evidence for source-1
+`;
+
+/** Builds a genuine paired preflight/Runtime/Vault/validator/decision production chain. */
+async function createForwardDecisionCoordinatorFixture() {
+  const pairing = createKnowledgeProductionWorkflowExecutionPairing();
+  const lifecycle = await createForwardDecisionExecutionLease(pairing.preflightClaim);
+  const sourcePath = "Sources/Source-1.md";
+  const schemaPath = "Knowledge/schema.md";
+  const pagePath = "Wiki/transaction-forward-historical.md";
+  const sourceBytes = new TextEncoder().encode(FORWARD_DECISION_SOURCE_TEXT);
+  const schemaBytes = new TextEncoder().encode(FORWARD_DECISION_SCHEMA_TEXT);
+  const owners = lifecycle.workflowLease.getOwners();
+  const owner = owners[0];
+  if (!owner) throw new Error("Expected one production Bundle owner");
+  const signal = new AbortController().signal;
+  const pipeline = lifecycle.workflowLease.resolve(owner, signal);
+  const watched = buildKnowledgeSourceWatchPlan([
+    {
+      bundle: owner.config,
+      manifest: createRegisteredManifest(),
+      schema: { path: schemaPath, bytes: schemaBytes },
+      pipeline,
+    },
+  ]).getSource("personal", "source-1");
+  if (!watched) throw new Error("Expected one watched production source");
+  const harness = await createForwardPublicationHarness(() => 500, undefined, {
+    historicalContent: FORWARD_DECISION_HISTORICAL_CONTENT,
+    currentContent: FORWARD_DECISION_CURRENT_CONTENT,
+    sourceContentHash: createSourceContentHash(sourceBytes),
+    pipelineFingerprint: watched.pipelineFingerprint,
+    historicalCitation: createSourceQuoteCitation(
+      "source-1",
+      createFileContentHash(FORWARD_DECISION_SOURCE_TEXT),
+      "primary"
+    ),
+    productionExecutionClaim: pairing.runtimeClaim,
+  });
+  await harness.port.publishForwardRevisionProposalAtomically(harness.evidence);
+  const review = await harness.port.readForwardRevisionReview("personal");
+  const pending = review.records[0];
+  if (!pending || pending.state !== "pending") throw new Error("Expected pending proposal");
+  const files = new Map<string, string>([
+    [sourcePath, FORWARD_DECISION_SOURCE_TEXT],
+    [schemaPath, FORWARD_DECISION_SCHEMA_TEXT],
+    [pagePath, FORWARD_DECISION_CURRENT_CONTENT],
+  ]);
+  const FileConstructor = TFile as unknown as new (path: string) => TFile;
+  const loaded = [...files.keys()].map((path) => new FileConstructor(path));
+  const adapter = {
+    /** Returns stable exact size metadata for one in-memory Vault file. */
+    stat: async (path: string) => {
+      const content = files.get(path);
+      return content === undefined
+        ? null
+        : {
+            type: "file" as const,
+            ctime: 1,
+            mtime: 1,
+            size: new TextEncoder().encode(content).byteLength,
+          };
+    },
+    /** Returns exact text for the genuine target resolver. */
+    read: async (path: string) => {
+      const content = files.get(path);
+      if (content === undefined) throw new Error("Missing in-memory Vault file");
+      return content;
+    },
+  } as unknown as DataAdapter;
+  const vault = {
+    adapter,
+    getAllLoadedFiles: () => loaded,
+  } as unknown as Vault;
+  const app = { vault } as App;
+  KnowledgeExecutionOwner.bindVaultLifecycle(lifecycle.executionOwner, app, vault, adapter);
+  const encodeArtifact = (path: string) => {
+    const content = files.get(path);
+    if (content === undefined) throw new Error("Missing in-memory artifact");
+    const bytes = new TextEncoder().encode(content);
+    return Object.freeze({
+      sourcePath: path,
+      bytes,
+      sourceContentHash: createSourceContentHash(bytes),
+    });
+  };
+  const artifactReader: KnowledgeExactArtifactReaderPort = Object.freeze({
+    read: async (path: string) => encodeArtifact(path),
+    readExpected: async (path: string, expectedHash: string) => {
+      const artifact = encodeArtifact(path);
+      if (artifact.sourceContentHash !== expectedHash) {
+        throw new Error("In-memory artifact hash changed");
+      }
+      return artifact;
+    },
+  });
+  const plan = await new KnowledgeSourceWorkflowPlanLoader({
+    executionOwner: lifecycle.executionOwner,
+    manifest: {
+      load: (bundleId: string) => harness.runtime.readManifest(bundleId),
+    },
+    artifactReader,
+    pipelineProfile: lifecycle.workflowLease,
+    parsers: lifecycle.workflowLease.getParsers(),
+    generation: { isCurrent: () => lifecycle.workflowLease.isCurrent() },
+  }).load(owners, new AbortController().signal);
+  const queue = new KnowledgeRuntimeQueueStorage(harness.runtime, lifecycle.executionOwner);
+  const proof = new KnowledgeRuntimeIngestExecutionProofPort(harness.runtime, queue);
+  const assertCurrent = () => lifecycle.workflowLease.assertCurrent();
+  const validator = new KnowledgeProductionForwardRevisionValidationCoordinator(
+    new KnowledgeRuntimeForwardRevisionValidationPort(harness.runtime, proof),
+    plan,
+    new ObsidianKnowledgeCompilerTargetResolver(app, lifecycle.executionOwner),
+    lifecycle.executionOwner,
+    assertCurrent
+  );
+  const decisions = new KnowledgeRuntimeForwardRevisionDecisionPort(
+    harness.runtime,
+    proof,
+    lifecycle.executionLease
+  );
+  return {
+    ...harness,
+    ...lifecycle,
+    files,
+    pending,
+    validator,
+    decisions,
+    coordinator: new KnowledgeProductionForwardRevisionDecisionCoordinator(
+      validator,
+      decisions,
+      lifecycle.executionOwner,
+      assertCurrent
+    ),
+  };
+}
+
+/** Captures one expected promise rejection for authentic error-category assertions. */
+async function captureForwardDecisionRejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected forward decision rejection");
 }
 
 /** Creates a minimal production Vault observer for one exact current Wiki page. */
@@ -8703,6 +9079,14 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
       return 1;
     });
     const before = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    let personalHints = 0;
+    let workHints = 0;
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      personalHints += 1;
+    });
+    harness.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
 
     const published = await harness.port.publish(harness.evidence);
 
@@ -8721,6 +9105,8 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(after.inputRevisions).toEqual(before.inputRevisions);
     expect(after.applyCommits).toEqual(before.applyCommits);
     expect(after.forwardRevisionReviews).toHaveLength(1);
+    expect(personalHints).toBe(1);
+    expect(workHints).toBe(0);
 
     await new KnowledgeRuntimeQueueStorage(harness.runtime).write(
       "unrelated",
@@ -8734,6 +9120,8 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(replayed.publicationId).toBe(published.publicationId);
     expect(replayed.runtimeRevision).toBe(published.runtimeRevision);
     expect(clockCalls).toBe(callsBeforeReplay);
+    expect(personalHints).toBe(1);
+    expect(workHints).toBe(0);
   });
 
   it("confirms an exact publication after an uncertain post-commit result", async () => {
@@ -9334,6 +9722,19 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
 });
 
 describe("KnowledgeRuntimeStore forward revision validation authority", () => {
+  /** Creates one validation facade through an authentic Queue execution-proof lifecycle. */
+  function createValidationPort(runtime: KnowledgeRuntimeStore): {
+    port: KnowledgeRuntimeForwardRevisionValidationPort;
+    proofPort: KnowledgeRuntimeIngestExecutionProofPort;
+  } {
+    const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
+    const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queueStorage);
+    return {
+      port: new KnowledgeRuntimeForwardRevisionValidationPort(runtime, proofPort),
+      proofPort,
+    };
+  }
+
   /** Publishes one pending proposal and derives its exact validation query. */
   async function publishForValidation(
     harness: Awaited<ReturnType<typeof createForwardPublicationHarness>>,
@@ -9356,7 +9757,7 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
   it("projects exact pending/current/history/citations from one read without writing", async () => {
     const harness = await createForwardPublicationHarness(() => 500);
     const published = await publishForValidation(harness);
-    const port = new KnowledgeRuntimeForwardRevisionValidationPort(harness.runtime);
+    const { port } = createValidationPort(harness.runtime);
     const before = await harness.file.read();
     const readsBefore = harness.file.getReadCallCount();
 
@@ -9393,7 +9794,7 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
   it("permits an unrelated Runtime advance while keeping the proposal-time tuple exact", async () => {
     const harness = await createForwardPublicationHarness(() => 500);
     const published = await publishForValidation(harness);
-    const port = new KnowledgeRuntimeForwardRevisionValidationPort(harness.runtime);
+    const { port } = createValidationPort(harness.runtime);
     const before = await port.readForwardRevisionValidationAuthority(published.query);
     if (!before) throw new Error("Expected initial validation authority");
 
@@ -9418,7 +9819,7 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
   it("returns null for identity staleness and decision-time Manifest/source tuple drift", async () => {
     const identity = await createForwardPublicationHarness(() => 500);
     const published = await publishForValidation(identity);
-    const identityPort = new KnowledgeRuntimeForwardRevisionValidationPort(identity.runtime);
+    const { port: identityPort } = createValidationPort(identity.runtime);
     for (const stale of [
       { ...published.query, proposalDigest: HASH_C },
       { ...published.query, requestDigest: HASH_C },
@@ -9431,9 +9832,9 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     const driftedPublished = await publishForValidation(drifted);
     await commitForwardNoChanges(drifted, HASH_C);
     await expect(
-      new KnowledgeRuntimeForwardRevisionValidationPort(
-        drifted.runtime
-      ).readForwardRevisionValidationAuthority(driftedPublished.query)
+      createValidationPort(drifted.runtime).port.readForwardRevisionValidationAuthority(
+        driftedPublished.query
+      )
     ).resolves.toBeNull();
   });
 
@@ -9442,9 +9843,9 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     await commitForwardNoChanges(harness, HASH_A);
     const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
     const published = await publishForValidation(harness, createForwardPublicationEvidence(state));
-    const authority = await new KnowledgeRuntimeForwardRevisionValidationPort(
+    const authority = await createValidationPort(
       harness.runtime
-    ).readForwardRevisionValidationAuthority(published.query);
+    ).port.readForwardRevisionValidationAuthority(published.query);
 
     expect(authority).toMatchObject({
       historicalCitations: [{ citationId: "citation-source-1" }],
@@ -9463,7 +9864,7 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     const first = await createForwardPublicationHarness(
       () => 500,
       (runtime) => {
-        firstValidation = new KnowledgeRuntimeForwardRevisionValidationPort(runtime);
+        firstValidation = createValidationPort(runtime).port;
         return new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime);
       }
     );
@@ -9475,7 +9876,7 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     ).resolves.toMatchObject({ proposalDigest: firstPublished.pending.proposalDigest });
 
     const second = await createForwardPublicationHarness(() => 500);
-    const secondValidation = new KnowledgeRuntimeForwardRevisionValidationPort(second.runtime);
+    const { port: secondValidation } = createValidationPort(second.runtime);
     KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(second.port);
     KnowledgeRuntimeForwardRevisionValidationPort.assert(secondValidation);
     const secondPublished = await publishForValidation(second);
@@ -9484,10 +9885,36 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     ).resolves.toMatchObject({ proposalDigest: secondPublished.pending.proposalDigest });
   });
 
+  it("keeps same-Runtime validation facades isolated by exact execution owner", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const first = createValidationPort(harness.runtime);
+    const second = createValidationPort(harness.runtime);
+    const firstOwner = KnowledgeRuntimeIngestExecutionProofPort.getExecutionOwner(first.proofPort);
+    const secondOwner = KnowledgeRuntimeIngestExecutionProofPort.getExecutionOwner(
+      second.proofPort
+    );
+
+    expect(
+      KnowledgeRuntimeForwardRevisionValidationPort.matchesExecutionOwner(first.port, firstOwner)
+    ).toBe(true);
+    expect(
+      KnowledgeRuntimeForwardRevisionValidationPort.matchesExecutionOwner(first.port, secondOwner)
+    ).toBe(false);
+    expect(
+      KnowledgeRuntimeForwardRevisionValidationPort.matchesExecutionOwner(second.port, firstOwner)
+    ).toBe(false);
+    expect(
+      KnowledgeRuntimeForwardRevisionValidationPort.matchesExecutionOwner(
+        new Proxy(first.port, {}),
+        firstOwner
+      )
+    ).toBe(false);
+  });
+
   it("pins the canonical read and rejects own tampering, subclasses, proxies, and forgeries", async () => {
     const harness = await createForwardPublicationHarness(() => 500);
     const published = await publishForValidation(harness);
-    const port = new KnowledgeRuntimeForwardRevisionValidationPort(harness.runtime);
+    const { port, proofPort } = createValidationPort(harness.runtime);
     const prototype = KnowledgeRuntimeStore.prototype;
     const original = Object.getOwnPropertyDescriptor(
       prototype,
@@ -9511,18 +9938,26 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
       configurable: true,
       value: () => Promise.resolve(null),
     });
-    expect(() => new KnowledgeRuntimeForwardRevisionValidationPort(tampered)).toThrow(TypeError);
+    expect(() => new KnowledgeRuntimeForwardRevisionValidationPort(tampered, proofPort)).toThrow(
+      TypeError
+    );
     class RuntimeSubclass extends KnowledgeRuntimeStore {}
+    const subclass = new RuntimeSubclass(harness.file);
+    const subclassQueue = new KnowledgeRuntimeQueueStorage(subclass);
+    const subclassProof = new KnowledgeRuntimeIngestExecutionProofPort(subclass, subclassQueue);
     expect(
-      () => new KnowledgeRuntimeForwardRevisionValidationPort(new RuntimeSubclass(harness.file))
+      () => new KnowledgeRuntimeForwardRevisionValidationPort(subclass, subclassProof)
     ).toThrow(TypeError);
+    const proxiedRuntime = new Proxy(harness.runtime, {});
     expect(
-      () => new KnowledgeRuntimeForwardRevisionValidationPort(new Proxy(harness.runtime, {}))
+      () => new KnowledgeRuntimeForwardRevisionValidationPort(proxiedRuntime, proofPort)
     ).toThrow(TypeError);
 
     class PortSubclass extends KnowledgeRuntimeForwardRevisionValidationPort {}
     expect(() =>
-      KnowledgeRuntimeForwardRevisionValidationPort.assert(new PortSubclass(harness.runtime))
+      KnowledgeRuntimeForwardRevisionValidationPort.assert(
+        new PortSubclass(harness.runtime, proofPort)
+      )
     ).toThrow(TypeError);
     expect(() =>
       KnowledgeRuntimeForwardRevisionValidationPort.assert(
@@ -9532,6 +9967,499 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     expect(() => KnowledgeRuntimeForwardRevisionValidationPort.assert(new Proxy(port, {}))).toThrow(
       TypeError
     );
+  });
+});
+
+describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
+  /** Publishes and returns the sole strict pending proposal for one decision test. */
+  async function createPendingDecisionFixture() {
+    const pairing = createKnowledgeProductionWorkflowExecutionPairing();
+    const harness = await createForwardPublicationHarness(() => 500, undefined, {
+      productionExecutionClaim: pairing.runtimeClaim,
+    });
+    await harness.port.publishForwardRevisionProposalAtomically(harness.evidence);
+    const review = await harness.port.readForwardRevisionReview("personal");
+    const pending = review.records[0];
+    if (!pending || pending.state !== "pending") throw new Error("Expected pending proposal");
+    const decision = await createPairedForwardDecisionPort(harness.runtime, pairing.preflightClaim);
+    return { ...harness, ...decision, pending };
+  }
+
+  it("requires genuine one-shot mutation authority and atomically rejects only the target slot", async () => {
+    const fixture = await createPendingDecisionFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "reject",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    const beforeText = await fixture.file.read();
+    const before = JSON.parse(beforeText) as KnowledgeRuntimeStoreSnapshot;
+    let personalHints = 0;
+    let workHints = 0;
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      personalHints += 1;
+    });
+    fixture.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
+
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        await captureForwardDecisionRejection(
+          fixture.runtime.decideForwardRevisionAtomically(command)
+        )
+      )
+    ).toBe("dependency_invalid");
+    expect(await fixture.file.read()).toBe(beforeText);
+
+    await expect(
+      fixture.port.readPending(command, new AbortController().signal)
+    ).resolves.toMatchObject({
+      kind: "pending",
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    const decided = await fixture.port.decide({ command }, new AbortController().signal);
+    const after = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+
+    expect(decided).toMatchObject({
+      kind: "rejected",
+      outcome: "decided",
+      runtimeRevision: before.revision + 1,
+      decisionStoreRevision: 2,
+      decision: { state: "rejected", rejectedAt: 500 },
+    });
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.forwardRevisionReviews[0]?.value).toMatchObject({
+      revision: 2,
+      records: [{ state: "rejected", decidedRuntimeRevision: before.revision + 1 }],
+    });
+    expect(personalHints).toBe(1);
+    expect(workHints).toBe(0);
+    for (const key of [
+      "queues",
+      "reviews",
+      "manifests",
+      "activeTransaction",
+      "inputRevisions",
+      "applyCommits",
+    ] as const) {
+      expect(after[key]).toEqual(before[key]);
+    }
+
+    await new KnowledgeRuntimeQueueStorage(fixture.runtime).write(
+      "unrelated",
+      createQueueSnapshot(1, "unrelated"),
+      null
+    );
+    const replay = await fixture.port.decide({ command }, new AbortController().signal);
+    expect(replay).toEqual({ ...decided, outcome: "already_decided" });
+    expect(personalHints).toBe(1);
+    expect(workHints).toBe(0);
+    await expect(fixture.port.readPending(command, new AbortController().signal)).resolves.toEqual({
+      kind: "terminal",
+      result: replay,
+    });
+
+    const conflicting = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        await captureForwardDecisionRejection(
+          fixture.port.decide({ command: conflicting }, new AbortController().signal)
+        )
+      )
+    ).toBe("conflict");
+    fixture.lifecycle.close();
+  });
+
+  it("confirms a commit-then-throw result and fails closed after lease revocation or overflow", async () => {
+    const committed = await createPendingDecisionFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "reject",
+      proposal: committed.pending.proposal,
+      proposalDigest: committed.pending.proposalDigest,
+    });
+    committed.file.throwAfterCommitOnNextWrite();
+
+    await expect(
+      committed.port.decide({ command }, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "rejected", outcome: "already_decided" });
+    committed.lifecycle.close();
+
+    const revoked = await createPendingDecisionFixture();
+    const revokedCommand = createKnowledgeForwardRevisionReviewCommand({
+      action: "reject",
+      proposal: revoked.pending.proposal,
+      proposalDigest: revoked.pending.proposalDigest,
+    });
+    const revokedBefore = await revoked.file.read();
+    revoked.lifecycle.invalidate();
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        await captureForwardDecisionRejection(
+          revoked.port.decide({ command: revokedCommand }, new AbortController().signal)
+        )
+      )
+    ).toBe("aborted");
+    expect(await revoked.file.read()).toBe(revokedBefore);
+
+    const overflow = await createPendingDecisionFixture();
+    const overflowCommand = createKnowledgeForwardRevisionReviewCommand({
+      action: "reject",
+      proposal: overflow.pending.proposal,
+      proposalDigest: overflow.pending.proposalDigest,
+    });
+    const overflowState = JSON.parse(await overflow.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    overflowState.revision = Number.MAX_SAFE_INTEGER;
+    overflow.file.replaceContent(JSON.stringify(overflowState));
+    const overflowBefore = await overflow.file.read();
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        await captureForwardDecisionRejection(
+          overflow.port.decide({ command: overflowCommand }, new AbortController().signal)
+        )
+      )
+    ).toBe("resource_limit");
+    expect(await overflow.file.read()).toBe(overflowBefore);
+    overflow.lifecycle.close();
+  });
+
+  it("accepts through the genuine paired validator and atomically mints the durable Apply claim", async () => {
+    const fixture = await createForwardDecisionCoordinatorFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    await new KnowledgeRuntimeQueueStorage(fixture.runtime).write(
+      "unrelated",
+      createQueueSnapshot(1, "unrelated"),
+      null
+    );
+    const beforeText = await fixture.file.read();
+    const before = JSON.parse(beforeText) as KnowledgeRuntimeStoreSnapshot;
+
+    const accepted = await fixture.coordinator.decide(command, new AbortController().signal);
+    if (accepted.kind !== "accepted") throw new Error("Expected accepted forward decision");
+    const afterText = await fixture.file.read();
+    const after = JSON.parse(afterText) as KnowledgeRuntimeStoreSnapshot;
+
+    expect(accepted).toMatchObject({
+      kind: "accepted",
+      outcome: "decided",
+      proposalId: fixture.pending.proposal.proposalId,
+      commandId: command.commandId,
+      runtimeRevision: before.revision + 1,
+      decisionStoreRevision: 2,
+    });
+    expect(Reflect.ownKeys(accepted)).toEqual([
+      "kind",
+      "outcome",
+      "proposalId",
+      "commandId",
+      "decisionDigest",
+      "runtimeRevision",
+      "decisionStoreRevision",
+    ]);
+    const terminal = after.forwardRevisionReviews[0]?.value as {
+      revision: number;
+      records: Array<{
+        state: string;
+        decidedRuntimeRevision: number;
+        decisionStoreRevision: number;
+        decision: {
+          state: string;
+          afterContent: string;
+          acceptedDecisionDigest: string;
+          validationReceipt: { commandId: string; receiptId: string };
+          validationReceiptDigest: string;
+          applyClaim: {
+            acceptedDecisionDigest: string;
+            validationReceiptId: string;
+            validationReceiptDigest: string;
+            runtimeRevision: number;
+          };
+        };
+      }>;
+    };
+    const record = terminal.records[0];
+    expect(terminal.revision).toBe(2);
+    expect(record).toMatchObject({
+      state: "accepted",
+      decidedRuntimeRevision: before.revision + 1,
+      decisionStoreRevision: 2,
+      decision: {
+        state: "accepted",
+        afterContent: FORWARD_DECISION_HISTORICAL_CONTENT,
+        validationReceipt: { commandId: command.commandId },
+      },
+    });
+    expect(record.decision.applyClaim).toMatchObject({
+      acceptedDecisionDigest: record.decision.acceptedDecisionDigest,
+      validationReceiptId: record.decision.validationReceipt.receiptId,
+      validationReceiptDigest: record.decision.validationReceiptDigest,
+      runtimeRevision: before.revision,
+    });
+    const {
+      revision: _beforeRevision,
+      forwardRevisionReviews: _beforeForward,
+      ...beforeIsolated
+    } = before;
+    const {
+      revision: _afterRevision,
+      forwardRevisionReviews: _afterForward,
+      ...afterIsolated
+    } = after;
+    void _beforeRevision;
+    void _beforeForward;
+    void _afterRevision;
+    void _afterForward;
+    expect(afterIsolated).toEqual(beforeIsolated);
+
+    const replay = await fixture.coordinator.decide(command, new AbortController().signal);
+    expect(replay).toEqual({ ...accepted, outcome: "already_decided" });
+    expect(await fixture.file.read()).toBe(afterText);
+
+    fixture.lifecycle.invalidate();
+    const restarted = await fixture.lifecycle.load(new AbortController().signal);
+    if (restarted.kind !== "configured") throw new Error("Expected restarted preflight");
+    const restartedOwner = KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
+      restarted.admission.workflowLease,
+      restarted.admission.workflowCompositionClaim
+    );
+    const restartedQueue = new KnowledgeRuntimeQueueStorage(fixture.runtime, restartedOwner);
+    const restartedProof = new KnowledgeRuntimeIngestExecutionProofPort(
+      fixture.runtime,
+      restartedQueue
+    );
+    const restartedPort = new KnowledgeRuntimeForwardRevisionDecisionPort(
+      fixture.runtime,
+      restartedProof,
+      KnowledgePluginProductionWorkflowLease.getExecutionLease(
+        restarted.admission.workflowLease,
+        restartedOwner
+      )
+    );
+    await expect(
+      restartedPort.decide({ command }, new AbortController().signal)
+    ).resolves.toMatchObject({
+      kind: "accepted",
+      outcome: "already_decided",
+      decisionDigest: accepted.decisionDigest,
+      runtimeRevision: accepted.runtimeRevision,
+      decisionStoreRevision: accepted.decisionStoreRevision,
+      decision: {
+        state: "accepted",
+        proposal: { proposalId: fixture.pending.proposal.proposalId },
+      },
+    });
+    expect(await fixture.file.read()).toBe(afterText);
+    fixture.lifecycle.close();
+  });
+
+  it("returns edited no_change without terminalizing or writing Runtime bytes", async () => {
+    const fixture = await createForwardDecisionCoordinatorFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_edited",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+      afterContent: FORWARD_DECISION_CURRENT_CONTENT,
+    });
+    const beforeText = await fixture.file.read();
+    let hints = 0;
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      hints += 1;
+    });
+
+    await expect(
+      fixture.coordinator.decide(command, new AbortController().signal)
+    ).resolves.toEqual({
+      kind: "no_change",
+      proposalId: fixture.pending.proposal.proposalId,
+      commandId: command.commandId,
+      contentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+    });
+    expect(await fixture.file.read()).toBe(beforeText);
+    expect(hints).toBe(0);
+    await expect(fixture.runtime.readForwardRevisionReview("personal")).resolves.toMatchObject({
+      revision: 1,
+      records: [{ state: "pending" }],
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("revokes the genuine coordinator generation before validation with zero Runtime writes", async () => {
+    const fixture = await createForwardDecisionCoordinatorFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    const beforeText = await fixture.file.read();
+    fixture.lifecycle.close();
+
+    await expect(
+      fixture.coordinator.decide(command, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(await fixture.file.read()).toBe(beforeText);
+  });
+
+  it("rechecks the genuine validation capability after a pre-transform lease revocation", async () => {
+    const fixture = await createForwardDecisionCoordinatorFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    const beforeText = await fixture.file.read();
+    fixture.file.runBeforeNextTransform(() => fixture.lifecycle.close());
+
+    await expect(
+      fixture.coordinator.decide(command, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(await fixture.file.read()).toBe(beforeText);
+  });
+
+  it("confirms an accepted commit after its lease closes before transport failure", async () => {
+    const fixture = await createForwardDecisionCoordinatorFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    const before = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    fixture.file.runAfterNextCommit(() => fixture.lifecycle.close());
+    fixture.file.throwAfterCommitOnNextWrite();
+
+    await expect(
+      fixture.coordinator.decide(command, new AbortController().signal)
+    ).resolves.toMatchObject({
+      kind: "accepted",
+      outcome: "already_decided",
+      proposalId: fixture.pending.proposal.proposalId,
+      commandId: command.commandId,
+      runtimeRevision: before.revision + 1,
+      decisionStoreRevision: 2,
+    });
+    await expect(fixture.runtime.readForwardRevisionReview("personal")).resolves.toMatchObject({
+      revision: 2,
+      records: [
+        {
+          state: "accepted",
+          decidedRuntimeRevision: before.revision + 1,
+          decisionStoreRevision: 2,
+        },
+      ],
+    });
+  });
+
+  it("rejects a genuine cross-pair execution lease before creating any mutation port", async () => {
+    const runtimePairing = createKnowledgeProductionWorkflowExecutionPairing();
+    const harness = await createForwardPublicationHarness(() => 500, undefined, {
+      productionExecutionClaim: runtimePairing.runtimeClaim,
+    });
+    const otherPairing = createKnowledgeProductionWorkflowExecutionPairing();
+    const other = await createForwardDecisionExecutionLease(otherPairing.preflightClaim);
+    const queue = new KnowledgeRuntimeQueueStorage(harness.runtime, other.executionOwner);
+    const proof = new KnowledgeRuntimeIngestExecutionProofPort(harness.runtime, queue);
+    const beforeText = await harness.file.read();
+    const runtimeOwnValues = Reflect.ownKeys(harness.runtime).map(
+      (key) => Object.getOwnPropertyDescriptor(harness.runtime, key)?.value as unknown
+    );
+
+    expect(runtimeOwnValues).not.toContain(runtimePairing.runtimeClaim);
+    expect(runtimeOwnValues).not.toContain(runtimePairing.preflightClaim);
+    expect(runtimeOwnValues).not.toContain(otherPairing.runtimeClaim);
+    expect(runtimeOwnValues).not.toContain(otherPairing.preflightClaim);
+
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        (() => {
+          try {
+            new KnowledgeRuntimeForwardRevisionDecisionPort(
+              harness.runtime,
+              proof,
+              other.executionLease
+            );
+          } catch (error: unknown) {
+            return error;
+          }
+          throw new Error("Expected the cross-pair decision port to reject");
+        })()
+      )
+    ).toBe("dependency_invalid");
+    expect(await harness.file.read()).toBe(beforeText);
+    other.lifecycle.close();
+  });
+
+  it("rejects a genuine lease against an unpaired Runtime without changing bytes", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const pairing = createKnowledgeProductionWorkflowExecutionPairing();
+    const execution = await createForwardDecisionExecutionLease(pairing.preflightClaim);
+    const queue = new KnowledgeRuntimeQueueStorage(harness.runtime, execution.executionOwner);
+    const proof = new KnowledgeRuntimeIngestExecutionProofPort(harness.runtime, queue);
+    const beforeText = await harness.file.read();
+
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        (() => {
+          try {
+            new KnowledgeRuntimeForwardRevisionDecisionPort(
+              harness.runtime,
+              proof,
+              execution.executionLease
+            );
+          } catch (error: unknown) {
+            return error;
+          }
+          throw new Error("Expected the unpaired Runtime decision port to reject");
+        })()
+      )
+    ).toBe("dependency_invalid");
+    expect(await harness.file.read()).toBe(beforeText);
+    execution.lifecycle.close();
+  });
+
+  it("normalizes a revoked decision-port receiver without reading or writing Runtime bytes", async () => {
+    const fixture = await createPendingDecisionFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "reject",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    const beforeText = await fixture.file.read();
+    const readsBefore = fixture.file.getReadCallCount();
+    const revoked = Proxy.revocable(fixture.port, {});
+    revoked.revoke();
+
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        await captureForwardDecisionRejection(
+          Reflect.apply(
+            KnowledgeRuntimeForwardRevisionDecisionPort.prototype.readPending,
+            revoked.proxy,
+            [command, new AbortController().signal]
+          )
+        )
+      )
+    ).toBe("dependency_invalid");
+    expect(
+      KnowledgeForwardRevisionDecisionPortError.inspect(
+        await captureForwardDecisionRejection(
+          Reflect.apply(
+            KnowledgeRuntimeForwardRevisionDecisionPort.prototype.decide,
+            revoked.proxy,
+            [{ command }, new AbortController().signal]
+          )
+        )
+      )
+    ).toBe("dependency_invalid");
+    expect(fixture.file.getReadCallCount()).toBe(readsBefore);
+    expect(await fixture.file.read()).toBe(beforeText);
+    fixture.lifecycle.close();
   });
 });
 

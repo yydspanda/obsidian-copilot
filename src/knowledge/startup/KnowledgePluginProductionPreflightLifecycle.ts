@@ -21,6 +21,13 @@ import {
   type ProjectKnowledgePipelineProjectInput,
 } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 import type { KnowledgeBundlePipelineProfile } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import {
+  consumeKnowledgeProductionWorkflowExecutionPreflightClaim,
+  KnowledgeProductionWorkflowExecutionPreflightBinding,
+  KnowledgeProductionWorkflowExecutionPreflightClaim,
+  KnowledgeProductionWorkflowExecutionLease,
+} from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import type { KnowledgePluginBundleConfigLoadResult } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 
@@ -48,6 +55,8 @@ export interface KnowledgePluginProductionPreflightPort {
 
 /** Injected plugin edges used to build one exact preflight generation. */
 export interface KnowledgePluginProductionPreflightLifecycleDependencies {
+  /** One-shot opaque half of the exact Runtime/preflight execution pairing. */
+  executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim;
   /** Captures project records once after ordinary Projects initialization. */
   getProjectRecords(): readonly KnowledgePluginProductionPreflightProjectRecord[];
   /** Captures already-hydrated settings once for the same synchronous generation. */
@@ -72,6 +81,8 @@ export interface KnowledgePluginProductionPreflightAdmission {
   readonly owners: readonly ConfiguredProjectKnowledgeBundle[];
   /** Unforgeable secret-free capabilities retained for the exact workflow generation. */
   readonly workflowLease: KnowledgePluginProductionWorkflowLease;
+  /** One-shot opaque bridge consumed only while composing this exact generation. */
+  readonly workflowCompositionClaim: KnowledgePluginProductionWorkflowCompositionClaim;
   /** Close-incapable access to exact preflight-created model routes. */
   readonly modelRouteLease: KnowledgeProductionModelRouteLease;
 }
@@ -98,10 +109,44 @@ const PROJECT_PROFILE_SOURCE_RESOLVE = ProjectKnowledgePipelineProfileSource.pro
 /** Module-private state held only by authentic workflow leases. */
 interface KnowledgePluginProductionWorkflowLeaseState {
   current: boolean;
+  executionOwner?: KnowledgeExecutionOwner;
+  executionLease?: KnowledgeProductionWorkflowExecutionLease;
+  executionBinding?: KnowledgeProductionWorkflowExecutionPreflightBinding;
   owners?: readonly ConfiguredProjectKnowledgeBundle[];
   parsers?: readonly KnowledgeByteParser[];
   profileSource?: ProjectKnowledgePipelineProfileSource;
   invalidationListeners: Set<() => void>;
+}
+
+const preflightExecutionBindings = new WeakMap<
+  object,
+  KnowledgeProductionWorkflowExecutionPreflightBinding
+>();
+
+/** Module-authentic one-shot bridge for installing the exact production composition owner. */
+export class KnowledgePluginProductionWorkflowCompositionClaim {
+  /** Construction is accepted only through hidden WeakMap state installed by preflight. */
+  constructor(token: symbol) {
+    if (token !== WORKFLOW_LEASE_CONSTRUCTOR_TOKEN) throw new TypeError();
+    Object.freeze(this);
+  }
+}
+
+interface WorkflowCompositionClaimState {
+  readonly lease: KnowledgePluginProductionWorkflowLease;
+  readonly executionOwner: KnowledgeExecutionOwner;
+  consumed: boolean;
+}
+
+const workflowCompositionClaimStates = new WeakMap<object, WorkflowCompositionClaimState>();
+
+/** Returns the hidden exact preflight binding captured during lifecycle construction. */
+function requirePreflightExecutionBinding(
+  lifecycle: KnowledgePluginProductionPreflightLifecycle
+): KnowledgeProductionWorkflowExecutionPreflightBinding {
+  const binding = preflightExecutionBindings.get(lifecycle);
+  if (!binding) throw new TypeError("The production preflight execution binding is invalid");
+  return binding;
 }
 
 const workflowLeaseStates = new WeakMap<object, KnowledgePluginProductionWorkflowLeaseState>();
@@ -150,6 +195,14 @@ function closeWorkflowLease(lease: KnowledgePluginProductionWorkflowLease): void
   state.owners = undefined;
   state.parsers = undefined;
   state.profileSource = undefined;
+  const executionBinding = state.executionBinding;
+  const executionLease = state.executionLease;
+  state.executionOwner = undefined;
+  state.executionBinding = undefined;
+  state.executionLease = undefined;
+  if (executionBinding && executionLease) {
+    executionBinding.revokeWorkflowExecutionLease(executionLease);
+  }
   for (const listener of listeners) {
     notifyWorkflowLeaseInvalidation(listener);
   }
@@ -333,14 +386,22 @@ function snapshotParsers(value: unknown): readonly KnowledgeByteParser[] {
 function createWorkflowLease(
   owners: readonly ConfiguredProjectKnowledgeBundle[],
   parsers: readonly KnowledgeByteParser[],
-  profileSource: ProjectKnowledgePipelineProfileSource
+  profileSource: ProjectKnowledgePipelineProfileSource,
+  executionBinding: KnowledgeProductionWorkflowExecutionPreflightBinding
 ): KnowledgePluginProductionWorkflowLease {
-  return new KnowledgePluginProductionWorkflowLease(
+  const lease = new KnowledgePluginProductionWorkflowLease(
     WORKFLOW_LEASE_CONSTRUCTOR_TOKEN,
     owners,
     parsers,
     profileSource
   );
+  const execution = executionBinding.issueWorkflowExecutionLease();
+  const { executionOwner } = execution;
+  KnowledgeExecutionOwner.bindProductionLease(executionOwner, lease);
+  requireWorkflowLeaseState(lease).executionOwner = executionOwner;
+  requireWorkflowLeaseState(lease).executionLease = execution.lease;
+  requireWorkflowLeaseState(lease).executionBinding = executionBinding;
+  return lease;
 }
 
 /** Freezes the narrow immutable admission passed to future production composition. */
@@ -348,9 +409,16 @@ function createAdmission(
   generation: number,
   owners: readonly ConfiguredProjectKnowledgeBundle[],
   workflowLease: KnowledgePluginProductionWorkflowLease,
+  workflowCompositionClaim: KnowledgePluginProductionWorkflowCompositionClaim,
   modelRouteLease: KnowledgeProductionModelRouteLease
 ): KnowledgePluginProductionPreflightAdmission {
-  return Object.freeze({ generation, owners, workflowLease, modelRouteLease });
+  return Object.freeze({
+    generation,
+    owners,
+    workflowLease,
+    workflowCompositionClaim,
+    modelRouteLease,
+  });
 }
 
 /** Maps an already-sanitized preflight diagnostic into the startup namespace. */
@@ -391,6 +459,88 @@ export class KnowledgePluginProductionWorkflowLease {
   /** Authenticates a lifecycle-minted lease without granting mint or close authority. */
   static assert(value: unknown): asserts value is KnowledgePluginProductionWorkflowLease {
     requireWorkflowLeaseState(value);
+  }
+
+  /** Reports whether this current lease owns the exact opaque execution lifecycle. */
+  static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
+    try {
+      const state = requireWorkflowLeaseState(value);
+      KnowledgeExecutionOwner.assert(executionOwner);
+      return (
+        state.current &&
+        state.executionOwner === executionOwner &&
+        state.executionLease !== undefined &&
+        state.executionBinding?.ownsWorkflowExecutionLease(state.executionLease) === true &&
+        KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+          state.executionLease,
+          executionOwner
+        ) &&
+        KnowledgeExecutionOwner.matchesProductionLease(executionOwner, value as object)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Returns the leaf-authentic Runtime decision lease only after exact owner rejoin. */
+  static getExecutionLease(
+    value: KnowledgePluginProductionWorkflowLease,
+    executionOwner: KnowledgeExecutionOwner
+  ): KnowledgeProductionWorkflowExecutionLease {
+    const state = requireWorkflowLeaseState(value);
+    if (
+      !state.current ||
+      state.executionOwner !== executionOwner ||
+      !state.executionLease ||
+      !state.executionBinding?.ownsWorkflowExecutionLease(state.executionLease) ||
+      !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+        state.executionLease,
+        executionOwner
+      )
+    ) {
+      throw createAbortError();
+    }
+    return state.executionLease;
+  }
+
+  /** Mints the one-shot composition bridge retained by this preflight admission. */
+  static createCompositionClaim(
+    value: KnowledgePluginProductionWorkflowLease
+  ): KnowledgePluginProductionWorkflowCompositionClaim {
+    const state = requireWorkflowLeaseState(value);
+    if (!state.current || !state.executionOwner) throw createAbortError();
+    const claim = new KnowledgePluginProductionWorkflowCompositionClaim(
+      WORKFLOW_LEASE_CONSTRUCTOR_TOKEN
+    );
+    KnowledgeExecutionOwner.bindCompositionClaim(state.executionOwner, claim);
+    workflowCompositionClaimStates.set(claim, {
+      lease: value,
+      executionOwner: state.executionOwner,
+      consumed: false,
+    });
+    return claim;
+  }
+
+  /** Consumes one exact preflight-minted composition claim once. */
+  static consumeCompositionClaim(
+    value: KnowledgePluginProductionWorkflowLease,
+    claimValue: unknown
+  ): KnowledgeExecutionOwner {
+    const state = requireWorkflowLeaseState(value);
+    const claim = workflowCompositionClaimStates.get(claimValue as object);
+    if (
+      !state.current ||
+      !state.executionOwner ||
+      !claim ||
+      claim.consumed ||
+      claim.lease !== value ||
+      claim.executionOwner !== state.executionOwner ||
+      !KnowledgeExecutionOwner.matchesCompositionClaim(state.executionOwner, claimValue as object)
+    ) {
+      throw createAbortError();
+    }
+    claim.consumed = true;
+    return state.executionOwner;
   }
 
   /** Returns whether this exact workflow generation still owns its capabilities. */
@@ -493,6 +643,10 @@ export class KnowledgePluginProductionWorkflowLease {
  * Queue, watcher, model invocation, source reader, Review, or Wiki mutation port.
  */
 export class KnowledgePluginProductionPreflightLifecycle {
+  private readonly dependencies: Omit<
+    KnowledgePluginProductionPreflightLifecycleDependencies,
+    "executionPreflightClaim"
+  >;
   private generation = 0;
   private closed = false;
   private current?: {
@@ -503,9 +657,13 @@ export class KnowledgePluginProductionPreflightLifecycle {
   };
 
   /** Creates one plugin-owned, initially fail-closed preflight lifecycle. */
-  constructor(
-    private readonly dependencies: KnowledgePluginProductionPreflightLifecycleDependencies
-  ) {}
+  constructor(dependencies: KnowledgePluginProductionPreflightLifecycleDependencies) {
+    const { executionPreflightClaim, ...retained } = dependencies;
+    const executionBinding =
+      consumeKnowledgeProductionWorkflowExecutionPreflightClaim(executionPreflightClaim);
+    preflightExecutionBindings.set(this, executionBinding);
+    this.dependencies = retained;
+  }
 
   /**
    * Strictly loads Bundle configuration and installs only a current preflight candidate.
@@ -569,7 +727,12 @@ export class KnowledgePluginProductionPreflightLifecycle {
         resources.profileOptions
       );
       owners = snapshotOwners(result.bundles);
-      workflowLease = createWorkflowLease(owners, parsers, profileSource);
+      workflowLease = createWorkflowLease(
+        owners,
+        parsers,
+        profileSource,
+        requirePreflightExecutionBinding(this)
+      );
       this.assertCurrent(generation, signal);
     } catch (error) {
       if (workflowLease) {
@@ -654,7 +817,15 @@ export class KnowledgePluginProductionPreflightLifecycle {
       if (!modelRouteLease.coversBundleIds(owners.map(({ config }) => config.id))) {
         throw new TypeError("The production model route generation does not cover every Bundle");
       }
-      admission = createAdmission(generation, owners, workflowLease, modelRouteLease);
+      const workflowCompositionClaim =
+        KnowledgePluginProductionWorkflowLease.createCompositionClaim(workflowLease);
+      admission = createAdmission(
+        generation,
+        owners,
+        workflowLease,
+        workflowCompositionClaim,
+        modelRouteLease
+      );
       this.assertCurrent(generation, signal);
     } catch {
       this.closeCandidate(candidate, generation, workflowLease, modelRouteOwner);
@@ -785,5 +956,7 @@ export class KnowledgePluginProductionPreflightLifecycle {
 
 Object.freeze(KnowledgePluginProductionWorkflowLease.prototype);
 Object.freeze(KnowledgePluginProductionWorkflowLease);
+Object.freeze(KnowledgePluginProductionWorkflowCompositionClaim.prototype);
+Object.freeze(KnowledgePluginProductionWorkflowCompositionClaim);
 Object.freeze(KnowledgePluginProductionPreflightLifecycle.prototype);
 Object.freeze(KnowledgePluginProductionPreflightLifecycle);
