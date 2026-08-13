@@ -245,6 +245,27 @@ function requireBoundedSelectedContent(records: readonly unknown[]): void {
   }
 }
 
+/** Strictly snapshots records while enforcing the authoritative aggregate incrementally. */
+function snapshotBoundedPublishedProposals(
+  values: readonly unknown[]
+): readonly Readonly<KnowledgeForwardRevisionPublishedProposalV1>[] {
+  const records: Readonly<KnowledgeForwardRevisionPublishedProposalV1>[] = [];
+  let characters = 0;
+  for (const value of values) {
+    const published = snapshotKnowledgeForwardRevisionPublishedProposal(value);
+    characters += published.proposal.request.selectedContent.length;
+    if (
+      !Number.isSafeInteger(characters) ||
+      characters >
+        KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_LIMITS.maxTotalSelectedContentCharacters
+    ) {
+      invalid();
+    }
+    records.push(published);
+  }
+  return Object.freeze(records);
+}
+
 /** Strictly snapshots one Runtime-owned published-proposal wrapper. */
 export function snapshotKnowledgeForwardRevisionPublishedProposal(
   value: unknown
@@ -339,7 +360,7 @@ export function snapshotKnowledgeForwardRevisionReviewSnapshot(
       invalid();
     }
     requireBoundedSelectedContent(rawRecords);
-    const records = rawRecords.map(snapshotKnowledgeForwardRevisionPublishedProposal);
+    const records = snapshotBoundedPublishedProposals(rawRecords);
     if (
       Number(record.lastRequestRevision) !== records.length ||
       Number(record.revision) !== records.length
@@ -386,7 +407,7 @@ export function snapshotKnowledgeForwardRevisionReviewSnapshot(
       bundleId: record.bundleId,
       revision: Number(record.revision),
       lastRequestRevision: Number(record.lastRequestRevision),
-      records: Object.freeze(records),
+      records,
     });
   } catch (error) {
     if (isAuthenticValidationError(error)) throw error;

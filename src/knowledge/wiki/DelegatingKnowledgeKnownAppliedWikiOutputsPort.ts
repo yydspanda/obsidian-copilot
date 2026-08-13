@@ -198,16 +198,20 @@ async function runAbortWins<T>(operation: Promise<T>, signal: AbortSignal): Prom
 
 /** Returns hidden state only for an authentic stable port. */
 function requireState(value: unknown): State {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Object.getPrototypeOf(value) !== DelegatingKnowledgeKnownAppliedWikiOutputsPort.prototype
-  ) {
+  try {
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Object.getPrototypeOf(value) !== DelegatingKnowledgeKnownAppliedWikiOutputsPort.prototype
+    ) {
+      throw createAbortError();
+    }
+    const state = states.get(value);
+    if (state) return state;
+  } catch {
     throw createAbortError();
   }
-  const state = states.get(value);
-  if (!state) throw createAbortError();
-  return state;
+  throw createAbortError();
 }
 
 /** Returns an authentic session binding only from the exact current generation. */
@@ -239,6 +243,36 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort
       disposed: false,
     });
     Object.freeze(this);
+  }
+
+  /**
+   * Requires an exact module-authentic stable port before it can supply Vault observations.
+   *
+   * @param value - Unknown candidate capability
+   */
+  static assert(value: unknown): asserts value is DelegatingKnowledgeKnownAppliedWikiOutputsPort {
+    requireState(value);
+  }
+
+  /**
+   * Requires that an exact stable port currently delegates to one expected production reader.
+   *
+   * @param value - Unknown candidate stable port
+   * @param delegate - Exact production reader expected for the current generation
+   */
+  static assertCurrentDelegate(
+    value: unknown,
+    delegate: KnowledgeKnownAppliedWikiOutputsPort
+  ): asserts value is DelegatingKnowledgeKnownAppliedWikiOutputsPort {
+    const state = requireState(value);
+    if (
+      state.disposed ||
+      typeof delegate !== "object" ||
+      delegate === null ||
+      state.generation.delegate.owner !== delegate
+    ) {
+      throw createAbortError();
+    }
   }
 
   /** Atomically replaces the read generation and invalidates all old sessions. */

@@ -3,6 +3,7 @@ import {
   createTransactionCommitReceipt,
   type TransactionCommitReceipt,
 } from "@/knowledge/changeset/ChangeSetTransaction";
+import type { ObsidianKnowledgeCompilerTargetVisitPort } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
 import {
   ALL_KNOWLEDGE_FILE_MUTATIONS,
   type ChangeSetValidator,
@@ -18,6 +19,8 @@ import {
   createKnowledgeForwardRevisionIntent,
   createKnowledgeForwardRevisionIntentDigest,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
+import { KnowledgeProductionForwardRevisionProposalCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionProposalCoordinator";
+import { KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   createKnowledgeForwardRevisionPendingProposalRecord,
   createKnowledgeForwardRevisionRequest,
@@ -26,6 +29,8 @@ import {
   createKnowledgeForwardRevisionPublishedProposal,
   snapshotKnowledgeForwardRevisionReviewSnapshot,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshot";
+import { migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
+import { createKnowledgeForwardRevisionProposalAuthorityQuery } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalAuthority";
 import {
   IngestQueue,
   type IngestExecutor,
@@ -87,6 +92,7 @@ import {
 } from "@/knowledge/review/ReviewRejectTransition";
 import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
+import { projectKnowledgeKnownAppliedWikiOutputIndex } from "@/knowledge/runtime/KnowledgeKnownAppliedWikiOutputProjector";
 import {
   KnowledgeApplyCommitAuthorityError,
   KnowledgeApplyCommitLedgerConflictError,
@@ -131,6 +137,8 @@ import {
   type KnowledgeRuntimeStudioBundleSnapshot,
   type KnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
+import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -1553,6 +1561,54 @@ function createForwardPublicationEvidence(
   };
 }
 
+/** Creates the exact R3b observation query for the historical forward output. */
+function createForwardAuthorityQuery(state: KnowledgeRuntimeStoreSnapshot) {
+  const evidence = createForwardPublicationEvidence(state);
+  const intent = evidence.intent as ReturnType<typeof createKnowledgeForwardRevisionIntent>;
+  const selected = projectKnowledgeKnownAppliedWikiOutputIndexForTest(state).outputs.find(
+    (item) => item.contentHash === evidence.selectedContentHash
+  );
+  if (!selected) throw new Error("Expected selected strict known output");
+  return createKnowledgeForwardRevisionProposalAuthorityQuery({
+    bundleId: "personal",
+    pagePath: intent.pagePath,
+    selectedContentHash: evidence.selectedContentHash,
+    selectedAppliedAt: selected.newestAppliedAt,
+    selectedVerifiedApplyCount: selected.verifiedApplyCount,
+    vaultObservedBeforeHash: evidence.vaultObservedBeforeHash,
+  });
+}
+
+/** Projects the strict known-output index from one test Runtime envelope. */
+function projectKnowledgeKnownAppliedWikiOutputIndexForTest(state: KnowledgeRuntimeStoreSnapshot) {
+  const evidence = createForwardPublicationEvidence(state);
+  const intent = evidence.intent as ReturnType<typeof createKnowledgeForwardRevisionIntent>;
+  const manifest = state.manifests.find((slot) => slot.bundleId === "personal")
+    ?.value as SourceManifest;
+  const review = state.reviews.find((slot) => slot.bundleId === "personal")
+    ?.value as ChangeSetReviewSnapshot;
+  const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
+  const page = source?.lastSuccessful?.generatedPages.find(
+    (candidate) => candidate.path === intent.pagePath
+  );
+  if (!page?.contentHash) throw new Error("Expected current forward target page");
+  return projectKnowledgeKnownAppliedWikiOutputIndex({
+    runtimeId: state.runtimeId,
+    runtimeRevision: state.revision,
+    bundleId: "personal",
+    pagePath: intent.pagePath,
+    applyCommits: state.applyCommits,
+    review,
+    manifestRevision: manifest.revision,
+    currentManifestPage: {
+      path: page.path,
+      windowsPathKey: toWindowsPathKey(page.path),
+      ownership: page.ownership,
+      contentHash: page.contentHash,
+    },
+  });
+}
+
 /** Creates clean exact historical/current Apply authority for forward publication tests. */
 async function createForwardPublicationHarness(clock: () => number = () => 1) {
   const historicalManifest = createRegisteredManifest();
@@ -1605,6 +1661,33 @@ async function createForwardPublicationHarness(clock: () => number = () => 1) {
     port: new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime),
     evidence: createForwardPublicationEvidence(clean),
     currentJournal: current.journal,
+  };
+}
+
+/** Creates a minimal production Vault observer for one exact current Wiki page. */
+function createForwardCurrentTargetVisitor(
+  pagePath: string,
+  currentContent: string,
+  sessions: unknown[]
+): ObsidianKnowledgeCompilerTargetVisitPort {
+  return {
+    /** Reports the requested page with its exact current bytes. */
+    async visit(requests, signal, options, visitor): Promise<void> {
+      if (signal.aborted) throw new DOMException("The operation was aborted", "AbortError");
+      if (requests.length !== 1 || requests[0].path !== pagePath || options.maxFileBytes < 1) {
+        throw new Error("Unexpected production target visit");
+      }
+      sessions.push(requests);
+      await visitor(
+        {
+          targetId: requests[0].targetId,
+          kind: "file",
+          path: pagePath,
+          content: currentContent,
+        },
+        new TextEncoder().encode(currentContent).byteLength
+      );
+    },
   };
 }
 
@@ -2665,7 +2748,7 @@ describe("KnowledgeRuntimeStore", () => {
       ...legacy,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: migrated.runtimeId,
-      revision: 11,
+      revision: 12,
       forwardRevisionReviews: [],
       reviews: [
         {
@@ -2748,7 +2831,7 @@ describe("KnowledgeRuntimeStore", () => {
     const authorityQueue = authority.queues[0].value as IngestQueueSnapshot;
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 11,
+      revision: 12,
       activeTransaction: { transactionId: proof.journal.transactionId },
       inputRevisions: [
         {
@@ -2797,7 +2880,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await file.read()).toBe(committed);
     expect(JSON.parse(committed)).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 11,
+      revision: 12,
     });
   });
 
@@ -2826,7 +2909,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: "1".repeat(32),
-      revision: 10,
+      revision: 11,
       queues: [
         {
           bundleId: "personal",
@@ -8487,7 +8570,7 @@ describe("KnowledgeRuntimeStore", () => {
 });
 
 describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
-  it("atomically migrates v5 by adding only an empty forward namespace and one revision", async () => {
+  it("atomically migrates v5 through empty v1 and v2 forward namespaces", async () => {
     const file = new MemoryAtomicRuntimeFile();
     const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
     const { forwardRevisionReviews: _forwardRevisionReviews, ...withoutForward } = current;
@@ -8500,8 +8583,105 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(JSON.parse(await file.read())).toEqual({
       ...previous,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 8,
+      revision: 9,
       forwardRevisionReviews: [],
+    });
+  });
+
+  it("migrates v6 forward v1 slots to v7 v2 without changing publication identity", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
+    const published = createForwardPublishedFixture(
+      "personal",
+      "Wiki/Migrated.md",
+      current.runtimeId,
+      "# migrated\n",
+      1,
+      3
+    );
+    const previous = {
+      ...current,
+      version: 6,
+      revision: 3,
+      forwardRevisionReviews: [
+        {
+          bundleId: "personal",
+          value: snapshotKnowledgeForwardRevisionReviewSnapshot({
+            version: 1,
+            bundleId: "personal",
+            revision: 1,
+            lastRequestRevision: 1,
+            records: [published],
+          }),
+        },
+      ],
+    };
+    await file.initialize(JSON.stringify(previous));
+
+    await new KnowledgeRuntimeStore(file).initialize();
+
+    const migrated = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(migrated).toMatchObject({ version: 7, revision: 4 });
+    expect(migrated.forwardRevisionReviews[0].value).toMatchObject({
+      version: 2,
+      revision: 1,
+      lastRequestRevision: 1,
+      records: [
+        {
+          state: "pending",
+          proposal: { proposalId: published.proposal.proposalId },
+          proposalDigest: published.proposalDigest,
+          publishedRuntimeRevision: 3,
+          proposalStoreRevision: 1,
+        },
+      ],
+    });
+  });
+
+  it("migrates multiple v6 forward Bundles and rejects outer revision overflow", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
+    const previous = {
+      ...current,
+      version: 6,
+      revision: 2,
+      forwardRevisionReviews: ["personal", "work"].map((bundleId, index) => ({
+        bundleId,
+        value: snapshotKnowledgeForwardRevisionReviewSnapshot({
+          version: 1,
+          bundleId,
+          revision: 1,
+          lastRequestRevision: 1,
+          records: [
+            createForwardPublishedFixture(
+              bundleId,
+              `Wiki/${bundleId}.md`,
+              current.runtimeId,
+              `# ${bundleId}\n`,
+              1,
+              index + 1
+            ),
+          ],
+        }),
+      })),
+    };
+    await file.initialize(JSON.stringify(previous));
+    await expect(new KnowledgeRuntimeStore(file).initialize()).resolves.toBeUndefined();
+    const migrated = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(migrated.forwardRevisionReviews.map((slot) => slot.value)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ version: 2, bundleId: "personal" }),
+        expect.objectContaining({ version: 2, bundleId: "work" }),
+      ])
+    );
+
+    const overflowFile = new MemoryAtomicRuntimeFile();
+    await overflowFile.initialize(
+      JSON.stringify({ ...previous, revision: Number.MAX_SAFE_INTEGER })
+    );
+    await expect(new KnowledgeRuntimeStore(overflowFile).initialize()).rejects.toMatchObject({
+      name: KnowledgeRuntimeMigrationUnsafeError.name,
+      reason: "revision_overflow",
     });
   });
 
@@ -8739,13 +8919,15 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     state.forwardRevisionReviews = [
       {
         bundleId: "personal",
-        value: snapshotKnowledgeForwardRevisionReviewSnapshot({
-          version: 1,
-          bundleId: "personal",
-          revision: records.length,
-          lastRequestRevision: records.length,
-          records,
-        }),
+        value: migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2(
+          snapshotKnowledgeForwardRevisionReviewSnapshot({
+            version: 1,
+            bundleId: "personal",
+            revision: records.length,
+            lastRequestRevision: records.length,
+            records,
+          })
+        ),
       },
     ];
     harness.file.replaceContent(JSON.stringify(state));
@@ -8778,22 +8960,24 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     state.revision = 1;
     state.forwardRevisionReviews = ["personal", "work"].map((bundleId) => ({
       bundleId,
-      value: snapshotKnowledgeForwardRevisionReviewSnapshot({
-        version: 1,
-        bundleId,
-        revision: 1,
-        lastRequestRevision: 1,
-        records: [
-          createForwardPublishedFixture(
-            bundleId,
-            `Wiki/${bundleId}.md`,
-            state.runtimeId,
-            `# ${bundleId}\n`,
-            1,
-            1
-          ),
-        ],
-      }),
+      value: migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2(
+        snapshotKnowledgeForwardRevisionReviewSnapshot({
+          version: 1,
+          bundleId,
+          revision: 1,
+          lastRequestRevision: 1,
+          records: [
+            createForwardPublishedFixture(
+              bundleId,
+              `Wiki/${bundleId}.md`,
+              state.runtimeId,
+              `# ${bundleId}\n`,
+              1,
+              1
+            ),
+          ],
+        })
+      ),
     }));
     await file.initialize(JSON.stringify(state));
 
@@ -8803,8 +8987,343 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
   });
 });
 
+describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
+  it("projects exact historical/current authority from one read without writing", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const query = createForwardAuthorityQuery(state);
+    const before = await harness.file.read();
+    const readsBefore = harness.file.getReadCallCount();
+
+    const authority = await harness.port.readForwardRevisionProposalAuthority(query);
+
+    expect(authority).toMatchObject({
+      runtimeId: state.runtimeId,
+      runtimeRevision: state.revision,
+      query,
+      intent: {
+        bundleId: "personal",
+        pagePath: query.pagePath,
+        historical: {
+          selectedContentHash: query.selectedContentHash,
+          appliedAt: query.selectedAppliedAt,
+          sourceId: "source-1",
+          inputRevision: 1,
+        },
+        current: {
+          ownership: "generated",
+          sourceOrigin: "ingest",
+          sourceIds: ["source-1"],
+          manifestBaseHash: query.vaultObservedBeforeHash,
+          vaultObservedBeforeHash: query.vaultObservedBeforeHash,
+        },
+      },
+      historicalReviewAuthority: {
+        acceptedRecordRevision: 1,
+        targetChange: {
+          path: query.pagePath,
+          operation: "create",
+          afterHash: query.selectedContentHash,
+          sourceRefs: ["source-1"],
+        },
+        manifestPage: {
+          path: query.pagePath,
+          ownership: "generated",
+          contentHash: query.selectedContentHash,
+        },
+      },
+    });
+    expect(harness.file.getReadCallCount()).toBe(readsBefore + 1);
+    expect(await harness.file.read()).toBe(before);
+  });
+
+  it("returns null for selected metadata, current hash, and current-output staleness", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const query = createForwardAuthorityQuery(state);
+
+    for (const stale of [
+      { ...query, selectedAppliedAt: query.selectedAppliedAt + 1 },
+      { ...query, selectedVerifiedApplyCount: query.selectedVerifiedApplyCount + 1 },
+      { ...query, selectedContentHash: HASH_C },
+      { ...query, vaultObservedBeforeHash: HASH_C },
+      {
+        ...query,
+        selectedContentHash: query.vaultObservedBeforeHash,
+        selectedAppliedAt: 340,
+      },
+    ]) {
+      await expect(harness.port.readForwardRevisionProposalAuthority(stale)).resolves.toBeNull();
+    }
+  });
+
+  it("rejects persisted shared-proof and source-origin drift", async () => {
+    const sharedHarness = await createForwardPublicationHarness(() => 500);
+    const sharedState = JSON.parse(
+      await sharedHarness.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+    const sharedQuery = createForwardAuthorityQuery(sharedState);
+    const sharedManifest = sharedState.manifests[0].value as SourceManifest;
+    const sharedPage = sharedManifest.entries[0].lastSuccessful?.generatedPages[0];
+    if (sharedPage) sharedPage.ownership = "shared";
+    sharedHarness.file.replaceContent(JSON.stringify(sharedState));
+    await expect(
+      sharedHarness.port.readForwardRevisionProposalAuthority(sharedQuery)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+
+    for (const mutate of [
+      (state: KnowledgeRuntimeStoreSnapshot) => {
+        const manifest = state.manifests[0].value as SourceManifest;
+        manifest.entries[0].custody = "managed_copy";
+        manifest.entries[0].extensions = {
+          ...manifest.entries[0].extensions,
+          [KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY]: {
+            version: 1,
+            operation: "query_writeback",
+            captureDigest: HASH_A,
+            captureContentHash: HASH_A,
+          },
+        };
+      },
+    ]) {
+      const harness = await createForwardPublicationHarness(() => 500);
+      const clean = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+      const query = createForwardAuthorityQuery(clean);
+      mutate(clean);
+      harness.file.replaceContent(JSON.stringify(clean));
+      await expect(harness.port.readForwardRevisionProposalAuthority(query)).rejects.toBeInstanceOf(
+        KnowledgeRuntimeStoreCorruptError
+      );
+    }
+  });
+
+  it("treats exact-case path drift as persisted corruption and retired history as unavailable", async () => {
+    const caseHarness = await createForwardPublicationHarness(() => 500);
+    const caseState = JSON.parse(await caseHarness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const caseQuery = createForwardAuthorityQuery(caseState);
+    const caseManifest = caseState.manifests[0].value as SourceManifest;
+    const casePage = caseManifest.entries[0].lastSuccessful?.generatedPages[0];
+    if (casePage) casePage.path = casePage.path.toLowerCase();
+    caseHarness.file.replaceContent(JSON.stringify(caseState));
+    await expect(
+      caseHarness.port.readForwardRevisionProposalAuthority(caseQuery)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+
+    const retiredHarness = await createForwardPublicationHarness(() => 500);
+    const retiredState = JSON.parse(
+      await retiredHarness.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+    const retiredQuery = createForwardAuthorityQuery(retiredState);
+    const manifest = retiredState.manifests[0].value as SourceManifest;
+    const retiredManifest = projectKnowledgeSourceRetirement(
+      manifest,
+      createKnowledgeSourceRetirementRecord({
+        bundleId: manifest.bundleId,
+        requestToken: HASH_A,
+        reason: "user_requested",
+        retiredAt: 500,
+        retiredManifestRevision: manifest.revision + 1,
+        source: manifest.entries[0],
+      })
+    );
+    retiredState.manifests[0].value = retiredManifest;
+    retiredHarness.file.replaceContent(JSON.stringify(retiredState));
+    await expect(
+      retiredHarness.port.readForwardRevisionProposalAuthority(retiredQuery)
+    ).resolves.toBeNull();
+  });
+
+  it("projects latest no-changes freshness and rejects historical/source proof drift", async () => {
+    const noChanges = await createForwardPublicationHarness(() => 500);
+    await commitForwardNoChanges(noChanges, HASH_A);
+    const noChangesState = JSON.parse(await noChanges.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const refreshed = createForwardAuthorityQuery(noChangesState);
+    await expect(
+      noChanges.port.readForwardRevisionProposalAuthority(refreshed)
+    ).resolves.toMatchObject({
+      intent: { current: { inputRevision: 3, sourceContentHash: HASH_A } },
+    });
+
+    const drifted = await createForwardPublicationHarness(() => 500);
+    const driftedState = JSON.parse(await drifted.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const driftedQuery = createForwardAuthorityQuery(driftedState);
+    driftedState.applyCommits[0].inputRevision = 99;
+    drifted.file.replaceContent(JSON.stringify(driftedState));
+    await expect(
+      drifted.port.readForwardRevisionProposalAuthority(driftedQuery)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+  });
+
+  it("exposes only pinned authority/review/publish methods and rejects forged ports", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const query = createForwardAuthorityQuery(state);
+    const prototype = KnowledgeRuntimeStore.prototype;
+    const originalRead = Object.getOwnPropertyDescriptor(
+      prototype,
+      "readForwardRevisionProposalAuthority"
+    );
+    if (!originalRead) throw new Error("Expected canonical forward authority read");
+    Object.defineProperty(prototype, "readForwardRevisionProposalAuthority", {
+      configurable: true,
+      value: () => Promise.resolve({ kind: "forged" }),
+    });
+    try {
+      await expect(harness.port.readForwardRevisionProposalAuthority(query)).resolves.toMatchObject(
+        { kind: "forward_revision_proposal_authority" }
+      );
+    } finally {
+      Object.defineProperty(prototype, "readForwardRevisionProposalAuthority", originalRead);
+    }
+    await expect(harness.port.readForwardRevisionReview("personal")).resolves.toMatchObject({
+      bundleId: "personal",
+    });
+    await expect(
+      harness.port.publishForwardRevisionProposalAtomically(harness.evidence)
+    ).resolves.toMatchObject({ outcome: "published" });
+
+    class ForgedPortSubclass extends KnowledgeRuntimeForwardRevisionProposalPublicationPort {
+      /** Deliberately replaces the trusted proposal-authority read. */
+      override async readForwardRevisionProposalAuthority() {
+        return null;
+      }
+    }
+    const subclass = new ForgedPortSubclass(harness.runtime);
+    expect(() => KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(subclass)).toThrow(
+      TypeError
+    );
+    const forged = Object.create(
+      KnowledgeRuntimeForwardRevisionProposalPublicationPort.prototype
+    ) as unknown;
+    expect(() => KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(forged)).toThrow(
+      TypeError
+    );
+    expect(() =>
+      KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(new Proxy(harness.port, {}))
+    ).toThrow(TypeError);
+  });
+
+  it("chains the genuine facade authority read, atomic publication, and Review read", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const query = createForwardAuthorityQuery(state);
+
+    const authority = await harness.port.readForwardRevisionProposalAuthority(query);
+    if (!authority) throw new Error("Expected genuine Runtime proposal authority");
+    const published = await harness.port.publishForwardRevisionProposalAtomically({
+      intent: authority.intent,
+      intentDigest: authority.intentDigest,
+      historicalReviewAuthority: authority.historicalReviewAuthority,
+      selectedContent: harness.evidence.selectedContent,
+      selectedContentHash: query.selectedContentHash,
+      vaultObservedBeforeHash: query.vaultObservedBeforeHash,
+    });
+    const review = await harness.port.readForwardRevisionReview("personal");
+
+    expect(published).toMatchObject({ outcome: "published", proposalStoreRevision: 1 });
+    expect(review).toMatchObject({
+      revision: 1,
+      records: [
+        {
+          proposal: {
+            proposalId: published.proposalId,
+            request: { intentDigest: authority.intentDigest },
+          },
+        },
+      ],
+    });
+  });
+
+  it("publishes through genuine production known-output and Runtime capabilities", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const query = createForwardAuthorityQuery(state);
+    const currentContent = "# Current forward target\n";
+    const targetVisits: unknown[] = [];
+    const targetVisitor = createForwardCurrentTargetVisitor(
+      query.pagePath,
+      currentContent,
+      targetVisits
+    );
+    const knownOutputsDelegate = new KnowledgeProductionKnownAppliedWikiOutputsCoordinator({
+      runtime: harness.runtime,
+      bundles: [{ bundle: createBundle(), targetVisitor }],
+      assertCurrent: () => undefined,
+    });
+    const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    knownOutputs.replaceDelegate(knownOutputsDelegate);
+    const session = await knownOutputs.inspectKnownOutputs(
+      { pagePath: query.pagePath },
+      new AbortController().signal
+    );
+    const selected = session.items.find(
+      (item) =>
+        item.appliedAt === query.selectedAppliedAt &&
+        item.verifiedApplyCount === query.selectedVerifiedApplyCount
+    );
+    if (!selected) throw new Error("Expected the historical production output selection");
+
+    const coordinator = new KnowledgeProductionForwardRevisionProposalCoordinator({
+      knownOutputs,
+      knownOutputsDelegate,
+      runtime: harness.port,
+      bundles: [{ bundleId: "personal", wikiRoot: "Wiki" }],
+      assertCurrent: () => undefined,
+    });
+    const wrongDelegate = new KnowledgeProductionKnownAppliedWikiOutputsCoordinator({
+      runtime: harness.runtime,
+      bundles: [{ bundle: createBundle(), targetVisitor }],
+      assertCurrent: () => undefined,
+    });
+    expect(
+      () =>
+        new KnowledgeProductionForwardRevisionProposalCoordinator({
+          knownOutputs,
+          knownOutputsDelegate: wrongDelegate,
+          runtime: harness.port,
+          bundles: [{ bundleId: "personal", wikiRoot: "Wiki" }],
+          assertCurrent: () => undefined,
+        })
+    ).toThrow(DOMException);
+
+    const copiedSession = JSON.parse(JSON.stringify(session)) as typeof session;
+    await expect(
+      coordinator.proposeKnownOutput(
+        copiedSession,
+        selected.outputRef,
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "stale" });
+    const result = await coordinator.proposeKnownOutput(
+      session,
+      selected.outputRef,
+      new AbortController().signal
+    );
+    if (result.kind !== "published") throw new Error("Expected one production publication");
+    const review = await harness.port.readForwardRevisionReview("personal");
+
+    expect(session).toMatchObject({ currentState: "applied", currentMatch: "current_applied" });
+    expect(selected.relation).toBe("earlier_known");
+    expect(result.receipt).toMatchObject({ outcome: "published", proposalStoreRevision: 1 });
+    expect(review).toMatchObject({
+      version: 2,
+      revision: 1,
+      records: [
+        {
+          state: "pending",
+          proposal: {
+            proposalId: result.receipt.proposalId,
+            request: { selectedContentHash: query.selectedContentHash },
+          },
+        },
+      ],
+    });
+    expect(targetVisits.length).toBeGreaterThan(0);
+  });
+});
+
 describe("KnowledgeRuntimeStore source retirement", () => {
-  it("migrates runtime v4 through the v5 and v6 downgrade fences", async () => {
+  it("migrates runtime v4 through the v5, v6, and v7 downgrade fences", async () => {
     const file = new MemoryAtomicRuntimeFile();
     const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
     const { forwardRevisionReviews: _forwardRevisionReviews, ...previousV4 } = current;
@@ -8822,7 +9341,7 @@ describe("KnowledgeRuntimeStore source retirement", () => {
     expect(JSON.parse(await file.read())).toEqual({
       ...current,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 9,
+      revision: 10,
     });
   });
 

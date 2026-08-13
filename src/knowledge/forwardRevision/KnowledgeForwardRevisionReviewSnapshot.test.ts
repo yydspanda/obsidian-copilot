@@ -29,7 +29,11 @@ const HASH_D = "d".repeat(64);
 const HASH_E = "e".repeat(64);
 
 /** Creates one canonical intent for a numbered request. */
-function createIntent(pagePath = "Wiki/Topic.md", historicalTransaction = "transaction-old") {
+function createIntent(
+  pagePath = "Wiki/Topic.md",
+  historicalTransaction = "transaction-old",
+  selectedContentHash = SELECTED_HASH
+) {
   return createKnowledgeForwardRevisionIntent({
     bundleId: "personal",
     pagePath,
@@ -47,7 +51,7 @@ function createIntent(pagePath = "Wiki/Topic.md", historicalTransaction = "trans
       manifestAfterRevision: 4,
       manifestAfterDigest: HASH_E,
       appliedAt: 100,
-      selectedContentHash: SELECTED_HASH,
+      selectedContentHash,
     },
     current: {
       currentState: "applied",
@@ -71,9 +75,11 @@ function createIntent(pagePath = "Wiki/Topic.md", historicalTransaction = "trans
 function createProposal(
   requestRevision = 1,
   pagePath = "Wiki/Topic.md",
-  historicalTransaction = "transaction-old"
+  historicalTransaction = "transaction-old",
+  selectedContent = SELECTED_CONTENT
 ) {
-  const intent = createIntent(pagePath, historicalTransaction);
+  const selectedContentHash = createFileContentHash(selectedContent);
+  const intent = createIntent(pagePath, historicalTransaction, selectedContentHash);
   const request = createKnowledgeForwardRevisionRequest({
     requestRevision,
     runtimeId: "runtime-1",
@@ -91,13 +97,13 @@ function createProposal(
         changeId: `change-${requestRevision}`,
         path: pagePath,
         operation: "update",
-        afterHash: SELECTED_HASH,
+        afterHash: selectedContentHash,
         sourceRefs: ["source-1"],
       },
-      manifestPage: { path: pagePath, ownership: "generated", contentHash: SELECTED_HASH },
+      manifestPage: { path: pagePath, ownership: "generated", contentHash: selectedContentHash },
     },
-    selectedContent: SELECTED_CONTENT,
-    selectedContentHash: SELECTED_HASH,
+    selectedContent,
+    selectedContentHash,
     requestedAt: 120 + requestRevision,
   });
   return createKnowledgeForwardRevisionPendingProposalRecord({
@@ -112,10 +118,11 @@ function createPublished(
   proposalStoreRevision = requestRevision,
   publishedRuntimeRevision = 10 + requestRevision,
   pagePath = "Wiki/Topic.md",
-  historicalTransaction = "transaction-old"
+  historicalTransaction = "transaction-old",
+  selectedContent = SELECTED_CONTENT
 ) {
   return createKnowledgeForwardRevisionPublishedProposal({
-    proposal: createProposal(requestRevision, pagePath, historicalTransaction),
+    proposal: createProposal(requestRevision, pagePath, historicalTransaction, selectedContent),
     publishedRuntimeRevision,
     proposalStoreRevision,
   });
@@ -124,6 +131,32 @@ function createPublished(
 /** Produces a mutable JSON clone for adversarial persisted-state tests. */
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** Makes the aggregate precheck observe a short body before strict snapshotting sees the real one. */
+function createShortThenFullProposalProxy(
+  published: KnowledgeForwardRevisionPublishedProposalV1,
+  onDeepRead?: () => void
+): unknown {
+  const target = clone(published) as unknown as Record<string, unknown>;
+  let proposalDescriptorReads = 0;
+  return new Proxy(target, {
+    getOwnPropertyDescriptor: (proxyTarget, key) => {
+      if (key === "proposal") {
+        proposalDescriptorReads += 1;
+        if (proposalDescriptorReads === 1) {
+          return {
+            value: { request: { selectedContent: "x" } },
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          };
+        }
+        onDeepRead?.();
+      }
+      return Reflect.getOwnPropertyDescriptor(proxyTarget, key);
+    },
+  });
 }
 
 describe("KnowledgeForwardRevisionReviewSnapshot", () => {
@@ -322,6 +355,61 @@ describe("KnowledgeForwardRevisionReviewSnapshot", () => {
         records,
       })
     ).toThrow(KnowledgeForwardRevisionReviewSnapshotValidationError);
+  });
+
+  it("rechecks detached proposal bodies after a stateful proxy evades the raw precheck", () => {
+    const selectedContent = "x".repeat(2_000_000);
+    const records = Array.from({ length: 9 }, (_, index) =>
+      createShortThenFullProposalProxy(
+        createPublished(
+          index + 1,
+          index + 1,
+          index + 11,
+          `Wiki/Large-${index + 1}.md`,
+          `transaction-large-${index + 1}`,
+          selectedContent
+        )
+      )
+    );
+
+    expect(() =>
+      snapshotKnowledgeForwardRevisionReviewSnapshot({
+        version: 1,
+        bundleId: "personal",
+        revision: records.length,
+        lastRequestRevision: records.length,
+        records,
+      })
+    ).toThrow(KnowledgeForwardRevisionReviewSnapshotValidationError);
+  });
+
+  it("stops deep snapshotting when detached proposal bodies cross the aggregate limit", () => {
+    const selectedContent = "x".repeat(2_000_000);
+    let afterLimitDeepReads = 0;
+    const records = Array.from({ length: 10 }, (_, index) =>
+      createShortThenFullProposalProxy(
+        createPublished(
+          index + 1,
+          index + 1,
+          index + 11,
+          `Wiki/Stop-${index + 1}.md`,
+          `transaction-stop-${index + 1}`,
+          selectedContent
+        ),
+        index === 9 ? () => (afterLimitDeepReads += 1) : undefined
+      )
+    );
+
+    expect(() =>
+      snapshotKnowledgeForwardRevisionReviewSnapshot({
+        version: 1,
+        bundleId: "personal",
+        revision: records.length,
+        lastRequestRevision: records.length,
+        records,
+      })
+    ).toThrow(KnowledgeForwardRevisionReviewSnapshotValidationError);
+    expect(afterLimitDeepReads).toBe(0);
   });
 
   it("returns detached safe diagnostics without retaining invalid input", () => {

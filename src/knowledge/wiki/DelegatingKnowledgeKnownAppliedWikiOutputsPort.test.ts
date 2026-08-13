@@ -221,4 +221,30 @@ describe("DelegatingKnowledgeKnownAppliedWikiOutputsPort", () => {
       port.inspectKnownOutputs({ pagePath: "Wiki/Page.md" }, new AbortController().signal)
     ).rejects.toMatchObject({ name: "AbortError" });
   });
+
+  it("authenticates only the exact stable port that owns opaque output sessions", () => {
+    const port = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    const delegate = createDelegate();
+    port.replaceDelegate(delegate);
+    expect(() => DelegatingKnowledgeKnownAppliedWikiOutputsPort.assert(port)).not.toThrow();
+    expect(() =>
+      DelegatingKnowledgeKnownAppliedWikiOutputsPort.assertCurrentDelegate(port, delegate)
+    ).not.toThrow();
+    expect(() =>
+      DelegatingKnowledgeKnownAppliedWikiOutputsPort.assertCurrentDelegate(port, createDelegate())
+    ).toThrow(DOMException);
+    expect(() =>
+      DelegatingKnowledgeKnownAppliedWikiOutputsPort.assert(
+        Object.create(DelegatingKnowledgeKnownAppliedWikiOutputsPort.prototype)
+      )
+    ).toThrow(DOMException);
+    expect(() =>
+      DelegatingKnowledgeKnownAppliedWikiOutputsPort.assert(new Proxy(port, {}))
+    ).toThrow(DOMException);
+
+    class ForgedSubclass extends DelegatingKnowledgeKnownAppliedWikiOutputsPort {}
+    expect(() =>
+      DelegatingKnowledgeKnownAppliedWikiOutputsPort.assert(new ForgedSubclass())
+    ).toThrow(DOMException);
+  });
 });
