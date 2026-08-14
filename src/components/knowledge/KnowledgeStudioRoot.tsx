@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
 import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 import type { KnowledgeReviewPlan } from "@/knowledge/review/ReviewDecision";
+import type { KnowledgeForwardRevisionStudioReview } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
 import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
 import type { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
 import type {
@@ -61,6 +62,7 @@ const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"
   cancel: "Cancelling the selected job…",
   retry: "Queuing the selected job for retry…",
   submit_review: "Submitting the review decision…",
+  submit_forward_revision: "Submitting the forward revision decision…",
   check_source: "Checking the selected source…",
   retire_source: "Removing the selected source…",
   continue_recovery: "Continuing the selected recovery…",
@@ -259,6 +261,122 @@ function getSelectedReview(state: KnowledgeStudioState): Readonly<KnowledgeRevie
   );
 }
 
+/** Finds the forward row selected by the controller's opaque product reference. */
+function getSelectedForwardRevision(
+  state: KnowledgeStudioState
+): Readonly<KnowledgeForwardRevisionStudioReview> | undefined {
+  return state.snapshot?.forwardRevisionReviews?.find(
+    (review) => review.reviewRef === state.selectedForwardRevisionRef
+  );
+}
+
+/** Returns concise stable text for one forward product state. */
+function formatForwardRevisionState(state: KnowledgeForwardRevisionStudioReview["state"]): string {
+  switch (state) {
+    case "pending":
+      return "Needs decision";
+    case "accepted_ready":
+      return "Accepted · ready to apply";
+    case "applying":
+      return "Applying";
+    case "recovery_required":
+      return "Recovery required";
+  }
+}
+
+/** Renders an accepted or journal-owned forward row without exposing protocol identities. */
+function ForwardRevisionStatusPanel({
+  review,
+  state,
+  controller,
+}: {
+  review: Exclude<KnowledgeForwardRevisionStudioReview, { state: "pending" }>;
+  state: KnowledgeStudioState;
+  controller: KnowledgeStudioController;
+}): React.ReactElement {
+  const busy = state.pendingAction !== undefined;
+  if (review.state === "accepted_ready") {
+    return (
+      <section
+        aria-label="Accepted forward revision ready to apply"
+        className="tw-space-y-3 tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-4"
+      >
+        <div className="tw-flex tw-flex-wrap tw-items-start tw-justify-between tw-gap-3">
+          <div className="tw-min-w-0">
+            <h2 className="tw-m-0 tw-text-lg tw-font-semibold">Accepted revision ready to apply</h2>
+            <p className="tw-m-0 tw-mt-1 tw-break-all tw-font-mono tw-text-sm">{review.pagePath}</p>
+          </div>
+          <Badge variant="secondary">Accepted</Badge>
+        </div>
+        <p className="tw-m-0 tw-text-sm tw-text-muted">
+          The Review decision is durable. Validate and apply reruns current deterministic source,
+          citation, schema, and exact-file checks before creating a crash-safe journal.
+        </p>
+        {review.manualOverride ? (
+          <p className="tw-m-0 tw-text-xs tw-text-muted" role="note">
+            This decision contains a manual full-file edit. No model is called to rewrite it.
+          </p>
+        ) : null}
+        <p className="tw-m-0 tw-text-xs tw-text-muted" role="note">
+          This first release has no abandon or force-apply action. If current validation cannot
+          pass, the accepted decision stays visible and no file is overwritten.
+        </p>
+        <div className="tw-flex tw-flex-wrap tw-gap-2">
+          <Button
+            disabled={busy || state.snapshot?.commandCapabilities.forwardRevisionReview !== true}
+            type="button"
+            onClick={() => void controller.applyForwardRevision(review.reviewRef)}
+          >
+            {busy ? <Loader2 aria-hidden="true" className="tw-size-3 tw-animate-spin" /> : null}
+            Validate and apply
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => controller.selectTab("activity")}>
+            Back to activity
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  if (review.state === "applying") {
+    return (
+      <section
+        aria-label="Forward revision applying"
+        className="tw-space-y-2 tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-4"
+        role="status"
+      >
+        <div className="tw-flex tw-items-center tw-gap-2">
+          <Loader2 aria-hidden="true" className="tw-size-4 tw-animate-spin" />
+          <h2 className="tw-m-0 tw-text-lg tw-font-semibold">Applying accepted revision</h2>
+        </div>
+        <p className="tw-m-0 tw-break-all tw-font-mono tw-text-sm">{review.pagePath}</p>
+        <p className="tw-m-0 tw-text-sm tw-text-muted">
+          A durable {review.applyPhase} journal owns this exact file transition. Reload or disable
+          cannot turn it back into an unjournaled write. If Apply remains paused, reload the plugin
+          to run startup recovery.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section
+      aria-label="Forward revision recovery required"
+      className="tw-border-error tw-space-y-2 tw-rounded-xl tw-border tw-border-solid tw-bg-error tw-p-4"
+      role="alert"
+    >
+      <div className="tw-flex tw-items-center tw-gap-2">
+        <ShieldAlert aria-hidden="true" className="tw-size-4" />
+        <h2 className="tw-m-0 tw-text-lg tw-font-semibold">Forward Apply needs recovery</h2>
+      </div>
+      <p className="tw-m-0 tw-break-all tw-font-mono tw-text-sm">{review.pagePath}</p>
+      <p className="tw-m-0 tw-text-sm">
+        The Wiki file no longer matches either exact journal state. Copilot will not overwrite it.
+        Startup remains stopped and no automatic retry will overwrite the file. Inspect or restore
+        the exact file state, then use the supported recovery workflow before continuing.
+      </p>
+    </section>
+  );
+}
+
 /**
  * Renders the review inbox and the exact plan selected by the controller.
  *
@@ -274,9 +392,11 @@ function ReviewWorkspace({
   controller: KnowledgeStudioController;
 }): React.ReactElement {
   const reviews = state.snapshot?.reviews ?? [];
+  const forwardReviews = state.snapshot?.forwardRevisionReviews ?? [];
   const selectedReview = getSelectedReview(state);
+  const selectedForwardRevision = getSelectedForwardRevision(state);
 
-  if (reviews.length === 0) {
+  if (reviews.length === 0 && forwardReviews.length === 0) {
     return (
       <div
         className="tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-6 tw-text-center"
@@ -285,7 +405,7 @@ function ReviewWorkspace({
         <Inbox aria-hidden="true" className="tw-mx-auto tw-size-6 tw-text-muted" />
         <p className="tw-m-0 tw-mt-2 tw-text-sm tw-font-medium">No proposals are awaiting review</p>
         <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
-          Multi-file proposals will appear here after deterministic validation.
+          New proposals and accepted revisions awaiting Apply will appear here.
         </p>
         <Button
           className="tw-mt-3"
@@ -320,6 +440,24 @@ function ReviewWorkspace({
             </Button>
           );
         })}
+        {forwardReviews.map((review, index) => {
+          const selected = review.reviewRef === state.selectedForwardRevisionRef;
+          return (
+            <Button
+              key={review.reviewRef}
+              aria-label={`Open forward revision ${index + 1}`}
+              aria-pressed={selected}
+              size="sm"
+              variant={selected ? "default" : "secondary"}
+              onClick={() => controller.openForwardRevision(review.reviewRef)}
+            >
+              Forward revision {index + 1}
+              <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
+                {formatForwardRevisionState(review.state)}
+              </Badge>
+            </Button>
+          );
+        })}
       </nav>
 
       {selectedReview ? (
@@ -343,6 +481,31 @@ function ReviewWorkspace({
           }
           onDraftChange={(draft) => controller.updateReviewDraft(selectedReview, draft)}
           onSubmit={(command) => controller.submitReview(command)}
+        />
+      ) : selectedForwardRevision?.state === "pending" ? (
+        <KnowledgeReviewPanel
+          activeEdit={controller.getReviewActiveEdit(selectedForwardRevision.plan)}
+          busy={state.pendingAction !== undefined}
+          acceptCommandsEnabled={state.snapshot?.commandCapabilities.forwardRevisionReview === true}
+          rejectCommandsEnabled={state.snapshot?.commandCapabilities.forwardRevisionReview === true}
+          draft={controller.getReviewDraft(selectedForwardRevision.plan)}
+          plan={selectedForwardRevision.plan}
+          onBack={() => controller.selectTab("activity")}
+          onActiveEditChange={(activeEdit) =>
+            controller.updateReviewActiveEdit(selectedForwardRevision.plan, activeEdit)
+          }
+          onDraftChange={(draft) =>
+            controller.updateReviewDraft(selectedForwardRevision.plan, draft)
+          }
+          onSubmit={(command) =>
+            controller.submitForwardRevisionReview(selectedForwardRevision.reviewRef, command)
+          }
+        />
+      ) : selectedForwardRevision ? (
+        <ForwardRevisionStatusPanel
+          controller={controller}
+          review={selectedForwardRevision}
+          state={state}
         />
       ) : (
         <div className="tw-rounded-lg tw-bg-error tw-p-3 tw-text-sm tw-text-error" role="alert">
@@ -532,9 +695,10 @@ export function KnowledgeStudioRoot({
                 >
                   <TabIcon aria-hidden="true" className="tw-size-3" />
                   {tab.label}
-                  {tab.id === "review" && snapshot.reviews.length > 0 ? (
+                  {tab.id === "review" &&
+                  snapshot.reviews.length + (snapshot.forwardRevisionReviews?.length ?? 0) > 0 ? (
                     <Badge className="tw-ml-1 tw-shadow-none" variant="outline">
-                      {snapshot.reviews.length}
+                      {snapshot.reviews.length + (snapshot.forwardRevisionReviews?.length ?? 0)}
                     </Badge>
                   ) : null}
                   {tab.id === "recovery" && snapshot.recovery.items.length > 0 ? (

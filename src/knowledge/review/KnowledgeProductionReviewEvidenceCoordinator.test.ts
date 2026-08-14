@@ -357,4 +357,53 @@ describe("KnowledgeProductionReviewEvidenceCoordinator", () => {
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
+
+  it("recognizes serialized own-data cancellation without trusting hostile names", async () => {
+    const record = createRecord();
+    /** Creates a coordinator whose final navigation boundary rejects with one value. */
+    const createCoordinator = (failure: Error): KnowledgeProductionReviewEvidenceCoordinator =>
+      new KnowledgeProductionReviewEvidenceCoordinator({
+        runtime: new FixedRuntime(createProjection(record)),
+        bundle: createBundle(),
+        targetResolver: new MissingTargetResolver(),
+        sourceAuthority: {
+          resolve: async () => Object.freeze({ sourcePath: SOURCE_PATH }),
+        },
+        navigator: {
+          navigate: async () => {
+            throw failure;
+          },
+        },
+        assertCurrent: () => undefined,
+      });
+    const signal = new AbortController().signal;
+
+    await expect(
+      createCoordinator(Object.freeze({ name: "AbortError" }) as Error).openReviewEvidence(
+        BUNDLE_ID,
+        createRequest(record),
+        signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    let getterCalls = 0;
+    const accessorLookalike = {} as Error;
+    Object.defineProperty(accessorLookalike, "name", {
+      get: () => {
+        getterCalls += 1;
+        return "AbortError";
+      },
+    });
+    const proxyLookalike = new Proxy({} as Error, {
+      getOwnPropertyDescriptor: () => {
+        throw new Error("descriptor trap must fail closed");
+      },
+    });
+    for (const failure of [accessorLookalike, proxyLookalike]) {
+      await expect(
+        createCoordinator(failure).openReviewEvidence(BUNDLE_ID, createRequest(record), signal)
+      ).resolves.toEqual({ kind: "unavailable" });
+    }
+    expect(getterCalls).toBe(0);
+  });
 });

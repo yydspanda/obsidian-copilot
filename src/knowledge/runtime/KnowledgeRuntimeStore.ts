@@ -69,6 +69,10 @@ import {
   type KnowledgeForwardRevisionReviewSnapshotV2,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
 import {
+  projectKnowledgeForwardRevisionStudioSnapshot,
+  type KnowledgeForwardRevisionStudioSnapshot,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
+import {
   createKnowledgeForwardRevisionAcceptedDecisionRecord,
   createKnowledgeForwardRevisionRejectedDecisionRecord,
   createKnowledgeForwardRevisionTerminalDecisionRecordDigest,
@@ -7419,6 +7423,19 @@ function assertForwardRevisionPublicationAuthority(
   return freshness.completedAt;
 }
 
+/** Groups forward-Apply ledgers by Bundle without exposing their values to hint listeners. */
+function groupForwardRevisionApplyCommitsByBundle(
+  records: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[]
+): ReadonlyMap<string, readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[]> {
+  const grouped = new Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[]>();
+  for (const record of records) {
+    const existing = grouped.get(record.bundleId);
+    if (existing) existing.push(record);
+    else grouped.set(record.bundleId, [record]);
+  }
+  return grouped;
+}
+
 /**
  * Finds Bundle ids whose Studio-visible Runtime slots changed in one commit.
  *
@@ -7431,6 +7448,12 @@ function findStudioChangedBundleIds(
   next: KnowledgeRuntimeStoreSnapshot
 ): string[] {
   const bundleIds = new Set<string>();
+  const currentForwardCommits = groupForwardRevisionApplyCommitsByBundle(
+    current.forwardRevisionApplyCommits
+  );
+  const nextForwardCommits = groupForwardRevisionApplyCommitsByBundle(
+    next.forwardRevisionApplyCommits
+  );
   for (const collection of [
     "queues",
     "reviews",
@@ -7440,9 +7463,25 @@ function findStudioChangedBundleIds(
     for (const slot of current[collection]) bundleIds.add(slot.bundleId);
     for (const slot of next[collection]) bundleIds.add(slot.bundleId);
   }
+  if (current.activeForwardRevisionApply !== null) {
+    bundleIds.add(current.activeForwardRevisionApply.bundleId);
+  }
+  if (next.activeForwardRevisionApply !== null) {
+    bundleIds.add(next.activeForwardRevisionApply.bundleId);
+  }
+  for (const bundleId of currentForwardCommits.keys()) bundleIds.add(bundleId);
+  for (const bundleId of nextForwardCommits.keys()) bundleIds.add(bundleId);
   return [...bundleIds]
-    .filter(
-      (bundleId) =>
+    .filter((bundleId) => {
+      const currentActiveForwardApply =
+        current.activeForwardRevisionApply?.bundleId === bundleId
+          ? current.activeForwardRevisionApply
+          : null;
+      const nextActiveForwardApply =
+        next.activeForwardRevisionApply?.bundleId === bundleId
+          ? next.activeForwardRevisionApply
+          : null;
+      return (
         !exactJsonValuesEqual(
           findBundleSlot(current, "queues", bundleId),
           findBundleSlot(next, "queues", bundleId)
@@ -7458,8 +7497,14 @@ function findStudioChangedBundleIds(
         !exactJsonValuesEqual(
           findBundleSlot(current, "manifests", bundleId),
           findBundleSlot(next, "manifests", bundleId)
+        ) ||
+        !exactJsonValuesEqual(currentActiveForwardApply, nextActiveForwardApply) ||
+        !exactJsonValuesEqual(
+          currentForwardCommits.get(bundleId) ?? [],
+          nextForwardCommits.get(bundleId) ?? []
         )
-    )
+      );
+    })
     .sort(compareIdentifiers);
 }
 
@@ -8065,6 +8110,38 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   }
 
   /**
+   * Reads dedicated forward Review work from exactly one Runtime envelope.
+   *
+   * The projection retains strict durable proposal or accepted-decision material
+   * for a private product coordinator. It does not mint a Decision or Apply
+   * capability, and React-facing adapters must reduce it to opaque references.
+   *
+   * @param bundleId - Stable Bundle identifier
+   * @returns One bounded forward Studio classification at the outer Runtime revision
+   */
+  async readForwardRevisionStudioBundle(
+    bundleId: string
+  ): Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>> {
+    assertIdentifier(bundleId, "bundleId");
+    const state = await this.readState();
+    const reviewRaw = findForwardRevisionReviewSlot(state, bundleId);
+    const activeApply =
+      state.activeForwardRevisionApply?.bundleId === bundleId
+        ? state.activeForwardRevisionApply
+        : null;
+    return projectKnowledgeForwardRevisionStudioSnapshot({
+      runtimeId: state.runtimeId,
+      runtimeRevision: state.revision,
+      bundleId,
+      ...(reviewRaw === null ? {} : { review: reviewRaw }),
+      activeApply,
+      applyCommits: state.forwardRevisionApplyCommits.filter(
+        (record) => record.bundleId === bundleId
+      ),
+    });
+  }
+
+  /**
    * Reads every active source retirement candidate from one atomic Runtime envelope.
    *
    * The opaque token binds the complete Runtime and Manifest revision. A later
@@ -8441,71 +8518,84 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   ): Promise<Readonly<KnowledgeForwardRevisionPreparedApplyJournalV1>> {
     const authorization = requireForwardRevisionApplyBeginAuthorization(authorizationValue);
     const prepared = createPreparedForwardRevisionApplyJournal(authorization.projection);
-    return this.updateState((state) => {
-      try {
-        authorization.workflowLease.assertCurrent();
-        if (
-          !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
-            authorization.workflowLease,
+    let mutationAttempted = false;
+    try {
+      return await this.updateState((state) => {
+        try {
+          authorization.workflowLease.assertCurrent();
+          if (
+            !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+              authorization.workflowLease,
+              authorization.executionOwner
+            )
+          ) {
+            throw new TypeError();
+          }
+          KnowledgeForwardRevisionApplyCapability.assertExecutionOwner(
+            authorization.capability,
             authorization.executionOwner
+          );
+          const currentProjection = KnowledgeForwardRevisionApplyCapability.project(
+            authorization.capability
+          );
+          if (!exactJsonValuesEqual(currentProjection, authorization.projection)) {
+            throw new TypeError();
+          }
+        } catch {
+          throw createForwardRevisionApplyPortError("aborted");
+        }
+
+        if (state.activeForwardRevisionApply !== null) {
+          const current = snapshotKnowledgeForwardRevisionApplyJournal(
+            state.activeForwardRevisionApply
+          );
+          if (current.phase === "prepared" && exactJsonValuesEqual(current, prepared)) {
+            return { value: current };
+          }
+          throw createForwardRevisionApplyPortError("conflict");
+        }
+        if (state.activeTransaction !== null) {
+          throw createForwardRevisionApplyPortError("authority_unavailable");
+        }
+        if (
+          state.applyCommits.some((record) => record.transactionId === prepared.transactionId) ||
+          state.forwardRevisionApplyCommits.some(
+            (record) => record.transactionId === prepared.transactionId
           )
         ) {
-          throw new TypeError();
+          throw createForwardRevisionApplyPortError("conflict");
         }
-        KnowledgeForwardRevisionApplyCapability.assertExecutionOwner(
-          authorization.capability,
-          authorization.executionOwner
+        const currentAuthority = projectForwardRevisionApplyAuthority(
+          state,
+          authorization.projection.request
         );
-        const currentProjection = KnowledgeForwardRevisionApplyCapability.project(
-          authorization.capability
-        );
-        if (!exactJsonValuesEqual(currentProjection, authorization.projection)) {
-          throw new TypeError();
+        if (
+          currentAuthority === null ||
+          !exactJsonValuesEqual(currentAuthority, authorization.projection.afterAuthority)
+        ) {
+          throw createForwardRevisionApplyPortError("authority_unavailable");
         }
-      } catch {
-        throw createForwardRevisionApplyPortError("aborted");
-      }
-
-      if (state.activeForwardRevisionApply !== null) {
-        const current = snapshotKnowledgeForwardRevisionApplyJournal(
-          state.activeForwardRevisionApply
-        );
-        if (current.phase === "prepared" && exactJsonValuesEqual(current, prepared)) {
-          return { value: current };
+        assertForwardRevisionApplyBeginResources(state, prepared, this.maxTextCharacters);
+        mutationAttempted = true;
+        return {
+          next: {
+            ...state,
+            revision: state.revision + 1,
+            activeForwardRevisionApply: prepared,
+          },
+          value: prepared,
+        };
+      });
+    } catch (error) {
+      if (mutationAttempted) {
+        const confirmed = await this.confirmForwardRevisionApplyBegin(authorization.projection);
+        if (confirmed) {
+          this.emitStudioHints([prepared.bundleId]);
+          return confirmed;
         }
-        throw createForwardRevisionApplyPortError("conflict");
       }
-      if (state.activeTransaction !== null) {
-        throw createForwardRevisionApplyPortError("authority_unavailable");
-      }
-      if (
-        state.applyCommits.some((record) => record.transactionId === prepared.transactionId) ||
-        state.forwardRevisionApplyCommits.some(
-          (record) => record.transactionId === prepared.transactionId
-        )
-      ) {
-        throw createForwardRevisionApplyPortError("conflict");
-      }
-      const currentAuthority = projectForwardRevisionApplyAuthority(
-        state,
-        authorization.projection.request
-      );
-      if (
-        currentAuthority === null ||
-        !exactJsonValuesEqual(currentAuthority, authorization.projection.afterAuthority)
-      ) {
-        throw createForwardRevisionApplyPortError("authority_unavailable");
-      }
-      assertForwardRevisionApplyBeginResources(state, prepared, this.maxTextCharacters);
-      return {
-        next: {
-          ...state,
-          revision: state.revision + 1,
-          activeForwardRevisionApply: prepared,
-        },
-        value: prepared,
-      };
-    });
+      throw error;
+    }
   }
 
   /** Re-proves the deterministic prepared journal after an ambiguous atomic write result. */
@@ -8545,42 +8635,57 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     if (projection.transition === "finalize") {
       throw createForwardRevisionApplyPortError("dependency_invalid");
     }
-    return this.updateState((state) => {
-      assertForwardRevisionApplyTransitionAuthorizationCurrent(
-        authorization,
-        projection,
-        "advance"
-      );
-      if (state.activeForwardRevisionApply === null) {
-        throw createForwardRevisionApplyPortError("conflict");
+    let mutationAttempted = false;
+    try {
+      return await this.updateState((state) => {
+        assertForwardRevisionApplyTransitionAuthorizationCurrent(
+          authorization,
+          projection,
+          "advance"
+        );
+        if (state.activeForwardRevisionApply === null) {
+          throw createForwardRevisionApplyPortError("conflict");
+        }
+        const active = snapshotKnowledgeForwardRevisionApplyJournal(
+          state.activeForwardRevisionApply
+        );
+        if (exactJsonValuesEqual(active, projection.nextJournal)) {
+          return { value: active };
+        }
+        if (!exactJsonValuesEqual(active, projection.previousJournal)) {
+          throw createForwardRevisionApplyPortError("conflict");
+        }
+        const requiredRemainingRevisions =
+          projection.transition === "applying" ? 3 : projection.transition === "committed" ? 2 : 1;
+        if (state.revision > Number.MAX_SAFE_INTEGER - requiredRemainingRevisions) {
+          throw createForwardRevisionApplyPortError("resource_limit");
+        }
+        let revision: number;
+        try {
+          revision = nextStoreRevision(state);
+        } catch {
+          throw createForwardRevisionApplyPortError("resource_limit");
+        }
+        mutationAttempted = true;
+        return {
+          next: {
+            ...state,
+            revision,
+            activeForwardRevisionApply: projection.nextJournal,
+          },
+          value: projection.nextJournal,
+        };
+      });
+    } catch (error) {
+      if (mutationAttempted) {
+        const confirmed = await this.confirmForwardRevisionApplyAdvance(projection);
+        if (confirmed) {
+          this.emitStudioHints([projection.nextJournal.bundleId]);
+          return confirmed;
+        }
       }
-      const active = snapshotKnowledgeForwardRevisionApplyJournal(state.activeForwardRevisionApply);
-      if (exactJsonValuesEqual(active, projection.nextJournal)) {
-        return { value: active };
-      }
-      if (!exactJsonValuesEqual(active, projection.previousJournal)) {
-        throw createForwardRevisionApplyPortError("conflict");
-      }
-      const requiredRemainingRevisions =
-        projection.transition === "applying" ? 3 : projection.transition === "committed" ? 2 : 1;
-      if (state.revision > Number.MAX_SAFE_INTEGER - requiredRemainingRevisions) {
-        throw createForwardRevisionApplyPortError("resource_limit");
-      }
-      let revision: number;
-      try {
-        revision = nextStoreRevision(state);
-      } catch {
-        throw createForwardRevisionApplyPortError("resource_limit");
-      }
-      return {
-        next: {
-          ...state,
-          revision,
-          activeForwardRevisionApply: projection.nextJournal,
-        },
-        value: projection.nextJournal,
-      };
-    });
+      throw error;
+    }
   }
 
   /** Re-proves one exact journal advance after an ambiguous atomic-file result. */
@@ -8611,24 +8716,39 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     if (projection.transition !== "finalize") {
       throw createForwardRevisionApplyPortError("dependency_invalid");
     }
-    return this.updateState((state) => {
-      assertForwardRevisionApplyTransitionAuthorizationCurrent(
-        authorization,
-        projection,
-        "finalize"
-      );
-      if (state.activeForwardRevisionApply === null) {
-        const replay = confirmForwardRevisionApplyFinalization(state, projection.previousJournal);
-        if (replay) return { value: replay };
-        throw createForwardRevisionApplyPortError("conflict");
+    let mutationAttempted = false;
+    try {
+      return await this.updateState((state) => {
+        assertForwardRevisionApplyTransitionAuthorizationCurrent(
+          authorization,
+          projection,
+          "finalize"
+        );
+        if (state.activeForwardRevisionApply === null) {
+          const replay = confirmForwardRevisionApplyFinalization(state, projection.previousJournal);
+          if (replay) return { value: replay };
+          throw createForwardRevisionApplyPortError("conflict");
+        }
+        const active = snapshotKnowledgeForwardRevisionApplyJournal(
+          state.activeForwardRevisionApply
+        );
+        if (!exactJsonValuesEqual(active, projection.previousJournal)) {
+          throw createForwardRevisionApplyPortError("conflict");
+        }
+        const projected = projectForwardRevisionApplyFinalization(state, active);
+        mutationAttempted = true;
+        return { next: projected.next, value: projected.ledger };
+      });
+    } catch (error) {
+      if (mutationAttempted) {
+        const confirmed = await this.confirmForwardRevisionApplyFinalization(projection);
+        if (confirmed) {
+          this.emitStudioHints([projection.previousJournal.bundleId]);
+          return confirmed;
+        }
       }
-      const active = snapshotKnowledgeForwardRevisionApplyJournal(state.activeForwardRevisionApply);
-      if (!exactJsonValuesEqual(active, projection.previousJournal)) {
-        throw createForwardRevisionApplyPortError("conflict");
-      }
-      const projected = projectForwardRevisionApplyFinalization(state, active);
-      return { next: projected.next, value: projected.ledger };
-    });
+      throw error;
+    }
   }
 
   /** Rejoins one exact finalized ledger after an ambiguous atomic-file result. */
@@ -8865,7 +8985,10 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     } catch (error) {
       if (attemptedReceipt) {
         const confirmed = await this.confirmForwardRevisionPublication(evidence, attemptedReceipt);
-        if (confirmed) return attemptedReceipt;
+        if (confirmed) {
+          this.emitStudioHints([evidence.intent.bundleId]);
+          return attemptedReceipt;
+        }
       }
       throw error;
     }
@@ -8878,170 +9001,183 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     const authorization = requireForwardRevisionDecisionMutationAuthorization(authorizationValue);
     const { command, validationProjection } = authorization;
     const decidedAt = this.now();
-    return this.updateState((state) => {
-      try {
-        authorization.workflowLease.assertCurrent();
-        if (
-          !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
-            authorization.workflowLease,
-            authorization.executionOwner
-          )
-        ) {
-          throw new TypeError();
-        }
-        if (validationProjection) {
-          KnowledgeForwardRevisionValidationCapability.assertExecutionOwner(
-            authorization.validationCapability,
-            authorization.executionOwner
-          );
-          const currentProjection = KnowledgeForwardRevisionValidationCapability.project(
-            authorization.validationCapability
-          );
-          if (!exactJsonValuesEqual(currentProjection, validationProjection)) {
+    let mutationAttempted = false;
+    try {
+      return await this.updateState((state) => {
+        try {
+          authorization.workflowLease.assertCurrent();
+          if (
+            !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+              authorization.workflowLease,
+              authorization.executionOwner
+            )
+          ) {
             throw new TypeError();
           }
-        } else if (authorization.validationCapability !== undefined) {
-          throw new TypeError();
+          if (validationProjection) {
+            KnowledgeForwardRevisionValidationCapability.assertExecutionOwner(
+              authorization.validationCapability,
+              authorization.executionOwner
+            );
+            const currentProjection = KnowledgeForwardRevisionValidationCapability.project(
+              authorization.validationCapability
+            );
+            if (!exactJsonValuesEqual(currentProjection, validationProjection)) {
+              throw new TypeError();
+            }
+          } else if (authorization.validationCapability !== undefined) {
+            throw new TypeError();
+          }
+        } catch {
+          throw createForwardRevisionDecisionPortError("aborted");
         }
-      } catch {
-        throw createForwardRevisionDecisionPortError("aborted");
-      }
-      if (
-        state.runtimeId !== command.runtimeId ||
-        state.activeTransaction !== null ||
-        state.activeForwardRevisionApply !== null
-      ) {
-        throw createForwardRevisionDecisionPortError("authority_unavailable");
-      }
-      const raw = findForwardRevisionReviewSlot(state, command.bundleId);
-      if (raw === null) throw createForwardRevisionDecisionPortError("conflict");
-      const store = snapshotKnowledgeForwardRevisionReviewSnapshotV2(raw);
-      const matches = store.records.filter((entry) => {
-        const proposal = projectKnowledgeForwardRevisionReviewEntryProposalV2(entry);
-        return (
-          proposal.proposal.proposalId === command.proposalId &&
-          proposal.proposalDigest === command.proposalDigest
-        );
-      });
-      if (matches.length !== 1) throw createForwardRevisionDecisionPortError("conflict");
-      const existing = matches[0];
-      const publication = projectKnowledgeForwardRevisionReviewEntryProposalV2(existing);
-      const strictCommand = snapshotKnowledgeForwardRevisionReviewCommandForProposal(
-        command,
-        publication.proposal,
-        publication.proposalDigest
-      );
-      if (existing.state !== "pending") {
-        const replay = projectForwardRevisionDecisionReplay(existing, strictCommand);
-        if (!replay) throw createForwardRevisionDecisionPortError("conflict");
-        return { value: replay };
-      }
-
-      const retainedCharacters = store.records.reduce(
-        (total, entry) =>
-          total +
-          projectKnowledgeForwardRevisionReviewEntryProposalV2(entry).proposal.request
-            .selectedContent.length +
-          (entry.state === "accepted" ? entry.decision.afterContent.length : 0),
-        strictCommand.action === "reject" ? 0 : (validationProjection?.afterContent.length ?? 0)
-      );
-      if (
-        !Number.isSafeInteger(retainedCharacters) ||
-        retainedCharacters >
-          KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_V2_LIMITS.maxTotalRetainedBodyCharacters
-      ) {
-        throw createForwardRevisionDecisionPortError("resource_limit");
-      }
-
-      if (state.revision === Number.MAX_SAFE_INTEGER) {
-        throw createForwardRevisionDecisionPortError("resource_limit");
-      }
-      const nextRuntimeRevision = nextStoreRevision(state);
-      const nextDecisionStoreRevision = store.revision + 1;
-      if (!Number.isSafeInteger(nextDecisionStoreRevision)) {
-        throw createForwardRevisionDecisionPortError("resource_limit");
-      }
-      let decision: Readonly<KnowledgeForwardRevisionTerminalDecisionRecordV1>;
-      if (strictCommand.action === "reject") {
-        if (validationProjection !== undefined) {
-          throw createForwardRevisionDecisionPortError("request_invalid");
-        }
-        decision = createKnowledgeForwardRevisionRejectedDecisionRecord({
-          proposal: publication.proposal,
-          proposalDigest: publication.proposalDigest,
-          rejectedAt: Math.max(publication.proposal.recordedAt, decidedAt),
-        });
-      } else {
-        if (!validationProjection) {
-          throw createForwardRevisionDecisionPortError("request_invalid");
-        }
-        const query = createKnowledgeForwardRevisionValidationAuthorityQuery({
-          proposal: publication.proposal,
-          proposalDigest: publication.proposalDigest,
-        });
-        const authority = projectForwardRevisionValidationAuthority(state, query);
-        if (!authority) {
+        if (
+          state.runtimeId !== command.runtimeId ||
+          state.activeTransaction !== null ||
+          state.activeForwardRevisionApply !== null
+        ) {
           throw createForwardRevisionDecisionPortError("authority_unavailable");
         }
-        assertForwardRevisionDecisionValidationProjection(
-          validationProjection,
-          publication.proposal,
-          publication.proposalDigest,
-          strictCommand,
-          authority
-        );
-        const acceptedAt = Math.max(
-          publication.proposal.recordedAt,
-          authority.acceptanceAuthority.currentSourceFreshness.completedAt,
-          validationProjection.receipt.validatedAt,
-          decidedAt
-        );
-        decision = createKnowledgeForwardRevisionAcceptedDecisionRecord({
-          proposal: publication.proposal,
-          proposalDigest: publication.proposalDigest,
-          command: strictCommand,
-          afterContent: validationProjection.afterContent,
-          acceptanceAuthority: authority.acceptanceAuthority,
-          validationReceipt: validationProjection.receipt,
-          validationReceiptDigest: validationProjection.receiptDigest,
-          acceptedAt,
+        const raw = findForwardRevisionReviewSlot(state, command.bundleId);
+        if (raw === null) throw createForwardRevisionDecisionPortError("conflict");
+        const store = snapshotKnowledgeForwardRevisionReviewSnapshotV2(raw);
+        const matches = store.records.filter((entry) => {
+          const proposal = projectKnowledgeForwardRevisionReviewEntryProposalV2(entry);
+          return (
+            proposal.proposal.proposalId === command.proposalId &&
+            proposal.proposalDigest === command.proposalDigest
+          );
         });
-      }
-      const terminal = createKnowledgeForwardRevisionTerminalReviewEntryV2({
-        decision,
-        publishedRuntimeRevision: publication.publishedRuntimeRevision,
-        proposalStoreRevision: publication.proposalStoreRevision,
-        decidedRuntimeRevision: nextRuntimeRevision,
-        decisionStoreRevision: nextDecisionStoreRevision,
-      });
-      const records = store.records.map((entry) => (entry === existing ? terminal : entry));
-      const nextStore = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
-        ...store,
-        revision: nextDecisionStoreRevision,
-        records,
-      });
-      const next: KnowledgeRuntimeStoreSnapshot = {
-        ...state,
-        revision: nextRuntimeRevision,
-        forwardRevisionReviews: replaceBundleSlot(
-          state.forwardRevisionReviews,
-          command.bundleId,
-          nextStore
-        ),
-      };
-      if (serializedRuntimeValueExceedsLimit(next, this.maxTextCharacters)) {
-        throw createForwardRevisionDecisionPortError("resource_limit");
-      }
-      return {
-        next,
-        value: createForwardRevisionDecisionResult(
-          "decided",
+        if (matches.length !== 1) throw createForwardRevisionDecisionPortError("conflict");
+        const existing = matches[0];
+        const publication = projectKnowledgeForwardRevisionReviewEntryProposalV2(existing);
+        const strictCommand = snapshotKnowledgeForwardRevisionReviewCommandForProposal(
+          command,
+          publication.proposal,
+          publication.proposalDigest
+        );
+        if (existing.state !== "pending") {
+          const replay = projectForwardRevisionDecisionReplay(existing, strictCommand);
+          if (!replay) throw createForwardRevisionDecisionPortError("conflict");
+          return { value: replay };
+        }
+
+        const retainedCharacters = store.records.reduce(
+          (total, entry) =>
+            total +
+            projectKnowledgeForwardRevisionReviewEntryProposalV2(entry).proposal.request
+              .selectedContent.length +
+            (entry.state === "accepted" ? entry.decision.afterContent.length : 0),
+          strictCommand.action === "reject" ? 0 : (validationProjection?.afterContent.length ?? 0)
+        );
+        if (
+          !Number.isSafeInteger(retainedCharacters) ||
+          retainedCharacters >
+            KNOWLEDGE_FORWARD_REVISION_REVIEW_SNAPSHOT_V2_LIMITS.maxTotalRetainedBodyCharacters
+        ) {
+          throw createForwardRevisionDecisionPortError("resource_limit");
+        }
+
+        if (state.revision === Number.MAX_SAFE_INTEGER) {
+          throw createForwardRevisionDecisionPortError("resource_limit");
+        }
+        const nextRuntimeRevision = nextStoreRevision(state);
+        const nextDecisionStoreRevision = store.revision + 1;
+        if (!Number.isSafeInteger(nextDecisionStoreRevision)) {
+          throw createForwardRevisionDecisionPortError("resource_limit");
+        }
+        let decision: Readonly<KnowledgeForwardRevisionTerminalDecisionRecordV1>;
+        if (strictCommand.action === "reject") {
+          if (validationProjection !== undefined) {
+            throw createForwardRevisionDecisionPortError("request_invalid");
+          }
+          decision = createKnowledgeForwardRevisionRejectedDecisionRecord({
+            proposal: publication.proposal,
+            proposalDigest: publication.proposalDigest,
+            rejectedAt: Math.max(publication.proposal.recordedAt, decidedAt),
+          });
+        } else {
+          if (!validationProjection) {
+            throw createForwardRevisionDecisionPortError("request_invalid");
+          }
+          const query = createKnowledgeForwardRevisionValidationAuthorityQuery({
+            proposal: publication.proposal,
+            proposalDigest: publication.proposalDigest,
+          });
+          const authority = projectForwardRevisionValidationAuthority(state, query);
+          if (!authority) {
+            throw createForwardRevisionDecisionPortError("authority_unavailable");
+          }
+          assertForwardRevisionDecisionValidationProjection(
+            validationProjection,
+            publication.proposal,
+            publication.proposalDigest,
+            strictCommand,
+            authority
+          );
+          const acceptedAt = Math.max(
+            publication.proposal.recordedAt,
+            authority.acceptanceAuthority.currentSourceFreshness.completedAt,
+            validationProjection.receipt.validatedAt,
+            decidedAt
+          );
+          decision = createKnowledgeForwardRevisionAcceptedDecisionRecord({
+            proposal: publication.proposal,
+            proposalDigest: publication.proposalDigest,
+            command: strictCommand,
+            afterContent: validationProjection.afterContent,
+            acceptanceAuthority: authority.acceptanceAuthority,
+            validationReceipt: validationProjection.receipt,
+            validationReceiptDigest: validationProjection.receiptDigest,
+            acceptedAt,
+          });
+        }
+        const terminal = createKnowledgeForwardRevisionTerminalReviewEntryV2({
           decision,
-          nextRuntimeRevision,
-          nextDecisionStoreRevision
-        ),
-      };
-    });
+          publishedRuntimeRevision: publication.publishedRuntimeRevision,
+          proposalStoreRevision: publication.proposalStoreRevision,
+          decidedRuntimeRevision: nextRuntimeRevision,
+          decisionStoreRevision: nextDecisionStoreRevision,
+        });
+        const records = store.records.map((entry) => (entry === existing ? terminal : entry));
+        const nextStore = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+          ...store,
+          revision: nextDecisionStoreRevision,
+          records,
+        });
+        const next: KnowledgeRuntimeStoreSnapshot = {
+          ...state,
+          revision: nextRuntimeRevision,
+          forwardRevisionReviews: replaceBundleSlot(
+            state.forwardRevisionReviews,
+            command.bundleId,
+            nextStore
+          ),
+        };
+        if (serializedRuntimeValueExceedsLimit(next, this.maxTextCharacters)) {
+          throw createForwardRevisionDecisionPortError("resource_limit");
+        }
+        mutationAttempted = true;
+        return {
+          next,
+          value: createForwardRevisionDecisionResult(
+            "decided",
+            decision,
+            nextRuntimeRevision,
+            nextDecisionStoreRevision
+          ),
+        };
+      });
+    } catch (error) {
+      if (mutationAttempted) {
+        const confirmed = await this.confirmForwardRevisionDecision(command);
+        if (confirmed) {
+          this.emitStudioHints([command.bundleId]);
+          return confirmed;
+        }
+      }
+      throw error;
+    }
   }
 
   /** Re-reads and proves one exact terminal decision after an ambiguous atomic write result. */
@@ -11631,6 +11767,8 @@ Object.freeze(KnowledgeRuntimeReviewRejectPort);
 
 /** Hidden canonical Runtime operations retained by one forward-proposal facade. */
 interface RuntimeForwardRevisionProposalPortState {
+  readonly executionOwner: KnowledgeExecutionOwner;
+  readonly workflowLease: KnowledgeProductionWorkflowExecutionLease;
   readonly readAuthority: (
     value: unknown
   ) => Promise<Readonly<KnowledgeForwardRevisionProposalAuthorityV1> | null>;
@@ -11640,6 +11778,12 @@ interface RuntimeForwardRevisionProposalPortState {
   readonly publish: (
     value: KnowledgeForwardRevisionProposalPublicationEvidence
   ) => Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>>;
+}
+
+/** Hidden canonical one-envelope read retained by the forward Studio facade. */
+interface RuntimeForwardRevisionStudioPortState {
+  readonly executionOwner?: KnowledgeExecutionOwner;
+  readonly read: (bundleId: string) => Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>;
 }
 
 /** Hidden canonical read retained by one validation-only facade. */
@@ -12047,6 +12191,10 @@ const runtimeForwardRevisionPublicationPortStates = new WeakMap<
   object,
   Readonly<RuntimeForwardRevisionProposalPortState>
 >();
+const runtimeForwardRevisionStudioPortStates = new WeakMap<
+  object,
+  Readonly<RuntimeForwardRevisionStudioPortState>
+>();
 const runtimeForwardRevisionValidationPortStates = new WeakMap<
   object,
   Readonly<RuntimeForwardRevisionValidationPortState>
@@ -12075,6 +12223,7 @@ const FORWARD_REVISION_PINNED_RUNTIME_METHOD_NAMES = [
   "confirmForwardRevisionApplyAdvance",
   "finalizeForwardRevisionApply",
   "confirmForwardRevisionApplyFinalization",
+  "readForwardRevisionStudioBundle",
   "readForwardRevisionReview",
   "publishForwardRevisionProposalAtomically",
   "readForwardRevisionPendingForDecision",
@@ -12120,6 +12269,9 @@ const runtimeForwardRevisionPublicationMethod = runtimeForwardRevisionPublicatio
 const runtimeForwardRevisionAuthorityReadMethod = runtimeForwardRevisionPublicationMethods.get(
   "readForwardRevisionProposalAuthority"
 ) as KnowledgeRuntimeStore["readForwardRevisionProposalAuthority"];
+const runtimeForwardRevisionStudioReadMethod = runtimeForwardRevisionPublicationMethods.get(
+  "readForwardRevisionStudioBundle"
+) as KnowledgeRuntimeStore["readForwardRevisionStudioBundle"];
 const runtimeForwardRevisionReviewReadMethod = runtimeForwardRevisionPublicationMethods.get(
   "readForwardRevisionReview"
 ) as KnowledgeRuntimeStore["readForwardRevisionReview"];
@@ -12221,6 +12373,97 @@ function sealForwardRevisionPublicationRuntimeStore(runtime: KnowledgeRuntimeSto
   }
 }
 
+/** Returns hidden read state only for an authentic forward Studio facade. */
+function requireRuntimeForwardRevisionStudioPortState(
+  value: unknown
+): Readonly<RuntimeForwardRevisionStudioPortState> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Object.getPrototypeOf(value) !== KnowledgeRuntimeForwardRevisionStudioPort.prototype
+  ) {
+    throw new TypeError("The Runtime forward-revision Studio port is invalid");
+  }
+  const state = runtimeForwardRevisionStudioPortStates.get(value);
+  if (!state) throw new TypeError("The Runtime forward-revision Studio port is invalid");
+  return state;
+}
+
+/** Genuine read-only facade exposing only the one-envelope forward Studio projection. */
+export class KnowledgeRuntimeForwardRevisionStudioPort {
+  /**
+   * Captures the pinned canonical read from one exact base Runtime receiver.
+   *
+   * Startup recovery may construct an unowned read facade. Product generations
+   * must supply both the exact Runtime proof facade and its paired workflow lease.
+   */
+  constructor(
+    runtime: KnowledgeRuntimeStore,
+    proofPort?: KnowledgeRuntimeIngestExecutionProofPort,
+    workflowLease?: KnowledgeProductionWorkflowExecutionLease
+  ) {
+    try {
+      if ((proofPort === undefined) !== (workflowLease === undefined)) throw new TypeError();
+      let executionOwner: KnowledgeExecutionOwner | undefined;
+      if (proofPort !== undefined && workflowLease !== undefined) {
+        const proofState = requireRuntimeIngestExecutionProofPortState(proofPort);
+        const runtimeState = requireAuthenticForwardRevisionPublicationRuntimeStore(runtime);
+        KnowledgeProductionWorkflowExecutionLease.assert(workflowLease);
+        if (
+          Object.getPrototypeOf(proofPort) !== KnowledgeRuntimeIngestExecutionProofPort.prototype ||
+          proofState.runtime !== runtime ||
+          !runtimeState.productionExecutionBinding?.ownsWorkflowExecutionLease(workflowLease) ||
+          !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+            workflowLease,
+            proofState.executionOwner
+          )
+        ) {
+          throw new TypeError();
+        }
+        executionOwner = proofState.executionOwner;
+      }
+      sealForwardRevisionPublicationRuntimeStore(runtime);
+      runtimeForwardRevisionStudioPortStates.set(
+        this,
+        Object.freeze({
+          ...(executionOwner === undefined ? {} : { executionOwner }),
+          read: (bundleId: string) =>
+            Reflect.apply(runtimeForwardRevisionStudioReadMethod, runtime, [bundleId]),
+        })
+      );
+      Object.freeze(this);
+    } catch {
+      throw new TypeError("The Runtime forward-revision Studio dependency is invalid");
+    }
+  }
+
+  /** Requires one exact-prototype process-local read facade. */
+  static assert(value: unknown): asserts value is KnowledgeRuntimeForwardRevisionStudioPort {
+    requireRuntimeForwardRevisionStudioPortState(value);
+  }
+
+  /** Reports whether this exact product-bound facade belongs to one execution lifecycle. */
+  static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
+    try {
+      const state = requireRuntimeForwardRevisionStudioPortState(value);
+      KnowledgeExecutionOwner.assert(executionOwner);
+      return state.executionOwner !== undefined && state.executionOwner === executionOwner;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Reads one strict bounded forward Studio projection from one Runtime envelope. */
+  readForwardRevisionStudioBundle(
+    bundleId: string
+  ): Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>> {
+    return requireRuntimeForwardRevisionStudioPortState(this).read(bundleId);
+  }
+}
+
+Object.freeze(KnowledgeRuntimeForwardRevisionStudioPort.prototype);
+Object.freeze(KnowledgeRuntimeForwardRevisionStudioPort);
+
 /** Returns the hidden publisher only for an authentic narrow facade. */
 function requireRuntimeForwardRevisionPublicationPortState(
   value: unknown
@@ -12240,23 +12483,66 @@ function requireRuntimeForwardRevisionPublicationPortState(
   return state;
 }
 
+/** Requires the proposal facade's exact workflow generation to remain current. */
+function assertRuntimeForwardRevisionPublicationPortCurrent(
+  state: Readonly<RuntimeForwardRevisionProposalPortState>
+): void {
+  try {
+    state.workflowLease.assertCurrent();
+    if (
+      !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+        state.workflowLease,
+        state.executionOwner
+      )
+    ) {
+      throw new TypeError();
+    }
+  } catch {
+    throw new DOMException("The operation was aborted", "AbortError");
+  }
+}
+
 /** Narrow authentic facade for forward proposal proof, Review read, and publication. */
 export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
-  /** Captures one Runtime proposal-publication capability without exposing its receiver. */
-  constructor(runtime: KnowledgeRuntimeStore) {
-    sealForwardRevisionPublicationRuntimeStore(runtime);
-    runtimeForwardRevisionPublicationPortStates.set(
-      this,
-      Object.freeze({
-        readAuthority: (value: unknown) =>
-          Reflect.apply(runtimeForwardRevisionAuthorityReadMethod, runtime, [value]),
-        readReview: (bundleId: string) =>
-          Reflect.apply(runtimeForwardRevisionReviewReadMethod, runtime, [bundleId]),
-        publish: (value: KnowledgeForwardRevisionProposalPublicationEvidence) =>
-          Reflect.apply(runtimeForwardRevisionPublicationMethod, runtime, [value]),
-      })
-    );
-    Object.freeze(this);
+  /** Captures one canonical Runtime mutation capability for an exact production generation. */
+  constructor(
+    runtime: KnowledgeRuntimeStore,
+    proofPort: KnowledgeRuntimeIngestExecutionProofPort,
+    workflowLease: KnowledgeProductionWorkflowExecutionLease
+  ) {
+    try {
+      const proofState = requireRuntimeIngestExecutionProofPortState(proofPort);
+      const runtimeState = requireAuthenticForwardRevisionPublicationRuntimeStore(runtime);
+      KnowledgeProductionWorkflowExecutionLease.assert(workflowLease);
+      if (
+        Object.getPrototypeOf(proofPort) !== KnowledgeRuntimeIngestExecutionProofPort.prototype ||
+        proofState.runtime !== runtime ||
+        !runtimeState.productionExecutionBinding?.ownsWorkflowExecutionLease(workflowLease) ||
+        !KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+          workflowLease,
+          proofState.executionOwner
+        )
+      ) {
+        throw new TypeError();
+      }
+      sealForwardRevisionPublicationRuntimeStore(runtime);
+      runtimeForwardRevisionPublicationPortStates.set(
+        this,
+        Object.freeze({
+          executionOwner: proofState.executionOwner,
+          workflowLease,
+          readAuthority: (value: unknown) =>
+            Reflect.apply(runtimeForwardRevisionAuthorityReadMethod, runtime, [value]),
+          readReview: (bundleId: string) =>
+            Reflect.apply(runtimeForwardRevisionReviewReadMethod, runtime, [bundleId]),
+          publish: (value: KnowledgeForwardRevisionProposalPublicationEvidence) =>
+            Reflect.apply(runtimeForwardRevisionPublicationMethod, runtime, [value]),
+        })
+      );
+      Object.freeze(this);
+    } catch {
+      throw new TypeError("The Runtime forward-revision publication dependency is invalid");
+    }
   }
 
   /** Requires one authentic process-local publication facade. */
@@ -12266,32 +12552,61 @@ export class KnowledgeRuntimeForwardRevisionProposalPublicationPort {
     requireRuntimeForwardRevisionPublicationPortState(value);
   }
 
+  /** Reports whether this exact mutation facade belongs to one live execution owner. */
+  static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
+    try {
+      const state = requireRuntimeForwardRevisionPublicationPortState(value);
+      KnowledgeExecutionOwner.assert(executionOwner);
+      return (
+        state.executionOwner === executionOwner &&
+        KnowledgeProductionWorkflowExecutionLease.matchesExecutionOwner(
+          state.workflowLease,
+          executionOwner
+        )
+      );
+    } catch {
+      return false;
+    }
+  }
+
   /** Reads strict read-only proposal proof from one Runtime envelope. */
-  readForwardRevisionProposalAuthority(
+  async readForwardRevisionProposalAuthority(
     value: unknown
   ): Promise<Readonly<KnowledgeForwardRevisionProposalAuthorityV1> | null> {
-    return requireRuntimeForwardRevisionPublicationPortState(this).readAuthority(value);
+    const state = requireRuntimeForwardRevisionPublicationPortState(this);
+    assertRuntimeForwardRevisionPublicationPortCurrent(state);
+    const authority = await state.readAuthority(value);
+    assertRuntimeForwardRevisionPublicationPortCurrent(state);
+    return authority;
   }
 
   /** Reads the dedicated forward Review namespace through the pinned Runtime method. */
-  readForwardRevisionReview(
+  async readForwardRevisionReview(
     bundleId: string
   ): Promise<Readonly<KnowledgeForwardRevisionReviewSnapshotV2>> {
-    return requireRuntimeForwardRevisionPublicationPortState(this).readReview(bundleId);
+    const state = requireRuntimeForwardRevisionPublicationPortState(this);
+    assertRuntimeForwardRevisionPublicationPortCurrent(state);
+    const review = await state.readReview(bundleId);
+    assertRuntimeForwardRevisionPublicationPortCurrent(state);
+    return review;
   }
 
   /** Atomically publishes or exactly replays one pending forward proposal. */
-  publishForwardRevisionProposalAtomically(
+  async publishForwardRevisionProposalAtomically(
     value: KnowledgeForwardRevisionProposalPublicationEvidence
   ): Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>> {
-    return requireRuntimeForwardRevisionPublicationPortState(this).publish(value);
+    const state = requireRuntimeForwardRevisionPublicationPortState(this);
+    assertRuntimeForwardRevisionPublicationPortCurrent(state);
+    return state.publish(value);
   }
 
   /** Backward-compatible alias for the exact atomic publication operation. */
-  publish(
+  async publish(
     value: KnowledgeForwardRevisionProposalPublicationEvidence
   ): Promise<Readonly<KnowledgeForwardRevisionPublicationReceiptV1>> {
-    return requireRuntimeForwardRevisionPublicationPortState(this).publish(value);
+    const state = requireRuntimeForwardRevisionPublicationPortState(this);
+    assertRuntimeForwardRevisionPublicationPortCurrent(state);
+    return state.publish(value);
   }
 }
 

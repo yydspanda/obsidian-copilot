@@ -11,6 +11,14 @@ import {
 } from "@/knowledge/changeset/ChangeSetValidator";
 import { KnowledgeProductionForwardRevisionApplyTransactionRunner } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import {
+  snapshotKnowledgeForwardRevisionStudioSnapshot,
+  type KnowledgeForwardRevisionStudioSnapshot,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
+import type {
+  KnowledgeForwardRevisionStudioApplyingReview,
+  KnowledgeForwardRevisionStudioRecoveryRequiredReview,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
+import {
   IngestQueue,
   type IngestExecutionContext,
   type IngestExecutor,
@@ -30,6 +38,7 @@ import { ReviewQueueStartupReconciler } from "@/knowledge/review/ReviewQueueStar
 import {
   KnowledgeRuntimeApplyAuthorityPort,
   KnowledgeRuntimeApplyCommitManifestPort,
+  KnowledgeRuntimeForwardRevisionStudioPort,
   KnowledgeRuntimeNoJournalApplyRecoveryPort,
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeReviewStorage,
@@ -88,6 +97,10 @@ export interface KnowledgeProductionRecoveryStudioObservation {
   reviewRevision: number;
   activity: Readonly<KnowledgeActivityModel>;
   recovery: Readonly<KnowledgeRecoveryModel>;
+  forwardRevisionReviews: readonly Readonly<
+    | KnowledgeForwardRevisionStudioApplyingReview
+    | KnowledgeForwardRevisionStudioRecoveryRequiredReview
+  >[];
 }
 
 /** Sanitized outcome of a fresh Gate plus conditional release pass. */
@@ -168,6 +181,7 @@ interface KnowledgeProductionRecoveryComposition {
   transaction: ChangeSetTransaction;
   gate: KnowledgeStartupGate;
   release: KnowledgeStartupReleaseCoordinator;
+  forwardRevisionStudio: KnowledgeRuntimeForwardRevisionStudioPort;
   forwardRevisionApplyRecovery?: KnowledgeProductionForwardRevisionApplyTransactionRunner;
 }
 
@@ -384,6 +398,7 @@ function composeRecovery(
     transaction,
     gate,
     release,
+    forwardRevisionStudio: new KnowledgeRuntimeForwardRevisionStudioPort(runtime),
     ...(forwardRevisionApplyRecovery === undefined ? {} : { forwardRevisionApplyRecovery }),
   });
 }
@@ -466,6 +481,90 @@ function createStudioObservation(
     reviewRevision: result.reviewRevision,
     activity: deriveKnowledgeActivityModel(result.queueSnapshot),
     recovery,
+    forwardRevisionReviews: Object.freeze([]),
+  });
+}
+
+/** Projects the one active forward journal into a content-free recovery-only Studio row. */
+function createForwardRevisionStudioObservation(
+  snapshotValue: Readonly<KnowledgeForwardRevisionStudioSnapshot>,
+  expectedState: "applying" | "recovery_required"
+): Readonly<KnowledgeProductionRecoveryStudioObservation> {
+  const snapshot = snapshotKnowledgeForwardRevisionStudioSnapshot(snapshotValue);
+  const matching = snapshot.activeRecords.filter((record) => record.state === expectedState);
+  if (matching.length !== 1) {
+    throw new KnowledgeProductionRecoveryRuntimeStateError();
+  }
+  const record = matching[0];
+  if (record.state !== expectedState) {
+    throw new KnowledgeProductionRecoveryRuntimeStateError();
+  }
+  const base = {
+    reviewRef: record.reviewRef,
+    snapshotRef: record.snapshotRef,
+    pagePath: record.pagePath,
+    updatedAt: record.updatedAt,
+    acceptedAt: record.acceptedAt,
+    manualOverride: record.manualOverride,
+  };
+  const review =
+    record.state === "applying"
+      ? Object.freeze({ state: "applying" as const, ...base, applyPhase: record.applyPhase })
+      : Object.freeze({
+          state: "recovery_required" as const,
+          ...base,
+          conflictCode: record.conflictCode,
+          actualKind: record.actualKind,
+          detectedAt: record.detectedAt,
+        });
+  const byStatus = Object.freeze({
+    queued: 0,
+    parsing: 0,
+    analyzing: 0,
+    associating: 0,
+    generating: 0,
+    validating: 0,
+    awaiting_review: 0,
+    applying: 0,
+    finalizing: 0,
+    paused: 0,
+    recovery_required: 0,
+    failed: 0,
+    cancelled: 0,
+    completed: 0,
+  });
+  const activity: Readonly<KnowledgeActivityModel> = Object.freeze({
+    bundleId: snapshot.bundleId,
+    revision: 0,
+    controls: Object.freeze({
+      state:
+        expectedState === "recovery_required"
+          ? ("recovery_required" as const)
+          : ("startup_recovery" as const),
+      canPause: false,
+      canResume: false,
+    }),
+    items: Object.freeze([]),
+    counts: Object.freeze({
+      total: 0,
+      active: 0,
+      terminal: 0,
+      hiddenTerminal: 0,
+      byStatus,
+    }),
+  });
+  const recovery: Readonly<KnowledgeRecoveryModel> = Object.freeze({
+    bundleId: snapshot.bundleId,
+    runtimeRevision: snapshot.runtimeRevision,
+    items: Object.freeze([]),
+  });
+  return Object.freeze({
+    bundleId: snapshot.bundleId,
+    runtimeRevision: snapshot.runtimeRevision,
+    reviewRevision: snapshot.reviewRevision,
+    activity,
+    recovery,
+    forwardRevisionReviews: Object.freeze([review]),
   });
 }
 
@@ -496,6 +595,13 @@ async function runForwardRevisionApplyRecovery(
     if (result.kind === "in_progress" && attempt + 1 < MAX_FORWARD_REVISION_RECOVERY_ATTEMPTS) {
       continue;
     }
+    const forwardRevisionSnapshot =
+      await composition.forwardRevisionStudio.readForwardRevisionStudioBundle(result.bundleId);
+    if (!isCurrent()) return undefined;
+    const studioObservation = createForwardRevisionStudioObservation(
+      forwardRevisionSnapshot,
+      result.kind === "recovery_required" ? "recovery_required" : "applying"
+    );
     const summary = Object.freeze({
       bundleId: result.bundleId,
       disposition: "blocked" as const,
@@ -508,6 +614,7 @@ async function runForwardRevisionApplyRecovery(
         stoppedBundleId: result.bundleId,
         bundleResults: Object.freeze([summary]),
       }),
+      studioObservation,
     };
   }
   throw new KnowledgeProductionRecoveryRuntimeStateError();

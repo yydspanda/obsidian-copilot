@@ -123,6 +123,18 @@ function createRuntime(
   };
 }
 
+/** Creates a Runtime facade that rejects each read with one selected value. */
+function createRejectingRuntime(failure: Error): KnowledgeKnownAppliedWikiOutputsRuntimePort {
+  return {
+    readKnownAppliedWikiOutputIndex: async () => {
+      throw failure;
+    },
+    readKnownAppliedWikiOutputDetail: async () => {
+      throw failure;
+    },
+  };
+}
+
 function createVisitor(
   current: () => string | undefined,
   reportedPath = PAGE_PATH
@@ -257,6 +269,67 @@ describe("KnowledgeProductionKnownAppliedWikiOutputsCoordinator", () => {
     await expect(
       coordinator.inspectKnownOutputs({ pagePath: PAGE_PATH }, new AbortController().signal)
     ).rejects.toMatchObject({ name: "KnowledgeKnownAppliedWikiOutputsError" });
+  });
+
+  it("recognizes serialized own-data cancellation and rejects hostile lookalikes", async () => {
+    await expect(
+      createCoordinator(
+        createRejectingRuntime(Object.freeze({ name: "AbortError" }) as Error),
+        () => "current"
+      ).inspectKnownOutputs({ pagePath: PAGE_PATH }, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    let getterCalls = 0;
+    const accessorLookalike = {} as Error;
+    Object.defineProperty(accessorLookalike, "name", {
+      get: () => {
+        getterCalls += 1;
+        return "AbortError";
+      },
+    });
+    const proxyLookalike = new Proxy({} as Error, {
+      getOwnPropertyDescriptor: () => {
+        throw new Error("descriptor trap must fail closed");
+      },
+    });
+    for (const failure of [accessorLookalike, proxyLookalike]) {
+      await expect(
+        createCoordinator(createRejectingRuntime(failure), () => "current").inspectKnownOutputs(
+          { pagePath: PAGE_PATH },
+          new AbortController().signal
+        )
+      ).rejects.toMatchObject({ name: "KnowledgeKnownAppliedWikiOutputsError" });
+    }
+    expect(getterCalls).toBe(0);
+  });
+
+  it("uses the caller signal as authority without reading a hostile error name", async () => {
+    let getterCalls = 0;
+    const accessorLookalike = {} as Error;
+    Object.defineProperty(accessorLookalike, "name", {
+      get: () => {
+        getterCalls += 1;
+        return "AbortError";
+      },
+    });
+    const controller = new AbortController();
+    const runtime: KnowledgeKnownAppliedWikiOutputsRuntimePort = {
+      readKnownAppliedWikiOutputIndex: async () => {
+        controller.abort();
+        throw accessorLookalike;
+      },
+      readKnownAppliedWikiOutputDetail: async () => {
+        throw new Error("detail was not expected");
+      },
+    };
+
+    await expect(
+      createCoordinator(runtime, () => "current").inspectKnownOutputs(
+        { pagePath: PAGE_PATH },
+        controller.signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(getterCalls).toBe(0);
   });
 
   it("rejects a Runtime output whose path is only a Windows-case alias", async () => {

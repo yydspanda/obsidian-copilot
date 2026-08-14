@@ -2,6 +2,7 @@ import type {
   CompilerTargetRequest,
   CompilerTargetResolver,
 } from "@/knowledge/compiler/CompilerModelPort";
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
 import { ObsidianKnowledgeCompilerTargetResolverError } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
 import type { IngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
@@ -56,6 +57,11 @@ import type {
   KnowledgeSourceRetirementUiReceipt,
 } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import { sha256 } from "@/utils/hash";
+import { KnowledgeProductionForwardRevisionStudioCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionStudioCoordinator";
+import type {
+  KnowledgeForwardRevisionStudioCommand,
+  KnowledgeForwardRevisionStudioSubmissionResult,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
 
 const DEFAULT_MAX_CONSISTENCY_ATTEMPTS = 3;
 const MAX_REVIEW_TARGET_CHARACTERS = 20_000_000;
@@ -87,6 +93,8 @@ export interface KnowledgeStudioRuntimeReadAdapterInput {
   query?: KnowledgeStudioRuntimeQueryPort;
   reviewEvidence?: KnowledgeStudioReviewEvidencePort;
   sourceLifecycle?: KnowledgeSourceLifecyclePort;
+  forwardRevision?: KnowledgeProductionForwardRevisionStudioCoordinator;
+  retainForwardRevisionDrain?: (drain: Promise<void>) => void;
   subscribeVaultHints?: KnowledgeStudioVaultHintPort;
   maxConsistencyAttempts?: number;
 }
@@ -587,11 +595,6 @@ function createTargetRequests(record: PendingChangeSetReviewRecord): CompilerTar
   }));
 }
 
-/** Reports whether an error is intentional cancellation. */
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
 /** Deep-freezes one internally constructed Review plan before UI publication. */
 function freezeReviewPlan(plan: KnowledgeReviewPlan): KnowledgeReviewPlan {
   for (const file of plan.files) {
@@ -621,7 +624,7 @@ async function resolveReviewTargets(
     throwIfAborted(signal);
     return parseTargetObservations(result, requests);
   } catch (error) {
-    if (signal.aborted || isAbortError(error))
+    if (signal.aborted || isKnowledgeAbortError(error))
       throw new DOMException("The operation was aborted", "AbortError");
     const code = ObsidianKnowledgeCompilerTargetResolverError.inspect(error);
     if (code === "state_changed") throw new KnowledgeStudioConsistencyRetry();
@@ -702,7 +705,7 @@ export async function loadKnowledgeStudioReviewContext(
       }
       return contexts[0];
     } catch (error) {
-      if (input.signal.aborted || isAbortError(error)) {
+      if (input.signal.aborted || isKnowledgeAbortError(error)) {
         throw new DOMException("The operation was aborted", "AbortError");
       }
       if (error instanceof KnowledgeStudioConsistencyRetry) continue;
@@ -717,7 +720,8 @@ export async function loadKnowledgeStudioReviewContext(
 /** Creates one opaque render revision containing no paths or file content. */
 function createRevisionToken(
   projection: KnowledgeRuntimeStudioBundleSnapshot,
-  plans: readonly KnowledgeReviewPlan[]
+  plans: readonly KnowledgeReviewPlan[],
+  forwardRevisionToken?: string
 ): string {
   const digest = sha256(
     `knowledge-studio-read-v1\n${canonicalizeJson({
@@ -725,6 +729,7 @@ function createRevisionToken(
       queueRevision: projection.queue.revision,
       reviewRevision: projection.review.revision,
       reviewSnapshotTokens: plans.map((plan) => plan.snapshotToken),
+      forwardRevisionToken: forwardRevisionToken ?? null,
     })}`
   );
   return `r${projection.runtimeRevision}-q${projection.queue.revision}-v${projection.review.revision}-${digest.slice(0, 12)}`;
@@ -766,6 +771,21 @@ export class KnowledgeStudioRuntimeReadAdapter
     if (input.commands !== undefined) {
       KnowledgeStudioRuntimeCommandAdapter.assert(input.commands);
     }
+    if (input.forwardRevision !== undefined) {
+      KnowledgeProductionForwardRevisionStudioCoordinator.assert(input.forwardRevision);
+    }
+    if (
+      input.retainForwardRevisionDrain !== undefined &&
+      typeof input.retainForwardRevisionDrain !== "function"
+    ) {
+      throw new KnowledgeStudioRuntimeReadError();
+    }
+    if (
+      (input.forwardRevision === undefined) !==
+      (input.retainForwardRevisionDrain === undefined)
+    ) {
+      throw new KnowledgeStudioRuntimeReadError();
+    }
     const query = captureOptionalQueryPort(input);
     const reviewEvidence =
       input.reviewEvidence === undefined
@@ -785,6 +805,10 @@ export class KnowledgeStudioRuntimeReadAdapter
       ...(query === undefined ? {} : { query }),
       ...(reviewEvidence === undefined ? {} : { reviewEvidence }),
       ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
+      ...(input.forwardRevision === undefined ? {} : { forwardRevision: input.forwardRevision }),
+      ...(input.retainForwardRevisionDrain === undefined
+        ? {}
+        : { retainForwardRevisionDrain: input.retainForwardRevisionDrain }),
       ...(input.subscribeVaultHints === undefined
         ? {}
         : { subscribeVaultHints: input.subscribeVaultHints }),
@@ -816,6 +840,9 @@ export class KnowledgeStudioRuntimeReadAdapter
           signal,
           () => this.input.assertCurrent()
         );
+        const forwardRevision = this.input.forwardRevision
+          ? await this.input.forwardRevision.loadForwardRevisionStudio(bundleId, signal)
+          : undefined;
         const sourceLifecycle = this.input.sourceLifecycle
           ? await this.input.sourceLifecycle.loadSources(bundleId, signal)
           : undefined;
@@ -824,6 +851,9 @@ export class KnowledgeStudioRuntimeReadAdapter
         this.input.assertCurrent();
         if (
           before.runtimeRevision !== after.runtimeRevision ||
+          (forwardRevision !== undefined &&
+            (forwardRevision.bundleId !== bundleId ||
+              forwardRevision.runtimeRevision !== before.runtimeRevision)) ||
           (sourceLifecycle !== undefined &&
             (sourceLifecycle.bundleId !== bundleId ||
               sourceLifecycle.runtimeRevision !== before.runtimeRevision))
@@ -831,15 +861,21 @@ export class KnowledgeStudioRuntimeReadAdapter
           throw new KnowledgeStudioConsistencyRetry();
         }
         const reviews = reviewContexts.map(({ plan }) => plan);
+        const baseCapabilities = this.input.commands
+          ? this.input.commands.getCapabilities()
+          : NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES;
+        const commandCapabilities = Object.freeze({
+          ...baseCapabilities,
+          forwardRevisionReview: this.input.forwardRevision !== undefined,
+        });
         return Object.freeze({
           bundleId,
-          revisionToken: createRevisionToken(before, reviews),
+          revisionToken: createRevisionToken(before, reviews, forwardRevision?.revisionToken),
           availability: "ready" as const,
-          commandCapabilities: this.input.commands
-            ? this.input.commands.getCapabilities()
-            : NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES,
+          commandCapabilities,
           activity: deriveKnowledgeActivityModel(before.queue),
           reviews: Object.freeze(reviews),
+          forwardRevisionReviews: forwardRevision?.reviews ?? Object.freeze([]),
           recovery: Object.freeze({
             bundleId,
             runtimeRevision: before.runtimeRevision,
@@ -866,7 +902,7 @@ export class KnowledgeStudioRuntimeReadAdapter
               : "Live durable Activity and Review are connected. Review decisions and Wiki apply remain disabled until their safe adapters are connected.",
         });
       } catch (error) {
-        if (signal.aborted || isAbortError(error)) {
+        if (signal.aborted || isKnowledgeAbortError(error)) {
           throw new DOMException("The operation was aborted", "AbortError");
         }
         if (error instanceof KnowledgeStudioConsistencyRetry) continue;
@@ -920,7 +956,9 @@ export class KnowledgeStudioRuntimeReadAdapter
           // The subscription never became authoritative.
         }
       }
-      if (isAbortError(error)) throw new DOMException("The operation was aborted", "AbortError");
+      if (isKnowledgeAbortError(error)) {
+        throw new DOMException("The operation was aborted", "AbortError");
+      }
       throw new KnowledgeStudioRuntimeReadError();
     }
     return () => {
@@ -986,6 +1024,27 @@ export class KnowledgeStudioRuntimeReadAdapter
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     if (!this.input.commands) throw new KnowledgeStudioAdapterUnavailableError();
     return this.input.commands.submitReview(bundleId, command, signal);
+  }
+
+  /** Delegates one dedicated forward Review or accepted-ready Apply action. */
+  async submitForwardRevisionStudio(
+    bundleId: string,
+    command: KnowledgeForwardRevisionStudioCommand,
+    signal: AbortSignal
+  ): Promise<KnowledgeForwardRevisionStudioSubmissionResult> {
+    if (!this.input.forwardRevision) throw new KnowledgeStudioAdapterUnavailableError();
+    const operation = this.input.forwardRevision.submitForwardRevisionStudio(
+      bundleId,
+      command,
+      signal
+    );
+    this.input.retainForwardRevisionDrain?.(
+      operation.then(
+        () => undefined,
+        () => undefined
+      )
+    );
+    return operation;
   }
 
   /** Opens one opaque current Review evidence reference through the production coordinator. */

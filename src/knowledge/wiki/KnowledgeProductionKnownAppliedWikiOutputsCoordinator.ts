@@ -1,4 +1,5 @@
 import type { CompilerTargetRequest } from "@/knowledge/compiler/CompilerModelPort";
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
 import {
   ObsidianKnowledgeCompilerTargetResolverError,
   type ObsidianKnowledgeCompilerTargetVisitPort,
@@ -850,9 +851,10 @@ async function readStable(
     try {
       observation = await bundle.observeCurrent(pagePath, signal);
     } catch (error) {
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       const code = ObsidianKnowledgeCompilerTargetResolverError.inspect(error);
       if (code === "resource_limit") throw new TooLargeRead();
-      if (code === "aborted" || signal.aborted) throw createAbortError();
+      if (code === "aborted") throw createAbortError();
       if (error instanceof RetryConsistency) continue;
       throw new UnavailableRead();
     }
@@ -1122,9 +1124,10 @@ async function readDetailSandwich(
   try {
     observation = await binding.bundle.observeCurrent(binding.pagePath, signal);
   } catch (error) {
+    if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
     const code = ObsidianKnowledgeCompilerTargetResolverError.inspect(error);
     if (code === "resource_limit") throw new TooLargeRead();
-    if (code === "aborted" || signal.aborted) throw createAbortError();
+    if (code === "aborted") throw createAbortError();
     throw new UnavailableRead();
   }
   assertInvocation(state, signal);
@@ -1223,8 +1226,8 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator
       state.sessions.set(binding.session, binding);
       return binding.session;
     } catch (error) {
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       if (error instanceof KnowledgeKnownAppliedWikiOutputsError) throw error;
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
       throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
     }
   }
@@ -1255,7 +1258,7 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator
         ),
       });
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       return error instanceof StaleSession ? STALE_PAGE : UNAVAILABLE_PAGE;
     }
   }
@@ -1285,7 +1288,7 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator
         }),
       });
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       if (error instanceof StaleSession) return STALE_DETAIL;
       if (error instanceof TooLargeRead) return TOO_LARGE_DETAIL;
       return UNAVAILABLE_DETAIL;
@@ -1318,7 +1321,7 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator
         }),
       });
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       if (error instanceof StaleSession) return STALE_COMPARISON;
       if (error instanceof TooLargeRead) return TOO_LARGE_COMPARISON;
       return UNAVAILABLE_COMPARISON;

@@ -2,8 +2,14 @@ import { KnowledgeProductionForwardRevisionProposalCoordinator } from "@/knowled
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
 import {
   KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+  KnowledgeRuntimeIngestExecutionProofPort,
+  KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeStore,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import {
+  consumeKnowledgeProductionWorkflowExecutionPreflightClaim,
+  createKnowledgeProductionWorkflowExecutionPairing,
+} from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import type {
   KnowledgeKnownAppliedWikiOutputsPort,
@@ -19,6 +25,7 @@ const PAGE_REF = `known-wiki-page-${"3".repeat(64)}`;
 /** Minimal atomic file used only to mint a genuine read/write Runtime facade. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
   private content?: string;
+  processCallCount = 0;
 
   /** Creates the file only when absent. */
   async initialize(initialContent: string): Promise<void> {
@@ -33,17 +40,39 @@ class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
 
   /** Applies one synchronous exact transform. */
   async process(transform: (currentContent: string) => string): Promise<string> {
+    this.processCallCount += 1;
     if (this.content === undefined) throw new Error("Runtime file is not initialized");
     this.content = transform(this.content);
     return this.content;
   }
 }
 
-/** Mints the genuine facade required by the production coordinator boundary. */
-function createRuntimePort(): KnowledgeRuntimeForwardRevisionProposalPublicationPort {
-  return new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
-    new KnowledgeRuntimeStore(new MemoryAtomicRuntimeFile())
+/** Mints one genuine owner-bound Runtime facade and its revocable test lifecycle. */
+function createRuntimeFixture(file = new MemoryAtomicRuntimeFile()) {
+  const pairing = createKnowledgeProductionWorkflowExecutionPairing();
+  const executionBinding = consumeKnowledgeProductionWorkflowExecutionPreflightClaim(
+    pairing.preflightClaim
   );
+  const execution = executionBinding.issueWorkflowExecutionLease();
+  const runtime = new KnowledgeRuntimeStore(file, {
+    productionExecutionClaim: pairing.runtimeClaim,
+  });
+  const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(
+    runtime,
+    new KnowledgeRuntimeQueueStorage(runtime, execution.executionOwner)
+  );
+  return Object.freeze({
+    file,
+    runtime,
+    executionOwner: execution.executionOwner,
+    workflowLease: execution.lease,
+    port: new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
+      runtime,
+      proofPort,
+      execution.lease
+    ),
+    revoke: () => executionBinding.revokeWorkflowExecutionLease(execution.lease),
+  });
 }
 
 /** Creates one authentic-shaped R3b session for pre-publication checks. */
@@ -125,6 +154,7 @@ async function createCoordinator(
   readonly knownOutputs: DelegatingKnowledgeKnownAppliedWikiOutputsPort;
   readonly delegate: ReturnType<typeof createKnownOutputsDelegate>;
   readonly session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>;
+  readonly runtime: ReturnType<typeof createRuntimeFixture>;
 }> {
   const delegate = createKnownOutputsDelegate(delegateSession, currentContent);
   const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
@@ -133,25 +163,44 @@ async function createCoordinator(
     { pagePath: PAGE_PATH },
     new AbortController().signal
   );
+  const runtime = createRuntimeFixture();
   return {
     knownOutputs,
     delegate,
     session,
+    runtime,
     coordinator: new KnowledgeProductionForwardRevisionProposalCoordinator({
       knownOutputs,
       knownOutputsDelegate: delegate,
-      runtime: createRuntimePort(),
+      runtime: runtime.port,
+      executionOwner: runtime.executionOwner,
       bundles: [{ bundleId: "bundle-a", wikiRoot: "Wiki" }],
-      assertCurrent: () => undefined,
+      assertCurrent: () => runtime.workflowLease.assertCurrent(),
     }),
   };
 }
 
 describe("KnowledgeProductionForwardRevisionProposalCoordinator", () => {
+  it("authenticates only exact process-local coordinator instances", async () => {
+    const { coordinator } = await createCoordinator(createSession());
+    expect(() =>
+      KnowledgeProductionForwardRevisionProposalCoordinator.assert(coordinator)
+    ).not.toThrow();
+    expect(() =>
+      KnowledgeProductionForwardRevisionProposalCoordinator.assert(
+        Object.create(KnowledgeProductionForwardRevisionProposalCoordinator.prototype)
+      )
+    ).toThrow(DOMException);
+    expect(() =>
+      KnowledgeProductionForwardRevisionProposalCoordinator.assert(new Proxy(coordinator, {}))
+    ).toThrow(DOMException);
+  });
+
   it("rejects every duck-typed write surface before retaining dependencies", () => {
     const delegate = createKnownOutputsDelegate(createSession());
     const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
     knownOutputs.replaceDelegate(delegate);
+    const runtime = createRuntimeFixture();
     expect(
       () =>
         new KnowledgeProductionForwardRevisionProposalCoordinator({
@@ -162,24 +211,165 @@ describe("KnowledgeProductionForwardRevisionProposalCoordinator", () => {
             readForwardRevisionReview: async () => ({}),
             publishForwardRevisionProposalAtomically: async () => ({}),
           } as unknown as KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+          executionOwner: runtime.executionOwner,
           bundles: [{ bundleId: "bundle-a", wikiRoot: "Wiki" }],
           assertCurrent: () => undefined,
         })
     ).toThrow(TypeError);
   });
 
+  it("rejects a genuine Runtime facade owned by another execution without publishing", () => {
+    const delegate = createKnownOutputsDelegate(createSession());
+    const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    knownOutputs.replaceDelegate(delegate);
+    const first = createRuntimeFixture();
+    const second = createRuntimeFixture();
+
+    expect(
+      () =>
+        new KnowledgeProductionForwardRevisionProposalCoordinator({
+          knownOutputs,
+          knownOutputsDelegate: delegate,
+          runtime: first.port,
+          executionOwner: second.executionOwner,
+          bundles: [{ bundleId: "bundle-a", wikiRoot: "Wiki" }],
+          assertCurrent: () => undefined,
+        })
+    ).toThrow(DOMException);
+    expect(first.file.processCallCount).toBe(0);
+    expect(second.file.processCallCount).toBe(0);
+  });
+
+  it("rejects a revoked execution before reading Vault text or publishing", async () => {
+    const fixture = await createCoordinator(createSession());
+    fixture.runtime.revoke();
+
+    await expect(
+      fixture.coordinator.proposeKnownOutput(
+        fixture.session,
+        SELECTED_REF,
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fixture.delegate.calls).toHaveLength(0);
+    expect(fixture.runtime.file.processCallCount).toBe(0);
+  });
+
+  it("re-proves Runtime ownership after an awaited Vault read with zero publication", async () => {
+    const sourceSession = createSession();
+    const baseDelegate = createKnownOutputsDelegate(sourceSession);
+    const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    const runtime = createRuntimeFixture();
+    const revokingDelegate: KnowledgeKnownAppliedWikiOutputsPort = {
+      ...baseDelegate,
+      async readOutput(session, outputRef, signal) {
+        const result = await baseDelegate.readOutput(session, outputRef, signal);
+        runtime.revoke();
+        return result;
+      },
+    };
+    knownOutputs.replaceDelegate(revokingDelegate);
+    const session = await knownOutputs.inspectKnownOutputs(
+      { pagePath: PAGE_PATH },
+      new AbortController().signal
+    );
+    const coordinator = new KnowledgeProductionForwardRevisionProposalCoordinator({
+      knownOutputs,
+      knownOutputsDelegate: revokingDelegate,
+      runtime: runtime.port,
+      executionOwner: runtime.executionOwner,
+      bundles: [{ bundleId: "bundle-a", wikiRoot: "Wiki" }],
+      assertCurrent: () => runtime.workflowLease.assertCurrent(),
+    });
+
+    await expect(
+      coordinator.proposeKnownOutput(session, SELECTED_REF, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(baseDelegate.calls).toEqual([sourceSession]);
+    expect(runtime.file.processCallCount).toBe(0);
+  });
+
   it("rejects a duck-typed known-output reader before it can supply Vault text", () => {
     const delegate = createKnownOutputsDelegate(createSession());
+    const runtime = createRuntimeFixture();
     expect(
       () =>
         new KnowledgeProductionForwardRevisionProposalCoordinator({
           knownOutputs: delegate as unknown as DelegatingKnowledgeKnownAppliedWikiOutputsPort,
           knownOutputsDelegate: delegate,
-          runtime: createRuntimePort(),
+          runtime: runtime.port,
+          executionOwner: runtime.executionOwner,
           bundles: [{ bundleId: "bundle-a", wikiRoot: "Wiki" }],
           assertCurrent: () => undefined,
         })
     ).toThrow(DOMException);
+  });
+
+  it("revokes an old action before a replacement reader or its authentic session can be used", async () => {
+    const originalDelegate = createKnownOutputsDelegate(createSession());
+    const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    knownOutputs.replaceDelegate(originalDelegate);
+    const file = new MemoryAtomicRuntimeFile();
+    const runtime = createRuntimeFixture(file);
+    const coordinator = new KnowledgeProductionForwardRevisionProposalCoordinator({
+      knownOutputs,
+      knownOutputsDelegate: originalDelegate,
+      runtime: runtime.port,
+      executionOwner: runtime.executionOwner,
+      bundles: [{ bundleId: "bundle-a", wikiRoot: "Wiki" }],
+      assertCurrent: () => undefined,
+    });
+
+    const replacementDelegate = createKnownOutputsDelegate(createSession());
+    knownOutputs.replaceDelegate(replacementDelegate);
+    const replacementSession = await knownOutputs.inspectKnownOutputs(
+      { pagePath: PAGE_PATH },
+      new AbortController().signal
+    );
+
+    await expect(
+      coordinator.proposeKnownOutput(replacementSession, SELECTED_REF, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(originalDelegate.calls).toHaveLength(0);
+    expect(replacementDelegate.calls).toHaveLength(0);
+    expect(file.processCallCount).toBe(0);
+  });
+
+  it("re-proves the exact reader after an awaited read before any publication", async () => {
+    const sourceSession = createSession();
+    const baseDelegate = createKnownOutputsDelegate(sourceSession);
+    const replacementDelegate = createKnownOutputsDelegate(createSession());
+    const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    const swappingDelegate: KnowledgeKnownAppliedWikiOutputsPort = {
+      ...baseDelegate,
+      async readOutput(session, outputRef, signal) {
+        const result = await baseDelegate.readOutput(session, outputRef, signal);
+        knownOutputs.replaceDelegate(replacementDelegate);
+        return result;
+      },
+    };
+    knownOutputs.replaceDelegate(swappingDelegate);
+    const session = await knownOutputs.inspectKnownOutputs(
+      { pagePath: PAGE_PATH },
+      new AbortController().signal
+    );
+    const file = new MemoryAtomicRuntimeFile();
+    const runtime = createRuntimeFixture(file);
+    const coordinator = new KnowledgeProductionForwardRevisionProposalCoordinator({
+      knownOutputs,
+      knownOutputsDelegate: swappingDelegate,
+      runtime: runtime.port,
+      executionOwner: runtime.executionOwner,
+      bundles: [{ bundleId: "bundle-a", wikiRoot: "Wiki" }],
+      assertCurrent: () => undefined,
+    });
+
+    await expect(
+      coordinator.proposeKnownOutput(session, SELECTED_REF, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(baseDelegate.calls).toEqual([sourceSession]);
+    expect(replacementDelegate.calls).toHaveLength(0);
+    expect(file.processCallCount).toBe(0);
   });
 
   it("passes the original authentic R3b session and rejects a copied capability", async () => {
@@ -218,12 +408,14 @@ describe("KnowledgeProductionForwardRevisionProposalCoordinator", () => {
     const delegate = createKnownOutputsDelegate(createSession());
     const knownOutputs = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
     knownOutputs.replaceDelegate(delegate);
+    const runtime = createRuntimeFixture();
     expect(
       () =>
         new KnowledgeProductionForwardRevisionProposalCoordinator({
           knownOutputs,
           knownOutputsDelegate: delegate,
-          runtime: createRuntimePort(),
+          runtime: runtime.port,
+          executionOwner: runtime.executionOwner,
           bundles: [
             { bundleId: "bundle-a", wikiRoot: "Wiki" },
             { bundleId: "bundle-b", wikiRoot: "wiki/Nested" },

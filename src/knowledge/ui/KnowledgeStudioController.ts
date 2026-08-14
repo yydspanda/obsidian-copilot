@@ -1,3 +1,4 @@
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
 import type { KnowledgeDiagnostic } from "@/knowledge/model/types";
 import type {
   KnowledgeStudioQueryResult,
@@ -17,6 +18,15 @@ import type {
   KnowledgeSourceLifecyclePort,
   KnowledgeSourceRetirementUiReceipt,
 } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
+import {
+  createKnowledgeForwardRevisionStudioApplyCommand,
+  createKnowledgeForwardRevisionStudioCommandFromReview,
+  snapshotKnowledgeForwardRevisionStudioCommand,
+  type KnowledgeForwardRevisionStudioCommand,
+  type KnowledgeForwardRevisionStudioPendingReview,
+  type KnowledgeForwardRevisionStudioReview,
+  type KnowledgeForwardRevisionStudioSubmissionResult,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
 import type {
   KnowledgeActivityCounts,
   KnowledgeActivityModel,
@@ -50,6 +60,8 @@ export interface KnowledgeStudioCommandCapabilities {
   retryJob: boolean;
   reviewReject: boolean;
   reviewAccept: boolean;
+  /** Whether the exact generation exposes dedicated forward Review decisions and Apply. */
+  forwardRevisionReview?: boolean;
   recoveryContinue?: boolean;
   recoveryAbandon?: boolean;
 }
@@ -62,11 +74,13 @@ export interface KnowledgeStudioSnapshot {
   commandCapabilities: Readonly<KnowledgeStudioCommandCapabilities>;
   activity: Readonly<KnowledgeActivityModel>;
   reviews: readonly Readonly<KnowledgeReviewPlan>[];
+  /** Independent forward proposals and accepted-but-unapplied work. */
+  forwardRevisionReviews?: readonly Readonly<KnowledgeForwardRevisionStudioReview>[];
   recovery: Readonly<KnowledgeRecoveryModel>;
   /** Active registered sources when the exact lifecycle generation is connected. */
   sourceLifecycle?: Readonly<KnowledgeSourceLifecycleModel>;
   /** Optional first-load tab selected by a constrained startup adapter. */
-  preferredTab?: "sources";
+  preferredTab?: "sources" | "review";
   /** Whether the exact adapter generation exposes scoped applied-Wiki Query. */
   queryAvailable?: boolean;
   /** Whether current grounded answers can enter the reviewed writeback pipeline. */
@@ -138,6 +152,12 @@ export interface KnowledgeStudioCommandPort {
     command: KnowledgeReviewCommand,
     signal: AbortSignal
   ): Promise<KnowledgeStudioReviewSubmissionResult>;
+  /** Submits one dedicated opaque forward Review or accepted-ready Apply action. */
+  submitForwardRevisionStudio?(
+    bundleId: string,
+    command: KnowledgeForwardRevisionStudioCommand,
+    signal: AbortSignal
+  ): Promise<KnowledgeForwardRevisionStudioSubmissionResult>;
   /** Continues an exact accepted apply after fresh durable re-proof. */
   continueRecovery?(
     bundleId: string,
@@ -171,6 +191,7 @@ export interface KnowledgeStudioPendingAction {
     | "cancel"
     | "retry"
     | "submit_review"
+    | "submit_forward_revision"
     | "check_source"
     | "retire_source"
     | "continue_recovery"
@@ -202,6 +223,7 @@ export interface KnowledgeStudioState {
   bundleId?: string;
   snapshot?: KnowledgeStudioSnapshot;
   selectedReviewChangeSetId?: string;
+  selectedForwardRevisionRef?: string;
   pendingAction?: KnowledgeStudioPendingAction;
   feedback?: KnowledgeStudioFeedback;
   unavailableNotice?: string;
@@ -252,6 +274,7 @@ export const NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioC
     retryJob: false,
     reviewReject: false,
     reviewAccept: false,
+    forwardRevisionReview: false,
     recoveryContinue: false,
     recoveryAbandon: false,
   });
@@ -294,6 +317,7 @@ export function createUnavailableKnowledgeStudioSnapshot(
     commandCapabilities: NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES,
     activity,
     reviews: Object.freeze([]),
+    forwardRevisionReviews: Object.freeze([]),
     recovery,
     notice,
   });
@@ -370,6 +394,15 @@ export class UnavailableKnowledgeStudioPort
     throw new KnowledgeStudioAdapterUnavailableError();
   }
 
+  /** Rejects forward Review submission while adapters are unavailable. */
+  async submitForwardRevisionStudio(
+    _bundleId: string,
+    _command: KnowledgeForwardRevisionStudioCommand,
+    _signal: AbortSignal
+  ): Promise<KnowledgeForwardRevisionStudioSubmissionResult> {
+    throw new KnowledgeStudioAdapterUnavailableError();
+  }
+
   /** Rejects recovery continuation while adapters are unavailable. */
   async continueRecovery(
     _bundleId: string,
@@ -397,9 +430,7 @@ export class UnavailableKnowledgeStudioPort
  * @param error - Unknown rejection
  * @returns Whether the error uses the platform AbortError convention
  */
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
+const isAbortError = isKnowledgeAbortError;
 
 /**
  * Validates the minimum cross-object identity contract of one trusted snapshot.
@@ -409,6 +440,7 @@ function isAbortError(error: unknown): boolean {
  */
 function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnapshot): void {
   const commandCapabilities = snapshot.commandCapabilities;
+  const forwardReviews = snapshot.forwardRevisionReviews ?? [];
   if (
     snapshot.bundleId !== bundleId ||
     snapshot.activity.bundleId !== bundleId ||
@@ -423,6 +455,8 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
     typeof commandCapabilities.retryJob !== "boolean" ||
     typeof commandCapabilities.reviewReject !== "boolean" ||
     typeof commandCapabilities.reviewAccept !== "boolean" ||
+    (commandCapabilities.forwardRevisionReview !== undefined &&
+      typeof commandCapabilities.forwardRevisionReview !== "boolean") ||
     (commandCapabilities.recoveryContinue !== undefined &&
       typeof commandCapabilities.recoveryContinue !== "boolean") ||
     (commandCapabilities.recoveryAbandon !== undefined &&
@@ -434,13 +468,28 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
       typeof snapshot.reviewEvidenceAvailable !== "boolean") ||
     (snapshot.queryWritebackAvailable === true && snapshot.queryAvailable !== true) ||
     (snapshot.sourceLifecycle !== undefined && snapshot.sourceLifecycle.bundleId !== bundleId) ||
-    (snapshot.preferredTab !== undefined && snapshot.preferredTab !== "sources") ||
-    (snapshot.preferredTab === "sources" && snapshot.sourceLifecycle === undefined)
+    (snapshot.preferredTab !== undefined &&
+      snapshot.preferredTab !== "sources" &&
+      snapshot.preferredTab !== "review") ||
+    (snapshot.preferredTab === "sources" && snapshot.sourceLifecycle === undefined) ||
+    (snapshot.preferredTab === "review" &&
+      snapshot.reviews.length === 0 &&
+      forwardReviews.length === 0)
   ) {
     throw new TypeError("Knowledge Studio snapshot identity is invalid");
   }
   if (snapshot.reviews.some((review) => review.bundleId !== bundleId)) {
     throw new TypeError("Knowledge Studio review belongs to another Bundle");
+  }
+  const forwardRefs = new Set<string>();
+  if (
+    forwardReviews.some((review) => {
+      if (forwardRefs.has(review.reviewRef)) return true;
+      forwardRefs.add(review.reviewRef);
+      return review.state === "pending" && review.plan.bundleId !== bundleId;
+    })
+  ) {
+    throw new TypeError("Knowledge Studio forward Review identity is invalid");
   }
 }
 
@@ -546,6 +595,7 @@ export class KnowledgeStudioController {
   private queryGeneration = 0;
   private reviewEvidenceGeneration = 0;
   private refreshQueued = false;
+  private pendingForwardRevisionFocusRef?: string;
   private readonly reviewDrafts = new KnowledgeReviewDraftStore();
 
   /**
@@ -959,11 +1009,66 @@ export class KnowledgeStudioController {
       ...this.state,
       activeTab: "review",
       selectedReviewChangeSetId: review.changeSetId,
+      selectedForwardRevisionRef: undefined,
       feedback: undefined,
       openingReviewEvidenceRef: undefined,
       reviewEvidenceError: undefined,
     };
     this.emit();
+  }
+
+  /** Opens one current dedicated forward row by its opaque product reference. */
+  openForwardRevision(reviewRef: string): void {
+    this.cancelReviewEvidenceWork();
+    const review = this.state.snapshot?.forwardRevisionReviews?.find(
+      (candidate) => candidate.reviewRef === reviewRef
+    );
+    if (!review) {
+      this.state = {
+        ...this.state,
+        feedback: {
+          kind: "blocked",
+          message: "That forward revision is no longer available. Review has been refreshed.",
+        },
+      };
+      this.emit();
+      void this.refresh();
+      return;
+    }
+    this.state = {
+      ...this.state,
+      activeTab: "review",
+      selectedReviewChangeSetId: undefined,
+      selectedForwardRevisionRef: review.reviewRef,
+      feedback: undefined,
+      openingReviewEvidenceRef: undefined,
+      reviewEvidenceError: undefined,
+    };
+    this.emit();
+  }
+
+  /**
+   * Focuses one just-published opaque forward row after a fresh durable reload.
+   *
+   * @param reviewRef - Product-only reference derived from the committed proposal receipt
+   */
+  focusPublishedForwardRevision(reviewRef: string): void {
+    if (!/^forward-studio-review-[a-f0-9]{64}$/.test(reviewRef)) {
+      throw new TypeError("Forward revision review reference is invalid");
+    }
+    this.cancelReviewEvidenceWork();
+    this.pendingForwardRevisionFocusRef = reviewRef;
+    this.state = {
+      ...this.state,
+      activeTab: "review",
+      selectedReviewChangeSetId: undefined,
+      selectedForwardRevisionRef: reviewRef,
+      feedback: undefined,
+      openingReviewEvidenceRef: undefined,
+      reviewEvidenceError: undefined,
+    };
+    this.emit();
+    void this.refresh();
   }
 
   /**
@@ -1052,7 +1157,13 @@ export class KnowledgeStudioController {
   ): Readonly<KnowledgeReviewPlan> | undefined {
     // React receives these exact frozen plan instances from the current controller snapshot.
     // Identity comparison avoids reading any property from a caller-owned impostor.
-    return this.state.snapshot?.reviews.find((candidate) => candidate === plan);
+    return (
+      this.state.snapshot?.reviews.find((candidate) => candidate === plan) ??
+      this.state.snapshot?.forwardRevisionReviews?.find(
+        (candidate): candidate is Readonly<KnowledgeForwardRevisionStudioPendingReview> =>
+          candidate.state === "pending" && candidate.plan === plan
+      )?.plan
+    );
   }
 
   /**
@@ -1219,15 +1330,45 @@ export class KnowledgeStudioController {
       ) {
         return;
       }
-      const reviewDraftsRevoked = this.reviewDrafts.reconcile(bundleId, snapshot.reviews);
-      const selectedReviewChangeSetId = snapshot.reviews.some(
-        (review) => review.changeSetId === this.state.selectedReviewChangeSetId
+      const forwardRevisionReviews = snapshot.forwardRevisionReviews ?? [];
+      const forwardPendingPlans = forwardRevisionReviews.flatMap((review) =>
+        review.state === "pending" ? [review.plan] : []
+      );
+      const requestedForwardRevisionRef = this.pendingForwardRevisionFocusRef;
+      const focusedForwardRevisionRef = forwardRevisionReviews.some(
+        (review) => review.reviewRef === requestedForwardRevisionRef
       )
-        ? this.state.selectedReviewChangeSetId
-        : snapshot.reviews[0]?.changeSetId;
-      const activeTab =
-        this.state.snapshot === undefined && snapshot.preferredTab === "sources"
-          ? "sources"
+        ? requestedForwardRevisionRef
+        : undefined;
+      this.pendingForwardRevisionFocusRef = undefined;
+      const reviewDraftsRevoked = this.reviewDrafts.reconcile(bundleId, [
+        ...snapshot.reviews,
+        ...forwardPendingPlans,
+      ]);
+      const retainedReviewChangeSetId =
+        !focusedForwardRevisionRef &&
+        snapshot.reviews.some(
+          (review) => review.changeSetId === this.state.selectedReviewChangeSetId
+        )
+          ? this.state.selectedReviewChangeSetId
+          : undefined;
+      const retainedForwardRevisionRef = forwardRevisionReviews.some(
+        (review) => review.reviewRef === this.state.selectedForwardRevisionRef
+      )
+        ? this.state.selectedForwardRevisionRef
+        : undefined;
+      const selectedForwardRevisionRef =
+        focusedForwardRevisionRef ??
+        (retainedReviewChangeSetId
+          ? undefined
+          : (retainedForwardRevisionRef ?? forwardRevisionReviews[0]?.reviewRef));
+      const selectedReviewChangeSetId = selectedForwardRevisionRef
+        ? undefined
+        : (retainedReviewChangeSetId ?? snapshot.reviews[0]?.changeSetId);
+      const activeTab = focusedForwardRevisionRef
+        ? ("review" as const)
+        : this.state.snapshot === undefined && snapshot.preferredTab !== undefined
+          ? snapshot.preferredTab
           : snapshot.recovery.items.length > 0
             ? this.state.snapshot === undefined
               ? "recovery"
@@ -1246,7 +1387,15 @@ export class KnowledgeStudioController {
         refreshing: false,
         snapshot,
         selectedReviewChangeSetId,
-        feedback: this.state.feedback,
+        selectedForwardRevisionRef,
+        feedback:
+          requestedForwardRevisionRef !== undefined && focusedForwardRevisionRef === undefined
+            ? {
+                kind: "blocked" as const,
+                message:
+                  "The published forward proposal is not in this current Bundle. The Review inbox was refreshed.",
+              }
+            : this.state.feedback,
         reviewDraftNotice: reviewDraftsRevoked
           ? "This proposal changed. Its session-only Review draft was cleared."
           : this.state.reviewDraftNotice,
@@ -1276,7 +1425,7 @@ export class KnowledgeStudioController {
       return;
     }
     const expectedQueueRevision = snapshot.activity.revision;
-    await this.executeAction(
+    await this.executeAction<void>(
       { kind: "pause" },
       (bundleId, signal) => this.commandPort.pauseBundle(bundleId, expectedQueueRevision, signal),
       () => ({ kind: "success", message: "Knowledge activity paused." })
@@ -1561,6 +1710,151 @@ export class KnowledgeStudioController {
               kind: "blocked",
               message: "The selected changes did not pass deterministic validation.",
               diagnostics: result.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+            };
+        }
+      }
+    );
+  }
+
+  /** Converts one reusable pending Review command into the distinct forward action boundary. */
+  async submitForwardRevisionReview(
+    reviewRef: string,
+    command: KnowledgeReviewCommand
+  ): Promise<void> {
+    const review = this.state.snapshot?.forwardRevisionReviews?.find(
+      (candidate): candidate is Readonly<KnowledgeForwardRevisionStudioPendingReview> =>
+        candidate.reviewRef === reviewRef && candidate.state === "pending"
+    );
+    if (!review) {
+      await this.rejectUnavailableAction(
+        "That forward proposal changed before submission. Review the refreshed snapshot."
+      );
+      return;
+    }
+    let captured: Readonly<KnowledgeForwardRevisionStudioCommand>;
+    try {
+      captured = createKnowledgeForwardRevisionStudioCommandFromReview(review, command);
+    } catch {
+      await this.rejectUnavailableAction(
+        "This forward Review command is invalid and was not submitted."
+      );
+      return;
+    }
+    const draftIdentity = createKnowledgeReviewDraftIdentity(review.plan.bundleId, review.plan);
+    if (this.reviewDrafts.readActiveEdit(draftIdentity) !== undefined) {
+      await this.rejectUnavailableAction(
+        "Finish or cancel the active manual edit before submitting this forward Review."
+      );
+      return;
+    }
+    await this.submitForwardRevisionCommand(captured, draftIdentity);
+  }
+
+  /** Retries fresh validation and Apply for one durable accepted-ready forward decision. */
+  async applyForwardRevision(reviewRef: string): Promise<void> {
+    const review = this.state.snapshot?.forwardRevisionReviews?.find(
+      (candidate) => candidate.reviewRef === reviewRef && candidate.state === "accepted_ready"
+    );
+    if (!review || review.state !== "accepted_ready") {
+      await this.rejectUnavailableAction(
+        "That accepted forward revision is no longer ready to apply."
+      );
+      return;
+    }
+    await this.submitForwardRevisionCommand(
+      createKnowledgeForwardRevisionStudioApplyCommand(review)
+    );
+  }
+
+  /** Serializes one current opaque Forward command and always reloads durable truth. */
+  private async submitForwardRevisionCommand(
+    commandValue: Readonly<KnowledgeForwardRevisionStudioCommand>,
+    draftIdentity?: ReturnType<typeof createKnowledgeReviewDraftIdentity>
+  ): Promise<void> {
+    if (this.state.pendingAction) return;
+    const snapshot = this.state.snapshot;
+    if (
+      snapshot?.commandCapabilities.forwardRevisionReview !== true ||
+      typeof this.commandPort.submitForwardRevisionStudio !== "function"
+    ) {
+      await this.rejectUnavailableAction(
+        "Forward Review decisions and Apply are unavailable from the current snapshot."
+      );
+      return;
+    }
+    let command: Readonly<KnowledgeForwardRevisionStudioCommand>;
+    try {
+      command = snapshotKnowledgeForwardRevisionStudioCommand(commandValue);
+    } catch {
+      await this.rejectUnavailableAction("This forward revision command is invalid.");
+      return;
+    }
+    const current = snapshot.forwardRevisionReviews?.find(
+      (review) =>
+        review.reviewRef === command.reviewRef && review.snapshotRef === command.snapshotRef
+    );
+    if (!current) {
+      await this.rejectUnavailableAction(
+        "This forward revision changed before submission. Review the refreshed snapshot."
+      );
+      return;
+    }
+
+    await this.executeAction<KnowledgeForwardRevisionStudioSubmissionResult>(
+      { kind: "submit_forward_revision", targetId: command.reviewRef },
+      (bundleId, signal) =>
+        this.commandPort.submitForwardRevisionStudio!(bundleId, command, signal),
+      (result) => {
+        if (
+          draftIdentity &&
+          result.kind !== "no_change" &&
+          result.kind !== "stale" &&
+          result.kind !== "unavailable"
+        ) {
+          this.reviewDrafts.delete(draftIdentity);
+        }
+        switch (result.kind) {
+          case "applied":
+            return { kind: "success", message: "The accepted revision was applied." };
+          case "rejected":
+            return {
+              kind: "success",
+              message: "The forward proposal was rejected without writing the Wiki page.",
+            };
+          case "accepted_ready":
+            return {
+              kind: "blocked",
+              message:
+                "The decision is durably accepted, but fresh Apply validation could not begin. It remains visible and retryable.",
+            };
+          case "applying":
+            return {
+              kind: "blocked",
+              message:
+                "The forward Apply journal is durable but paused. Reload the plugin to run startup recovery.",
+            };
+          case "no_change":
+            return {
+              kind: "blocked",
+              message:
+                "The selected edited content already equals the current Wiki page. The proposal remains pending.",
+            };
+          case "recovery_required":
+            return {
+              kind: "blocked",
+              message:
+                "The accepted revision is durable, but an exact file conflict requires recovery.",
+            };
+          case "stale":
+            return {
+              kind: "blocked",
+              message:
+                "The proposal, accepted decision, or current page changed. Review the refreshed state.",
+            };
+          case "unavailable":
+            return {
+              kind: "error",
+              message: "The forward revision action is temporarily unavailable.",
             };
         }
       }

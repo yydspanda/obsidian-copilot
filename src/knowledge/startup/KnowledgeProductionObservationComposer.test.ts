@@ -21,6 +21,7 @@ import {
 } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { KnowledgeProductionChatCaptureCoordinator } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
+import { KnowledgeProductionForwardRevisionProposalActionAdapter } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
 import { KnowledgeForwardRevisionValidationCoordinatorError } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
 import { KnowledgeProductionForwardRevisionApplyTransactionRunner } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import type { KnowledgeProductionPreflightSettingsInput } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
@@ -336,31 +337,33 @@ class PostCommitThrowRuntimeFile extends KnowledgeExecutionMemoryRuntimeFile {
  * Mints one authentic same-snapshot workflow lease through production preflight.
  *
  * @param fetchPort - Test model transport that observation must not call
- * @param bundle - Bundle projected into the production preflight snapshot
+ * @param bundleInput - Bundle or Bundles projected into the production preflight snapshot
  * @param createResources - Exact parser/profile registry captured by preflight
  */
 async function createAdmission(
   fetchPort: KnowledgeDeepSeekFetchPort,
-  bundle: KnowledgeBundleConfig = createBundle(),
+  bundleInput: KnowledgeBundleConfig | readonly KnowledgeBundleConfig[] = createBundle(),
   createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
 ): Promise<{
   lifecycle: KnowledgePluginProductionPreflightLifecycle;
   admission: KnowledgePluginProductionPreflightAdmission;
   runtimeClaim: KnowledgeProductionWorkflowExecutionRuntimeClaim;
 }> {
+  const bundles: readonly KnowledgeBundleConfig[] = Array.isArray(bundleInput)
+    ? bundleInput
+    : [bundleInput as KnowledgeBundleConfig];
   const { runtimeClaim, preflightClaim } = createKnowledgeProductionWorkflowExecutionPairing();
   const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
     executionPreflightClaim: preflightClaim,
-    getProjectRecords: () => [
-      {
+    getProjectRecords: () =>
+      bundles.map((bundle, index) => ({
         project: {
-          id: PROJECT_ID,
+          id: index === 0 ? PROJECT_ID : `${PROJECT_ID}-${bundle.id}`,
           knowledgeBundle: bundle,
           projectModelKey: MODEL_KEY,
           modelConfigs: {},
         },
-      },
-    ],
+      })),
     getSettings: () => createSettings(),
     fetchPort,
     createResources,
@@ -1240,8 +1243,7 @@ describe("KnowledgeProductionObservationComposer", () => {
     ).rejects.toMatchObject({ code: "unavailable" });
     expect(pathIndex.lookupExact("Wiki/personal/Missing.md")).toEqual([]);
     await expect(inspector.listAppliedWikiPathIndexRows(signal)).rejects.toMatchObject({
-      name: "KnowledgeAppliedWikiPageInspectorError",
-      code: "unavailable",
+      name: "AbortError",
     });
     generation.close();
     stablePort.dispose();
@@ -1404,6 +1406,108 @@ describe("KnowledgeProductionObservationComposer", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
     generation.close();
     stablePort.dispose();
+    await worker.whenSettled();
+    lifecycle.close();
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("pairs the forward proposal action with the exact released execution owner", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+    const runtime = await createRuntime(runtimeClaim);
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const signal = new AbortController().signal;
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
+    });
+
+    await expect(composer.start(signal)).resolves.toMatchObject({
+      kind: "observation_converged",
+    });
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => undefined
+    );
+    const browser = composer.createKnownAppliedWikiOutputsCoordinator();
+    const stablePort = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    stablePort.replaceDelegate(browser);
+    const drains: Promise<void>[] = [];
+    const action = composer.createForwardRevisionProposalActionAdapter(
+      stablePort,
+      browser,
+      (drain) => drains.push(drain)
+    );
+
+    KnowledgeProductionForwardRevisionProposalActionAdapter.assert(action);
+    expect(Reflect.ownKeys(action)).toEqual([]);
+    expect(Object.isFrozen(action)).toBe(true);
+    expect(() =>
+      composer.createForwardRevisionProposalActionAdapter(stablePort, browser, () => undefined)
+    ).toThrow("aborted");
+
+    composer.close();
+    await expect(
+      action.proposeKnownOutput({} as never, `known-wiki-output-${"2".repeat(64)}`, signal)
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(drains).toHaveLength(1);
+    await Promise.all(drains);
+    stablePort.dispose();
+    await worker.whenSettled();
+    lifecycle.close();
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("keeps proposal mutation unavailable for a multi-Bundle generation", async () => {
+    const fetchPort = createFetchPort();
+    const workSchemaPath = "Schemas/work.md";
+    const bundles = [
+      createBundle(),
+      createBundle({
+        id: "work",
+        sourceRoots: ["Sources/work"],
+        wikiRoot: "Wiki/work",
+        schemaRef: workSchemaPath,
+      }),
+    ];
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort, bundles);
+    const runtime = await createRuntime(runtimeClaim);
+    const vault = new ProductionVaultHarness();
+    vault.addFile(SCHEMA_PATH, encodeText("# Personal schema\n"));
+    vault.addFile(workSchemaPath, encodeText("# Work schema\n"));
+    vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
+    });
+
+    await expect(composer.start(new AbortController().signal)).resolves.toMatchObject({
+      kind: "observation_converged",
+    });
+    const worker = composer.createCompileReviewWorkerController(
+      admission.modelRouteLease,
+      () => true,
+      createWorkerScheduler(),
+      () => undefined
+    );
+    const browser = composer.createKnownAppliedWikiOutputsCoordinator();
+    const stablePort = new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+    stablePort.replaceDelegate(browser);
+
+    expect(() =>
+      composer.createForwardRevisionProposalActionAdapter(stablePort, browser, () => undefined)
+    ).toThrow("aborted");
+
+    stablePort.dispose();
+    composer.close();
     await worker.whenSettled();
     lifecycle.close();
     expect(fetchPort).not.toHaveBeenCalled();

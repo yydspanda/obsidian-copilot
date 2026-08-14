@@ -474,7 +474,7 @@ function toReviewDiffPart(change: Change): KnowledgeReviewDiffPart {
  * @param afterContent - Exact proposed post-state text
  * @returns Stable exact diff blocks
  */
-function createReviewBlocks(
+export function createKnowledgeReviewBlocks(
   changeId: string,
   beforeContent: string,
   afterContent: string
@@ -665,7 +665,7 @@ export function createKnowledgeReviewPlan(
     const inspection = inspectTarget(change, observation);
     const beforeContent = inspection.beforeContent;
     const afterContent = getAfterContent(change);
-    const blocks = createReviewBlocks(change.id, beforeContent ?? "", afterContent ?? "");
+    const blocks = createKnowledgeReviewBlocks(change.id, beforeContent ?? "", afterContent ?? "");
     const hasChangeBlocks = blocks.some((block) => block.kind === "change");
     const capability =
       inspection.capability === "blocks_allowed" && !hasChangeBlocks
@@ -922,7 +922,7 @@ function assertSelectedCandidateContentBudget(
  * @param acceptedBlockIds - Changed blocks whose proposed side was accepted
  * @returns Exact selected text preserving line endings and trailing whitespace
  */
-function composeSelectedContent(
+export function composeKnowledgeReviewSelectedContent(
   file: KnowledgeReviewFile,
   acceptedBlockIds: ReadonlySet<string>
 ): string {
@@ -1017,7 +1017,10 @@ export function compileKnowledgeReviewSelection(
       return;
     }
 
-    const afterContent = composeSelectedContent(file, new Set(decision.acceptedBlockIds));
+    const afterContent = composeKnowledgeReviewSelectedContent(
+      file,
+      new Set(decision.acceptedBlockIds)
+    );
     if (afterContent === beforeContent) {
       return;
     }

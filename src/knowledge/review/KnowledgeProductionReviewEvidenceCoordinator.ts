@@ -1,4 +1,5 @@
 import type { CompilerTargetResolver } from "@/knowledge/compiler/CompilerModelPort";
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import { validateKnowledgeBundleConfig } from "@/knowledge/model/validation";
 import { isPathWithinRoot, parseVaultPath } from "@/knowledge/paths/vaultPath";
@@ -66,11 +67,6 @@ const UNAVAILABLE_RESULT = Object.freeze({ kind: "unavailable" as const });
 /** Creates the platform-standard cancellation category without retaining a reason. */
 function createAbortError(): DOMException {
   return new DOMException("The operation was aborted", "AbortError");
-}
-
-/** Reports whether one failure is intentional cancellation. */
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }
 
 /** Stops work at every asynchronous authority boundary. */
@@ -287,7 +283,7 @@ export class KnowledgeProductionReviewEvidenceCoordinator
       assertInvocation(state, signal);
       return mapNavigationResult(result);
     } catch (error) {
-      if (signal.aborted || isAbortError(error)) throw createAbortError();
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       return UNAVAILABLE_RESULT;
     }
   }

@@ -693,6 +693,7 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
       reviewAccept: true,
       recoveryContinue: false,
       recoveryAbandon: false,
+      forwardRevisionReview: false,
     });
     expect(snapshot.recovery).toEqual({
       bundleId: BUNDLE_ID,
@@ -873,6 +874,48 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
         assertCurrent
       ).load(BUNDLE_ID, new AbortController().signal)
     ).rejects.toMatchObject({ name: "KnowledgeStudioRuntimeReadError" });
+  });
+
+  it("recognizes a serialized own-data cancellation and rejects hostile lookalikes", async () => {
+    const record = createPendingRecord();
+    const projection = createProjection(1, createQueue(record), createReview([record]));
+    const serializedAbort = Object.freeze({ name: "AbortError" }) as Error;
+    const abortingResolver = new FakeTargetResolver(async () => {
+      throw serializedAbort;
+    });
+
+    await expect(
+      createAdapter(new FakeRuntime([projection]), abortingResolver).load(
+        BUNDLE_ID,
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    let getterCalls = 0;
+    const accessorLookalike = {} as Error;
+    Object.defineProperty(accessorLookalike, "name", {
+      get: () => {
+        getterCalls += 1;
+        return "AbortError";
+      },
+    });
+    const proxyLookalike = new Proxy({} as Error, {
+      getOwnPropertyDescriptor: () => {
+        throw new Error("descriptor trap must fail closed");
+      },
+    });
+    for (const failure of [accessorLookalike, proxyLookalike]) {
+      const hostileResolver = new FakeTargetResolver(async () => {
+        throw failure;
+      });
+      await expect(
+        createAdapter(new FakeRuntime([projection]), hostileResolver).load(
+          BUNDLE_ID,
+          new AbortController().signal
+        )
+      ).rejects.toBeInstanceOf(KnowledgeStudioRuntimeReadError);
+    }
+    expect(getterCalls).toBe(0);
   });
 
   it("combines Runtime and Vault hints and cleans both subscriptions idempotently", () => {

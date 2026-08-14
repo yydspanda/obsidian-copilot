@@ -25,13 +25,19 @@ import {
   KnowledgeStudioRecoveryOnlyAdapter,
   type KnowledgeStudioRecoveryActionPort,
 } from "@/knowledge/ui/KnowledgeStudioRecoveryOnlyAdapter";
-import type { KnowledgeStudioRecoverySubmissionResult } from "@/knowledge/ui/KnowledgeStudioController";
+import {
+  KnowledgeStudioController,
+  type KnowledgeStudioRecoverySubmissionResult,
+} from "@/knowledge/ui/KnowledgeStudioController";
 
 interface MutableComposerHarness {
   observation?: unknown;
   nextObservation?: unknown;
   start: jest.Mock<Promise<void>, []>;
 }
+
+const FORWARD_REVIEW_REF = `forward-studio-review-${"1".repeat(64)}`;
+const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"2".repeat(64)}`;
 
 /** Creates one frozen-enough content-free recovery observation for adapter tests. */
 function createObservation(runtimeRevision = 7) {
@@ -82,6 +88,43 @@ function createObservation(runtimeRevision = 7) {
         },
       ],
     },
+    forwardRevisionReviews: [],
+  };
+}
+
+/** Creates one content-free forward journal observation owned by startup recovery. */
+function createForwardObservation(state: "applying" | "recovery_required", runtimeRevision = 8) {
+  const base = {
+    reviewRef: FORWARD_REVIEW_REF,
+    snapshotRef: FORWARD_SNAPSHOT_REF,
+    pagePath: "Wiki/Forward.md",
+    updatedAt: 30,
+    acceptedAt: 20,
+    manualOverride: false,
+  };
+  return {
+    ...createObservation(runtimeRevision),
+    activity: {
+      ...createObservation(runtimeRevision).activity,
+      controls: {
+        state:
+          state === "applying" ? ("startup_recovery" as const) : ("recovery_required" as const),
+        canPause: false,
+        canResume: false,
+      },
+    },
+    recovery: { bundleId: "personal", runtimeRevision, items: [] },
+    forwardRevisionReviews: [
+      state === "applying"
+        ? { state, ...base, applyPhase: "applying" as const }
+        : {
+            state,
+            ...base,
+            conflictCode: "file_state_conflict" as const,
+            actualKind: "file" as const,
+            detectedAt: 31,
+          },
+    ],
   };
 }
 
@@ -128,6 +171,7 @@ describe("KnowledgeStudioRecoveryOnlyAdapter", () => {
         retryJob: false,
         reviewReject: false,
         reviewAccept: false,
+        forwardRevisionReview: false,
         recoveryContinue: true,
         recoveryAbandon: true,
       },
@@ -138,6 +182,114 @@ describe("KnowledgeStudioRecoveryOnlyAdapter", () => {
     await expect(
       adapter.pauseBundle("personal", 5, new AbortController().signal)
     ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
+  });
+
+  it.each(["applying", "recovery_required"] as const)(
+    "publishes one %s forward row on Review with every mutation command disabled",
+    async (forwardState) => {
+      const { adapter, actions, mutableComposer } = createHarness();
+      mutableComposer.observation = createForwardObservation(forwardState);
+
+      const snapshot = await adapter.load("personal", new AbortController().signal);
+
+      expect(snapshot.preferredTab).toBe("review");
+      expect(snapshot.commandCapabilities).toEqual({
+        pauseBundle: false,
+        resumeBundle: false,
+        cancelJob: false,
+        retryJob: false,
+        reviewReject: false,
+        reviewAccept: false,
+        forwardRevisionReview: false,
+        recoveryContinue: false,
+        recoveryAbandon: false,
+      });
+      expect(snapshot.reviews).toEqual([]);
+      expect(snapshot.recovery.items).toEqual([]);
+      expect(snapshot.forwardRevisionReviews).toHaveLength(1);
+      expect(snapshot.forwardRevisionReviews?.[0]).toMatchObject({
+        state: forwardState,
+        reviewRef: FORWARD_REVIEW_REF,
+        snapshotRef: FORWARD_SNAPSHOT_REF,
+        pagePath: "Wiki/Forward.md",
+      });
+      expect(Object.keys(snapshot.forwardRevisionReviews?.[0] ?? {}).sort()).toEqual(
+        (forwardState === "applying"
+          ? [
+              "acceptedAt",
+              "applyPhase",
+              "manualOverride",
+              "pagePath",
+              "reviewRef",
+              "snapshotRef",
+              "state",
+              "updatedAt",
+            ]
+          : [
+              "acceptedAt",
+              "actualKind",
+              "conflictCode",
+              "detectedAt",
+              "manualOverride",
+              "pagePath",
+              "reviewRef",
+              "snapshotRef",
+              "state",
+              "updatedAt",
+            ]
+        ).sort()
+      );
+      expect(JSON.stringify(snapshot)).not.toMatch(
+        /acceptedDecision|applyClaim|decisionDigest|journalRevision|ledger|transactionId/
+      );
+      expect("submitForwardRevisionStudio" in adapter).toBe(false);
+      expect(actions.continue).not.toHaveBeenCalled();
+      expect(actions.abandon).not.toHaveBeenCalled();
+      expect(snapshot.notice).toContain(
+        forwardState === "applying"
+          ? "reload the plugin or reopen Studio"
+          : "Automatic Apply retry is disabled"
+      );
+    }
+  );
+
+  it("re-runs forward recovery on a second load and replaces applying with sticky conflict truth", async () => {
+    const { adapter, mutableComposer, onRecoveryStateChanged } = createHarness();
+    mutableComposer.observation = createForwardObservation("applying", 8);
+    const initial = await adapter.load("personal", new AbortController().signal);
+    mutableComposer.nextObservation = createForwardObservation("recovery_required", 9);
+
+    const refreshed = await adapter.load("personal", new AbortController().signal);
+
+    expect(mutableComposer.start).toHaveBeenCalledTimes(1);
+    expect(refreshed.preferredTab).toBe("review");
+    expect(refreshed.forwardRevisionReviews).toMatchObject([
+      { state: "recovery_required", reviewRef: FORWARD_REVIEW_REF },
+    ]);
+    expect(refreshed.revisionToken).not.toBe(initial.revisionToken);
+    expect(onRecoveryStateChanged).not.toHaveBeenCalled();
+  });
+
+  it("opens the controller on Review for the first forward startup-recovery snapshot", async () => {
+    const { adapter, mutableComposer } = createHarness();
+    mutableComposer.observation = createForwardObservation("applying");
+    const controller = new KnowledgeStudioController(adapter, adapter);
+
+    controller.start("personal");
+    for (let attempt = 0; attempt < 20 && controller.getState().status !== "ready"; attempt += 1) {
+      await Promise.resolve();
+    }
+
+    expect(controller.getState()).toMatchObject({
+      status: "ready",
+      activeTab: "review",
+      selectedForwardRevisionRef: FORWARD_REVIEW_REF,
+      snapshot: {
+        preferredTab: "review",
+        commandCapabilities: { forwardRevisionReview: false },
+      },
+    });
+    controller.destroy();
   });
 
   it("re-runs recovery on a later check and requests lifecycle rebuild when clear", async () => {

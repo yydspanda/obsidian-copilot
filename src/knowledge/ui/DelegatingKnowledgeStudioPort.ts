@@ -23,6 +23,10 @@ import type {
   KnowledgeSourceRetirementUiReceipt,
 } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import type { KnowledgeStudioReviewEvidencePort } from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";
+import type {
+  KnowledgeForwardRevisionStudioCommand,
+  KnowledgeForwardRevisionStudioSubmissionResult,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
 import {
   KnowledgeStudioAdapterUnavailableError,
   UnavailableKnowledgeStudioPort,
@@ -284,6 +288,19 @@ export class DelegatingKnowledgeStudioPort
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     return this.runCommitWinsWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
       delegate.submitReview(bundleId, command, delegatedSignal)
+    );
+  }
+
+  /** Routes one forward decision/Apply while preserving any durable commit-wins result. */
+  async submitForwardRevisionStudio(
+    bundleId: string,
+    command: KnowledgeForwardRevisionStudioCommand,
+    signal: AbortSignal
+  ): Promise<KnowledgeForwardRevisionStudioSubmissionResult> {
+    return this.runCommitWinsWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.submitForwardRevisionStudio === "function"
+        ? delegate.submitForwardRevisionStudio(bundleId, command, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
     );
   }
 

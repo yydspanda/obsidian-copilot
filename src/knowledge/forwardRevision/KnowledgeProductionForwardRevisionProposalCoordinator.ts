@@ -1,3 +1,4 @@
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
 import {
   createKnowledgeForwardRevisionProposalAuthorityQuery,
   snapshotKnowledgeForwardRevisionProposalAuthority,
@@ -6,13 +7,8 @@ import {
   snapshotKnowledgeForwardRevisionPublicationReceipt,
   type KnowledgeForwardRevisionPublicationReceiptV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposal";
-import { snapshotKnowledgeForwardRevisionReviewSnapshot } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshot";
-import {
-  projectKnowledgeForwardRevisionReviewEntryProposalV2,
-  snapshotKnowledgeForwardRevisionReviewSnapshotV2,
-} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
-import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
-import type { JsonValue } from "@/knowledge/model/types";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
+import { createFileContentHash } from "@/knowledge/model/fingerprint";
 import { isPathWithinRoot, parseVaultPath } from "@/knowledge/paths/vaultPath";
 import { KnowledgeRuntimeForwardRevisionProposalPublicationPort } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
@@ -53,6 +49,7 @@ export interface KnowledgeProductionForwardRevisionProposalCoordinatorInput {
   readonly knownOutputs: DelegatingKnowledgeKnownAppliedWikiOutputsPort;
   readonly knownOutputsDelegate: KnowledgeKnownAppliedWikiOutputsPort;
   readonly runtime: KnowledgeRuntimeForwardRevisionProposalPublicationPort;
+  readonly executionOwner: KnowledgeExecutionOwner;
   readonly bundles: readonly Readonly<KnowledgeForwardRevisionProposalBundleBinding>[];
   readonly assertCurrent: () => void;
 }
@@ -66,6 +63,7 @@ export type KnowledgeForwardRevisionProposalIneligibilityReason =
 export type KnowledgeForwardRevisionProposalResult =
   | Readonly<{
       kind: "published";
+      bundleId: string;
       receipt: Readonly<KnowledgeForwardRevisionPublicationReceiptV1>;
     }>
   | Readonly<{
@@ -75,14 +73,15 @@ export type KnowledgeForwardRevisionProposalResult =
   | Readonly<{ kind: "stale" | "too_large" | "unavailable" }>;
 
 interface CapturedKnownOutputs {
-  readonly owner: object;
+  readonly owner: DelegatingKnowledgeKnownAppliedWikiOutputsPort;
+  readonly delegate: KnowledgeKnownAppliedWikiOutputsPort;
   readonly readOutput: KnowledgeKnownAppliedWikiOutputsPort["readOutput"];
   readonly compareWithCurrent: KnowledgeKnownAppliedWikiOutputsPort["compareWithCurrent"];
 }
 
 interface CapturedRuntime {
+  readonly owner: KnowledgeRuntimeForwardRevisionProposalPublicationPort;
   readonly readAuthority: KnowledgeRuntimeForwardRevisionProposalPublicationPort["readForwardRevisionProposalAuthority"];
-  readonly readReview: KnowledgeRuntimeForwardRevisionProposalPublicationPort["readForwardRevisionReview"];
   readonly publish: KnowledgeRuntimeForwardRevisionProposalPublicationPort["publishForwardRevisionProposalAtomically"];
 }
 
@@ -94,6 +93,7 @@ interface CapturedBundle {
 interface CoordinatorState {
   readonly knownOutputs: Readonly<CapturedKnownOutputs>;
   readonly runtime: Readonly<CapturedRuntime>;
+  readonly executionOwner: KnowledgeExecutionOwner;
   readonly bundles: readonly Readonly<CapturedBundle>[];
   readonly assertCurrent: () => void;
 }
@@ -220,13 +220,17 @@ function captureMethod(value: object, name: string): ((...args: unknown[]) => un
 }
 
 /** Captures only the two R3b methods that re-prove an opaque session selection. */
-function captureKnownOutputs(value: unknown): Readonly<CapturedKnownOutputs> {
-  DelegatingKnowledgeKnownAppliedWikiOutputsPort.assert(value);
+function captureKnownOutputs(
+  value: unknown,
+  delegate: KnowledgeKnownAppliedWikiOutputsPort
+): Readonly<CapturedKnownOutputs> {
+  DelegatingKnowledgeKnownAppliedWikiOutputsPort.assertCurrentDelegate(value, delegate);
   const readOutput = captureMethod(value, "readOutput");
   const compareWithCurrent = captureMethod(value, "compareWithCurrent");
   if (!readOutput || !compareWithCurrent) throw createAbortError();
   return Object.freeze({
     owner: value,
+    delegate,
     readOutput: ((session, outputRef, signal) =>
       Promise.resolve(
         Reflect.apply(readOutput, value, [session, outputRef, signal])
@@ -238,12 +242,23 @@ function captureKnownOutputs(value: unknown): Readonly<CapturedKnownOutputs> {
   });
 }
 
-/** Captures the read-authority and atomic publication methods with their receiver. */
-function captureRuntime(value: unknown): Readonly<CapturedRuntime> {
+/** Captures owner-bound Runtime methods only from the exact production execution lifecycle. */
+function captureRuntime(
+  value: unknown,
+  executionOwner: KnowledgeExecutionOwner
+): Readonly<CapturedRuntime> {
   KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(value);
+  if (
+    !KnowledgeRuntimeForwardRevisionProposalPublicationPort.matchesExecutionOwner(
+      value,
+      executionOwner
+    )
+  ) {
+    throw createAbortError();
+  }
   return Object.freeze({
+    owner: value,
     readAuthority: value.readForwardRevisionProposalAuthority.bind(value),
-    readReview: value.readForwardRevisionReview.bind(value),
     publish: value.publishForwardRevisionProposalAtomically.bind(value),
   });
 }
@@ -293,6 +308,7 @@ function snapshotInput(
     "knownOutputs",
     "knownOutputsDelegate",
     "runtime",
+    "executionOwner",
     "bundles",
     "assertCurrent",
   ]);
@@ -301,15 +317,42 @@ function snapshotInput(
     knownOutputs: record.knownOutputs as DelegatingKnowledgeKnownAppliedWikiOutputsPort,
     knownOutputsDelegate: record.knownOutputsDelegate as KnowledgeKnownAppliedWikiOutputsPort,
     runtime: record.runtime as KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+    executionOwner: record.executionOwner as KnowledgeExecutionOwner,
     bundles: record.bundles as readonly Readonly<KnowledgeForwardRevisionProposalBundleBinding>[],
     assertCurrent: record.assertCurrent as () => void,
   });
 }
 
+/** Re-proves the Runtime mutation facade against the captured exact execution owner. */
+function assertRuntimeOwner(state: CoordinatorState): void {
+  if (
+    !KnowledgeRuntimeForwardRevisionProposalPublicationPort.matchesExecutionOwner(
+      state.runtime.owner,
+      state.executionOwner
+    )
+  ) {
+    throw createAbortError();
+  }
+}
+
 /** Stops proposal work around every asynchronous pre-commit authority boundary. */
 function assertInvocation(state: CoordinatorState, signal: AbortSignal): void {
   if (signal.aborted) throw createAbortError();
-  state.assertCurrent();
+  try {
+    assertRuntimeOwner(state);
+    DelegatingKnowledgeKnownAppliedWikiOutputsPort.assertCurrentDelegate(
+      state.knownOutputs.owner,
+      state.knownOutputs.delegate
+    );
+    state.assertCurrent();
+    assertRuntimeOwner(state);
+    DelegatingKnowledgeKnownAppliedWikiOutputsPort.assertCurrentDelegate(
+      state.knownOutputs.owner,
+      state.knownOutputs.delegate
+    );
+  } catch {
+    throw createAbortError();
+  }
   if (signal.aborted) throw createAbortError();
 }
 
@@ -354,103 +397,30 @@ function mapComparisonTerminal(
   return UNAVAILABLE_RESULT;
 }
 
-/** Compares strict JSON protocol values independently of property order. */
-function exactJsonValuesEqual(left: unknown, right: unknown): boolean {
-  try {
-    return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
-  } catch {
-    return false;
-  }
-}
-
-/** Rejoins a strict receipt with the exact dedicated Review proposal it names. */
-async function confirmPublishedReceipt(
-  state: Readonly<CoordinatorState>,
-  bundleId: string,
-  authority: ReturnType<typeof snapshotKnowledgeForwardRevisionProposalAuthority>,
-  selectedContent: string,
-  selectedContentHash: string,
-  vaultObservedBeforeHash: string,
-  receipt: Readonly<KnowledgeForwardRevisionPublicationReceiptV1>
-): Promise<boolean> {
-  try {
-    const rawReview = await state.runtime.readReview(bundleId);
-    let reviewBundleId: string;
-    let reviewRevision: number;
-    let proposals: readonly ReturnType<
-      typeof projectKnowledgeForwardRevisionReviewEntryProposalV2
-    >[];
-    try {
-      const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2(rawReview);
-      reviewBundleId = review.bundleId;
-      reviewRevision = review.revision;
-      proposals = review.records.map(projectKnowledgeForwardRevisionReviewEntryProposalV2);
-    } catch {
-      const review = snapshotKnowledgeForwardRevisionReviewSnapshot(rawReview);
-      reviewBundleId = review.bundleId;
-      reviewRevision = review.revision;
-      proposals = review.records.map((record) =>
-        Object.freeze({
-          proposal: record.proposal,
-          proposalDigest: record.proposalDigest,
-          publishedRuntimeRevision: record.publishedRuntimeRevision,
-          proposalStoreRevision: record.proposalStoreRevision,
-        })
-      );
-    }
-    if (reviewBundleId !== bundleId || reviewRevision < receipt.proposalStoreRevision) {
-      return false;
-    }
-    const matches = proposals.filter((record) => record.proposal.proposalId === receipt.proposalId);
-    if (matches.length !== 1) return false;
-    const published = matches[0];
-    const proposal = published.proposal;
-    const request = proposal.request;
-    return (
-      published.proposalDigest === receipt.proposalDigest &&
-      published.publishedRuntimeRevision === receipt.runtimeRevision &&
-      published.proposalStoreRevision === receipt.proposalStoreRevision &&
-      proposal.requestDigest === receipt.requestDigest &&
-      proposal.recordedAt === receipt.publishedAt &&
-      request.runtimeId === receipt.runtimeId &&
-      request.requestId === receipt.requestId &&
-      request.requestRevision === receipt.requestRevision &&
-      request.bundleId === bundleId &&
-      request.pagePath === authority.intent.pagePath &&
-      request.intentDigest === authority.intentDigest &&
-      exactJsonValuesEqual(request.intent, authority.intent) &&
-      exactJsonValuesEqual(
-        request.historicalReviewAuthority,
-        authority.historicalReviewAuthority
-      ) &&
-      request.selectedContent === selectedContent &&
-      request.selectedContentHash === selectedContentHash &&
-      request.intent.current.vaultObservedBeforeHash === vaultObservedBeforeHash
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** Production coordinator for authenticated known-output proposal publication only. */
 export class KnowledgeProductionForwardRevisionProposalCoordinator {
   /** Captures one exact worker generation without Wiki, model, or network write authority. */
   constructor(inputValue: KnowledgeProductionForwardRevisionProposalCoordinatorInput) {
     const input = snapshotInput(inputValue);
-    DelegatingKnowledgeKnownAppliedWikiOutputsPort.assertCurrentDelegate(
-      input.knownOutputs,
-      input.knownOutputsDelegate
-    );
+    KnowledgeExecutionOwner.assert(input.executionOwner);
     coordinatorStates.set(
       this,
       Object.freeze({
-        knownOutputs: captureKnownOutputs(input.knownOutputs),
-        runtime: captureRuntime(input.runtime),
+        knownOutputs: captureKnownOutputs(input.knownOutputs, input.knownOutputsDelegate),
+        runtime: captureRuntime(input.runtime, input.executionOwner),
+        executionOwner: input.executionOwner,
         bundles: snapshotBundles(input.bundles),
         assertCurrent: input.assertCurrent,
       })
     );
     Object.freeze(this);
+  }
+
+  /** Requires one exact process-local production proposal coordinator. */
+  static assert(
+    value: unknown
+  ): asserts value is KnowledgeProductionForwardRevisionProposalCoordinator {
+    requireState(value);
   }
 
   /**
@@ -474,11 +444,14 @@ export class KnowledgeProductionForwardRevisionProposalCoordinator {
     const state = requireState(this);
     let publicationInvoked = false;
     let session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>;
+    assertInvocation(state, signal);
     try {
       session = snapshotKnowledgeKnownAppliedWikiOutputsSession(sessionValue);
     } catch {
+      assertInvocation(state, signal);
       return STALE_RESULT;
     }
+    assertInvocation(state, signal);
     if (typeof outputRef !== "string" || !OPAQUE_OUTPUT_PATTERN.test(outputRef)) {
       return STALE_RESULT;
     }
@@ -495,6 +468,7 @@ export class KnowledgeProductionForwardRevisionProposalCoordinator {
       if (detail.kind !== "loaded") return mapDetailTerminal(detail);
       if (detail.value.outputRef !== outputRef) return UNAVAILABLE_RESULT;
 
+      assertInvocation(state, signal);
       const comparison = snapshotKnowledgeKnownAppliedWikiOutputComparisonResult(
         await state.knownOutputs.compareWithCurrent(sessionValue, outputRef, signal)
       );
@@ -540,28 +514,17 @@ export class KnowledgeProductionForwardRevisionProposalCoordinator {
         selectedContentHash,
         vaultObservedBeforeHash,
       });
+      // The genuine Runtime method confirms uncertain commits before returning.
+      // Do not re-enter revocable generation authority after this atomic boundary.
       const receipt = snapshotKnowledgeForwardRevisionPublicationReceipt(rawReceipt);
       if (receipt.runtimeId !== authority.runtimeId) return UNAVAILABLE_RESULT;
-      if (
-        !(await confirmPublishedReceipt(
-          state,
-          bundle.bundleId,
-          authority,
-          detail.value.content,
-          selectedContentHash,
-          vaultObservedBeforeHash,
-          receipt
-        ))
-      ) {
-        return UNAVAILABLE_RESULT;
-      }
-      return Object.freeze({ kind: "published" as const, receipt });
+      return Object.freeze({ kind: "published" as const, bundleId: bundle.bundleId, receipt });
     } catch (error) {
       if (publicationInvoked) return UNAVAILABLE_RESULT;
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (isKnowledgeAbortError(error)) throw createAbortError();
       if (signal.aborted) throw createAbortError();
       try {
-        state.assertCurrent();
+        assertInvocation(state, signal);
       } catch {
         throw createAbortError();
       }

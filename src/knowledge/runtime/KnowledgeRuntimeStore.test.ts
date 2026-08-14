@@ -58,6 +58,12 @@ import {
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationAuthority";
 import { createKnowledgeForwardRevisionReviewCommand } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
 import {
+  KnowledgeForwardRevisionStudioProjectionLimitError,
+  projectKnowledgeForwardRevisionStudioSnapshot,
+  snapshotKnowledgeForwardRevisionStudioSnapshot,
+  type KnowledgeForwardRevisionStudioSnapshot,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
+import {
   IngestQueue,
   type IngestExecutor,
   type IngestSourceFreshnessAdmissionPort,
@@ -141,6 +147,7 @@ import {
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
   KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+  KnowledgeRuntimeForwardRevisionStudioPort,
   KnowledgeRuntimeForwardRevisionApplyPort,
   KnowledgeRuntimeForwardRevisionApplyRecoveryPort,
   KnowledgeForwardRevisionApplyPortError,
@@ -192,6 +199,7 @@ import {
   type KnowledgeProductionPipelineResources,
 } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import {
+  consumeKnowledgeProductionWorkflowExecutionPreflightClaim,
   createKnowledgeProductionWorkflowExecutionPairing,
   type KnowledgeProductionWorkflowExecutionPreflightClaim,
   type KnowledgeProductionWorkflowExecutionRuntimeClaim,
@@ -1751,13 +1759,57 @@ function projectKnowledgeKnownAppliedWikiOutputIndexForTest(state: KnowledgeRunt
   });
 }
 
+/** Issues one genuine owner-bound execution lifecycle for a proposal Runtime test. */
+function createForwardProposalExecutionFixture() {
+  const pairing = createKnowledgeProductionWorkflowExecutionPairing();
+  const preflightBinding = consumeKnowledgeProductionWorkflowExecutionPreflightClaim(
+    pairing.preflightClaim
+  );
+  const execution = preflightBinding.issueWorkflowExecutionLease();
+  return Object.freeze({
+    runtimeClaim: pairing.runtimeClaim,
+    executionOwner: execution.executionOwner,
+    executionLease: execution.lease,
+    revoke: () => preflightBinding.revokeWorkflowExecutionLease(execution.lease),
+  });
+}
+
+/** Creates the genuine proposal facade paired to one already-bound Runtime. */
+function createForwardProposalPort(
+  runtime: KnowledgeRuntimeStore,
+  execution: Readonly<{
+    executionOwner: KnowledgeExecutionOwner;
+    executionLease: ReturnType<typeof createForwardProposalExecutionFixture>["executionLease"];
+  }>
+): Readonly<{
+  port: KnowledgeRuntimeForwardRevisionProposalPublicationPort;
+  proofPort: KnowledgeRuntimeIngestExecutionProofPort;
+}> {
+  const queue = new KnowledgeRuntimeQueueStorage(runtime, execution.executionOwner);
+  const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queue);
+  return Object.freeze({
+    port: new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
+      runtime,
+      proofPort,
+      execution.executionLease
+    ),
+    proofPort,
+  });
+}
+
 /** Creates clean exact historical/current Apply authority for forward publication tests. */
 async function createForwardPublicationHarness(
   clock: () => number = () => 1,
   createPublicationPort: (
-    runtime: KnowledgeRuntimeStore
-  ) => KnowledgeRuntimeForwardRevisionProposalPublicationPort = (runtime) =>
-    new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime),
+    runtime: KnowledgeRuntimeStore,
+    proofPort: KnowledgeRuntimeIngestExecutionProofPort,
+    executionLease: ReturnType<typeof createForwardProposalExecutionFixture>["executionLease"]
+  ) => KnowledgeRuntimeForwardRevisionProposalPublicationPort = (
+    runtime,
+    proofPort,
+    executionLease
+  ) =>
+    new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime, proofPort, executionLease),
   fixture?: Readonly<{
     historicalContent?: string;
     currentContent?: string;
@@ -1766,11 +1818,17 @@ async function createForwardPublicationHarness(
     citationArtifactContentHash?: string;
     citationArtifactId?: string;
     historicalCitation?: KnowledgeChangeSet["citations"][number];
-    productionExecutionClaim?: KnowledgeProductionWorkflowExecutionRuntimeClaim;
+    productionExecution?: Readonly<{
+      runtimeClaim: KnowledgeProductionWorkflowExecutionRuntimeClaim;
+      executionOwner: KnowledgeExecutionOwner;
+      executionLease: ReturnType<typeof createForwardProposalExecutionFixture>["executionLease"];
+      revoke?: () => void;
+    }>;
     maxTextCharacters?: number;
   }>
 ) {
   const historicalContent = fixture?.historicalContent ?? "# transaction-forward-historical\n";
+  const execution = fixture?.productionExecution ?? createForwardProposalExecutionFixture();
   const currentContent = fixture?.currentContent ?? "# Current forward target\n";
   const sourceContentHash = fixture?.sourceContentHash ?? HASH_A;
   const pipelineFingerprint = fixture?.pipelineFingerprint ?? HASH_B;
@@ -1830,13 +1888,21 @@ async function createForwardPublicationHarness(
   current.file.replaceContent(JSON.stringify(clean));
   const runtime = new KnowledgeRuntimeStore(current.file, {
     clock,
-    productionExecutionClaim: fixture?.productionExecutionClaim,
+    productionExecutionClaim: execution.runtimeClaim,
     maxTextCharacters: fixture?.maxTextCharacters,
   });
+  const proofPort = new KnowledgeRuntimeIngestExecutionProofPort(
+    runtime,
+    new KnowledgeRuntimeQueueStorage(runtime, execution.executionOwner)
+  );
   return {
     file: current.file,
     runtime,
-    port: createPublicationPort(runtime),
+    port: createPublicationPort(runtime, proofPort, execution.executionLease),
+    proofPort,
+    executionOwner: execution.executionOwner,
+    executionLease: execution.executionLease,
+    revokeExecution: execution.revoke,
     evidence: createForwardPublicationEvidence(clean, historicalContent),
     currentJournal: current.journal,
   };
@@ -1904,20 +1970,6 @@ async function createForwardDecisionExecutionLease(
   return { lifecycle, workflowLease, executionOwner, executionLease };
 }
 
-/** Creates one genuine decision facade whose hidden pairing matches its Runtime. */
-async function createPairedForwardDecisionPort(
-  runtime: KnowledgeRuntimeStore,
-  executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim
-) {
-  const lifecycle = await createForwardDecisionExecutionLease(executionPreflightClaim);
-  const queue = new KnowledgeRuntimeQueueStorage(runtime, lifecycle.executionOwner);
-  const proof = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queue);
-  return {
-    ...lifecycle,
-    port: new KnowledgeRuntimeForwardRevisionDecisionPort(runtime, proof, lifecycle.executionLease),
-  };
-}
-
 const FORWARD_DECISION_SOURCE_TEXT = "Grounded evidence for source-1";
 const FORWARD_DECISION_SCHEMA_TEXT = "type: schema\n";
 const FORWARD_DECISION_HISTORICAL_CONTENT = `---
@@ -1982,7 +2034,11 @@ async function createForwardDecisionCoordinatorFixture(
       createFileContentHash(FORWARD_DECISION_SOURCE_TEXT),
       "primary"
     ),
-    productionExecutionClaim: pairing.runtimeClaim,
+    productionExecution: {
+      runtimeClaim: pairing.runtimeClaim,
+      executionOwner: lifecycle.executionOwner,
+      executionLease: lifecycle.executionLease,
+    },
     maxTextCharacters,
   });
   await harness.port.publishForwardRevisionProposalAtomically(harness.evidence);
@@ -9486,16 +9542,47 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
 
   it("confirms an exact publication after an uncertain post-commit result", async () => {
     const harness = await createForwardPublicationHarness(() => 500);
+    const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
+    const listenerArguments: unknown[][] = [];
+    let siblingHints = 0;
+    let workHints = 0;
+    harness.runtime.subscribeStudioBundle("personal", (...values: unknown[]) => {
+      listenerArguments.push(values);
+      throw new Error("First forward publication subscriber closed");
+    });
+    harness.runtime.subscribeStudioBundle("personal", () => {
+      siblingHints += 1;
+      personalReads.push(harness.runtime.readForwardRevisionStudioBundle("personal"));
+    });
+    harness.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
     harness.file.throwAfterCommitOnNextWrite();
 
-    await expect(harness.port.publish(harness.evidence)).resolves.toMatchObject({
+    const published = await harness.port.publish(harness.evidence);
+    expect(published).toMatchObject({
       outcome: "published",
       proposalStoreRevision: 1,
     });
-    await expect(harness.runtime.readForwardRevisionReview("personal")).resolves.toMatchObject({
-      revision: 1,
-      records: [{ proposalStoreRevision: 1 }],
+    await expect(Promise.all(personalReads)).resolves.toEqual([
+      expect.objectContaining({
+        bundleId: "personal",
+        reviewRevision: 1,
+        activeRecords: [expect.objectContaining({ state: "pending" })],
+      }),
+    ]);
+    expect(listenerArguments).toEqual([[]]);
+    expect(siblingHints).toBe(1);
+    expect(workHints).toBe(0);
+
+    await expect(harness.port.publish(harness.evidence)).resolves.toEqual({
+      ...published,
+      outcome: "already_published",
     });
+    expect(personalReads).toHaveLength(1);
+    expect(listenerArguments).toEqual([[]]);
+    expect(siblingHints).toBe(1);
+    expect(workHints).toBe(0);
   });
 
   it("rejects a mismatched external Vault observation without changing Runtime bytes", async () => {
@@ -9600,10 +9687,12 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
       value: () => Promise.resolve({ outcome: "forged" }),
     });
     try {
-      const canonicalRuntime = new KnowledgeRuntimeStore(harness.file, { clock: () => 500 });
-      const canonicalPort = new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
-        canonicalRuntime
-      );
+      const canonicalExecution = createForwardProposalExecutionFixture();
+      const canonicalRuntime = new KnowledgeRuntimeStore(harness.file, {
+        clock: () => 500,
+        productionExecutionClaim: canonicalExecution.runtimeClaim,
+      });
+      const canonicalPort = createForwardProposalPort(canonicalRuntime, canonicalExecution).port;
       await expect(canonicalPort.publish(harness.evidence)).resolves.toMatchObject({
         outcome: "published",
       });
@@ -9611,33 +9700,64 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
       Object.defineProperty(prototype, "updateState", originalUpdateState);
     }
 
-    const tamperedRuntime = new KnowledgeRuntimeStore(harness.file, { clock: () => 500 });
+    const tamperedExecution = createForwardProposalExecutionFixture();
+    const tamperedRuntime = new KnowledgeRuntimeStore(harness.file, {
+      clock: () => 500,
+      productionExecutionClaim: tamperedExecution.runtimeClaim,
+    });
     Object.defineProperty(tamperedRuntime, "updateState", {
       configurable: true,
       value: () => Promise.resolve({ outcome: "forged" }),
     });
-    expect(
-      () => new KnowledgeRuntimeForwardRevisionProposalPublicationPort(tamperedRuntime)
-    ).toThrow(TypeError);
+    expect(() => createForwardProposalPort(tamperedRuntime, tamperedExecution)).toThrow(TypeError);
 
     class UntrustedRuntimeSubclass extends KnowledgeRuntimeStore {
       /** Installs a forged own atomic boundary that an authentic port must never accept. */
-      constructor(file: AtomicRuntimeFile) {
-        super(file, { clock: () => 500 });
+      constructor(
+        file: AtomicRuntimeFile,
+        productionExecutionClaim: KnowledgeProductionWorkflowExecutionRuntimeClaim
+      ) {
+        super(file, { clock: () => 500, productionExecutionClaim });
         Object.defineProperty(this, "updateState", {
           value: () => Promise.resolve({}),
         });
       }
     }
+    const subclassExecution = createForwardProposalExecutionFixture();
+    expect(
+      () => new UntrustedRuntimeSubclass(harness.file, subclassExecution.runtimeClaim)
+    ).toThrow(TypeError);
     expect(
       () =>
         new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
-          new UntrustedRuntimeSubclass(harness.file)
+          new Proxy(harness.runtime, {}),
+          harness.proofPort,
+          harness.executionLease
         )
     ).toThrow(TypeError);
     expect(
       () =>
-        new KnowledgeRuntimeForwardRevisionProposalPublicationPort(new Proxy(harness.runtime, {}))
+        Reflect.construct(KnowledgeRuntimeForwardRevisionProposalPublicationPort, [
+          harness.runtime,
+        ]) as unknown
+    ).toThrow(TypeError);
+
+    const other = await createForwardPublicationHarness(() => 500);
+    expect(
+      () =>
+        new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
+          harness.runtime,
+          other.proofPort,
+          harness.executionLease
+        )
+    ).toThrow(TypeError);
+    expect(
+      () =>
+        new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
+          harness.runtime,
+          harness.proofPort,
+          other.executionLease
+        )
     ).toThrow(TypeError);
 
     class SubclassPort extends KnowledgeRuntimeForwardRevisionProposalPublicationPort {
@@ -9646,7 +9766,7 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
         return {} as never;
       }
     }
-    const subclass = new SubclassPort(harness.runtime);
+    const subclass = new SubclassPort(harness.runtime, harness.proofPort, harness.executionLease);
     expect(() => KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(subclass)).toThrow(
       TypeError
     );
@@ -9659,6 +9779,49 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(() =>
       KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(new Proxy(harness.port, {}))
     ).toThrow(TypeError);
+    expect(
+      KnowledgeRuntimeForwardRevisionProposalPublicationPort.matchesExecutionOwner(
+        harness.port,
+        harness.executionOwner
+      )
+    ).toBe(true);
+    expect(
+      KnowledgeRuntimeForwardRevisionProposalPublicationPort.matchesExecutionOwner(
+        harness.port,
+        other.executionOwner
+      )
+    ).toBe(false);
+    expect(
+      KnowledgeRuntimeForwardRevisionProposalPublicationPort.matchesExecutionOwner(
+        new Proxy(harness.port, {}),
+        harness.executionOwner
+      )
+    ).toBe(false);
+
+    const revokedExecution = createForwardProposalExecutionFixture();
+    const revokedRuntime = new KnowledgeRuntimeStore(harness.file, {
+      clock: () => 500,
+      productionExecutionClaim: revokedExecution.runtimeClaim,
+    });
+    const revokedPort = createForwardProposalPort(revokedRuntime, revokedExecution).port;
+    const beforeRevokedAttempt = await harness.file.read();
+    let processEntered = false;
+    harness.file.runBeforeNextTransform(() => {
+      processEntered = true;
+    });
+    revokedExecution.revoke();
+
+    await expect(revokedPort.publish(harness.evidence)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(processEntered).toBe(false);
+    expect(await harness.file.read()).toBe(beforeRevokedAttempt);
+    expect(
+      KnowledgeRuntimeForwardRevisionProposalPublicationPort.matchesExecutionOwner(
+        revokedPort,
+        revokedExecution.executionOwner
+      )
+    ).toBe(false);
   });
 
   it("maps aggregate proposal capacity exhaustion to the closed resource conflict", async () => {
@@ -9700,11 +9863,13 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
   it("maps an enclosing Runtime text-bound overflow to resource_limit without writing", async () => {
     const harness = await createForwardPublicationHarness(() => 500);
     const before = await harness.file.read();
+    const limitedExecution = createForwardProposalExecutionFixture();
     const limitedRuntime = new KnowledgeRuntimeStore(harness.file, {
       clock: () => 500,
       maxTextCharacters: before.length,
+      productionExecutionClaim: limitedExecution.runtimeClaim,
     });
-    const limitedPort = new KnowledgeRuntimeForwardRevisionProposalPublicationPort(limitedRuntime);
+    const limitedPort = createForwardProposalPort(limitedRuntime, limitedExecution).port;
 
     await expect(limitedPort.publish(harness.evidence)).rejects.toMatchObject({
       name: KnowledgeForwardRevisionPublicationConflictError.name,
@@ -9743,6 +9908,399 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
       KnowledgeRuntimeStoreCorruptError
     );
+  });
+});
+
+describe("KnowledgeRuntimeStore forward revision Studio projection", () => {
+  it("reads one pending durable proposal from one envelope through a genuine narrow facade", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    await harness.port.publish(harness.evidence);
+    const port = new KnowledgeRuntimeForwardRevisionStudioPort(harness.runtime);
+    const readsBefore = harness.file.getReadCallCount();
+
+    const snapshot = await port.readForwardRevisionStudioBundle("personal");
+
+    expect(harness.file.getReadCallCount() - readsBefore).toBe(1);
+    expect(snapshot).toMatchObject({
+      version: 1,
+      kind: "forward_revision_studio_snapshot",
+      bundleId: "personal",
+      reviewRevision: 1,
+      committedCount: 0,
+      activeRecords: [
+        {
+          state: "pending",
+          pagePath: "Wiki/transaction-forward-historical.md",
+          requestedAt: 500,
+          selectedAppliedAt: 240,
+          proposal: {
+            request: { selectedContent: "# transaction-forward-historical\n" },
+          },
+        },
+      ],
+    });
+    expect(snapshot.revisionToken).toMatch(/^forward-studio-revision-[a-f0-9]{64}$/);
+    expect(snapshot.activeRecords[0]?.reviewRef).toMatch(/^forward-studio-review-[a-f0-9]{64}$/);
+    expect(snapshot.activeRecords[0]?.snapshotRef).toMatch(
+      /^forward-studio-snapshot-[a-f0-9]{64}$/
+    );
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.activeRecords)).toBe(true);
+    expect(Object.isFrozen(snapshot.activeRecords[0])).toBe(true);
+    if (snapshot.activeRecords[0]?.state !== "pending") {
+      throw new Error("Expected one pending forward Studio record");
+    }
+    expect(Object.isFrozen(snapshot.activeRecords[0].proposal)).toBe(true);
+    expect(Object.keys(port)).toEqual([]);
+    expect(Object.isFrozen(port)).toBe(true);
+    expect(() => KnowledgeRuntimeForwardRevisionStudioPort.assert(port)).not.toThrow();
+  });
+
+  it("rejects copied, subclassed, proxied, and wrong-receiver Studio facades", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    const port = new KnowledgeRuntimeForwardRevisionStudioPort(harness.runtime);
+    const fake: object = {};
+    Object.setPrototypeOf(fake, KnowledgeRuntimeForwardRevisionStudioPort.prototype);
+    const proxy = new Proxy(port, {});
+    class DerivedStudioPort extends KnowledgeRuntimeForwardRevisionStudioPort {}
+    const derived = new DerivedStudioPort(harness.runtime);
+    const read = port.readForwardRevisionStudioBundle;
+
+    expect(() => KnowledgeRuntimeForwardRevisionStudioPort.assert(fake)).toThrow(TypeError);
+    expect(() => KnowledgeRuntimeForwardRevisionStudioPort.assert(proxy)).toThrow(TypeError);
+    expect(() => KnowledgeRuntimeForwardRevisionStudioPort.assert(derived)).toThrow(TypeError);
+    expect(() => proxy.readForwardRevisionStudioBundle("personal")).toThrow(TypeError);
+    expect(() => derived.readForwardRevisionStudioBundle("personal")).toThrow(TypeError);
+    expect(() => Reflect.apply(read, {}, ["personal"])).toThrow(TypeError);
+  });
+
+  it("binds product Studio reads to one exact Runtime proof and workflow owner", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const bound = new KnowledgeRuntimeForwardRevisionStudioPort(
+      fixture.runtime,
+      fixture.proof,
+      fixture.executionLease
+    );
+    const unbound = new KnowledgeRuntimeForwardRevisionStudioPort(fixture.runtime);
+    const foreignQueue = new KnowledgeRuntimeQueueStorage(fixture.runtime);
+    const foreignProof = new KnowledgeRuntimeIngestExecutionProofPort(
+      fixture.runtime,
+      foreignQueue
+    );
+    const other = await createHarness();
+    const otherProof = new KnowledgeRuntimeIngestExecutionProofPort(other.runtime, other.queue);
+
+    expect(
+      KnowledgeRuntimeForwardRevisionStudioPort.matchesExecutionOwner(bound, fixture.executionOwner)
+    ).toBe(true);
+    expect(
+      KnowledgeRuntimeForwardRevisionStudioPort.matchesExecutionOwner(
+        unbound,
+        fixture.executionOwner
+      )
+    ).toBe(false);
+    expect(
+      KnowledgeRuntimeForwardRevisionStudioPort.matchesExecutionOwner(
+        bound,
+        foreignQueue.getExecutionOwner()
+      )
+    ).toBe(false);
+    expect(
+      KnowledgeRuntimeForwardRevisionStudioPort.matchesExecutionOwner(
+        new Proxy(bound, {}),
+        fixture.executionOwner
+      )
+    ).toBe(false);
+    expect(
+      () => new KnowledgeRuntimeForwardRevisionStudioPort(fixture.runtime, fixture.proof)
+    ).toThrow(TypeError);
+    expect(
+      () =>
+        new KnowledgeRuntimeForwardRevisionStudioPort(
+          fixture.runtime,
+          undefined,
+          fixture.executionLease
+        )
+    ).toThrow(TypeError);
+    expect(
+      () =>
+        new KnowledgeRuntimeForwardRevisionStudioPort(
+          fixture.runtime,
+          foreignProof,
+          fixture.executionLease
+        )
+    ).toThrow(TypeError);
+    expect(
+      () =>
+        new KnowledgeRuntimeForwardRevisionStudioPort(
+          fixture.runtime,
+          otherProof,
+          fixture.executionLease
+        )
+    ).toThrow(TypeError);
+    await expect(bound.readForwardRevisionStudioBundle("personal")).resolves.toMatchObject({
+      bundleId: "personal",
+      activeRecords: [{ state: "accepted_ready" }],
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("keeps accepted-without-journal visible and binds a fresh accepted snapshot token", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const port = new KnowledgeRuntimeForwardRevisionStudioPort(fixture.runtime);
+
+    const first = await port.readForwardRevisionStudioBundle("personal");
+    const second = await port.readForwardRevisionStudioBundle("personal");
+
+    expect(first).toEqual(second);
+    expect(first.activeRecords).toHaveLength(1);
+    const accepted = first.activeRecords[0];
+    expect(accepted).toMatchObject({
+      state: "accepted_ready",
+      pagePath: fixture.request.pagePath,
+      manualOverride: false,
+      acceptedDecision: {
+        state: "accepted",
+        afterContent: FORWARD_DECISION_HISTORICAL_CONTENT,
+        acceptedDecisionDigest: fixture.request.acceptedDecisionDigest,
+      },
+    });
+    expect(first.committedCount).toBe(0);
+    expect(first.committedReviewRefs).toEqual([]);
+    expect(first.revisionToken).toBe(second.revisionToken);
+    expect(first.activeRecords[0]?.snapshotRef).toBe(second.activeRecords[0]?.snapshotRef);
+    fixture.lifecycle.close();
+  });
+
+  it("classifies prepared and sticky recovery journals without copying journal bodies", async () => {
+    const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    const port = new KnowledgeRuntimeForwardRevisionStudioPort(fixture.runtime);
+
+    const prepared = await port.readForwardRevisionStudioBundle("personal");
+    expect(prepared.activeRecords).toHaveLength(1);
+    expect(prepared.activeRecords[0]).toMatchObject({
+      state: "applying",
+      applyPhase: "prepared",
+      pagePath: fixture.request.pagePath,
+      acceptedDecision: { afterContent: FORWARD_DECISION_HISTORICAL_CONTENT },
+    });
+    expect(prepared.activeRecords[0]).not.toHaveProperty("beforeContent");
+    expect(prepared.activeRecords[0]).not.toHaveProperty("afterContent");
+
+    const preparedState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const review = preparedState.forwardRevisionReviews[0]?.value;
+    if (!review) throw new Error("Expected one forward Review slot");
+    const applyingJournal = projectKnowledgeForwardRevisionApplyJournalApplying(
+      fixture.journal,
+      501
+    );
+    const committedJournal = projectKnowledgeForwardRevisionApplyJournalCommitted(
+      applyingJournal,
+      502
+    );
+    expect(
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        runtimeId: preparedState.runtimeId,
+        runtimeRevision: preparedState.revision + 1,
+        bundleId: "personal",
+        review,
+        activeApply: applyingJournal,
+        applyCommits: [],
+      }).activeRecords[0]
+    ).toMatchObject({ state: "applying", applyPhase: "applying" });
+    expect(
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        runtimeId: preparedState.runtimeId,
+        runtimeRevision: preparedState.revision + 2,
+        bundleId: "personal",
+        review,
+        activeApply: committedJournal,
+        applyCommits: [],
+      }).activeRecords[0]
+    ).toMatchObject({ state: "applying", applyPhase: "committed" });
+
+    fixture.wikiProcessFault.beforeNextProcess = () => {
+      fixture.files.set(fixture.request.pagePath, "# conflicting forward Studio state\n");
+    };
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "recovery_required",
+        conflictCode: "file_state_conflict",
+      }
+    );
+
+    const recovery = await port.readForwardRevisionStudioBundle("personal");
+    expect(recovery.activeRecords).toHaveLength(1);
+    expect(recovery.activeRecords[0]).toMatchObject({
+      state: "recovery_required",
+      conflictCode: "file_state_conflict",
+      actualKind: "file",
+      acceptedDecision: { afterContent: FORWARD_DECISION_HISTORICAL_CONTENT },
+    });
+    expect(recovery.revisionToken).not.toBe(prepared.revisionToken);
+    expect(recovery.activeRecords[0]?.snapshotRef).not.toBe(prepared.activeRecords[0]?.snapshotRef);
+    fixture.lifecycle.close();
+  });
+
+  it("excludes exact rejected and committed records from active work", async () => {
+    const rejectedFixture = await createForwardDecisionCoordinatorFixture();
+    const rejectCommand = createKnowledgeForwardRevisionReviewCommand({
+      action: "reject",
+      proposal: rejectedFixture.pending.proposal,
+      proposalDigest: rejectedFixture.pending.proposalDigest,
+    });
+    await rejectedFixture.coordinator.decide(rejectCommand, new AbortController().signal);
+    const rejected = await new KnowledgeRuntimeForwardRevisionStudioPort(
+      rejectedFixture.runtime
+    ).readForwardRevisionStudioBundle("personal");
+    expect(rejected.activeRecords).toEqual([]);
+    expect(rejected.committedCount).toBe(0);
+    rejectedFixture.lifecycle.close();
+
+    const committedFixture = await createForwardApplyCoordinatorFixture();
+    await committedFixture.applyCoordinator.apply(
+      committedFixture.request,
+      new AbortController().signal
+    );
+    const committed = await new KnowledgeRuntimeForwardRevisionStudioPort(
+      committedFixture.runtime
+    ).readForwardRevisionStudioBundle("personal");
+    expect(committed.activeRecords).toEqual([]);
+    expect(committed.committedCount).toBe(1);
+    expect(committed.committedReviewRefs).toHaveLength(1);
+    expect(committed.committedReviewRefs[0]).toMatch(/^forward-studio-review-[a-f0-9]{64}$/);
+    expect(committed).not.toHaveProperty("forwardRevisionApplyCommits");
+    committedFixture.lifecycle.close();
+  });
+
+  it("accepts exactly 256 active rows and fails closed instead of truncating row 257", () => {
+    const state = createEmptyKnowledgeRuntimeStoreSnapshot("runtime-forward-studio-limit");
+
+    /** Builds one strict pending-only Review at the requested product boundary. */
+    const createPendingReview = (count: number) => {
+      const records = Array.from({ length: count }, (_, index) =>
+        createForwardPublishedFixture(
+          "personal",
+          `Wiki/forward-studio-${String(index + 1).padStart(3, "0")}.md`,
+          state.runtimeId,
+          `# Forward Studio ${index + 1}\n`,
+          index + 1,
+          index + 1
+        )
+      );
+      return migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2(
+        snapshotKnowledgeForwardRevisionReviewSnapshot({
+          version: 1,
+          bundleId: "personal",
+          revision: count,
+          lastRequestRevision: count,
+          records,
+        })
+      );
+    };
+
+    const atLimit = projectKnowledgeForwardRevisionStudioSnapshot({
+      runtimeId: state.runtimeId,
+      runtimeRevision: 256,
+      bundleId: "personal",
+      review: createPendingReview(256),
+      activeApply: null,
+      applyCommits: [],
+    });
+    expect(atLimit.activeRecords).toHaveLength(256);
+    expect(atLimit.activeRecords.every((record) => record.state === "pending")).toBe(true);
+
+    let overflow: unknown;
+    try {
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        runtimeId: state.runtimeId,
+        runtimeRevision: 257,
+        bundleId: "personal",
+        review: createPendingReview(257),
+        activeApply: null,
+        applyCommits: [],
+      });
+    } catch (error) {
+      overflow = error;
+    }
+    expect(overflow).toBeInstanceOf(KnowledgeForwardRevisionStudioProjectionLimitError);
+    if (!(overflow instanceof KnowledgeForwardRevisionStudioProjectionLimitError)) {
+      throw new Error("Expected one forward Studio active-record limit failure");
+    }
+    expect(overflow.limit).toBe("active_records");
+  });
+
+  it("rejects accessor, Proxy, and non-canonical Windows-path UI snapshot copies", async () => {
+    const harness = await createForwardPublicationHarness(() => 500);
+    await harness.port.publish(harness.evidence);
+    const snapshot = await harness.runtime.readForwardRevisionStudioBundle("personal");
+    const pending = snapshot.activeRecords[0];
+    if (!pending || pending.state !== "pending") throw new Error("Expected pending record");
+    let accessorCalls = 0;
+    const accessorCopy = { ...snapshot } as Record<string, unknown>;
+    Object.defineProperty(accessorCopy, "revisionToken", {
+      enumerable: true,
+      get: () => {
+        accessorCalls += 1;
+        return snapshot.revisionToken;
+      },
+    });
+
+    expect(() => snapshotKnowledgeForwardRevisionStudioSnapshot(accessorCopy)).toThrow();
+    expect(accessorCalls).toBe(0);
+    expect(() =>
+      snapshotKnowledgeForwardRevisionStudioSnapshot(
+        new Proxy(snapshot, {
+          ownKeys: () => {
+            throw new Error("hostile ownKeys");
+          },
+        })
+      )
+    ).toThrow();
+    expect(() =>
+      snapshotKnowledgeForwardRevisionStudioSnapshot({
+        ...snapshot,
+        activeRecords: [{ ...pending, pagePath: "Wiki\\forward-studio.md" }],
+      })
+    ).toThrow();
+  });
+
+  it("fails closed on hostile one-envelope projection descriptors without invoking accessors", () => {
+    const input = {
+      runtimeId: "runtime-forward-studio-hostile",
+      runtimeRevision: 0,
+      bundleId: "personal",
+      activeApply: null,
+      applyCommits: [],
+    };
+    expect(projectKnowledgeForwardRevisionStudioSnapshot(input)).toMatchObject({
+      bundleId: "personal",
+      runtimeRevision: 0,
+      reviewRevision: 0,
+      activeRecords: [],
+      committedCount: 0,
+    });
+    let accessorCalls = 0;
+    const accessorInput: Record<string, unknown> = { ...input };
+    Object.defineProperty(accessorInput, "runtimeId", {
+      enumerable: true,
+      get: () => {
+        accessorCalls += 1;
+        return input.runtimeId;
+      },
+    });
+
+    expect(() => projectKnowledgeForwardRevisionStudioSnapshot(accessorInput)).toThrow();
+    expect(accessorCalls).toBe(0);
+    expect(() =>
+      projectKnowledgeForwardRevisionStudioSnapshot(
+        new Proxy(input, {
+          getOwnPropertyDescriptor: () => {
+            throw new Error("hostile descriptor");
+          },
+        })
+      )
+    ).toThrow();
   });
 });
 
@@ -9947,7 +10505,11 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
         return null;
       }
     }
-    const subclass = new ForgedPortSubclass(harness.runtime);
+    const subclass = new ForgedPortSubclass(
+      harness.runtime,
+      harness.proofPort,
+      harness.executionLease
+    );
     expect(() => KnowledgeRuntimeForwardRevisionProposalPublicationPort.assert(subclass)).toThrow(
       TypeError
     );
@@ -9993,7 +10555,7 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
     });
   });
 
-  it("publishes through genuine production known-output and Runtime capabilities", async () => {
+  it("keeps a genuine known-output publication committed after synchronous revocation", async () => {
     const harness = await createForwardPublicationHarness(() => 500);
     const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
     const query = createForwardAuthorityQuery(state);
@@ -10026,6 +10588,7 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
       knownOutputs,
       knownOutputsDelegate,
       runtime: harness.port,
+      executionOwner: harness.executionOwner,
       bundles: [{ bundleId: "personal", wikiRoot: "Wiki" }],
       assertCurrent: () => undefined,
     });
@@ -10040,6 +10603,7 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
           knownOutputs,
           knownOutputsDelegate: wrongDelegate,
           runtime: harness.port,
+          executionOwner: harness.executionOwner,
           bundles: [{ bundleId: "personal", wikiRoot: "Wiki" }],
           assertCurrent: () => undefined,
         })
@@ -10053,13 +10617,15 @@ describe("KnowledgeRuntimeStore forward revision proposal authority", () => {
         new AbortController().signal
       )
     ).resolves.toEqual({ kind: "stale" });
+    if (!harness.revokeExecution) throw new Error("Expected a revocable proposal lifecycle");
+    harness.file.runAfterNextCommit(harness.revokeExecution);
     const result = await coordinator.proposeKnownOutput(
       session,
       selected.outputRef,
       new AbortController().signal
     );
     if (result.kind !== "published") throw new Error("Expected one production publication");
-    const review = await harness.port.readForwardRevisionReview("personal");
+    const review = await harness.runtime.readForwardRevisionReview("personal");
 
     expect(session).toMatchObject({ currentState: "applied", currentMatch: "current_applied" });
     expect(selected.relation).toBe("earlier_known");
@@ -10223,9 +10789,13 @@ describe("KnowledgeRuntimeStore forward revision validation authority", () => {
     let firstValidation: KnowledgeRuntimeForwardRevisionValidationPort | undefined;
     const first = await createForwardPublicationHarness(
       () => 500,
-      (runtime) => {
+      (runtime, proofPort, executionLease) => {
         firstValidation = createValidationPort(runtime).port;
-        return new KnowledgeRuntimeForwardRevisionProposalPublicationPort(runtime);
+        return new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
+          runtime,
+          proofPort,
+          executionLease
+        );
       }
     );
     if (!firstValidation) throw new Error("Expected validation-first facade");
@@ -10334,15 +10904,24 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
   /** Publishes and returns the sole strict pending proposal for one decision test. */
   async function createPendingDecisionFixture() {
     const pairing = createKnowledgeProductionWorkflowExecutionPairing();
+    const decision = await createForwardDecisionExecutionLease(pairing.preflightClaim);
     const harness = await createForwardPublicationHarness(() => 500, undefined, {
-      productionExecutionClaim: pairing.runtimeClaim,
+      productionExecution: {
+        runtimeClaim: pairing.runtimeClaim,
+        executionOwner: decision.executionOwner,
+        executionLease: decision.executionLease,
+      },
     });
     await harness.port.publishForwardRevisionProposalAtomically(harness.evidence);
     const review = await harness.port.readForwardRevisionReview("personal");
     const pending = review.records[0];
     if (!pending || pending.state !== "pending") throw new Error("Expected pending proposal");
-    const decision = await createPairedForwardDecisionPort(harness.runtime, pairing.preflightClaim);
-    return { ...harness, ...decision, pending };
+    const decisionPort = new KnowledgeRuntimeForwardRevisionDecisionPort(
+      harness.runtime,
+      harness.proofPort,
+      decision.executionLease
+    );
+    return { ...harness, ...decision, port: decisionPort, pending };
   }
 
   it("requires genuine one-shot mutation authority and atomically rejects only the target slot", async () => {
@@ -10442,11 +11021,43 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
       proposal: committed.pending.proposal,
       proposalDigest: committed.pending.proposalDigest,
     });
+    const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
+    const listenerArguments: unknown[][] = [];
+    let siblingHints = 0;
+    let workHints = 0;
+    committed.runtime.subscribeStudioBundle("personal", (...values: unknown[]) => {
+      listenerArguments.push(values);
+      throw new Error("First forward decision subscriber closed");
+    });
+    committed.runtime.subscribeStudioBundle("personal", () => {
+      siblingHints += 1;
+      personalReads.push(committed.runtime.readForwardRevisionStudioBundle("personal"));
+    });
+    committed.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
     committed.file.throwAfterCommitOnNextWrite();
 
-    await expect(
-      committed.port.decide({ command }, new AbortController().signal)
-    ).resolves.toMatchObject({ kind: "rejected", outcome: "already_decided" });
+    const decided = await committed.port.decide({ command }, new AbortController().signal);
+    expect(decided).toMatchObject({ kind: "rejected", outcome: "already_decided" });
+    await expect(Promise.all(personalReads)).resolves.toEqual([
+      expect.objectContaining({
+        bundleId: "personal",
+        reviewRevision: 2,
+        activeRecords: [],
+      }),
+    ]);
+    expect(listenerArguments).toEqual([[]]);
+    expect(siblingHints).toBe(1);
+    expect(workHints).toBe(0);
+
+    await expect(committed.port.decide({ command }, new AbortController().signal)).resolves.toEqual(
+      decided
+    );
+    expect(personalReads).toHaveLength(1);
+    expect(listenerArguments).toEqual([[]]);
+    expect(siblingHints).toBe(1);
+    expect(workHints).toBe(0);
     committed.lifecycle.close();
 
     const revoked = await createPendingDecisionFixture();
@@ -10780,6 +11391,19 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     const ready = await coordinator.revalidate(request, new AbortController().signal);
     const beforeBegin = await fixture.file.read();
     const beforeWiki = fixture.files.get(request.pagePath);
+    const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
+    let siblingHints = 0;
+    let workHints = 0;
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      throw new Error("First prepared-journal subscriber closed");
+    });
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      siblingHints += 1;
+      personalReads.push(fixture.runtime.readForwardRevisionStudioBundle("personal"));
+    });
+    fixture.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
     fixture.file.throwAfterCommitOnNextWrite();
 
     const journal = await port.begin(ready.capability, new AbortController().signal);
@@ -10804,10 +11428,22 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
       activeForwardRevisionApply: journal,
       forwardRevisionApplyCommits: [],
     });
+    await expect(Promise.all(personalReads)).resolves.toEqual([
+      expect.objectContaining({
+        bundleId: "personal",
+        activeRecords: [expect.objectContaining({ state: "applying", applyPhase: "prepared" })],
+      }),
+    ]);
+    expect(siblingHints).toBe(1);
+    expect(workHints).toBe(0);
+
     await expect(port.begin(ready.capability, new AbortController().signal)).resolves.toEqual(
       journal
     );
     expect(await fixture.file.read()).toBe(preparedText);
+    expect(personalReads).toHaveLength(1);
+    expect(siblingHints).toBe(1);
+    expect(workHints).toBe(0);
 
     await expect(fixture.runtime.beginForwardRevisionApply({})).rejects.toMatchObject({
       name: "KnowledgeForwardRevisionApplyPortError",
@@ -10844,6 +11480,82 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
           acceptedDecisionDigest: fixture.request.acceptedDecisionDigest,
         },
       ],
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("publishes value-only hints for every forward Apply phase and final ledger convergence", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
+    let workHints = 0;
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      personalReads.push(fixture.runtime.readForwardRevisionStudioBundle("personal"));
+    });
+    fixture.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
+
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed", bundleId: "personal" });
+    const snapshots = await Promise.all(personalReads);
+
+    expect(snapshots).toHaveLength(4);
+    expect(
+      snapshots.map((snapshot) => {
+        const record = snapshot.activeRecords[0];
+        return {
+          state: record?.state ?? "committed",
+          phase: record?.state === "applying" ? record.applyPhase : null,
+          committedCount: snapshot.committedCount,
+        };
+      })
+    ).toEqual([
+      { state: "applying", phase: "prepared", committedCount: 0 },
+      { state: "applying", phase: "applying", committedCount: 0 },
+      { state: "applying", phase: "committed", committedCount: 0 },
+      { state: "committed", phase: null, committedCount: 1 },
+    ]);
+    expect(workHints).toBe(0);
+    fixture.lifecycle.close();
+  });
+
+  it("publishes fresh forward hints through a sticky recovery transition", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      personalReads.push(fixture.runtime.readForwardRevisionStudioBundle("personal"));
+    });
+    const ready = await fixture.applyCoordinator.revalidate(
+      fixture.request,
+      new AbortController().signal
+    );
+    await fixture.port.begin(ready.capability, new AbortController().signal);
+    fixture.wikiProcessFault.beforeNextProcess = () => {
+      fixture.files.set(fixture.request.pagePath, "# hint conflict\n");
+    };
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "recovery_required",
+        bundleId: "personal",
+        conflictCode: "file_state_conflict",
+      }
+    );
+    const snapshots = await Promise.all(personalReads);
+
+    expect(snapshots).toHaveLength(3);
+    expect(
+      snapshots.map((snapshot) => {
+        const record = snapshot.activeRecords[0];
+        return record?.state === "applying"
+          ? `${record.state}:${record.applyPhase}`
+          : record?.state;
+      })
+    ).toEqual(["applying:prepared", "applying:applying", "recovery_required"]);
+    expect(snapshots[2]?.activeRecords[0]).toMatchObject({
+      state: "recovery_required",
+      conflictCode: "file_state_conflict",
     });
     fixture.lifecycle.close();
   });
@@ -11015,6 +11727,19 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
 
   it("confirms an applying-marker commit-then-throw without replaying its Runtime revision", async () => {
     const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
+    let siblingHints = 0;
+    let workHints = 0;
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      throw new Error("First applying-journal subscriber closed");
+    });
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      siblingHints += 1;
+      personalReads.push(fixture.runtime.readForwardRevisionStudioBundle("personal"));
+    });
+    fixture.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
     fixture.file.throwAfterCommitOnNextWrite();
 
     await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
@@ -11031,6 +11756,23 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     });
     expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
     expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 1 });
+    const snapshots = await Promise.all(personalReads);
+    expect(
+      snapshots.map((snapshot) => {
+        const record = snapshot.activeRecords[0];
+        return record?.state === "applying" ? record.applyPhase : "committed";
+      })
+    ).toEqual(["applying", "committed", "committed"]);
+    expect(snapshots[2]?.committedReviewRefs).toHaveLength(1);
+    expect(siblingHints).toBe(3);
+    expect(workHints).toBe(0);
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toEqual({
+      kind: "idle",
+    });
+    expect(personalReads).toHaveLength(3);
+    expect(siblingHints).toBe(3);
+    expect(workHints).toBe(0);
     fixture.lifecycle.close();
   });
 
@@ -11065,6 +11807,19 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
       new AbortController().signal
     );
     const journal = await fixture.port.begin(ready.capability, new AbortController().signal);
+    const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
+    let siblingHints = 0;
+    let workHints = 0;
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      throw new Error("First finalization subscriber closed");
+    });
+    fixture.runtime.subscribeStudioBundle("personal", () => {
+      siblingHints += 1;
+      personalReads.push(fixture.runtime.readForwardRevisionStudioBundle("personal"));
+    });
+    fixture.runtime.subscribeStudioBundle("work", () => {
+      workHints += 1;
+    });
     let wikiBeforeApplyingCommit = false;
     fixture.file.runAfterNextCommit(() => {
       wikiBeforeApplyingCommit =
@@ -11109,6 +11864,24 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toEqual({
       kind: "idle",
     });
+    const snapshots = await Promise.all(personalReads);
+    expect(
+      snapshots.map((snapshot) => {
+        const record = snapshot.activeRecords[0];
+        return {
+          state: record?.state ?? "committed",
+          phase: record?.state === "applying" ? record.applyPhase : null,
+          committedCount: snapshot.committedCount,
+        };
+      })
+    ).toEqual([
+      { state: "applying", phase: "applying", committedCount: 0 },
+      { state: "applying", phase: "committed", committedCount: 0 },
+      { state: "committed", phase: null, committedCount: 1 },
+    ]);
+    expect(snapshots[2]?.committedReviewRefs).toHaveLength(1);
+    expect(siblingHints).toBe(3);
+    expect(workHints).toBe(0);
     expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
     fixture.lifecycle.close();
   });
@@ -11339,8 +12112,15 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
 
   it("rejects a genuine cross-pair execution lease before creating any mutation port", async () => {
     const runtimePairing = createKnowledgeProductionWorkflowExecutionPairing();
+    const runtimeExecution = await createForwardDecisionExecutionLease(
+      runtimePairing.preflightClaim
+    );
     const harness = await createForwardPublicationHarness(() => 500, undefined, {
-      productionExecutionClaim: runtimePairing.runtimeClaim,
+      productionExecution: {
+        runtimeClaim: runtimePairing.runtimeClaim,
+        executionOwner: runtimeExecution.executionOwner,
+        executionLease: runtimeExecution.executionLease,
+      },
     });
     const otherPairing = createKnowledgeProductionWorkflowExecutionPairing();
     const other = await createForwardDecisionExecutionLease(otherPairing.preflightClaim);
@@ -11390,6 +12170,7 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     ).toBe("dependency_invalid");
     expect(await harness.file.read()).toBe(beforeText);
     other.lifecycle.close();
+    runtimeExecution.lifecycle.close();
   });
 
   it("rejects a genuine lease against an unpaired Runtime without changing bytes", async () => {

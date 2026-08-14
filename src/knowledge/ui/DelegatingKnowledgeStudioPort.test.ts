@@ -17,6 +17,13 @@ import type {
   KnowledgeStudioQueryWritebackRequest,
   KnowledgeStudioQueryWritebackResult,
 } from "@/knowledge/query/KnowledgeQueryWritebackCapture";
+import type {
+  KnowledgeForwardRevisionStudioCommand,
+  KnowledgeForwardRevisionStudioSubmissionResult,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
+
+const FORWARD_REVIEW_REF = `forward-studio-review-${"a".repeat(64)}`;
+const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"b".repeat(64)}`;
 
 /** Promise whose settlement is controlled by one test. */
 interface Deferred<T> {
@@ -129,6 +136,17 @@ function createReviewCommand(): KnowledgeReviewCommand {
     proposalDigest: "a".repeat(64),
     expectedSnapshotToken: "snapshot-1",
     decisions: [{ changeId: "change-1", decision: "reject" }],
+  };
+}
+
+/** Creates one exact accepted-ready Apply command for delegation tests. */
+function createForwardApplyCommand(): KnowledgeForwardRevisionStudioCommand {
+  return {
+    version: 1,
+    kind: "forward_revision_studio_command",
+    reviewRef: FORWARD_REVIEW_REF,
+    snapshotRef: FORWARD_SNAPSHOT_REF,
+    action: "apply",
   };
 }
 
@@ -467,6 +485,71 @@ describe("DelegatingKnowledgeStudioPort", () => {
       committedReceipt
     );
     expect(review).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a committed forward result when its generation is replaced during submission", async () => {
+    const port = new DelegatingKnowledgeStudioPort();
+    const replacementForward = jest.fn(
+      async (): Promise<KnowledgeForwardRevisionStudioSubmissionResult> => ({ kind: "applied" })
+    );
+    const replacement = Object.assign(new RecordingKnowledgeStudioPort("new"), {
+      submitForwardRevisionStudio: replacementForward,
+    });
+    const committedReceipt = Object.freeze({ kind: "accepted_ready" as const });
+    const submitForwardRevisionStudio = jest.fn(
+      async (): Promise<KnowledgeForwardRevisionStudioSubmissionResult> => {
+        port.replaceDelegate(replacement);
+        return committedReceipt;
+      }
+    );
+    port.replaceDelegate(
+      Object.assign(new RecordingKnowledgeStudioPort("old"), {
+        submitForwardRevisionStudio,
+      })
+    );
+
+    await expect(
+      port.submitForwardRevisionStudio(
+        "personal",
+        createForwardApplyCommand(),
+        new AbortController().signal
+      )
+    ).resolves.toBe(committedReceipt);
+    expect(submitForwardRevisionStudio).toHaveBeenCalledTimes(1);
+    expect(replacementForward).not.toHaveBeenCalled();
+  });
+
+  it("revokes an unresolved forward generation but still returns its later durable receipt", async () => {
+    const pending = createDeferred<KnowledgeForwardRevisionStudioSubmissionResult>();
+    let delegatedSignal: AbortSignal | undefined;
+    const submitForwardRevisionStudio = jest.fn(
+      async (
+        _bundleId: string,
+        _command: KnowledgeForwardRevisionStudioCommand,
+        signal: AbortSignal
+      ) => {
+        delegatedSignal = signal;
+        return pending.promise;
+      }
+    );
+    const port = new DelegatingKnowledgeStudioPort();
+    port.replaceDelegate(
+      Object.assign(new RecordingKnowledgeStudioPort("old"), {
+        submitForwardRevisionStudio,
+      })
+    );
+
+    const result = port.submitForwardRevisionStudio(
+      "personal",
+      createForwardApplyCommand(),
+      new AbortController().signal
+    );
+    await flushAsync();
+    port.replaceDelegate(new RecordingKnowledgeStudioPort("new"));
+
+    expect(delegatedSignal?.aborted).toBe(true);
+    pending.resolve(Object.freeze({ kind: "recovery_required" }));
+    await expect(result).resolves.toEqual({ kind: "recovery_required" });
   });
 
   it("does not invoke Review when caller cancellation is already active", async () => {

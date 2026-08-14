@@ -4,6 +4,7 @@ import type {
   ObsidianKnowledgeCompilerTargetVisitor,
 } from "@/knowledge/compiler/ObsidianKnowledgeCompilerTargetResolver";
 import type { KnowledgeOutputObservationReaderPort } from "@/knowledge/ingest/ObsidianKnowledgeOutputObservationReader";
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import { validateKnowledgeBundleConfig } from "@/knowledge/model/validation";
 import { isPathWithinRoot, parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
@@ -664,11 +665,10 @@ async function readStablePage(
         state: observation.contentHash === after.page.contentHash ? "applied" : "drifted",
       });
     } catch (error) {
-      if (signal.aborted) throw createAbortError();
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       if (error instanceof PageNotApplied || error instanceof PageDrifted) throw error;
       if (error instanceof ConsistencyRetry) continue;
       if (getKnowledgeAppliedWikiPageInspectorErrorCode(error)) throw error;
-      if (error instanceof DOMException && error.name === "AbortError") throw createAbortError();
       throw new KnowledgeAppliedWikiPageInspectorError("unavailable");
     }
   }
@@ -784,7 +784,7 @@ export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
       );
       return projectorSession;
     } catch (error) {
-      if (signal.aborted) throw createAbortError();
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       if (error instanceof PageNotApplied) {
         throw new KnowledgeAppliedWikiPageInspectorError("not_applied");
       }
@@ -857,7 +857,7 @@ export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
       const afterSession = state.projector.project(afterNavigation.authority);
       return findFreshEvidence(state.projector, afterSession, original) ? mapped : STALE_RESULT;
     } catch (error) {
-      if (signal.aborted) throw createAbortError();
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       if (error instanceof PageNotApplied || error instanceof PageDrifted) return STALE_RESULT;
       const code = getKnowledgeAppliedWikiPageInspectorErrorCode(error);
       if (code === "not_applied" || code === "drifted") return STALE_RESULT;
@@ -894,8 +894,8 @@ export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
                 : 0
       );
       return Object.freeze(rows);
-    } catch {
-      if (signal.aborted) throw createAbortError();
+    } catch (error) {
+      if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
       throw new KnowledgeAppliedWikiPageInspectorError("unavailable");
     }
   }

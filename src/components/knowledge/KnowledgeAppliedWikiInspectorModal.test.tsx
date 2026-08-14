@@ -10,6 +10,7 @@ import {
   KnowledgeAppliedWikiInspectorContent,
   KnowledgeAppliedWikiInspectorModal,
 } from "@/components/knowledge/KnowledgeAppliedWikiInspectorModal";
+import type { KnowledgeForwardRevisionProposalActionPort } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
 import type {
   KnowledgeAppliedWikiEvidenceOpenResult,
   KnowledgeAppliedWikiPageInspectionSession,
@@ -20,6 +21,8 @@ import type { KnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/Know
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
 import type { App } from "obsidian";
 import type { Root } from "react-dom/client";
+
+const REVIEW_REF = `forward-studio-review-${"9".repeat(64)}`;
 
 jest.mock("@/utils/react/createPluginRoot", () => ({
   createPluginRoot: jest.fn(),
@@ -136,6 +139,53 @@ function createKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPort {
       Object.freeze({ kind: "loaded", value: Object.freeze({ items: Object.freeze([]) }) })
     ),
     readOutput: jest.fn(async () => Object.freeze({ kind: "unavailable" as const })),
+    compareWithCurrent: jest.fn(async () => Object.freeze({ kind: "unavailable" as const })),
+  };
+}
+
+/** Creates an applied session with one earlier output eligible for proposal publication. */
+function createProposalKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPort {
+  const currentRef = `known-wiki-output-${"1".repeat(64)}`;
+  const earlierRef = `known-wiki-output-${"2".repeat(64)}`;
+  const items = Object.freeze([
+    Object.freeze({
+      outputRef: currentRef,
+      appliedAt: 1_765_000_000_000,
+      verifiedApplyCount: 1,
+      relation: "current_applied" as const,
+    }),
+    Object.freeze({
+      outputRef: earlierRef,
+      appliedAt: 1_764_000_000_000,
+      verifiedApplyCount: 2,
+      relation: "earlier_known" as const,
+    }),
+  ]);
+  return {
+    inspectKnownOutputs: jest.fn(async () =>
+      Object.freeze({
+        pageRef: `known-wiki-page-${"3".repeat(64)}`,
+        displayPagePath: "Wiki/Topic.md",
+        currentState: "applied" as const,
+        currentMatch: "current_applied" as const,
+        knownOutputCount: 2,
+        items,
+      })
+    ),
+    listMore: jest.fn(async () => Object.freeze({ kind: "stale" as const })),
+    readOutput: jest.fn(async (_session, outputRef) => {
+      const summary = items.find((item) => item.outputRef === outputRef);
+      if (!summary) return Object.freeze({ kind: "stale" as const });
+      return Object.freeze({
+        kind: "loaded" as const,
+        value: Object.freeze({
+          outputRef,
+          appliedAt: summary.appliedAt,
+          verifiedApplyCount: summary.verifiedApplyCount,
+          content: outputRef === earlierRef ? "earlier exact body" : "current exact body",
+        }),
+      });
+    }),
     compareWithCurrent: jest.fn(async () => Object.freeze({ kind: "unavailable" as const })),
   };
 }
@@ -311,6 +361,58 @@ describe("KnowledgeAppliedWikiInspectorContent", () => {
     expect(screen.queryByText(/exact source location could not/)).toBeNull();
   });
 
+  it("forwards the opaque proposal action and publication callback into Known outputs", async () => {
+    const proposeKnownOutput = jest.fn(async () =>
+      Object.freeze({ kind: "published" as const, reviewRef: REVIEW_REF })
+    );
+    const proposalAction: KnowledgeForwardRevisionProposalActionPort = { proposeKnownOutput };
+    const onPublished = jest.fn();
+    render(
+      <KnowledgeAppliedWikiInspectorContent
+        inspector={createInspector()}
+        knownOutputs={createProposalKnownOutputsHistory()}
+        proposalAction={proposalAction}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onClose={jest.fn()}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getByRole("button", { name: "Known applied outputs" }));
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+    fireEvent.click(screen.getByRole("button", { name: "Propose this output" }));
+    await flushPromises();
+
+    expect(proposeKnownOutput).toHaveBeenCalledTimes(1);
+    expect(proposeKnownOutput.mock.calls[0]).toHaveLength(3);
+    expect(onPublished).toHaveBeenCalledTimes(1);
+    expect(onPublished).toHaveBeenCalledWith(REVIEW_REF);
+  });
+
+  it("omits proposal publication when the Modal receives no action capability", async () => {
+    const onPublished = jest.fn();
+    render(
+      <KnowledgeAppliedWikiInspectorContent
+        inspector={createInspector()}
+        knownOutputs={createProposalKnownOutputsHistory()}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onClose={jest.fn()}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getByRole("button", { name: "Known applied outputs" }));
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+
+    expect(screen.getByRole("heading", { name: "Known applied output" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
+    expect(onPublished).not.toHaveBeenCalled();
+  });
+
   it("aborts an obsolete inspection and ignores its late completion when the page changes", async () => {
     const first = createDeferred<Readonly<KnowledgeAppliedWikiPageInspectionSession>>();
     const second = createDeferred<Readonly<KnowledgeAppliedWikiPageInspectionSession>>();
@@ -420,6 +522,39 @@ describe("KnowledgeAppliedWikiInspectorModal", () => {
 
     modal.onClose();
     expect(root.unmount).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains and forwards the exact optional proposal action lifecycle", () => {
+    const renderRoot = jest.fn();
+    const root = {
+      render: renderRoot,
+      unmount: jest.fn(),
+    } as unknown as Root;
+    jest.mocked(createPluginRoot).mockReturnValue(root);
+    const knownOutputs = createProposalKnownOutputsHistory();
+    const proposalAction: KnowledgeForwardRevisionProposalActionPort = {
+      proposeKnownOutput: jest.fn(async () =>
+        Object.freeze({ kind: "published" as const, reviewRef: REVIEW_REF })
+      ),
+    };
+    const onPublished = jest.fn();
+    const modal = new KnowledgeAppliedWikiInspectorModal(
+      {} as App,
+      Object.freeze({ pagePath: "Wiki/Topic.md" }),
+      createInspector(),
+      undefined,
+      knownOutputs,
+      proposalAction,
+      onPublished
+    );
+
+    modal.onOpen();
+    const rendered = renderRoot.mock.calls[0][0] as React.ReactElement<{
+      readonly proposalAction?: KnowledgeForwardRevisionProposalActionPort;
+      readonly onPublished?: (reviewRef: string) => void;
+    }>;
+    expect(rendered.props.proposalAction).toBe(proposalAction);
+    expect(rendered.props.onPublished).toBe(onPublished);
   });
 
   it("notifies its lifecycle owner exactly once after synchronous cleanup", () => {

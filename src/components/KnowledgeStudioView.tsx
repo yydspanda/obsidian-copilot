@@ -60,6 +60,16 @@ export class KnowledgeStudioView extends ItemView {
     return "Knowledge Studio";
   }
 
+  /** Selects the Review workspace without exposing the controller to navigation callers. */
+  selectReviewTab(): void {
+    this.controller.selectTab("review");
+  }
+
+  /** Focuses one just-published opaque forward proposal after a fresh Studio reload. */
+  focusPublishedForwardRevision(reviewRef: string): void {
+    this.controller.focusPublishedForwardRevision(reviewRef);
+  }
+
   /** Mounts the React surface and starts its durable Bundle session. */
   async onOpen(): Promise<void> {
     this.renderView();

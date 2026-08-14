@@ -121,6 +121,22 @@ class RecordingVisitor implements ObsidianKnowledgeCompilerTargetVisitPort {
   }
 }
 
+/** Visitor fixture that rejects with one caller-selected boundary failure. */
+class RejectingVisitor implements ObsidianKnowledgeCompilerTargetVisitPort {
+  /** Captures the exact rejection value without inspecting it. */
+  constructor(private readonly failure: Error) {}
+
+  /** Rejects before publishing any Vault observation. */
+  async visit(
+    _targets: readonly CompilerTargetRequest[],
+    _signal: AbortSignal,
+    _options: Readonly<ObsidianKnowledgeCompilerTargetVisitOptions>,
+    _visitor: ObsidianKnowledgeCompilerTargetVisitor
+  ): Promise<void> {
+    throw this.failure;
+  }
+}
+
 interface Harness {
   coordinator: KnowledgeProductionAppliedWikiPageInspectorCoordinator;
   visitor: RecordingVisitor;
@@ -146,6 +162,18 @@ function createHarness(
     assertCurrent: () => undefined,
   });
   return { coordinator, visitor, runtimeReads, navigate, snapshots };
+}
+
+/** Creates an inspector whose Vault boundary rejects with one selected value. */
+function createRejectingCoordinator(
+  failure: Error
+): KnowledgeProductionAppliedWikiPageInspectorCoordinator {
+  return new KnowledgeProductionAppliedWikiPageInspectorCoordinator({
+    runtime: { readAppliedProvenance: async () => createSnapshot() },
+    bundles: [{ bundle: BUNDLE, targetVisitor: new RejectingVisitor(failure) }],
+    navigator: { navigate: async () => ({ status: "opened" }) },
+    assertCurrent: () => undefined,
+  });
 }
 
 /** Returns the authentic first evidence ref from one inspection session. */
@@ -501,6 +529,38 @@ describe("KnowledgeProductionAppliedWikiPageInspectorCoordinator", () => {
     await expect(
       harness.coordinator.listAppliedWikiPathIndexRows(new AbortController().signal)
     ).rejects.toEqual(expect.objectContaining({ code: "unavailable" }));
+    expect(getterCalls).toBe(0);
+  });
+
+  it("recognizes serialized own-data cancellation and rejects hostile lookalikes", async () => {
+    await expect(
+      createRejectingCoordinator(Object.freeze({ name: "AbortError" }) as Error).inspectPage(
+        { pagePath: "Wiki/Applied.md" },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    let getterCalls = 0;
+    const accessorLookalike = {} as Error;
+    Object.defineProperty(accessorLookalike, "name", {
+      get: () => {
+        getterCalls += 1;
+        return "AbortError";
+      },
+    });
+    const proxyLookalike = new Proxy({} as Error, {
+      getOwnPropertyDescriptor: () => {
+        throw new Error("descriptor trap must fail closed");
+      },
+    });
+    for (const failure of [accessorLookalike, proxyLookalike]) {
+      await expect(
+        createRejectingCoordinator(failure).inspectPage(
+          { pagePath: "Wiki/Applied.md" },
+          new AbortController().signal
+        )
+      ).rejects.toEqual(expect.objectContaining({ code: "unavailable" }));
+    }
     expect(getterCalls).toBe(0);
   });
 

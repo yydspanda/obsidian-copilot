@@ -27,6 +27,12 @@ import type {
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
 import type {
+  KnowledgeForwardRevisionStudioCommand,
+  KnowledgeForwardRevisionStudioPendingReview,
+  KnowledgeForwardRevisionStudioReview,
+  KnowledgeForwardRevisionStudioSubmissionResult,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
+import type {
   KnowledgeSourceLifecyclePort,
   KnowledgeSourceRetirementRequest,
   KnowledgeSourceRetirementUiReceipt,
@@ -160,6 +166,58 @@ function createSnapshot(
     },
     reviews,
     notice: undefined,
+  };
+}
+
+const FORWARD_REVIEW_REF = `forward-studio-review-${"d".repeat(64)}`;
+const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"e".repeat(64)}`;
+const FORWARD_BLOCK_REF = `review-block-${"f".repeat(64)}`;
+
+/** Creates one current pending forward row over the reusable single-file Review plan. */
+function createForwardPendingReview(): Readonly<KnowledgeForwardRevisionStudioPendingReview> {
+  const plan = createReviewPlan("c".repeat(64));
+  return Object.freeze({
+    state: "pending" as const,
+    reviewRef: FORWARD_REVIEW_REF,
+    snapshotRef: FORWARD_SNAPSHOT_REF,
+    pagePath: "Wiki/Page.md",
+    updatedAt: 20,
+    requestedAt: 15,
+    selectedAppliedAt: 10,
+    plan: Object.freeze({
+      ...plan,
+      changeSetId: FORWARD_REVIEW_REF,
+      proposalDigest: "a".repeat(64),
+      snapshotToken: "b".repeat(64),
+      files: Object.freeze([
+        Object.freeze({
+          ...plan.files[0],
+          changeId: "forward-change-1",
+          blocks: Object.freeze([
+            Object.freeze({
+              ...plan.files[0].blocks[0],
+              blockId: FORWARD_BLOCK_REF,
+            }),
+          ]) as unknown as KnowledgeReviewPlan["files"][number]["blocks"],
+        }),
+      ]) as unknown as KnowledgeReviewPlan["files"],
+    }),
+  });
+}
+
+/** Embeds exact forward work in an otherwise ready Studio snapshot. */
+function createForwardSnapshot(
+  revisionToken: string,
+  reviews: readonly Readonly<KnowledgeForwardRevisionStudioReview>[]
+): KnowledgeStudioSnapshot {
+  const base = createSnapshot(revisionToken, []);
+  return {
+    ...base,
+    commandCapabilities: {
+      ...base.commandCapabilities,
+      forwardRevisionReview: true,
+    },
+    forwardRevisionReviews: reviews,
   };
 }
 
@@ -326,6 +384,11 @@ type RecoveryCommandHandler = (
   expectedRuntimeRevision: number,
   signal: AbortSignal
 ) => Promise<KnowledgeStudioRecoverySubmissionResult>;
+type ForwardRevisionCommandHandler = (
+  bundleId: string,
+  command: KnowledgeForwardRevisionStudioCommand,
+  signal: AbortSignal
+) => Promise<KnowledgeForwardRevisionStudioSubmissionResult>;
 
 /** Scriptable read/command port that records every boundary call. */
 class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudioCommandPort {
@@ -349,6 +412,11 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
   readonly reviewCalls: {
     bundleId: string;
     command: KnowledgeReviewCommand;
+    signal: AbortSignal;
+  }[] = [];
+  readonly forwardRevisionCalls: {
+    bundleId: string;
+    command: KnowledgeForwardRevisionStudioCommand;
     signal: AbortSignal;
   }[] = [];
   readonly continueRecoveryCalls: {
@@ -375,6 +443,9 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
     }),
     private readonly recoveryCommandHandler: RecoveryCommandHandler = async () => ({
       kind: "completed",
+    }),
+    private readonly forwardRevisionCommandHandler: ForwardRevisionCommandHandler = async () => ({
+      kind: "applied",
     })
   ) {}
 
@@ -442,6 +513,16 @@ class FakeKnowledgeStudioPort implements KnowledgeStudioReadPort, KnowledgeStudi
   ): Promise<KnowledgeStudioReviewSubmissionResult> {
     this.reviewCalls.push({ bundleId, command, signal });
     return this.reviewCommandHandler(bundleId, command, signal);
+  }
+
+  /** Records and delegates one dedicated opaque forward Review or Apply command. */
+  async submitForwardRevisionStudio(
+    bundleId: string,
+    command: KnowledgeForwardRevisionStudioCommand,
+    signal: AbortSignal
+  ): Promise<KnowledgeForwardRevisionStudioSubmissionResult> {
+    this.forwardRevisionCalls.push({ bundleId, command, signal });
+    return this.forwardRevisionCommandHandler(bundleId, command, signal);
   }
 
   /** Records and delegates one exact recovery continuation. */
@@ -617,6 +698,18 @@ function createReviewCommand(token = "b".repeat(64)): KnowledgeReviewCommand {
     proposalDigest: "a".repeat(64),
     expectedSnapshotToken: token,
     decisions: [{ changeId: "change-1", decision: "accept_blocks", acceptedBlockIds: ["block-1"] }],
+  };
+}
+
+/** Builds one reusable Review command bound to the pending forward render plan. */
+function createForwardReviewCommand(
+  decision: KnowledgeReviewCommand["decisions"][number]
+): KnowledgeReviewCommand {
+  return {
+    changeSetId: FORWARD_REVIEW_REF,
+    proposalDigest: "a".repeat(64),
+    expectedSnapshotToken: "b".repeat(64),
+    decisions: [decision],
   };
 }
 
@@ -1515,6 +1608,241 @@ describe("KnowledgeStudioController", () => {
     expect(controller.getState().feedback).toEqual({
       kind: "blocked",
       message: "This review command is invalid and was not submitted.",
+    });
+  });
+
+  it("converts pending forward reject, block, and edited decisions at the distinct command boundary", async () => {
+    const review = createForwardPendingReview();
+    const snapshot = createForwardSnapshot("forward-pending", [review]);
+    const results: KnowledgeForwardRevisionStudioSubmissionResult[] = [
+      { kind: "rejected" },
+      { kind: "stale" },
+      { kind: "accepted_ready" },
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshot,
+      undefined,
+      undefined,
+      undefined,
+      async () => results.shift() ?? { kind: "unavailable" }
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.submitForwardRevisionReview(
+      review.reviewRef,
+      createForwardReviewCommand({ changeId: "forward-change-1", decision: "reject" })
+    );
+    await controller.submitForwardRevisionReview(
+      review.reviewRef,
+      createForwardReviewCommand({
+        changeId: "forward-change-1",
+        decision: "accept_blocks",
+        acceptedBlockIds: [FORWARD_BLOCK_REF],
+      })
+    );
+    await controller.submitForwardRevisionReview(
+      review.reviewRef,
+      createForwardReviewCommand({
+        changeId: "forward-change-1",
+        decision: "accept_edited",
+        afterContent: "# Manually selected revision\n",
+      })
+    );
+
+    expect(port.forwardRevisionCalls).toHaveLength(3);
+    expect(port.forwardRevisionCalls.map(({ command }) => command)).toEqual([
+      {
+        version: 1,
+        kind: "forward_revision_studio_command",
+        reviewRef: FORWARD_REVIEW_REF,
+        snapshotRef: FORWARD_SNAPSHOT_REF,
+        action: "reject",
+      },
+      {
+        version: 1,
+        kind: "forward_revision_studio_command",
+        reviewRef: FORWARD_REVIEW_REF,
+        snapshotRef: FORWARD_SNAPSHOT_REF,
+        action: "accept_blocks",
+        acceptedBlockIds: [FORWARD_BLOCK_REF],
+      },
+      {
+        version: 1,
+        kind: "forward_revision_studio_command",
+        reviewRef: FORWARD_REVIEW_REF,
+        snapshotRef: FORWARD_SNAPSHOT_REF,
+        action: "accept_edited",
+        afterContent: "# Manually selected revision\n",
+      },
+    ]);
+    expect(port.forwardRevisionCalls.every(({ bundleId }) => bundleId === "personal")).toBe(true);
+  });
+
+  it("keeps an accepted-ready forward revision visible and retryable after Apply cannot start", async () => {
+    const accepted = Object.freeze({
+      state: "accepted_ready" as const,
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      pagePath: "Wiki/Page.md",
+      updatedAt: 30,
+      acceptedAt: 25,
+      manualOverride: true,
+    });
+    const before = createForwardSnapshot("accepted-before", [accepted]);
+    const after = createForwardSnapshot("accepted-after", [accepted]);
+    const snapshots = [before, after];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift() ?? after,
+      undefined,
+      undefined,
+      undefined,
+      async () => ({ kind: "accepted_ready" })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.applyForwardRevision(FORWARD_REVIEW_REF);
+
+    expect(port.forwardRevisionCalls).toHaveLength(1);
+    expect(port.forwardRevisionCalls[0]).toMatchObject({
+      bundleId: "personal",
+      command: {
+        version: 1,
+        kind: "forward_revision_studio_command",
+        reviewRef: FORWARD_REVIEW_REF,
+        snapshotRef: FORWARD_SNAPSHOT_REF,
+        action: "apply",
+      },
+    });
+    const state = controller.getState();
+    expect(state).toMatchObject({
+      snapshot: {
+        revisionToken: "accepted-after",
+        forwardRevisionReviews: [{ state: "accepted_ready", reviewRef: FORWARD_REVIEW_REF }],
+      },
+      selectedForwardRevisionRef: FORWARD_REVIEW_REF,
+      feedback: {
+        kind: "blocked",
+      },
+    });
+    expect(state.feedback?.message).toContain("remains visible and retryable");
+  });
+
+  it("describes a durable but paused forward journal without promising background progress", async () => {
+    const accepted = Object.freeze({
+      state: "accepted_ready" as const,
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      pagePath: "Wiki/Page.md",
+      updatedAt: 30,
+      acceptedAt: 25,
+      manualOverride: false,
+    });
+    const applying = Object.freeze({
+      ...accepted,
+      state: "applying" as const,
+      applyPhase: "prepared" as const,
+      updatedAt: 31,
+    });
+    const snapshots = [
+      createForwardSnapshot("apply-before", [accepted]),
+      createForwardSnapshot("apply-paused", [applying]),
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift() ?? createForwardSnapshot("apply-paused", [applying]),
+      undefined,
+      undefined,
+      undefined,
+      async () => ({ kind: "applying" })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.applyForwardRevision(FORWARD_REVIEW_REF);
+
+    const state = controller.getState();
+    expect(state).toMatchObject({
+      snapshot: { forwardRevisionReviews: [{ state: "applying" }] },
+      feedback: {
+        kind: "blocked",
+      },
+    });
+    expect(state.feedback?.message).toContain("Reload the plugin to run startup recovery");
+  });
+
+  it("focuses a just-published opaque forward row only after a fresh durable reload", async () => {
+    const published = createForwardPendingReview();
+    const snapshots = [
+      createForwardSnapshot("before-publish", []),
+      createForwardSnapshot("after-publish", [published]),
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift() ?? createForwardSnapshot("after-publish", [published])
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    controller.focusPublishedForwardRevision(published.reviewRef);
+    await flushAsync();
+
+    expect(controller.getState()).toMatchObject({
+      activeTab: "review",
+      selectedForwardRevisionRef: published.reviewRef,
+      snapshot: { revisionToken: "after-publish" },
+      feedback: undefined,
+    });
+  });
+
+  it("falls back to the Review inbox when a published ref is absent after fresh reload", async () => {
+    const empty = createForwardSnapshot("empty-after-publish", []);
+    const port = new FakeKnowledgeStudioPort(async () => empty);
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    controller.focusPublishedForwardRevision(FORWARD_REVIEW_REF);
+    await flushAsync();
+
+    const state = controller.getState();
+    expect(state).toMatchObject({
+      activeTab: "review",
+      selectedForwardRevisionRef: undefined,
+      feedback: {
+        kind: "blocked",
+      },
+    });
+    expect(state.feedback?.message).toContain("not in this current Bundle");
+  });
+
+  it("never forwards a pending forward decision without the exact generation capability", async () => {
+    const review = createForwardPendingReview();
+    const ready = createForwardSnapshot("forward-read-only", [review]);
+    const snapshot: KnowledgeStudioSnapshot = {
+      ...ready,
+      commandCapabilities: {
+        ...ready.commandCapabilities,
+        forwardRevisionReview: false,
+      },
+    };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.submitForwardRevisionReview(
+      review.reviewRef,
+      createForwardReviewCommand({ changeId: "forward-change-1", decision: "reject" })
+    );
+
+    expect(port.forwardRevisionCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toEqual({
+      kind: "blocked",
+      message: "Forward Review decisions and Apply are unavailable from the current snapshot.",
     });
   });
 

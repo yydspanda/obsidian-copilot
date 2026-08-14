@@ -60,6 +60,16 @@ Git 通常不覆盖插件所有私有状态。需要真正可恢复的快照时�
 
 这个启动核对，以及 `Check again`、`Remove`、导入或 Project/设置变化触发的正常 generation 换代，都可能短暂显示中性 `Refreshing Knowledge Studio…`。此时旧代权限已撤销，操作按钮暂停；这不表示刚才的操作失败。等待新代自动就绪，不要重复点击或通过编辑私有 Runtime 绕过核对。只有已判定的持久配置、Runtime 或 Recovery 等终态问题才会显示红色 `Knowledge Studio unavailable`。
 
+### Forward revision startup recovery
+
+从 `Known applied outputs` 提出的历史版本若未能在接受后立即开始 journal，会独立显示在 `Review`：
+
+- `Accepted revision ready to apply` 表示决定已持久保存但尚未创建文件 journal；它不会因为 reload/disable 消失，可再次点击 `Validate and apply` 重试新鲜核对。当前没有 abandon 或强制跳过核对的按钮。
+- `Applying accepted revision` 表示 durable journal 已拥有这次单页转换。若它长时间停留，重新加载插件会在启动期只凭持久 journal 和当前文件字节继续核对，不会调用模型、parser parse 或网络。
+- `Forward Apply needs recovery` 表示文件既不匹配 journal 的精确 before，也不匹配精确 after，或写后验证无法可靠完成。此状态是 sticky、只读且没有普通 Retry/Resume 按钮；系统不会自动覆盖文件，重新加载也不会清除冲突。
+
+遇到 sticky Forward recovery 时，先备份整个 Vault，并记录界面显示的页面路径与冲突类别。不要直接编辑 Runtime、Manifest、journal 或 ledger，也不要反复点击普通 Apply。当前产品表面不提供危险的强制继续/回滚动作；在恢复流程明确支持该状态前，应保持插件停止写入并使用受支持的故障排查或人工支持流程。
+
 ## Recovery 动作
 
 恢复（`Recovery`）页只显示当前状态允许的按钮。没有按钮不是界面损坏，而是系统拒绝猜测一次危险写入应该怎样结束。

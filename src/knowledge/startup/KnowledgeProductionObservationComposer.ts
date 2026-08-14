@@ -6,11 +6,14 @@ import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledg
 import { KnowledgeProductionCandidateValidator } from "@/knowledge/compiler/KnowledgeProductionCandidateValidator";
 import { KnowledgeProductionModelRouteLease } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import { KnowledgeProductionForwardRevisionDecisionCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionDecisionCoordinator";
+import { KnowledgeProductionForwardRevisionProposalActionAdapter } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
+import { KnowledgeProductionForwardRevisionProposalCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionProposalCoordinator";
 import {
   KnowledgeProductionForwardRevisionApplyCoordinator,
   KnowledgeProductionForwardRevisionApplyTransactionRunner,
 } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import { KnowledgeProductionForwardRevisionValidationCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
+import { KnowledgeProductionForwardRevisionStudioCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionStudioCoordinator";
 import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
   KnowledgeSourceWorkflowPlanLoader,
@@ -48,6 +51,8 @@ import {
   KnowledgeRuntimeForwardRevisionDecisionPort,
   KnowledgeRuntimeForwardRevisionApplyPort,
   KnowledgeRuntimeForwardRevisionApplyRecoveryPort,
+  KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+  KnowledgeRuntimeForwardRevisionStudioPort,
   KnowledgeRuntimeForwardRevisionValidationPort,
   KnowledgeRuntimeIngestExecutionProofPort,
   KnowledgeRuntimeManifestStorage,
@@ -86,6 +91,8 @@ import {
 } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
 import { KnowledgeProductionAppliedWikiPageInspectorCoordinator } from "@/knowledge/wiki/KnowledgeProductionAppliedWikiPageInspectorCoordinator";
 import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
+import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
+import type { KnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 
 /** Exact production resources consumed by one observation-only workflow generation. */
 export interface KnowledgeProductionObservationComposerInput {
@@ -212,6 +219,7 @@ interface KnowledgeProductionObservationInternalState {
   sourceRecoveryIssues?: readonly KnowledgeSourceObservationRecoverableIssue[];
   appliedWikiInspectorCreated?: boolean;
   knownAppliedWikiOutputsCreated?: boolean;
+  forwardRevisionProposalActionCreated?: boolean;
   forwardRevisionValidationCoordinatorCreated?: boolean;
   forwardRevisionDecisionCoordinatorCreated?: boolean;
   forwardRevisionApplyCoordinatorCreated?: boolean;
@@ -1087,6 +1095,27 @@ export class KnowledgeProductionObservationComposer {
       assertCurrent,
     });
     this.subscribeClose(() => query.close());
+    const forwardRevision =
+      retainCommandDrain === undefined
+        ? undefined
+        : new KnowledgeProductionForwardRevisionStudioCoordinator(
+            new KnowledgeRuntimeForwardRevisionStudioPort(
+              composition.runtime,
+              composition.proofPort,
+              KnowledgePluginProductionWorkflowLease.getExecutionLease(
+                composition.workflowLease,
+                composition.executionOwner
+              )
+            ),
+            this.createForwardRevisionDecisionCoordinator(),
+            this.createForwardRevisionApplyCoordinator(),
+            new ObsidianKnowledgeCompilerTargetResolver(
+              composition.app,
+              composition.executionOwner
+            ),
+            composition.executionOwner,
+            assertCurrent
+          );
     return new KnowledgeStudioRuntimeReadAdapter({
       runtime,
       bundles: composition.owners.map(({ config }) => config),
@@ -1095,6 +1124,12 @@ export class KnowledgeProductionObservationComposer {
       commands,
       query,
       reviewEvidence,
+      ...(forwardRevision === undefined
+        ? {}
+        : {
+            forwardRevision,
+            retainForwardRevisionDrain: retainCommandDrain,
+          }),
       ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
       subscribeVaultHints: (bundleId, onHint) =>
         subscribeKnowledgeStudioExternalHints(composition, bundleId, onHint, (listener) =>
@@ -1204,6 +1239,68 @@ export class KnowledgeProductionObservationComposer {
       assertCurrent();
       state.knownAppliedWikiOutputsCreated = true;
       return coordinator;
+    } catch {
+      throw createAbortError();
+    }
+  }
+
+  /**
+   * Creates the receipt-free proposal action paired with the exact known-output generation.
+   *
+   * @param knownOutputs - Stable authentic browser boundary that issued the UI session
+   * @param knownOutputsDelegate - Exact current delegate behind that stable boundary
+   * @param retainDrain - Generation drain registrar invoked before proposal work can settle
+   * @returns One genuine generation-owned proposal action adapter
+   */
+  createForwardRevisionProposalActionAdapter(
+    knownOutputs: DelegatingKnowledgeKnownAppliedWikiOutputsPort,
+    knownOutputsDelegate: KnowledgeKnownAppliedWikiOutputsPort,
+    retainDrain: (drain: Promise<void>) => void
+  ): KnowledgeProductionForwardRevisionProposalActionAdapter {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (
+      !composition ||
+      !state.coordinator ||
+      !state.workerController ||
+      !state.plan ||
+      composition.owners.length !== 1 ||
+      !state.knownAppliedWikiOutputsCreated ||
+      state.forwardRevisionProposalActionCreated
+    ) {
+      throw createAbortError();
+    }
+    if (typeof retainDrain !== "function") throw createAbortError();
+    try {
+      /** Reasserts that the proposal action still belongs to this live production generation. */
+      const assertCurrent = (): void => {
+        assertCompositionCurrent(state, state.generation, composition);
+        this.assertHealthy();
+      };
+      const executionLease = KnowledgePluginProductionWorkflowLease.getExecutionLease(
+        composition.workflowLease,
+        composition.executionOwner
+      );
+      const adapter = new KnowledgeProductionForwardRevisionProposalActionAdapter(
+        new KnowledgeProductionForwardRevisionProposalCoordinator({
+          knownOutputs,
+          knownOutputsDelegate,
+          runtime: new KnowledgeRuntimeForwardRevisionProposalPublicationPort(
+            composition.runtime,
+            composition.proofPort,
+            executionLease
+          ),
+          executionOwner: composition.executionOwner,
+          bundles: composition.owners.map(({ config }) =>
+            Object.freeze({ bundleId: config.id, wikiRoot: config.wikiRoot })
+          ),
+          assertCurrent,
+        }),
+        retainDrain
+      );
+      assertCurrent();
+      state.forwardRevisionProposalActionCreated = true;
+      return adapter;
     } catch {
       throw createAbortError();
     }
@@ -1457,6 +1554,7 @@ export class KnowledgeProductionObservationComposer {
     state.modelRouteLease = undefined;
     state.appliedWikiInspectorCreated = undefined;
     state.knownAppliedWikiOutputsCreated = undefined;
+    state.forwardRevisionProposalActionCreated = undefined;
     state.forwardRevisionValidationCoordinatorCreated = undefined;
     state.forwardRevisionDecisionCoordinatorCreated = undefined;
     state.forwardRevisionApplyCoordinatorCreated = undefined;

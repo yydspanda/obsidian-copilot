@@ -42,6 +42,8 @@ import type { KnowledgeAppliedWikiPageInspectionRequest } from "@/knowledge/wiki
 import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import { KnowledgeKnownAppliedWikiOutputsGenerationLease } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsGenerationLease";
+import { DelegatingKnowledgeForwardRevisionProposalActionPort } from "@/knowledge/forwardRevision/DelegatingKnowledgeForwardRevisionProposalActionPort";
+import { KnowledgeForwardRevisionProposalActionGenerationLease } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionGenerationLease";
 import { ObsidianKnowledgeFolderImportFileStore } from "@/knowledge/capture/ObsidianKnowledgeFolderImportFileStore";
 import {
   KnowledgeProductionChatCaptureCoordinator,
@@ -110,6 +112,11 @@ import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledg
 import { KnowledgeStudioRecoveryOnlyAdapter } from "@/knowledge/ui/KnowledgeStudioRecoveryOnlyAdapter";
 import { KnowledgeStudioSourceLifecycleOnlyAdapter } from "@/knowledge/ui/KnowledgeStudioSourceLifecycleOnlyAdapter";
 import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
+import {
+  captureKnowledgeStudioPresentationHint,
+  planKnowledgeStudioPresentationNavigation,
+  type KnowledgeStudioPresentationHint,
+} from "@/knowledge/ui/KnowledgeStudioWindowNavigation";
 import { logError, logInfo, logWarn } from "@/logger";
 import { logFileManager } from "@/logFileManager";
 import { KeychainService } from "@/services/keychainService";
@@ -264,6 +271,8 @@ export default class CopilotPlugin extends Plugin {
     new DelegatingKnowledgeAppliedWikiPageInspectorPort();
   private readonly knowledgeKnownAppliedWikiOutputsPort =
     new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
+  private readonly knowledgeForwardRevisionProposalActionPort =
+    new DelegatingKnowledgeForwardRevisionProposalActionPort();
   private readonly knowledgeAppliedWikiPathIndex = new KnowledgeAppliedWikiPathIndex();
   private readonly knowledgeAppliedWikiInspectorModals =
     new Set<KnowledgeAppliedWikiInspectorModal>();
@@ -733,13 +742,7 @@ export default class CopilotPlugin extends Plugin {
           publishKnowledgeSetupThenStudioAuthority(
             state,
             (nextState) => this.publishKnowledgeSetupReadiness(nextState),
-            (nextState) => {
-              if (nextState.attentionKinds.includes("forward_revision_apply_recovery_required")) {
-                this.knowledgeStudioStartupAvailability.setUnavailable(nextState);
-                return;
-              }
-              this.knowledgeStudioStartupAvailability.setRecoveryReady(nextState);
-            }
+            (nextState) => this.knowledgeStudioStartupAvailability.setRecoveryReady(nextState)
           );
         },
         setSourceRecoveryReady: (state) => {
@@ -896,12 +899,28 @@ export default class CopilotPlugin extends Plugin {
     if (this.knowledgeLifecycleClosed) return;
     let modal: KnowledgeAppliedWikiInspectorModal | undefined;
     try {
+      const proposalAction = this.knowledgeForwardRevisionProposalActionPort.isAvailable()
+        ? this.knowledgeForwardRevisionProposalActionPort
+        : undefined;
       modal = new KnowledgeAppliedWikiInspectorModal(
         this.app,
         request,
         this.knowledgeAppliedWikiPageInspectorPort,
         (closedModal) => this.knowledgeAppliedWikiInspectorModals.delete(closedModal),
-        this.knowledgeKnownAppliedWikiOutputsPort
+        this.knowledgeKnownAppliedWikiOutputsPort,
+        proposalAction,
+        (reviewRef) => {
+          if (
+            this.knowledgeLifecycleClosed ||
+            !modal ||
+            !this.knowledgeAppliedWikiInspectorModals.has(modal)
+          ) {
+            return;
+          }
+          const presentationHint = captureKnowledgeStudioPresentationHint(modal.contentEl);
+          modal.close();
+          void this.activateKnowledgeStudio("review", reviewRef, presentationHint);
+        }
       );
       this.knowledgeAppliedWikiInspectorModals.add(modal);
       modal.open();
@@ -966,6 +985,9 @@ export default class CopilotPlugin extends Plugin {
       | undefined;
     let knownAppliedWikiOutputsGeneration:
       | KnowledgeKnownAppliedWikiOutputsGenerationLease
+      | undefined;
+    let forwardRevisionProposalActionGeneration:
+      | KnowledgeForwardRevisionProposalActionGenerationLease
       | undefined;
     let sourcePathIndexLease: Readonly<KnowledgeSourcePathIndexLease> | undefined;
     try {
@@ -1148,8 +1170,29 @@ export default class CopilotPlugin extends Plugin {
                     this.knowledgeKnownAppliedWikiOutputsPort.revokeDelegate(next),
                   assertCurrent,
                 });
+              try {
+                if (admission.owners.length !== 1) throw new TypeError();
+                const proposalAction = candidate.createForwardRevisionProposalActionAdapter(
+                  this.knowledgeKnownAppliedWikiOutputsPort,
+                  delegate,
+                  (drain) => retainKnowledgeProductionDrain(this.app.vault, drain)
+                );
+                forwardRevisionProposalActionGeneration =
+                  new KnowledgeForwardRevisionProposalActionGenerationLease({
+                    delegate: proposalAction,
+                    subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
+                    replaceDelegate: (next) =>
+                      this.knowledgeForwardRevisionProposalActionPort.replaceDelegate(next),
+                    revokeDelegate: (next) =>
+                      this.knowledgeForwardRevisionProposalActionPort.revokeDelegate(next),
+                    assertCurrent,
+                  });
+              } catch {
+                this.knowledgeForwardRevisionProposalActionPort.setUnavailable();
+              }
             } catch {
               this.knowledgeKnownAppliedWikiOutputsPort.setUnavailable();
+              this.knowledgeForwardRevisionProposalActionPort.setUnavailable();
             }
             const studioAdapter = candidate.createKnowledgeStudioRuntimeReadAdapter(
               admission.modelRouteLease,
@@ -1249,6 +1292,8 @@ export default class CopilotPlugin extends Plugin {
           folderImportGeneration = undefined;
           appliedWikiInspectorGeneration?.close();
           appliedWikiInspectorGeneration = undefined;
+          forwardRevisionProposalActionGeneration?.close();
+          forwardRevisionProposalActionGeneration = undefined;
           knownAppliedWikiOutputsGeneration?.close();
           knownAppliedWikiOutputsGeneration = undefined;
           this.closeKnowledgeAppliedWikiInspectorModals();
@@ -1273,6 +1318,8 @@ export default class CopilotPlugin extends Plugin {
         folderImportGeneration = undefined;
         appliedWikiInspectorGeneration?.close();
         appliedWikiInspectorGeneration = undefined;
+        forwardRevisionProposalActionGeneration?.close();
+        forwardRevisionProposalActionGeneration = undefined;
         knownAppliedWikiOutputsGeneration?.close();
         knownAppliedWikiOutputsGeneration = undefined;
         this.closeKnowledgeAppliedWikiInspectorModals();
@@ -1415,6 +1462,7 @@ export default class CopilotPlugin extends Plugin {
     this.knowledgeFolderImportPort.dispose();
     this.knowledgeSourcePathIndex.clear();
     this.knowledgeAppliedWikiPageInspectorPort.dispose();
+    this.knowledgeForwardRevisionProposalActionPort.dispose();
     this.knowledgeKnownAppliedWikiOutputsPort.dispose();
     this.knowledgeAppliedWikiPathIndex.dispose();
     this.knowledgeProjectRecordsUnsubscriber?.();
@@ -1796,23 +1844,81 @@ export default class CopilotPlugin extends Plugin {
     }, 50);
   }
 
-  /** Opens the Windows-only personal Knowledge Studio workspace. */
-  async activateKnowledgeStudio(): Promise<void> {
+  /**
+   * Opens the Windows-only personal Knowledge Studio workspace.
+   *
+   * @param initialTab - Optional first Studio tab to select
+   * @param forwardRevisionReviewRef - Optional opaque forward Review row to focus
+   * @param presentationHint - Non-authoritative renderer realm that initiated navigation
+   */
+  async activateKnowledgeStudio(
+    initialTab?: "review",
+    forwardRevisionReviewRef?: string,
+    presentationHint?: Readonly<KnowledgeStudioPresentationHint>
+  ): Promise<void> {
     if (!isKnowledgeStudioPlatformSupported()) {
       new Notice("Knowledge Studio is currently available only in Obsidian Desktop on Windows.");
       return;
     }
 
     const leaves = this.app.workspace.getLeavesOfType(KNOWLEDGE_STUDIO_VIEW_TYPE);
+    if (presentationHint) {
+      const allLeaves: WorkspaceLeaf[] = [];
+      this.app.workspace.iterateAllLeaves((leaf) => allLeaves.push(leaf));
+      const plan = planKnowledgeStudioPresentationNavigation(leaves, allLeaves, presentationHint);
+      if (plan.kind === "existing") {
+        this.app.workspace.revealLeaf(plan.leaf);
+        if (initialTab === "review" && plan.leaf.view instanceof KnowledgeStudioView) {
+          if (forwardRevisionReviewRef) {
+            plan.leaf.view.focusPublishedForwardRevision(forwardRevisionReviewRef);
+          } else {
+            plan.leaf.view.selectReviewTab();
+          }
+        }
+        return;
+      }
+      if (plan.kind === "create_adjacent") {
+        const leaf = this.app.workspace.createLeafBySplit(plan.anchor);
+        await leaf.setViewState({
+          type: KNOWLEDGE_STUDIO_VIEW_TYPE,
+          active: true,
+        });
+        this.app.workspace.revealLeaf(leaf);
+        if (initialTab === "review" && leaf.view instanceof KnowledgeStudioView) {
+          if (forwardRevisionReviewRef) {
+            leaf.view.focusPublishedForwardRevision(forwardRevisionReviewRef);
+          } else {
+            leaf.view.selectReviewTab();
+          }
+        }
+        return;
+      }
+    }
+
     if (leaves.length > 0) {
       this.app.workspace.revealLeaf(leaves[0]);
+      if (initialTab === "review" && leaves[0].view instanceof KnowledgeStudioView) {
+        if (forwardRevisionReviewRef) {
+          leaves[0].view.focusPublishedForwardRevision(forwardRevisionReviewRef);
+        } else {
+          leaves[0].view.selectReviewTab();
+        }
+      }
       return;
     }
 
-    await this.app.workspace.getLeaf(true).setViewState({
+    const leaf = this.app.workspace.getLeaf(true);
+    await leaf.setViewState({
       type: KNOWLEDGE_STUDIO_VIEW_TYPE,
       active: true,
     });
+    if (initialTab === "review" && leaf.view instanceof KnowledgeStudioView) {
+      if (forwardRevisionReviewRef) {
+        leaf.view.focusPublishedForwardRevision(forwardRevisionReviewRef);
+      } else {
+        leaf.view.selectReviewTab();
+      }
+    }
   }
 
   async deactivateView() {

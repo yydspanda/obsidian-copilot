@@ -11,6 +11,10 @@ import {
   KnowledgeKnownAppliedWikiOutputsView,
 } from "@/components/knowledge/KnowledgeKnownAppliedWikiOutputsView";
 import type {
+  KnowledgeForwardRevisionProposalActionPort,
+  KnowledgeForwardRevisionProposalActionResult,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
+import type {
   KnowledgeKnownAppliedWikiOutputDetail,
   KnowledgeKnownAppliedWikiOutputDetailResult,
   KnowledgeKnownAppliedWikiOutputsPageResult,
@@ -22,6 +26,7 @@ const PAGE_REF = `known-wiki-page-${"a".repeat(64)}`;
 const FIRST_OUTPUT_REF = `known-wiki-output-${"b".repeat(64)}`;
 const SECOND_OUTPUT_REF = `known-wiki-output-${"c".repeat(64)}`;
 const FIRST_CURSOR = `known-wiki-cursor-${"d".repeat(64)}`;
+const REVIEW_REF = `forward-studio-review-${"e".repeat(64)}`;
 
 /** Creates one deterministic opaque output ref for paging fixtures. */
 function outputRef(index: number): string {
@@ -112,6 +117,46 @@ function createHistory(
     ),
     ...overrides,
   };
+}
+
+/** Creates detail reads whose metadata remains bound to either fixture summary. */
+function createProposalEligibleHistory(
+  session: Readonly<KnowledgeKnownAppliedWikiOutputsSession> = createSession()
+): KnowledgeKnownAppliedWikiOutputsPort {
+  return createHistory({
+    inspectKnownOutputs: jest.fn(async () => session),
+    readOutput: jest.fn(async (_session, ref) => {
+      const summary = session.items.find((item) => item.outputRef === ref);
+      if (!summary) return Object.freeze({ kind: "stale" as const });
+      return Object.freeze({
+        kind: "loaded" as const,
+        value: Object.freeze({
+          outputRef: ref,
+          appliedAt: summary.appliedAt,
+          verifiedApplyCount: summary.verifiedApplyCount,
+          content: ref === SECOND_OUTPUT_REF ? "historical proposal body" : "current body",
+        }),
+      });
+    }),
+    compareWithCurrent: jest.fn(async (_session, ref) =>
+      Object.freeze({
+        kind: "loaded" as const,
+        value: Object.freeze({
+          outputRef: ref,
+          currentState: session.currentState,
+          knownContent: ref === SECOND_OUTPUT_REF ? "historical proposal body" : "current body",
+          currentContent: "current body",
+        }),
+      })
+    ),
+  });
+}
+
+/** Creates one action mock that exposes only the three-field opaque invocation. */
+function createProposalAction(
+  proposeKnownOutput: KnowledgeForwardRevisionProposalActionPort["proposeKnownOutput"]
+): KnowledgeForwardRevisionProposalActionPort {
+  return { proposeKnownOutput: jest.fn(proposeKnownOutput) };
 }
 
 /** Flushes pending promise continuations and React updates. */
@@ -351,6 +396,7 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
       />
     );
     await flushPromises();
+    expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
 
     fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[0]);
     await flushPromises();
@@ -534,6 +580,284 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
     expect(screen.getByRole("heading", { name: "Known applied outputs" }).matches(":focus")).toBe(
       true
     );
+  });
+
+  it("offers proposal publication only for an earlier detail in a current applied session", async () => {
+    const proposalAction = createProposalAction(async () => ({
+      kind: "published",
+      reviewRef: REVIEW_REF,
+    }));
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory()}
+        proposalAction={proposalAction}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+      />
+    );
+    await flushPromises();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[0]);
+    await flushPromises();
+    expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to known outputs" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+    expect(screen.getByRole("button", { name: "Propose this output" })).toBeTruthy();
+    expect(screen.getByText(/creates a pending Studio Review proposal/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare with current file" }));
+    await flushPromises();
+    expect(screen.getByRole("heading", { name: "Compare with current file" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
+  });
+
+  it.each(["drifted", "missing"] as const)(
+    "does not offer proposal publication when the current page is %s",
+    async (currentState) => {
+      const session = createSession({ currentState, currentMatch: "none" });
+      render(
+        <KnowledgeKnownAppliedWikiOutputsView
+          history={createProposalEligibleHistory(session)}
+          proposalAction={createProposalAction(async () => ({
+            kind: "published",
+            reviewRef: REVIEW_REF,
+          }))}
+          request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+          onBack={jest.fn()}
+        />
+      );
+      await flushPromises();
+      fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+      await flushPromises();
+
+      expect(screen.getByRole("heading", { name: "Known applied output" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
+    }
+  );
+
+  it("submits only the authentic session, opaque ref, and signal, then reports publication", async () => {
+    const session = createSession();
+    const deferred = createDeferred<Readonly<KnowledgeForwardRevisionProposalActionResult>>();
+    const proposeKnownOutput = jest.fn(
+      async (
+        _session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
+        _outputRef: string,
+        _signal: AbortSignal
+      ) => deferred.promise
+    );
+    const onPublished = jest.fn();
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory(session)}
+        proposalAction={{ proposeKnownOutput }}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+
+    fireEvent.click(screen.getByRole("button", { name: "Propose this output" }));
+    const pendingButton = screen.getByRole("button", { name: "Proposing…" });
+    expect(pendingButton.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Compare with current file" }).hasAttribute("disabled")
+    ).toBe(true);
+    fireEvent.click(pendingButton);
+    expect(proposeKnownOutput).toHaveBeenCalledTimes(1);
+    expect(proposeKnownOutput.mock.calls[0]).toHaveLength(3);
+    expect(proposeKnownOutput.mock.calls[0][0]).toBe(session);
+    expect(proposeKnownOutput.mock.calls[0][1]).toBe(SECOND_OUTPUT_REF);
+    expect(proposeKnownOutput.mock.calls[0][2]).toBeInstanceOf(AbortSignal);
+
+    await act(async () => {
+      deferred.resolve(Object.freeze({ kind: "published", reviewRef: REVIEW_REF }));
+      await deferred.promise;
+    });
+    expect(screen.getByRole("status").textContent).toContain("Proposal published");
+    expect(onPublished).toHaveBeenCalledTimes(1);
+    expect(onPublished).toHaveBeenCalledWith(REVIEW_REF);
+  });
+
+  it("coalesces same-render rapid clicks into one publication and one callback", async () => {
+    const deferred = createDeferred<Readonly<KnowledgeForwardRevisionProposalActionResult>>();
+    const proposeKnownOutput: jest.MockedFunction<
+      KnowledgeForwardRevisionProposalActionPort["proposeKnownOutput"]
+    > = jest.fn(async (_session, _outputRef, _signal) => deferred.promise);
+    const onPublished = jest.fn();
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory()}
+        proposalAction={{ proposeKnownOutput }}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+    const button = screen.getByRole("button", { name: "Propose this output" });
+
+    await act(async () => {
+      button.click();
+      button.click();
+      await Promise.resolve();
+    });
+    expect(proposeKnownOutput).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      deferred.resolve(Object.freeze({ kind: "published", reviewRef: REVIEW_REF }));
+      await deferred.promise;
+    });
+    expect(onPublished).toHaveBeenCalledTimes(1);
+    expect(onPublished).toHaveBeenCalledWith(REVIEW_REF);
+    expect(screen.getByRole("status").textContent).toContain("Proposal published");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([
+    [Object.freeze({ kind: "stale" as const }), "no longer current"],
+    [Object.freeze({ kind: "too_large" as const }), "too large"],
+    [Object.freeze({ kind: "unavailable" as const }), "could not be published"],
+    [
+      Object.freeze({ kind: "not_eligible" as const, reason: "current_not_applied" as const }),
+      "no longer proposal-eligible",
+    ],
+    [
+      Object.freeze({ kind: "not_eligible" as const, reason: "selected_is_current" as const }),
+      "already matches",
+    ],
+  ])("renders one bounded failure for %o", async (result, expectedText) => {
+    const onPublished = jest.fn();
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory()}
+        proposalAction={createProposalAction(async () => result)}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+    fireEvent.click(screen.getByRole("button", { name: "Propose this output" }));
+    await flushPromises();
+
+    expect(screen.getByRole("alert").textContent).toContain(expectedText);
+    expect(onPublished).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed published Review ref without invoking navigation", async () => {
+    const onPublished = jest.fn();
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory()}
+        proposalAction={createProposalAction(async () => ({
+          kind: "published",
+          reviewRef: "forward-studio-review-not-opaque",
+        }))}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+    fireEvent.click(screen.getByRole("button", { name: "Propose this output" }));
+    await flushPromises();
+
+    expect(screen.getByRole("alert").textContent).toContain("could not be verified");
+    expect(onPublished).not.toHaveBeenCalled();
+  });
+
+  it("does not present a later confirmed publication after returning from the proposal", async () => {
+    const deferred = createDeferred<Readonly<KnowledgeForwardRevisionProposalActionResult>>();
+    let signal: AbortSignal | undefined;
+    const proposeKnownOutput = jest.fn(
+      async (
+        _session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
+        _ref: string,
+        actionSignal: AbortSignal
+      ) => {
+        signal = actionSignal;
+        return deferred.promise;
+      }
+    );
+    const proposalAction = createProposalAction(proposeKnownOutput);
+    const onPublished = jest.fn();
+    const onBack = jest.fn();
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory()}
+        proposalAction={proposalAction}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={onBack}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+    fireEvent.click(screen.getByRole("button", { name: "Propose this output" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to known outputs" }));
+    expect(signal?.aborted).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Back to current page" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      deferred.resolve(Object.freeze({ kind: "published", reviewRef: REVIEW_REF }));
+      await deferred.promise;
+    });
+    expect(proposeKnownOutput).toHaveBeenCalledTimes(1);
+    expect(onPublished).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Known applied outputs" })).toBeTruthy();
+    expect(screen.queryByText(/Proposal published/)).toBeNull();
+  });
+
+  it("does not present a later confirmed publication after unmount", async () => {
+    const deferred = createDeferred<Readonly<KnowledgeForwardRevisionProposalActionResult>>();
+    let signal: AbortSignal | undefined;
+    const proposeKnownOutput = jest.fn(
+      async (
+        _session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
+        _ref: string,
+        actionSignal: AbortSignal
+      ) => {
+        signal = actionSignal;
+        return deferred.promise;
+      }
+    );
+    const onPublished = jest.fn();
+    const { unmount } = render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory()}
+        proposalAction={createProposalAction(proposeKnownOutput)}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+        onPublished={onPublished}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+    fireEvent.click(screen.getByRole("button", { name: "Propose this output" }));
+
+    unmount();
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      deferred.resolve(Object.freeze({ kind: "published", reviewRef: REVIEW_REF }));
+      await deferred.promise;
+    });
+
+    expect(proposeKnownOutput).toHaveBeenCalledTimes(1);
+    expect(onPublished).not.toHaveBeenCalled();
   });
 
   it("returns focus through the realm-local Back button without global document access", async () => {

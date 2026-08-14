@@ -1,3 +1,4 @@
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
 import {
   snapshotKnowledgeForwardRevisionReviewCommand,
   type KnowledgeForwardRevisionReviewCommandV1,
@@ -180,6 +181,18 @@ export class KnowledgeProductionForwardRevisionDecisionCoordinator {
     }
   }
 
+  /** Requires one live exact coordinator owned by the supplied execution lifecycle. */
+  static assertExecutionOwner(value: unknown, executionOwner: unknown): void {
+    try {
+      KnowledgeExecutionOwner.assert(executionOwner);
+      const state = requireCoordinatorState(value);
+      assertCoordinatorCurrent(state);
+      if (state.executionOwner !== executionOwner) throw createAbortError();
+    } catch {
+      throw createAbortError();
+    }
+  }
+
   /**
    * Decides one strict command while preserving abort-before-CAS and commit-wins-after-CAS.
    *
@@ -259,7 +272,7 @@ export class KnowledgeProductionForwardRevisionDecisionCoordinator {
     } catch (error) {
       const decisionCode = KnowledgeForwardRevisionDecisionPortError.inspect(error);
       if (decisionCode) return mapDecisionFailure(error);
-      if (error instanceof DOMException && error.name === "AbortError") throw createAbortError();
+      if (isKnowledgeAbortError(error)) throw createAbortError();
       return UNAVAILABLE_RESULT;
     }
   }

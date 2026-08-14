@@ -7,6 +7,10 @@ import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
+import type {
+  KnowledgeForwardRevisionStudioPendingReview,
+  KnowledgeForwardRevisionStudioReview,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
 import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
 import type { KnowledgeSetupReadinessProjection } from "@/knowledge/setup/KnowledgeSetupReadiness";
 import { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
@@ -232,6 +236,7 @@ const ENABLED_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioCommandCapabilities>
   retryJob: true,
   reviewReject: true,
   reviewAccept: true,
+  forwardRevisionReview: true,
   recoveryContinue: true,
   recoveryAbandon: true,
 };
@@ -243,6 +248,7 @@ const DISABLED_COMMAND_CAPABILITIES: Readonly<KnowledgeStudioCommandCapabilities
   retryJob: false,
   reviewReject: false,
   reviewAccept: false,
+  forwardRevisionReview: false,
   recoveryContinue: false,
   recoveryAbandon: false,
 };
@@ -321,6 +327,40 @@ function createReviewPlan(changeSetId: string): KnowledgeReviewPlan {
   };
 }
 
+const FORWARD_REVIEW_REF = `forward-studio-review-${"a".repeat(64)}`;
+const FORWARD_SNAPSHOT_REF = `forward-studio-snapshot-${"b".repeat(64)}`;
+
+/** Creates one pending forward row rendered through the reusable Review panel. */
+function createForwardPendingReview(): Readonly<KnowledgeForwardRevisionStudioPendingReview> {
+  return {
+    state: "pending",
+    reviewRef: FORWARD_REVIEW_REF,
+    snapshotRef: FORWARD_SNAPSHOT_REF,
+    pagePath: "Wiki/Forward.md",
+    updatedAt: 30,
+    requestedAt: 20,
+    selectedAppliedAt: 10,
+    plan: createReviewPlan(FORWARD_REVIEW_REF),
+  };
+}
+
+/** Embeds forward rows into a ready Review-tab state with no legacy proposal. */
+function createForwardReadyState(
+  reviews: readonly Readonly<KnowledgeForwardRevisionStudioReview>[]
+): KnowledgeStudioState {
+  const base = createReadyState([]);
+  return {
+    ...base,
+    activeTab: "review",
+    selectedReviewChangeSetId: undefined,
+    selectedForwardRevisionRef: reviews[0]?.reviewRef,
+    snapshot: {
+      ...base.snapshot!,
+      forwardRevisionReviews: reviews,
+    },
+  };
+}
+
 /** Creates one ready controller state with optional reviews. */
 function createReadyState(
   reviews: readonly KnowledgeReviewPlan[] = [createReviewPlan("changeset-1")],
@@ -386,6 +426,7 @@ class TestKnowledgeStudioController {
   private state: KnowledgeStudioState;
   readonly calls: string[] = [];
   submitted?: KnowledgeReviewCommand;
+  submittedForward?: KnowledgeReviewCommand;
 
   /** Creates the fake with one externally owned state object. */
   constructor(initialState: KnowledgeStudioState) {
@@ -425,6 +466,17 @@ class TestKnowledgeStudioController {
     });
   }
 
+  /** Records one dedicated forward-row selection and clears legacy selection. */
+  openForwardRevision(reviewRef: string): void {
+    this.calls.push(`forward:${reviewRef}`);
+    this.publish({
+      ...this.state,
+      activeTab: "review",
+      selectedReviewChangeSetId: undefined,
+      selectedForwardRevisionRef: reviewRef,
+    });
+  }
+
   /** Records a durable reload request without changing render state. */
   async refresh(): Promise<void> {
     this.calls.push("refresh");
@@ -454,6 +506,20 @@ class TestKnowledgeStudioController {
   async submitReview(command: KnowledgeReviewCommand): Promise<void> {
     this.calls.push(`submit:${command.changeSetId}`);
     this.submitted = command;
+  }
+
+  /** Records a reusable Review command routed through the distinct forward boundary. */
+  async submitForwardRevisionReview(
+    reviewRef: string,
+    command: KnowledgeReviewCommand
+  ): Promise<void> {
+    this.calls.push(`forward-submit:${reviewRef}`);
+    this.submittedForward = command;
+  }
+
+  /** Records a retry of one durable accepted-ready forward decision. */
+  async applyForwardRevision(reviewRef: string): Promise<void> {
+    this.calls.push(`forward-apply:${reviewRef}`);
   }
 
   /** Returns no retained Review decisions from this focused composition fake. */
@@ -835,6 +901,96 @@ describe("KnowledgeStudioRoot", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Review open evidence" }));
     expect(controller.calls).toContain("review-evidence:opaque-evidence-ref");
+  });
+
+  it("renders a pending forward row through Review while keeping its submit route distinct", () => {
+    const review = createForwardPendingReview();
+    const controller = new TestKnowledgeStudioController({
+      ...createForwardReadyState([review]),
+      pendingAction: { kind: "submit_forward_revision", targetId: review.reviewRef },
+    });
+    renderStudio(controller);
+
+    expect(screen.getByRole("button", { name: "Open forward revision 1" }).textContent).toContain(
+      "Needs decision"
+    );
+    expect(screen.getByText(`Review plan ${FORWARD_REVIEW_REF}`)).toBeTruthy();
+    expect(screen.getByText("Review busy true")).toBeTruthy();
+    expect(screen.getByText("Review accept true")).toBeTruthy();
+    expect(screen.getByText("Submitting the forward revision decision…")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review submit" }));
+
+    expect(controller.calls).toEqual([`forward-submit:${FORWARD_REVIEW_REF}`]);
+    expect(controller.submittedForward).toMatchObject({
+      changeSetId: FORWARD_REVIEW_REF,
+      decisions: [],
+    });
+  });
+
+  it("keeps accepted-ready work actionable and renders applying and recovery states read-only", () => {
+    const accepted = Object.freeze({
+      state: "accepted_ready" as const,
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      pagePath: "Wiki/Forward.md",
+      updatedAt: 40,
+      acceptedAt: 35,
+      manualOverride: true,
+    });
+    const controller = new TestKnowledgeStudioController(createForwardReadyState([accepted]));
+    const rendered = renderStudio(controller);
+
+    expect(screen.getByRole("tab", { name: /Review/ }).textContent).toContain("1");
+    expect(screen.getByText("Accepted revision ready to apply")).toBeTruthy();
+    expect(screen.getByText(/has no abandon or force-apply action/i).textContent).toContain(
+      "no file is overwritten"
+    );
+    expect(screen.getByText(/manual full-file edit/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Validate and apply" }));
+    expect(controller.calls).toEqual([`forward-apply:${FORWARD_REVIEW_REF}`]);
+
+    act(() =>
+      controller.publish(
+        createForwardReadyState([
+          {
+            ...accepted,
+            state: "applying",
+            applyPhase: "applying",
+          },
+        ])
+      )
+    );
+    expect(screen.getByRole("status", { name: "Forward revision applying" }).textContent).toContain(
+      "durable applying journal"
+    );
+    expect(screen.getByRole("status", { name: "Forward revision applying" }).textContent).toContain(
+      "reload the plugin"
+    );
+    expect(screen.queryByRole("button", { name: "Validate and apply" })).toBeNull();
+
+    act(() =>
+      controller.publish(
+        createForwardReadyState([
+          {
+            ...accepted,
+            state: "recovery_required",
+            conflictCode: "file_state_conflict",
+            actualKind: "file",
+            detectedAt: 45,
+          },
+        ])
+      )
+    );
+    expect(
+      screen.getByRole("alert", { name: "Forward revision recovery required" }).textContent
+    ).toContain("will not overwrite it");
+    expect(
+      screen.getByRole("alert", { name: "Forward revision recovery required" }).textContent
+    ).toContain("no automatic retry");
+    expect(controller.calls).toEqual([`forward-apply:${FORWARD_REVIEW_REF}`]);
+
+    rendered.unmount();
   });
 
   it("reveals Recovery only for durable rows and delegates its exact actions", () => {

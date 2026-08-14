@@ -440,7 +440,14 @@ async function createHarness(bundles: KnowledgeBundleConfig[] = [createBundle()]
   runtime: KnowledgeRuntimeStore;
   composer: KnowledgeProductionRecoveryComposer;
   vault: ReturnType<typeof createVault>;
+  releaseStartupRecovery: jest.SpyInstance;
 }> {
+  // Install the observation hook on the prototype before an authentic Runtime is
+  // created. The forward Studio facade later seals each exact Runtime instance.
+  const releaseStartupRecovery = jest.spyOn(
+    KnowledgeRuntimeStore.prototype,
+    "releaseStartupRecovery"
+  );
   const file = new MemoryAtomicRuntimeFile();
   const runtime = new KnowledgeRuntimeStore(file);
   await runtime.initialize();
@@ -450,6 +457,7 @@ async function createHarness(bundles: KnowledgeBundleConfig[] = [createBundle()]
     runtime,
     composer: new KnowledgeProductionRecoveryComposer({ runtime, vault: vault.vault, bundles }),
     vault,
+    releaseStartupRecovery,
   };
 }
 
@@ -697,7 +705,7 @@ describe("KnowledgeProductionRecoveryComposer", () => {
   ])(
     "accepts a safely preserved $pauseReason pause without changing Runtime or Queue bytes",
     async ({ pauseReason, releaseReason }) => {
-      const { file, runtime, composer } = await createHarness();
+      const { file, runtime, composer, releaseStartupRecovery: release } = await createHarness();
       const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
       const queue = createPausedQueue("personal", pauseReason);
       await writeObservedQueue(runtime, queue);
@@ -709,8 +717,6 @@ describe("KnowledgeProductionRecoveryComposer", () => {
       });
       const runtimeBytesBeforeRelease = await file.read();
       const queueBeforeRelease = await queueStorage.read("personal");
-      const release = jest.spyOn(runtime, "releaseStartupRecovery");
-
       await expect(composer.releaseFresh(jest.fn())).resolves.toEqual({
         kind: "released",
         bundleIds: ["personal"],
@@ -734,7 +740,7 @@ describe("KnowledgeProductionRecoveryComposer", () => {
   );
 
   it("keeps a real recovery-required Queue blocked without entering atomic release", async () => {
-    const { file, runtime, composer } = await createHarness();
+    const { file, runtime, composer, releaseStartupRecovery: release } = await createHarness();
     const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
     await writeObservedQueue(runtime, createRecoveryRequiredQueue("personal"));
     const runtimeBytesBeforeRecovery = await file.read();
@@ -752,8 +758,6 @@ describe("KnowledgeProductionRecoveryComposer", () => {
         },
       ],
     });
-    const release = jest.spyOn(runtime, "releaseStartupRecovery");
-
     await expect(composer.releaseFresh(jest.fn())).resolves.toEqual({
       kind: "blocked",
       bundleId: "personal",
@@ -765,7 +769,7 @@ describe("KnowledgeProductionRecoveryComposer", () => {
   });
 
   it("keeps a startup-recovery pause with a retained paused job blocked atomically", async () => {
-    const { file, runtime, composer } = await createHarness();
+    const { file, runtime, composer, releaseStartupRecovery: release } = await createHarness();
     const queueStorage = new KnowledgeRuntimeQueueStorage(runtime);
     await writeObservedQueue(runtime, createPausedQueue("personal", "startup_recovery"));
 
@@ -776,8 +780,6 @@ describe("KnowledgeProductionRecoveryComposer", () => {
     });
     const runtimeBytesBeforeRelease = await file.read();
     const queueBeforeRelease = await queueStorage.read("personal");
-    const release = jest.spyOn(runtime, "releaseStartupRecovery");
-
     await expect(composer.releaseFresh(jest.fn())).resolves.toEqual({
       kind: "blocked",
       bundleId: "personal",
@@ -1142,5 +1144,266 @@ describe("KnowledgeProductionRecoveryComposer", () => {
       code: "input_invalid",
     });
     expect(JSON.stringify(composer.getState())).not.toContain(rawPath);
+  });
+
+  it("projects exhausted and sticky forward Apply recovery exactly, then clears on a later generation", async () => {
+    await jest.isolateModulesAsync(async () => {
+      const applyModule =
+        "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
+      const projectionModule =
+        "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
+      const runtimeModule = "@/knowledge/runtime/KnowledgeRuntimeStore";
+      const studioSnapshots = new WeakMap<object, Readonly<Record<string, unknown>>>();
+      const studioReads = new WeakMap<object, string[]>();
+      const runnerStates = new WeakMap<
+        object,
+        {
+          runtime: object;
+          vault: object;
+          results: Readonly<Record<string, unknown>>[];
+          callCount: number;
+        }
+      >();
+
+      class ControlledForwardRecoveryRunner {
+        /** Captures one exact Runtime/Vault pair and deterministic recovery result sequence. */
+        constructor(
+          runtime: object,
+          vault: object,
+          results: readonly Readonly<Record<string, unknown>>[]
+        ) {
+          runnerStates.set(this, { runtime, vault, results: [...results], callCount: 0 });
+          Object.freeze(this);
+        }
+
+        /** Accepts only runners minted by this isolated production-composer test. */
+        static assert(value: unknown): void {
+          if (typeof value !== "object" || value === null || !runnerStates.has(value)) {
+            throw new TypeError("invalid controlled runner");
+          }
+        }
+
+        /** Preserves the production composer's exact Runtime/Vault pairing check. */
+        static matchesRuntimeAndVault(value: unknown, runtime: unknown, vault: unknown): boolean {
+          if (typeof value !== "object" || value === null) return false;
+          const state = runnerStates.get(value);
+          return state !== undefined && state.runtime === runtime && state.vault === vault;
+        }
+
+        /** Returns the next durable recovery classification without any model work. */
+        async recoverActive(): Promise<Readonly<Record<string, unknown>>> {
+          const state = runnerStates.get(this);
+          if (!state) throw new TypeError("invalid controlled runner");
+          const result = state.results[state.callCount] ?? { kind: "idle" as const };
+          state.callCount += 1;
+          return result;
+        }
+      }
+
+      const actualRuntime =
+        jest.requireActual<typeof import("@/knowledge/runtime/KnowledgeRuntimeStore")>(
+          runtimeModule
+        );
+      class ControlledForwardStudioPort {
+        /** Retains only the exact Runtime receiver used to find its one-envelope fixture. */
+        constructor(private readonly runtime: object) {
+          if (!(runtime instanceof actualRuntime.KnowledgeRuntimeStore)) throw new TypeError();
+        }
+
+        /** Returns the exact Bundle snapshot assigned to this Runtime scenario. */
+        async readForwardRevisionStudioBundle(
+          bundleId: string
+        ): Promise<Readonly<Record<string, unknown>>> {
+          const reads = studioReads.get(this.runtime) ?? [];
+          reads.push(bundleId);
+          studioReads.set(this.runtime, reads);
+          const snapshot = studioSnapshots.get(this.runtime);
+          if (!snapshot) throw new TypeError("missing controlled Studio snapshot");
+          return snapshot;
+        }
+      }
+
+      jest.doMock(applyModule, () => ({
+        KnowledgeProductionForwardRevisionApplyTransactionRunner: ControlledForwardRecoveryRunner,
+      }));
+      jest.doMock(runtimeModule, () => ({
+        ...actualRuntime,
+        KnowledgeRuntimeForwardRevisionStudioPort: ControlledForwardStudioPort,
+      }));
+      const actualProjection =
+        jest.requireActual<
+          typeof import("@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection")
+        >(projectionModule);
+      jest.doMock(projectionModule, () => ({
+        ...actualProjection,
+        snapshotKnowledgeForwardRevisionStudioSnapshot: (value: unknown) => value,
+      }));
+
+      const isolated = await import("@/knowledge/startup/KnowledgeProductionRecoveryComposer");
+      const reviewRef = `forward-studio-review-${"4".repeat(64)}`;
+      const snapshotRef = `forward-studio-snapshot-${"5".repeat(64)}`;
+      const createStudioSnapshot = (state: "applying" | "recovery_required") => ({
+        version: 1,
+        kind: "forward_revision_studio_snapshot",
+        bundleId: "personal",
+        runtimeRevision: 12,
+        reviewRevision: 4,
+        revisionToken: `forward-studio-revision-${"6".repeat(64)}`,
+        activeRecords: [
+          state === "applying"
+            ? {
+                state,
+                reviewRef,
+                snapshotRef,
+                pagePath: "Wiki/Forward.md",
+                updatedAt: 30,
+                acceptedAt: 20,
+                manualOverride: false,
+                applyPhase: "applying",
+                acceptedDecision: { private: "must-not-cross-startup-ui" },
+                decisionDigest: "7".repeat(64),
+              }
+            : {
+                state,
+                reviewRef,
+                snapshotRef,
+                pagePath: "Wiki/Forward.md",
+                updatedAt: 31,
+                acceptedAt: 20,
+                manualOverride: false,
+                conflictCode: "file_state_conflict",
+                actualKind: "file",
+                detectedAt: 31,
+                acceptedDecision: { private: "must-not-cross-startup-ui" },
+                decisionDigest: "7".repeat(64),
+              },
+        ],
+        committedReviewRefs: [],
+        committedCount: 0,
+      });
+      const createScenario = async (
+        results: readonly Readonly<Record<string, unknown>>[],
+        forwardState: "applying" | "recovery_required",
+        bundles: KnowledgeBundleConfig[] = [createBundle()]
+      ) => {
+        const file = new MemoryAtomicRuntimeFile();
+        const runtime = new actualRuntime.KnowledgeRuntimeStore(file);
+        await runtime.initialize();
+        const vault = createVault();
+        studioSnapshots.set(runtime, createStudioSnapshot(forwardState));
+        const runner = new ControlledForwardRecoveryRunner(runtime, vault.vault, results);
+        const composer = new isolated.KnowledgeProductionRecoveryComposer({
+          runtime,
+          vault: vault.vault,
+          bundles,
+          forwardRevisionApplyRecovery: runner as never,
+        });
+        return { composer, runner, runtime };
+      };
+
+      const exhausted = await createScenario(
+        [
+          { kind: "in_progress", bundleId: "personal", transactionId: "tx-1", phase: "prepared" },
+          { kind: "in_progress", bundleId: "personal", transactionId: "tx-1", phase: "applying" },
+          { kind: "in_progress", bundleId: "personal", transactionId: "tx-1", phase: "applying" },
+          { kind: "committed", bundleId: "personal", transactionId: "tx-1" },
+        ],
+        "applying"
+      );
+      await exhausted.composer.start();
+      expect(exhausted.composer.getState()).toMatchObject({
+        status: "blocked",
+        stoppedBundleId: "personal",
+        bundleResults: [
+          {
+            bundleId: "personal",
+            attentionKinds: ["forward_revision_apply_recovery_required"],
+          },
+        ],
+      });
+      const applyingObservation = exhausted.composer.getStudioObservation("personal");
+      expect(applyingObservation?.forwardRevisionReviews).toEqual([
+        {
+          state: "applying",
+          reviewRef,
+          snapshotRef,
+          pagePath: "Wiki/Forward.md",
+          updatedAt: 30,
+          acceptedAt: 20,
+          manualOverride: false,
+          applyPhase: "applying",
+        },
+      ]);
+      expect(JSON.stringify(applyingObservation)).not.toMatch(
+        /acceptedDecision|decisionDigest|transactionId|private/
+      );
+      expect(runnerStates.get(exhausted.runner)?.callCount).toBe(3);
+      expect(studioReads.get(exhausted.runtime)).toEqual(["personal"]);
+
+      await exhausted.composer.start();
+      expect(exhausted.composer.getState()).toMatchObject({ status: "observed_clear" });
+      expect(exhausted.composer.getStudioObservation("personal")).toBeUndefined();
+      expect(runnerStates.get(exhausted.runner)?.callCount).toBe(4);
+
+      const sticky = await createScenario(
+        [
+          {
+            kind: "recovery_required",
+            bundleId: "personal",
+            transactionId: "tx-2",
+            journalRevision: 4,
+            conflictCode: "file_state_conflict",
+          },
+        ],
+        "recovery_required"
+      );
+      await sticky.composer.start();
+      expect(sticky.composer.getStudioObservation("personal")?.forwardRevisionReviews).toEqual([
+        {
+          state: "recovery_required",
+          reviewRef,
+          snapshotRef,
+          pagePath: "Wiki/Forward.md",
+          updatedAt: 31,
+          acceptedAt: 20,
+          manualOverride: false,
+          conflictCode: "file_state_conflict",
+          actualKind: "file",
+          detectedAt: 31,
+        },
+      ]);
+      expect(runnerStates.get(sticky.runner)?.callCount).toBe(1);
+
+      const wrongOwner = await createScenario(
+        [{ kind: "in_progress", bundleId: "other", transactionId: "tx-3", phase: "applying" }],
+        "applying"
+      );
+      await wrongOwner.composer.start();
+      expect(wrongOwner.composer.getState()).toEqual({
+        generation: 1,
+        status: "diagnostic",
+        code: "active_transaction_owner_unconfigured",
+      });
+      expect(studioReads.get(wrongOwner.runtime)).toBeUndefined();
+
+      const mismatchedState = await createScenario(
+        [
+          {
+            kind: "recovery_required",
+            bundleId: "personal",
+            transactionId: "tx-4",
+            journalRevision: 2,
+            conflictCode: "file_state_conflict",
+          },
+        ],
+        "applying"
+      );
+      await mismatchedState.composer.start();
+      expect(mismatchedState.composer.getState()).toEqual({
+        generation: 1,
+        status: "diagnostic",
+        code: "runtime_state_invalid",
+      });
+    });
   });
 });

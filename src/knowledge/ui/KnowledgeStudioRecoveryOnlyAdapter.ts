@@ -10,7 +10,10 @@ import type {
   KnowledgeStudioReviewSubmissionResult,
   KnowledgeStudioSnapshot,
 } from "@/knowledge/ui/KnowledgeStudioController";
-import { KnowledgeStudioAdapterUnavailableError } from "@/knowledge/ui/KnowledgeStudioController";
+import {
+  createUnavailableKnowledgeStudioSnapshot,
+  KnowledgeStudioAdapterUnavailableError,
+} from "@/knowledge/ui/KnowledgeStudioController";
 import { sha256 } from "@/utils/hash";
 
 /** Narrow action authority supplied by the production recovery coordinator. */
@@ -102,8 +105,8 @@ function createRecoveryRevisionToken(
     bundleId: observation.bundleId,
     runtimeRevision: observation.runtimeRevision,
     reviewRevision: observation.reviewRevision,
-    queueRevision: observation.activity.revision,
-    items: observation.recovery.items.map((item) => ({
+    queueRevision: observation.activity?.revision ?? null,
+    items: (observation.recovery?.items ?? []).map((item) => ({
       id: item.id,
       status: item.status,
       changeSetId: item.changeSetId ?? null,
@@ -112,6 +115,19 @@ function createRecoveryRevisionToken(
       blockedReason: item.blockedReason ?? null,
       canContinue: item.actions.canContinue,
       canAbandon: item.actions.canAbandon,
+    })),
+    forwardRevisionReviews: observation.forwardRevisionReviews.map((review) => ({
+      reviewRef: review.reviewRef,
+      snapshotRef: review.snapshotRef,
+      state: review.state,
+      updatedAt: review.updatedAt,
+      ...(review.state === "applying"
+        ? { applyPhase: review.applyPhase }
+        : {
+            conflictCode: review.conflictCode,
+            actualKind: review.actualKind,
+            detectedAt: review.detectedAt,
+          }),
     })),
   };
   return `knowledge-recovery-${sha256(canonicalizeJson(material))}`;
@@ -128,8 +144,9 @@ function createRecoveryCapabilities(
     retryJob: false,
     reviewReject: false,
     reviewAccept: false,
-    recoveryContinue: observation.recovery.items.some((item) => item.actions.canContinue),
-    recoveryAbandon: observation.recovery.items.some((item) => item.actions.canAbandon),
+    forwardRevisionReview: false,
+    recoveryContinue: (observation.recovery?.items ?? []).some((item) => item.actions.canContinue),
+    recoveryAbandon: (observation.recovery?.items ?? []).some((item) => item.actions.canAbandon),
   });
 }
 
@@ -214,16 +231,44 @@ export class KnowledgeStudioRecoveryOnlyAdapter
       requestRecoveryStateChanged(state);
       throw createAbortError();
     }
+    const fallback = createUnavailableKnowledgeStudioSnapshot(bundleId);
+    const forwardRevisionBlocked = observation.forwardRevisionReviews.length > 0;
+    const forwardRevisionState = observation.forwardRevisionReviews[0]?.state;
+    const activity =
+      observation.activity ??
+      Object.freeze({
+        ...fallback.activity,
+        controls: Object.freeze({
+          state: forwardRevisionBlocked
+            ? ("recovery_required" as const)
+            : ("startup_recovery" as const),
+          canPause: false,
+          canResume: false,
+        }),
+      });
+    const recovery =
+      observation.recovery ??
+      Object.freeze({
+        bundleId,
+        runtimeRevision: observation.runtimeRevision,
+        items: Object.freeze([]),
+      });
     return Object.freeze({
       bundleId,
       revisionToken: createRecoveryRevisionToken(observation),
       availability: "ready" as const,
+      ...(forwardRevisionBlocked ? { preferredTab: "review" as const } : {}),
       commandCapabilities: createRecoveryCapabilities(observation),
-      activity: observation.activity,
+      activity,
       reviews: Object.freeze([]),
-      recovery: observation.recovery,
+      forwardRevisionReviews: observation.forwardRevisionReviews,
+      recovery,
       notice:
-        "Knowledge startup is paused for an explicit recovery decision. Ordinary ingest and Review commands remain disabled.",
+        forwardRevisionState === "applying"
+          ? "Knowledge startup paused after bounded recovery attempts for this durable Apply journal. New work remains disabled; reload the plugin or reopen Studio to run startup recovery again."
+          : forwardRevisionState === "recovery_required"
+            ? "Knowledge startup is blocked by a sticky exact-file conflict. Automatic Apply retry is disabled; preserve the current note and use the supported recovery path before restarting Knowledge work."
+            : "Knowledge startup is paused for an explicit recovery decision. Ordinary ingest and Review commands remain disabled.",
     });
   }
 

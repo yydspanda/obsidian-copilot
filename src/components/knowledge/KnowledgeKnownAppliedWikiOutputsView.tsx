@@ -3,6 +3,12 @@ import React, { useEffect, useId, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
+import type {
+  KnowledgeForwardRevisionProposalActionPort,
+  KnowledgeForwardRevisionProposalActionResult,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
+import { isKnowledgeForwardRevisionProposalReviewRef } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
 import type { KnowledgeAppliedWikiPageInspectionRequest } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 import {
   KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS,
@@ -10,6 +16,7 @@ import {
   type KnowledgeKnownAppliedWikiOutputComparison,
   type KnowledgeKnownAppliedWikiOutputDetail,
   type KnowledgeKnownAppliedWikiOutputRelation,
+  type KnowledgeKnownAppliedWikiOutputSummary,
   type KnowledgeKnownAppliedWikiOutputsPage,
   type KnowledgeKnownAppliedWikiOutputsPort,
   type KnowledgeKnownAppliedWikiOutputsSession,
@@ -26,6 +33,8 @@ export const KNOWLEDGE_KNOWN_OUTPUTS_VIEW_LIMITS = Object.freeze({
 export interface KnowledgeKnownAppliedWikiOutputsViewProps {
   readonly request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>;
   readonly history: KnowledgeKnownAppliedWikiOutputsPort;
+  readonly proposalAction?: KnowledgeForwardRevisionProposalActionPort;
+  readonly onPublished?: (reviewRef: string) => void;
   readonly onBack: () => void;
 }
 
@@ -45,18 +54,49 @@ type SessionState = Readonly<{
 
 type ChildState =
   | Readonly<{ kind: "list" }>
-  | Readonly<{ kind: "loading_detail"; outputRef: string }>
-  | Readonly<{ kind: "detail"; detail: Readonly<KnowledgeKnownAppliedWikiOutputDetail> }>
+  | Readonly<{
+      kind: "loading_detail";
+      summary: Readonly<KnowledgeKnownAppliedWikiOutputSummary>;
+    }>
+  | Readonly<{ kind: "detail"; selection: Readonly<DetailSelection> }>
   | Readonly<{
       kind: "loading_comparison";
-      detail: Readonly<KnowledgeKnownAppliedWikiOutputDetail>;
+      selection: Readonly<DetailSelection>;
     }>
   | Readonly<{
       kind: "comparison";
-      detail: Readonly<KnowledgeKnownAppliedWikiOutputDetail>;
+      selection: Readonly<DetailSelection>;
       comparison: Readonly<KnowledgeKnownAppliedWikiOutputComparison>;
     }>
   | Readonly<{ kind: "read_error"; outputRef: string; message: string }>;
+
+interface DetailSelection {
+  readonly summary: Readonly<KnowledgeKnownAppliedWikiOutputSummary>;
+  readonly detail: Readonly<KnowledgeKnownAppliedWikiOutputDetail>;
+}
+
+type ProposalState =
+  | Readonly<{ kind: "idle" }>
+  | Readonly<{
+      kind: "pending";
+      action: KnowledgeForwardRevisionProposalActionPort;
+      session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>;
+      outputRef: string;
+    }>
+  | Readonly<{
+      kind: "result";
+      action: KnowledgeForwardRevisionProposalActionPort;
+      session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>;
+      outputRef: string;
+      tone: "success" | "error";
+      message: string;
+    }>;
+
+interface ProposalFlight {
+  readonly action: KnowledgeForwardRevisionProposalActionPort;
+  readonly session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>;
+  readonly outputRef: string;
+}
 
 /** Counts exact LF-delimited rows up to a strict inclusive limit. */
 function hasAtMostLines(value: string, limit: number): boolean {
@@ -134,10 +174,41 @@ function formatReadFailure(kind: "stale" | "unavailable" | "too_large"): string 
   }
 }
 
-/** Reports whether a caught error represents deliberate cancellation. */
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+/** Maps a closed non-published proposal result to one bounded UI message. */
+function formatProposalFailure(
+  result: Exclude<KnowledgeForwardRevisionProposalActionResult, { kind: "published" }>
+): string {
+  switch (result.kind) {
+    case "stale":
+      return "This output reference is no longer current. Return to the list and try again.";
+    case "too_large":
+      return "This exact output is too large for a bounded proposal.";
+    case "unavailable":
+      return "A proposal could not be published. Reopen this current applied page and try again.";
+    case "not_eligible":
+      return result.reason === "current_not_applied"
+        ? "The current page is no longer proposal-eligible. Reopen known applied outputs."
+        : "This output already matches the current applied file.";
+  }
 }
+
+/** Reports whether one pending mutation belongs to the exact visible selection. */
+function isPendingProposal(
+  state: ProposalState,
+  action: KnowledgeForwardRevisionProposalActionPort | undefined,
+  session: Readonly<KnowledgeKnownAppliedWikiOutputsSession> | undefined,
+  outputRef: string | undefined
+): boolean {
+  return (
+    state.kind === "pending" &&
+    state.action === action &&
+    state.session === session &&
+    state.outputRef === outputRef
+  );
+}
+
+/** Reports whether a caught error represents deliberate cancellation. */
+const isAbortError = isKnowledgeAbortError;
 
 /** Checks the runtime container shape without widening its declared element type. */
 function isArrayContainer(value: unknown): boolean {
@@ -241,6 +312,8 @@ function ExactPlainText({ children }: { readonly children: string }): React.Reac
 export function KnowledgeKnownAppliedWikiOutputsView({
   request,
   history,
+  proposalAction,
+  onPublished,
   onBack,
 }: KnowledgeKnownAppliedWikiOutputsViewProps): React.ReactElement {
   const [sessionState, setSessionState] = useState<SessionState>();
@@ -249,8 +322,12 @@ export function KnowledgeKnownAppliedWikiOutputsView({
   const [childState, setChildState] = useState<ChildState>({ kind: "list" });
   const [pageLoading, setPageLoading] = useState(false);
   const [pageError, setPageError] = useState<string>();
+  const [proposalState, setProposalState] = useState<ProposalState>({ kind: "idle" });
   const generation = useRef(0);
   const abortRef = useRef<AbortController>();
+  const proposalGeneration = useRef(0);
+  const proposalAbortRef = useRef<AbortController>();
+  const proposalInFlightRef = useRef<Readonly<ProposalFlight>>();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const childHeadingRef = useRef<HTMLHeadingElement>(null);
   const idPrefix = useId();
@@ -267,6 +344,9 @@ export function KnowledgeKnownAppliedWikiOutputsView({
     const nextGeneration = generation.current + 1;
     generation.current = nextGeneration;
     abortRef.current?.abort();
+    proposalGeneration.current += 1;
+    proposalAbortRef.current?.abort();
+    proposalAbortRef.current = undefined;
     const abort = new AbortController();
     abortRef.current = abort;
     void history
@@ -323,9 +403,17 @@ export function KnowledgeKnownAppliedWikiOutputsView({
     () => () => {
       generation.current += 1;
       abortRef.current?.abort();
+      proposalGeneration.current += 1;
+      proposalAbortRef.current?.abort();
     },
     []
   );
+
+  useEffect(() => {
+    proposalGeneration.current += 1;
+    proposalAbortRef.current?.abort();
+    proposalAbortRef.current = undefined;
+  }, [proposalAction]);
 
   useEffect(() => {
     if (visibleChildState.kind === "list") headingRef.current?.focus();
@@ -401,7 +489,8 @@ export function KnowledgeKnownAppliedWikiOutputsView({
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
-    setChildState({ kind: "loading_detail", outputRef });
+    setProposalState({ kind: "idle" });
+    setChildState({ kind: "loading_detail", summary });
     void history
       .readOutput(session, outputRef, abort.signal)
       .then((result) => {
@@ -424,7 +513,10 @@ export function KnowledgeKnownAppliedWikiOutputsView({
               message: formatReadFailure("too_large"),
             });
           } else {
-            setChildState({ kind: "detail", detail: result.value });
+            setChildState({
+              kind: "detail",
+              selection: Object.freeze({ summary, detail: result.value }),
+            });
           }
           return;
         }
@@ -443,14 +535,30 @@ export function KnowledgeKnownAppliedWikiOutputsView({
   };
 
   /** Loads a bounded exact current-file comparison for the selected output. */
-  const openComparison = (detail: Readonly<KnowledgeKnownAppliedWikiOutputDetail>): void => {
-    if (!session || session.currentState === "missing") return;
+  const openComparison = (selection: Readonly<DetailSelection>): void => {
+    if (
+      !session ||
+      session.currentState === "missing" ||
+      isPendingProposal(proposalState, proposalAction, session, selection.detail.outputRef)
+    ) {
+      return;
+    }
+    const currentFlight = proposalInFlightRef.current;
+    if (
+      currentFlight !== undefined &&
+      currentFlight.action === proposalAction &&
+      currentFlight.session === session &&
+      currentFlight.outputRef === selection.detail.outputRef
+    ) {
+      return;
+    }
+    const { detail } = selection;
     const nextGeneration = generation.current + 1;
     generation.current = nextGeneration;
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
-    setChildState({ kind: "loading_comparison", detail });
+    setChildState({ kind: "loading_comparison", selection });
     void history
       .compareWithCurrent(session, detail.outputRef, abort.signal)
       .then((result) => {
@@ -478,7 +586,7 @@ export function KnowledgeKnownAppliedWikiOutputsView({
               message: formatReadFailure("too_large"),
             });
           } else {
-            setChildState({ kind: "comparison", detail, comparison: result.value });
+            setChildState({ kind: "comparison", selection, comparison: result.value });
           }
           return;
         }
@@ -503,19 +611,150 @@ export function KnowledgeKnownAppliedWikiOutputsView({
   /** Cancels a child read and returns to the current bounded list page. */
   const returnToList = (): void => {
     abortRef.current?.abort();
+    proposalGeneration.current += 1;
+    proposalAbortRef.current?.abort();
+    proposalAbortRef.current = undefined;
     generation.current += 1;
+    setProposalState({ kind: "idle" });
     setChildState({ kind: "list" });
   };
 
+  /** Cancels every local generation before returning to the parent inspector. */
+  const returnToInspector = (): void => {
+    generation.current += 1;
+    abortRef.current?.abort();
+    proposalGeneration.current += 1;
+    proposalAbortRef.current?.abort();
+    proposalAbortRef.current = undefined;
+    onBack();
+  };
+
+  /** Publishes one opaque eligible selection without passing its rendered body. */
+  const proposeOutput = (selection: Readonly<DetailSelection>): void => {
+    if (
+      !session ||
+      !proposalAction ||
+      session.currentState !== "applied" ||
+      selection.summary.relation !== "earlier_known" ||
+      selection.summary.outputRef !== selection.detail.outputRef ||
+      isPendingProposal(proposalState, proposalAction, session, selection.detail.outputRef)
+    ) {
+      return;
+    }
+    const currentFlight = proposalInFlightRef.current;
+    if (
+      currentFlight !== undefined &&
+      currentFlight.action === proposalAction &&
+      currentFlight.session === session &&
+      currentFlight.outputRef === selection.detail.outputRef
+    ) {
+      return;
+    }
+    const nextGeneration = proposalGeneration.current + 1;
+    proposalGeneration.current = nextGeneration;
+    proposalAbortRef.current?.abort();
+    const abort = new AbortController();
+    proposalAbortRef.current = abort;
+    const outputRef = selection.detail.outputRef;
+    const action = proposalAction;
+    const proposalSession = session;
+    const flight = Object.freeze({ action, session: proposalSession, outputRef });
+    proposalInFlightRef.current = flight;
+    setProposalState({ kind: "pending", action, session: proposalSession, outputRef });
+    void action
+      .proposeKnownOutput(proposalSession, outputRef, abort.signal)
+      .then((result) => {
+        if (
+          result.kind === "published" &&
+          isKnowledgeForwardRevisionProposalReviewRef(result.reviewRef)
+        ) {
+          if (!abort.signal.aborted && proposalGeneration.current === nextGeneration) {
+            setProposalState({
+              kind: "result",
+              action,
+              session: proposalSession,
+              outputRef,
+              tone: "success",
+              message: "Proposal published. Open Studio Review to inspect and decide it.",
+            });
+            try {
+              onPublished?.(result.reviewRef);
+            } catch {
+              // Durable publication remains successful when current presentation navigation fails.
+            }
+          }
+          return;
+        }
+        if (abort.signal.aborted || proposalGeneration.current !== nextGeneration) return;
+        if (result.kind === "published") {
+          setProposalState({
+            kind: "result",
+            action,
+            session: proposalSession,
+            outputRef,
+            tone: "error",
+            message:
+              "A proposal was published but its Studio Review reference could not be verified.",
+          });
+          return;
+        }
+        setProposalState({
+          kind: "result",
+          action,
+          session: proposalSession,
+          outputRef,
+          tone: "error",
+          message: formatProposalFailure(result),
+        });
+      })
+      .catch((error: unknown) => {
+        if (
+          abort.signal.aborted ||
+          proposalGeneration.current !== nextGeneration ||
+          isAbortError(error)
+        ) {
+          return;
+        }
+        setProposalState({
+          kind: "result",
+          action,
+          session: proposalSession,
+          outputRef,
+          tone: "error",
+          message:
+            "A proposal could not be published. Reopen this current applied page and try again.",
+        });
+      })
+      .finally(() => {
+        if (proposalInFlightRef.current === flight) proposalInFlightRef.current = undefined;
+      });
+  };
+
   if (visibleChildState.kind !== "list") {
-    const detail =
+    const selection =
       visibleChildState.kind === "detail" ||
       visibleChildState.kind === "loading_comparison" ||
       visibleChildState.kind === "comparison"
-        ? visibleChildState.detail
+        ? visibleChildState.selection
         : undefined;
+    const detail = selection?.detail;
+    const visibleProposalState =
+      detail &&
+      proposalState.kind !== "idle" &&
+      proposalState.action === proposalAction &&
+      proposalState.session === session &&
+      proposalState.outputRef === detail.outputRef
+        ? proposalState
+        : ({ kind: "idle" } as const);
+    const proposalPending = visibleProposalState.kind === "pending";
+    const proposalEligible =
+      proposalAction !== undefined &&
+      session?.currentState === "applied" &&
+      selection?.summary.relation === "earlier_known";
     return (
-      <section aria-busy={visibleChildState.kind.startsWith("loading_") || undefined}>
+      <section
+        aria-busy={visibleChildState.kind.startsWith("loading_") || proposalPending || undefined}
+      >
         <div className="tw-mb-3 tw-flex tw-items-center tw-justify-between tw-gap-2">
           <Button type="button" variant="ghost" onClick={returnToList}>
             Back to known outputs
@@ -559,10 +798,45 @@ export function KnowledgeKnownAppliedWikiOutputsView({
                 but there is no current file to compare.
               </p>
             ) : (
-              <Button type="button" variant="secondary" onClick={() => openComparison(detail)}>
+              <Button
+                disabled={proposalPending}
+                type="button"
+                variant="secondary"
+                onClick={() => selection && openComparison(selection)}
+              >
                 Compare with current file
               </Button>
             )}
+            {proposalEligible && selection ? (
+              <div className="tw-space-y-2 tw-rounded-lg tw-border tw-border-solid tw-border-border tw-p-3">
+                <p className="tw-m-0 tw-text-xs tw-text-muted" role="note">
+                  This creates a pending Studio Review proposal. It does not change the current
+                  file.
+                </p>
+                <Button
+                  disabled={proposalPending}
+                  type="button"
+                  onClick={() => proposeOutput(selection)}
+                >
+                  {proposalPending ? (
+                    <Loader2 aria-hidden="true" className="tw-size-4 tw-animate-spin" />
+                  ) : null}
+                  {proposalPending ? "Proposing…" : "Propose this output"}
+                </Button>
+                {visibleProposalState.kind === "result" ? (
+                  <p
+                    className={
+                      visibleProposalState.tone === "success"
+                        ? "tw-m-0 tw-text-xs tw-text-muted"
+                        : "tw-m-0 tw-text-xs tw-text-error"
+                    }
+                    role={visibleProposalState.tone === "success" ? "status" : "alert"}
+                  >
+                    {visibleProposalState.message}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -597,7 +871,7 @@ export function KnowledgeKnownAppliedWikiOutputsView({
 
   return (
     <section aria-busy={currentSessionState === undefined || pageLoading || undefined}>
-      <Button className="tw-mb-3" type="button" variant="ghost" onClick={onBack}>
+      <Button className="tw-mb-3" type="button" variant="ghost" onClick={returnToInspector}>
         Back to current page
       </Button>
       <h3 className="tw-m-0 tw-text-base tw-font-semibold" ref={headingRef} tabIndex={-1}>

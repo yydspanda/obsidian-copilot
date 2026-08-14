@@ -6,6 +6,8 @@ import type { Root } from "react-dom/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { KnowledgeKnownAppliedWikiOutputsView } from "@/components/knowledge/KnowledgeKnownAppliedWikiOutputsView";
+import { isKnowledgeAbortError } from "@/knowledge/errors/abortError";
+import type { KnowledgeForwardRevisionProposalActionPort } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
 import type {
   KnowledgeAppliedWikiEvidenceOpenResult,
   KnowledgeAppliedWikiPageInspectionRequest,
@@ -29,6 +31,8 @@ export interface KnowledgeAppliedWikiInspectorContentProps {
   readonly request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>;
   readonly inspector: KnowledgeAppliedWikiPageInspectorPort;
   readonly knownOutputs?: KnowledgeKnownAppliedWikiOutputsPort;
+  readonly proposalAction?: KnowledgeForwardRevisionProposalActionPort;
+  readonly onPublished?: (reviewRef: string) => void;
   readonly onClose: () => void;
 }
 
@@ -124,9 +128,7 @@ function formatRelation(relation: KnowledgeReviewEvidenceSummary["relation"]): s
 }
 
 /** Reports whether a failure is intentional cancellation. */
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
+const isAbortError = isKnowledgeAbortError;
 
 interface EvidenceRowProps {
   readonly evidence: Readonly<KnowledgeReviewEvidenceSummary>;
@@ -214,6 +216,8 @@ export function KnowledgeAppliedWikiInspectorContent({
   request,
   inspector,
   knownOutputs,
+  proposalAction,
+  onPublished,
   onClose,
 }: KnowledgeAppliedWikiInspectorContentProps): React.ReactElement {
   const pagePath = request.pagePath;
@@ -331,8 +335,10 @@ export function KnowledgeAppliedWikiInspectorContent({
       <div className="tw-flex tw-max-h-[75vh] tw-flex-col tw-gap-4 tw-overflow-y-auto">
         <KnowledgeKnownAppliedWikiOutputsView
           history={knownOutputs}
+          proposalAction={proposalAction}
           request={Object.freeze({ pagePath })}
           onBack={() => setView("overview")}
+          onPublished={onPublished}
         />
         <div className="tw-flex tw-justify-end">
           <Button type="button" variant="secondary" onClick={onClose}>
@@ -500,6 +506,8 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
   private readonly inspector: KnowledgeAppliedWikiPageInspectorPort;
   private readonly onClosed?: (modal: KnowledgeAppliedWikiInspectorModal) => void;
   private readonly knownOutputs?: KnowledgeKnownAppliedWikiOutputsPort;
+  private readonly proposalAction?: KnowledgeForwardRevisionProposalActionPort;
+  private readonly onPublished?: (reviewRef: string) => void;
 
   /** Captures one value-only page request and stable inspector capability. */
   constructor(
@@ -507,16 +515,23 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
     request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>,
     inspector: KnowledgeAppliedWikiPageInspectorPort,
     onClosed?: (modal: KnowledgeAppliedWikiInspectorModal) => void,
-    knownOutputs?: KnowledgeKnownAppliedWikiOutputsPort
+    knownOutputs?: KnowledgeKnownAppliedWikiOutputsPort,
+    proposalAction?: KnowledgeForwardRevisionProposalActionPort,
+    onPublished?: (reviewRef: string) => void
   ) {
     super(app);
     if (onClosed !== undefined && typeof onClosed !== "function") {
       throw new TypeError("Invalid applied Knowledge page inspector close callback");
     }
+    if (onPublished !== undefined && typeof onPublished !== "function") {
+      throw new TypeError("Invalid forward revision proposal publication callback");
+    }
     this.request = snapshotKnowledgeAppliedWikiPageInspectionRequest(request);
     this.inspector = inspector;
     this.onClosed = onClosed;
     this.knownOutputs = knownOutputs;
+    this.proposalAction = proposalAction;
+    this.onPublished = onPublished;
   }
 
   /** Mounts the inspector into this Modal's owning document through the shared App root. */
@@ -526,8 +541,10 @@ export class KnowledgeAppliedWikiInspectorModal extends Modal {
       <KnowledgeAppliedWikiInspectorContent
         inspector={this.inspector}
         knownOutputs={this.knownOutputs}
+        proposalAction={this.proposalAction}
         request={this.request}
         onClose={() => this.close()}
+        onPublished={this.onPublished}
       />
     );
   }

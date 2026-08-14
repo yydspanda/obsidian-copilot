@@ -1,6 +1,6 @@
 # Review 与 Apply
 
-> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-11。
+> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-14。
 
 ## 本页目标
 
@@ -28,6 +28,26 @@
 - 新提案正在完成持久交接，稍后刷新才会出现。
 
 如果 Activity 已 `Completed` 且没有失败或 Recovery，优先把空 Review 理解为 `no_changes`，不要反复导入同一资料。
+
+## 从已应用历史版本提出新 Review
+
+在已应用 Wiki 页的检查窗口中，`Known applied outputs` 会列出系统能够由持久记录验证的已知输出。当前页仍精确匹配最近一次应用结果、所选项是较早的已知输出、并且 Studio 只有一个可路由的 Knowledge Bundle 时，详情会显示 `Propose this output`。
+
+这个动作不是 Restore、Revert 或 Rollback，也不会立即修改 Wiki。它只把所选历史正文发布为一条新的 pending Forward Review，然后用不含写权限的引用打开 Knowledge Studio 的 `Review`。快速重复点击只会合并为同一次提案与一次导航；若插件换代，旧窗口不能把提案发到新运行代。
+
+在这类 Review 中：
+
+1. 重新阅读当前正文与历史候选的差异；
+2. 选择整页接受、允许时逐块接受、人工编辑，或拒绝；
+3. 点击 `Validate and apply selection`。系统先持久保存接受决定，再立即用当前 Source、Schema、引用、Manifest 和目标文件执行新的确定性核对；只有核对通过才创建 crash-safe journal 并尝试 exact-file 写入。拒绝不会写 Wiki；
+4. 若接受决定已经持久保存，但 journal 因 reload、disable、依赖漂移或暂时故障尚未开始，页面会显示 `Accepted revision ready to apply`。这个状态不会因为关闭视图或重新加载而消失；再次点击 `Validate and apply` 会重试当前核对，不会重做或替换已经保存的决定；
+5. 若 journal 已经开始，则页面改为 `Applying accepted revision` 或需要人工处理的 recovery 状态，而不是回到 pending Review。
+
+Forward Review 与普通编译 Review 使用不同的持久协议，但按钮语义相同：接受操作会进入受控 Apply。历史输出提案会先持久保存接受决定，再进行一次全新的确定性复核；若这两个阶段之间中断，`Accepted revision ready to apply` 提供显式重试入口。任何外部文件变化都会阻断覆盖。
+
+若同时配置多个 Bundle，当前 Studio 不提供可靠的跨 Bundle 导航，因此 `Propose this output` 保持不可用；查看历史输出本身仍是只读的。
+
+首版对同一 Wiki 页只支持一个未被拒绝的 Forward revision lifecycle。已经接受但永久无法通过新鲜核对的条目目前不能在界面中 abandon；已经提交的 lifecycle 也不能直接再叠加另一条历史输出提案。它们会保持可见并 fail closed，而不是被隐藏或强制覆盖。先恢复导致核对失败的 Source、Schema、Manifest 或文件条件；若无法恢复，请保留备份并使用受支持的故障排查流程，绝不要直接删除私有 Review、journal、overlay 或 ledger。
 
 ## 操作步骤：打开提案
 
@@ -140,6 +160,8 @@ OKF、Citations、Links 显示 `valid` 只说明机器可验证的结构符合�
 - **应该**保持 Obsidian 打开，等待持久确认完成。
 
 Apply 是受控事务：系统会重新确认提案、目标内容和持久状态仍然匹配。出现漂移时会阻断，而不是静默覆盖你的文件。
+
+Forward Apply 若显示 `Applying accepted revision`，说明 journal 已持久化，但当前运行代未必仍有后台任务继续推进；长时间停留时重新加载插件，让 startup recovery 继续核对。若显示 `Forward Apply needs recovery`，系统已经遇到不能安全猜测的精确文件冲突：当前界面只读、不会自动重试或覆盖，重新加载也不会自行清除 sticky recovery。先备份 Vault，再按 [维护与恢复](maintenance-and-recovery.md) 的 Forward recovery 说明处理。
 
 ## 你应该看到什么
 
