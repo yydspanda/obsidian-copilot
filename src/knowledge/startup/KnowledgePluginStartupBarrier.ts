@@ -181,6 +181,7 @@ const SAFE_RECOVERY_ATTENTION_KINDS = new Set([
   "accepted_apply_blocked",
   "accepted_not_started",
   "commit_finalizing",
+  "forward_revision_apply_recovery_required",
   "global_transaction_observed",
   "no_journal_decision_required",
   "queue_commit_pending_ack",

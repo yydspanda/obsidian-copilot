@@ -9,6 +9,7 @@ import {
   type KnowledgeProjectionValidator,
   type SourceArtifactResolver,
 } from "@/knowledge/changeset/ChangeSetValidator";
+import { KnowledgeProductionForwardRevisionApplyTransactionRunner } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import {
   IngestQueue,
   type IngestExecutionContext,
@@ -47,6 +48,7 @@ import {
 } from "@/knowledge/ui/recoveryModel";
 
 const MAX_CONFIGURED_BUNDLES = 10_000;
+const MAX_FORWARD_REVISION_RECOVERY_ATTEMPTS = 3;
 
 /** Exact production dependencies captured by one recovery-only lifecycle. */
 export interface KnowledgeProductionRecoveryComposerInput {
@@ -56,6 +58,8 @@ export interface KnowledgeProductionRecoveryComposerInput {
   vault: Vault;
   /** Complete strict Bundle set captured from one Projects generation. */
   bundles: readonly KnowledgeBundleConfig[];
+  /** Genuine same-Runtime/Vault runner for an already-durable forward Apply journal. */
+  forwardRevisionApplyRecovery?: KnowledgeProductionForwardRevisionApplyTransactionRunner;
 }
 
 /** Closed diagnostic vocabulary that never includes raw Runtime or Vault values. */
@@ -69,8 +73,13 @@ export type KnowledgeProductionRecoveryDiagnosticCode =
 export interface KnowledgeProductionRecoveryBundleResult {
   bundleId: string;
   disposition: KnowledgeStartupGateDisposition;
-  attentionKinds: readonly KnowledgeStartupAttention["kind"][];
+  attentionKinds: readonly KnowledgeProductionRecoveryAttentionKind[];
 }
+
+/** Closed recovery evidence accepted by the plugin startup barrier. */
+export type KnowledgeProductionRecoveryAttentionKind =
+  | KnowledgeStartupAttention["kind"]
+  | "forward_revision_apply_recovery_required";
 
 /** Narrow stopped-Bundle projection retained only for the recovery Studio delegate. */
 export interface KnowledgeProductionRecoveryStudioObservation {
@@ -159,6 +168,7 @@ interface KnowledgeProductionRecoveryComposition {
   transaction: ChangeSetTransaction;
   gate: KnowledgeStartupGate;
   release: KnowledgeStartupReleaseCoordinator;
+  forwardRevisionApplyRecovery?: KnowledgeProductionForwardRevisionApplyTransactionRunner;
 }
 
 interface KnowledgeProductionRecoveryInternalState {
@@ -225,6 +235,19 @@ function readDataProperty(value: unknown, key: string): unknown {
   }
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+    throw new KnowledgeProductionRecoveryInputError();
+  }
+  return descriptor.value;
+}
+
+/** Reads one optional enumerable own data property without evaluating accessors. */
+function readOptionalDataProperty(value: unknown, key: string): unknown {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    throw new KnowledgeProductionRecoveryInputError();
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor) return undefined;
+  if (!("value" in descriptor) || !descriptor.enumerable) {
     throw new KnowledgeProductionRecoveryInputError();
   }
   return descriptor.value;
@@ -306,8 +329,24 @@ function composeRecovery(
   const runtime = readDataProperty(input, "runtime");
   const vault = readDataProperty(input, "vault");
   const bundles = snapshotBundles(readDataProperty(input, "bundles"));
+  const forwardRevisionApplyRecovery = readOptionalDataProperty(
+    input,
+    "forwardRevisionApplyRecovery"
+  );
   if (!(runtime instanceof KnowledgeRuntimeStore) || typeof vault !== "object" || vault === null) {
     throw new KnowledgeProductionRecoveryInputError();
+  }
+  if (forwardRevisionApplyRecovery !== undefined) {
+    KnowledgeProductionForwardRevisionApplyTransactionRunner.assert(forwardRevisionApplyRecovery);
+    if (
+      !KnowledgeProductionForwardRevisionApplyTransactionRunner.matchesRuntimeAndVault(
+        forwardRevisionApplyRecovery,
+        runtime,
+        vault
+      )
+    ) {
+      throw new KnowledgeProductionRecoveryInputError();
+    }
   }
 
   const queue = new IngestQueue(
@@ -345,6 +384,7 @@ function composeRecovery(
     transaction,
     gate,
     release,
+    ...(forwardRevisionApplyRecovery === undefined ? {} : { forwardRevisionApplyRecovery }),
   });
 }
 
@@ -429,12 +469,58 @@ function createStudioObservation(
   });
 }
 
+/**
+ * Converges an already-durable forward Apply before any legacy Bundle Gate runs.
+ *
+ * A transient unchanged-before result receives a bounded immediate retry. A
+ * sticky conflict or exhausted retry remains globally blocked, while an exact
+ * commit proceeds to the ordinary owner-first recovery sequence.
+ */
+async function runForwardRevisionApplyRecovery(
+  composition: KnowledgeProductionRecoveryComposition,
+  generation: number,
+  isCurrent: () => boolean
+): Promise<KnowledgeProductionRecoveryGenerationResult | null | undefined> {
+  const runner = composition.forwardRevisionApplyRecovery;
+  if (!runner) return null;
+  const signal = new AbortController().signal;
+  for (let attempt = 0; attempt < MAX_FORWARD_REVISION_RECOVERY_ATTEMPTS; attempt += 1) {
+    if (!isCurrent()) return undefined;
+    const result = await runner.recoverActive(signal);
+    if (!isCurrent()) return undefined;
+    if (result.kind === "idle") return null;
+    if (!composition.bundlesById.has(result.bundleId)) {
+      throw new KnowledgeProductionRecoveryActiveOwnerError();
+    }
+    if (result.kind === "committed") return null;
+    if (result.kind === "in_progress" && attempt + 1 < MAX_FORWARD_REVISION_RECOVERY_ATTEMPTS) {
+      continue;
+    }
+    const summary = Object.freeze({
+      bundleId: result.bundleId,
+      disposition: "blocked" as const,
+      attentionKinds: Object.freeze(["forward_revision_apply_recovery_required" as const]),
+    });
+    return {
+      state: freezeState({
+        generation,
+        status: "blocked",
+        stoppedBundleId: result.bundleId,
+        bundleResults: Object.freeze([summary]),
+      }),
+    };
+  }
+  throw new KnowledgeProductionRecoveryRuntimeStateError();
+}
+
 /** Runs only the startup Gate and stops at the first non-clear Bundle. */
 async function runRecoveryGeneration(
   composition: KnowledgeProductionRecoveryComposition,
   generation: number,
   isCurrent: () => boolean
 ): Promise<KnowledgeProductionRecoveryGenerationResult | undefined> {
+  const forwardResult = await runForwardRevisionApplyRecovery(composition, generation, isCurrent);
+  if (forwardResult !== null) return forwardResult;
   const bundles = await orderBundlesForRecovery(composition);
   if (!isCurrent()) return undefined;
   const bundleResults: KnowledgeProductionRecoveryBundleResult[] = [];

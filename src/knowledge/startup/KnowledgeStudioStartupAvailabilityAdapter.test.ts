@@ -340,6 +340,15 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
       }),
       expectedNotice: "protect existing notes",
     },
+    {
+      state: createState({
+        status: "recovery_blocked",
+        bundleIds: Object.freeze(["personal"]),
+        recoveryBundleId: "personal",
+        attentionKinds: Object.freeze(["forward_revision_apply_recovery_required"]),
+      }),
+      expectedNotice: "reviewed Wiki revision",
+    },
   ])("selects an exact unavailable Bundle for $state.status", async ({ state, expectedNotice }) => {
     const port = new DelegatingKnowledgeStudioPort();
     const sessions = new KnowledgeStudioSessionStore("Waiting.");
@@ -369,6 +378,22 @@ describe("KnowledgeStudioStartupAvailabilityAdapter", () => {
     expect(notice).toContain("unsafe actions remain disabled");
     expect(notice).not.toContain("continue eligible work");
     expect(notice).not.toContain("abandon");
+  });
+
+  it("gives a forward Apply conflict content-free blocked guidance", () => {
+    const state = createState({
+      status: "recovery_blocked",
+      bundleIds: Object.freeze(["personal"]),
+      recoveryBundleId: "personal",
+      attentionKinds: Object.freeze(["forward_revision_apply_recovery_required"]),
+    });
+
+    const notice = getKnowledgeStartupNotice(state);
+
+    expect(notice).toContain("reviewed Wiki revision");
+    expect(notice).toContain("No new AI or Wiki work will run");
+    expect(notice).not.toContain("Open Recovery");
+    expect(notice).not.toContain("transaction");
   });
 
   it("publishes the delegate before session observers receive an exact Bundle", () => {

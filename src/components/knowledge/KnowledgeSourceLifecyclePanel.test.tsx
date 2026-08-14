@@ -127,6 +127,20 @@ describe("KnowledgeSourceLifecyclePanel", () => {
     expect(within(blockedRow).queryByRole("button", { name: /Remove source/ })).toBeNull();
   });
 
+  it("explains that an active reviewed Wiki revision must be resolved before removal", () => {
+    const overlayBlocked = createReady({
+      actions: { canCheckAgain: false, canRemove: false },
+      retirementBlockers: ["forward_revision_overlay_active"],
+    });
+
+    const rendered = renderPanel(createModel([overlayBlocked]));
+
+    expect(rendered.getByText(/owns an active reviewed Wiki revision/i).textContent).toContain(
+      "Apply or supersede that revision"
+    );
+    expect(rendered.queryByText(/Clear pending Activity, Review, or Recovery work/)).toBeNull();
+  });
+
   it("passes only sourceId plus a revocable signal and disables every concurrent action", async () => {
     const deferred = createDeferred<void>();
     const onCheckAgain = jest.fn<Promise<void>, [string, AbortSignal]>(() => deferred.promise);

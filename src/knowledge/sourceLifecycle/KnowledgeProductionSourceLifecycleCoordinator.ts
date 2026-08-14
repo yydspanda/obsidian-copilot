@@ -43,6 +43,7 @@ interface RetirementReceiptProjection {
 
 const RETIREMENT_BLOCKERS = new Set<KnowledgeSourceRetirementBlocker>([
   "active_transaction",
+  "forward_revision_overlay_active",
   "bundle_work_active",
   "bundle_rerun_pending",
   "bundle_review_pending",

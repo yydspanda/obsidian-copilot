@@ -25,6 +25,7 @@ export interface KnowledgeSourceRemovalConfirmation {
 /** Stable blockers that can deny an otherwise requested source retirement. */
 export type KnowledgeSourceLifecycleRetirementBlocker =
   | "active_transaction"
+  | "forward_revision_overlay_active"
   | "bundle_work_active"
   | "bundle_rerun_pending"
   | "bundle_review_pending"
@@ -94,6 +95,7 @@ const ISSUE_REASONS = new Set<KnowledgeSourceLifecycleIssueReason>([
 
 const RETIREMENT_BLOCKERS = new Set<KnowledgeSourceLifecycleRetirementBlocker>([
   "active_transaction",
+  "forward_revision_overlay_active",
   "bundle_work_active",
   "bundle_rerun_pending",
   "bundle_review_pending",

@@ -733,7 +733,13 @@ export default class CopilotPlugin extends Plugin {
           publishKnowledgeSetupThenStudioAuthority(
             state,
             (nextState) => this.publishKnowledgeSetupReadiness(nextState),
-            (nextState) => this.knowledgeStudioStartupAvailability.setRecoveryReady(nextState)
+            (nextState) => {
+              if (nextState.attentionKinds.includes("forward_revision_apply_recovery_required")) {
+                this.knowledgeStudioStartupAvailability.setUnavailable(nextState);
+                return;
+              }
+              this.knowledgeStudioStartupAvailability.setRecoveryReady(nextState);
+            }
           );
         },
         setSourceRecoveryReady: (state) => {
@@ -771,12 +777,35 @@ export default class CopilotPlugin extends Plugin {
       return result;
     }
     this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(result.admission);
-    const recovery = this.createKnowledgeProductionRecoveryPort(result.admission, signal);
+    const runtime = this.knowledgeRuntime;
+    if (!runtime) {
+      throw new DOMException("The operation was aborted", "AbortError");
+    }
+    const observationCandidate = new KnowledgeProductionObservationComposer({
+      app: this.app,
+      runtime,
+      workflowLease: result.admission.workflowLease,
+      workflowCompositionClaim: result.admission.workflowCompositionClaim,
+      notificationSink: this.knowledgeSourceIssueNotificationSink,
+    });
+    let recovery: KnowledgePluginRecoveryStartupPort | undefined;
     try {
-      const observation = this.createKnowledgeProductionObservationPort(result.admission, signal);
+      const forwardRevisionApplyRecovery =
+        observationCandidate.createForwardRevisionApplyRecoveryRunner();
+      recovery = this.createKnowledgeProductionRecoveryPort(
+        result.admission,
+        signal,
+        forwardRevisionApplyRecovery
+      );
+      const observation = this.createKnowledgeProductionObservationPort(
+        result.admission,
+        signal,
+        observationCandidate
+      );
       return { kind: "configured", bundleIds: result.bundleIds, recovery, observation };
     } catch (error) {
-      recovery.close();
+      recovery?.close();
+      observationCandidate.close();
       throw error;
     }
   }
@@ -790,11 +819,15 @@ export default class CopilotPlugin extends Plugin {
    *
    * @param admission - Current generation's strict Bundle owners
    * @param startupSignal - Outer startup generation cancellation
+   * @param forwardRevisionApplyRecovery - Genuine pre-Gate commit-wins recovery runner
    * @returns One-shot recovery capability consumed and closed by the startup barrier
    */
   private createKnowledgeProductionRecoveryPort(
     admission: KnowledgePluginProductionPreflightAdmission,
-    startupSignal: AbortSignal
+    startupSignal: AbortSignal,
+    forwardRevisionApplyRecovery: ReturnType<
+      KnowledgeProductionObservationComposer["createForwardRevisionApplyRecoveryRunner"]
+    >
   ): KnowledgePluginRecoveryStartupPort {
     const runtime = this.knowledgeRuntime;
     if (!runtime) {
@@ -804,6 +837,7 @@ export default class CopilotPlugin extends Plugin {
       runtime,
       vault: this.app.vault,
       bundles: admission.owners.map(({ config }) => config),
+      forwardRevisionApplyRecovery,
     });
     this.knowledgeProductionRecovery = candidate;
     try {
@@ -896,22 +930,23 @@ export default class CopilotPlugin extends Plugin {
     }
   }
 
-  /** Creates the long-lived observation port bound to the exact preflight generation. */
+  /**
+   * Creates the long-lived observation port bound to the exact preflight generation.
+   *
+   * @param admission - Current generation's strict Bundle owners
+   * @param startupSignal - Outer startup generation cancellation
+   * @param candidate - Already-composed owner of the paired startup recovery runner
+   * @returns Observation startup boundary retained after recovery is clear
+   */
   private createKnowledgeProductionObservationPort(
     admission: KnowledgePluginProductionPreflightAdmission,
-    startupSignal: AbortSignal
+    startupSignal: AbortSignal,
+    candidate: KnowledgeProductionObservationComposer
   ): KnowledgePluginObservationStartupPort {
     const runtime = this.knowledgeRuntime;
     if (!runtime) {
       throw new DOMException("The operation was aborted", "AbortError");
     }
-    const candidate = new KnowledgeProductionObservationComposer({
-      app: this.app,
-      runtime,
-      workflowLease: admission.workflowLease,
-      workflowCompositionClaim: admission.workflowCompositionClaim,
-      notificationSink: this.knowledgeSourceIssueNotificationSink,
-    });
     const releaseComposer = new KnowledgeProductionRecoveryComposer({
       runtime,
       vault: this.app.vault,

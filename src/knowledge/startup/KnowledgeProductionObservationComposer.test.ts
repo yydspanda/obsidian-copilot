@@ -22,12 +22,14 @@ import {
 import { KnowledgeProductionChatCaptureCoordinator } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import { KnowledgeForwardRevisionValidationCoordinatorError } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
+import { KnowledgeProductionForwardRevisionApplyTransactionRunner } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import type { KnowledgeProductionPreflightSettingsInput } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import { parseIngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY } from "@/knowledge/manifest/NoChangesManifestCommit";
 import { createSourceContentHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
+import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import {
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
@@ -40,6 +42,7 @@ import {
   type KnowledgePluginProductionPreflightAdmission,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
 import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import { KnowledgeProductionRecoveryComposer } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
 import { DelegatingKnowledgeAppliedWikiPageInspectorPort } from "@/knowledge/wiki/DelegatingKnowledgeAppliedWikiPageInspectorPort";
 import { KnowledgeAppliedWikiPageInspectorGenerationLease } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorGenerationLease";
 import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
@@ -51,7 +54,10 @@ import {
 } from "@/knowledge/startup/KnowledgePluginStartupBarrier";
 import { createSourceObservationPreReleaseResult } from "@/knowledge/startup/KnowledgeSourceObservationPreRelease";
 import { KnowledgeStudioReadGenerationLease } from "@/knowledge/startup/KnowledgeStudioReadGenerationLease";
-import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import {
+  createKnowledgeProductionPipelineResources,
+  type KnowledgeProductionPipelineResources,
+} from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import {
   createKnowledgeProductionWorkflowExecutionPairing,
   type KnowledgeProductionWorkflowExecutionRuntimeClaim,
@@ -331,10 +337,12 @@ class PostCommitThrowRuntimeFile extends KnowledgeExecutionMemoryRuntimeFile {
  *
  * @param fetchPort - Test model transport that observation must not call
  * @param bundle - Bundle projected into the production preflight snapshot
+ * @param createResources - Exact parser/profile registry captured by preflight
  */
 async function createAdmission(
   fetchPort: KnowledgeDeepSeekFetchPort,
-  bundle: KnowledgeBundleConfig = createBundle()
+  bundle: KnowledgeBundleConfig = createBundle(),
+  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
 ): Promise<{
   lifecycle: KnowledgePluginProductionPreflightLifecycle;
   admission: KnowledgePluginProductionPreflightAdmission;
@@ -355,7 +363,7 @@ async function createAdmission(
     ],
     getSettings: () => createSettings(),
     fetchPort,
-    createResources: () => createKnowledgeProductionPipelineResources(),
+    createResources,
   });
   const result = await lifecycle.load(new AbortController().signal);
   if (result.kind !== "configured") {
@@ -399,6 +407,137 @@ describe("KnowledgeProductionObservationComposer", () => {
     } else {
       Reflect.deleteProperty(window.crypto, "randomUUID");
     }
+  });
+
+  it("mints one genuine forward recovery runner before observation without fetch or Vault reads", async () => {
+    const fetchPort = createFetchPort();
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+    const runtime = await createRuntime(runtimeClaim);
+    const vault = new ProductionVaultHarness();
+    const app = vault.createApp();
+    const composer = new KnowledgeProductionObservationComposer({
+      app,
+      runtime,
+      workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
+    });
+
+    const runner = composer.createForwardRevisionApplyRecoveryRunner();
+
+    expect(Reflect.ownKeys(runner)).toEqual([]);
+    expect(Object.isFrozen(runner)).toBe(true);
+    expect(() =>
+      KnowledgeProductionForwardRevisionApplyTransactionRunner.assert(runner)
+    ).not.toThrow();
+    expect(
+      KnowledgeProductionForwardRevisionApplyTransactionRunner.matchesRuntimeAndVault(
+        runner,
+        runtime,
+        app.vault
+      )
+    ).toBe(true);
+    await expect(runner.recoverActive(new AbortController().signal)).resolves.toEqual({
+      kind: "idle",
+    });
+    const recovery = new KnowledgeProductionRecoveryComposer({
+      runtime,
+      vault: app.vault,
+      bundles: [createBundle()],
+      forwardRevisionApplyRecovery: runner,
+    });
+    await recovery.start();
+    expect(recovery.getState()).toMatchObject({
+      status: "observed_clear",
+      bundleResults: [{ bundleId: "personal", disposition: "observed_clear" }],
+    });
+    const mismatchedVault = new ProductionVaultHarness();
+    const mismatchedRecovery = new KnowledgeProductionRecoveryComposer({
+      runtime,
+      vault: mismatchedVault.vault,
+      bundles: [createBundle()],
+      forwardRevisionApplyRecovery: runner,
+    });
+    await mismatchedRecovery.start();
+    expect(mismatchedRecovery.getState()).toEqual({
+      generation: 1,
+      status: "diagnostic",
+      code: "input_invalid",
+    });
+    expect(() => composer.createForwardRevisionApplyRecoveryRunner()).toThrow("aborted");
+    expect(fetchPort).not.toHaveBeenCalled();
+    expect(vault.stat).not.toHaveBeenCalled();
+    expect(vault.read).not.toHaveBeenCalled();
+
+    mismatchedRecovery.close();
+    recovery.close();
+    composer.close();
+    lifecycle.close();
+  });
+
+  it("does not capture parser profiles until recovery is clear and observation starts", async () => {
+    const fetchPort = createFetchPort();
+    const baseResources = createKnowledgeProductionPipelineResources();
+    const baseParser = baseResources.parsers[0];
+    if (!baseParser) throw new Error("Expected one production parser");
+    const profileProbe = { calls: 0, fail: false };
+    const controlledParser: KnowledgeByteParser = Object.freeze({
+      /** Reports the original profile until the test arms the broken registry. */
+      getProfile: () => {
+        profileProbe.calls += 1;
+        if (profileProbe.fail) throw new Error("test-only parser profile failure");
+        return baseParser.getProfile();
+      },
+      /** Delegates parsing to the exact production parser. */
+      parse: (...args: Parameters<KnowledgeByteParser["parse"]>) => baseParser.parse(...args),
+    });
+    const controlledResources: KnowledgeProductionPipelineResources = Object.freeze({
+      parsers: Object.freeze([controlledParser, ...baseResources.parsers.slice(1)]),
+      profileOptions: baseResources.profileOptions,
+    });
+    const { lifecycle, admission, runtimeClaim } = await createAdmission(
+      fetchPort,
+      createBundle(),
+      () => controlledResources
+    );
+    const runtime = await createRuntime(runtimeClaim);
+    const vault = new ProductionVaultHarness();
+    profileProbe.calls = 0;
+    profileProbe.fail = true;
+    const composer = new KnowledgeProductionObservationComposer({
+      app: vault.createApp(),
+      runtime,
+      workflowLease: admission.workflowLease,
+      workflowCompositionClaim: admission.workflowCompositionClaim,
+    });
+
+    const runner = composer.createForwardRevisionApplyRecoveryRunner();
+
+    expect(profileProbe.calls).toBe(0);
+    await expect(runner.recoverActive(new AbortController().signal)).resolves.toEqual({
+      kind: "idle",
+    });
+    expect(profileProbe.calls).toBe(0);
+    const recovery = new KnowledgeProductionRecoveryComposer({
+      runtime,
+      vault: vault.vault,
+      bundles: [createBundle()],
+      forwardRevisionApplyRecovery: runner,
+    });
+    await recovery.start();
+    expect(recovery.getState()).toMatchObject({ status: "observed_clear" });
+    expect(profileProbe.calls).toBe(0);
+    await expect(composer.start(new AbortController().signal)).resolves.toEqual({
+      kind: "diagnostic",
+      code: "workflow_plan_unavailable",
+    });
+    expect(profileProbe.calls).toBe(1);
+    expect(fetchPort).not.toHaveBeenCalled();
+    expect(vault.stat).not.toHaveBeenCalled();
+    expect(vault.read).not.toHaveBeenCalled();
+
+    recovery.close();
+    composer.close();
+    lifecycle.close();
   });
 
   it("loads the same preflight generation and converges a real Runtime observation without fetch", async () => {

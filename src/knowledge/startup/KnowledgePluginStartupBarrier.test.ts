@@ -431,6 +431,19 @@ describe("KnowledgePluginStartupBarrier", () => {
     },
     {
       recoveryResult: {
+        kind: "blocked" as const,
+        attentionKinds: ["forward_revision_apply_recovery_required"],
+      },
+      expected: {
+        generation: 1,
+        status: "recovery_blocked",
+        bundleIds: ["personal"],
+        recoveryBundleId: "personal",
+        attentionKinds: ["forward_revision_apply_recovery_required"],
+      },
+    },
+    {
+      recoveryResult: {
         kind: "unavailable" as const,
         diagnosticCode: "runtime_state_invalid",
       },

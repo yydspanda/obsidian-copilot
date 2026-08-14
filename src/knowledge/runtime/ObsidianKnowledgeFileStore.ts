@@ -8,6 +8,7 @@ import type {
   KnowledgeFileStore,
 } from "@/knowledge/changeset/ChangeSetValidator";
 import type { TransactionFileState } from "@/knowledge/changeset/TransactionStorage";
+import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 import {
@@ -40,6 +41,42 @@ export interface ExclusiveKnowledgeFileCreator {
   create(path: string, content: string): Promise<ExclusiveKnowledgeFileCreateResult>;
 }
 
+/** Exact resource limits for one bounded forward Wiki-file observation. */
+export interface KnowledgeFileObservationLimits {
+  readonly maxBytes: number;
+  readonly maxCharacters: number;
+}
+
+interface ObsidianKnowledgeFileStoreState {
+  readonly vault: Vault;
+  readonly adapter: DataAdapter;
+  readonly creator: ExclusiveKnowledgeFileCreator;
+  readonly app?: object;
+  readonly executionOwner?: KnowledgeExecutionOwner;
+}
+
+const obsidianKnowledgeFileStoreStates = new WeakMap<object, ObsidianKnowledgeFileStoreState>();
+
+/** Returns hidden state only for an exact base file-store instance. */
+function requireObsidianKnowledgeFileStoreState(value: unknown): ObsidianKnowledgeFileStoreState {
+  let prototype: object | null;
+  try {
+    prototype = typeof value === "object" && value !== null ? Object.getPrototypeOf(value) : null;
+  } catch {
+    throw new TypeError("The Obsidian knowledge file store is invalid");
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    prototype !== ObsidianKnowledgeFileStore.prototype
+  ) {
+    throw new TypeError("The Obsidian knowledge file store is invalid");
+  }
+  const state = obsidianKnowledgeFileStoreStates.get(value);
+  if (!state) throw new TypeError("The Obsidian knowledge file store is invalid");
+  return state;
+}
+
 /** Reports an operation the public Obsidian/Node boundary cannot make atomic. */
 export class KnowledgeFileMutationUnsupportedError extends Error {
   /**
@@ -70,6 +107,31 @@ export class KnowledgeFileAdapterPayloadError extends Error {
     this.name = "KnowledgeFileAdapterPayloadError";
   }
 }
+
+const observationLimitErrors = new WeakSet<object>();
+
+/** Reports a bounded observation rejected before retaining oversized file bytes. */
+export class KnowledgeFileObservationLimitError extends Error {
+  /** Creates one value-free resource-limit error. */
+  constructor() {
+    super("The knowledge file exceeds the bounded observation limit");
+    this.name = "KnowledgeFileObservationLimitError";
+    observationLimitErrors.add(this);
+    Object.freeze(this);
+  }
+
+  /** Reports whether one value is an authentic bounded-observation failure. */
+  static inspect(value: unknown): boolean {
+    return (
+      (typeof value === "object" || typeof value === "function") &&
+      value !== null &&
+      observationLimitErrors.has(value)
+    );
+  }
+}
+
+Object.freeze(KnowledgeFileObservationLimitError.prototype);
+Object.freeze(KnowledgeFileObservationLimitError);
 
 /** Private control signal used to abort Vault.process without rewriting bytes. */
 class KnowledgeFileProcessDecision extends Error {
@@ -238,12 +300,108 @@ export class ObsidianKnowledgeFileStore implements KnowledgeFileStore {
     creator?: ExclusiveKnowledgeFileCreator
   ) {
     this.creator = creator ?? new WindowsExclusiveKnowledgeFileCreator(vault.adapter);
+    obsidianKnowledgeFileStoreStates.set(
+      this,
+      Object.freeze({ vault: this.vault, adapter: vault.adapter, creator: this.creator })
+    );
+  }
+
+  /**
+   * Creates one forward-capable store bound to an exact App/Vault workflow owner.
+   *
+   * The owner must already have been bound by the production composition. This
+   * factory never claims an unbound owner and therefore cannot hijack a future
+   * App/Vault generation through first-bind behavior.
+   *
+   * @param app - Exact Obsidian App identity retained by the production composition
+   * @param vault - Exact Vault identity owned by that App generation
+   * @param executionOwner - Opaque production workflow owner already bound to the tuple
+   * @param creator - Optional testable native create edge retained for legacy parity
+   * @returns Frozen exact-base file store eligible for forward coordinator matching
+   */
+  static createForExecutionOwner(
+    app: object,
+    vault: Vault,
+    executionOwner: KnowledgeExecutionOwner,
+    creator?: ExclusiveKnowledgeFileCreator
+  ): ObsidianKnowledgeFileStore {
+    KnowledgeExecutionOwner.assert(executionOwner);
+    if (
+      typeof app !== "object" ||
+      app === null ||
+      typeof vault !== "object" ||
+      vault === null ||
+      typeof vault.adapter !== "object" ||
+      vault.adapter === null ||
+      !KnowledgeExecutionOwner.matchesVaultLifecycle(executionOwner, app, vault, vault.adapter)
+    ) {
+      throw new TypeError("The Obsidian knowledge file store owner is invalid");
+    }
+    const store = new ObsidianKnowledgeFileStore(vault, creator);
+    const state = requireObsidianKnowledgeFileStoreState(store);
+    obsidianKnowledgeFileStoreStates.set(
+      store,
+      Object.freeze({
+        vault: state.vault,
+        adapter: state.adapter,
+        creator: state.creator,
+        app,
+        executionOwner,
+      })
+    );
+    Object.freeze(store);
+    return store;
+  }
+
+  /** Requires one authentic exact-base process-local file store. */
+  static assert(value: unknown): asserts value is ObsidianKnowledgeFileStore {
+    requireObsidianKnowledgeFileStoreState(value);
+  }
+
+  /** Reports whether a frozen forward store belongs to one exact Vault generation owner. */
+  static matchesExecutionOwner(value: unknown, executionOwner: unknown): boolean {
+    try {
+      KnowledgeExecutionOwner.assert(executionOwner);
+      const state = requireObsidianKnowledgeFileStoreState(value);
+      if (
+        state.executionOwner !== executionOwner ||
+        state.app === undefined ||
+        (state.app as { vault?: unknown }).vault !== state.vault ||
+        state.vault.adapter !== state.adapter ||
+        !Object.isFrozen(value)
+      ) {
+        return false;
+      }
+      return KnowledgeExecutionOwner.matchesVaultLifecycle(
+        executionOwner,
+        state.app,
+        state.vault,
+        state.adapter
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /** Reports whether this exact store is bound to one exact current Vault object. */
+  static matchesVault(value: unknown, vault: unknown): boolean {
+    try {
+      const state = requireObsidianKnowledgeFileStoreState(value);
+      if (state.vault !== vault || state.vault.adapter !== state.adapter) return false;
+      return state.executionOwner === undefined
+        ? true
+        : ObsidianKnowledgeFileStore.matchesExecutionOwner(value, state.executionOwner);
+    } catch {
+      return false;
+    }
   }
 
   /** Observes exact non-cached text, directory, or missing state. */
   async observe(path: string): Promise<KnowledgeFileObservation> {
+    this.assertForwardOwnerCurrent();
     const exactPath = requireVaultPath(path);
     const stat = await this.vault.adapter.stat(exactPath);
+    this.assertForwardOwnerCurrent();
     if (stat === null) {
       return { kind: "missing" };
     }
@@ -258,8 +416,85 @@ export class ObsidianKnowledgeFileStore implements KnowledgeFileStore {
       return { kind: "directory" };
     }
     const content = await this.vault.adapter.read(exactPath);
+    this.assertForwardOwnerCurrent();
     if (typeof content !== "string") {
       throw new KnowledgeFileAdapterPayloadError();
+    }
+    return { kind: "file", content };
+  }
+
+  /**
+   * Observes one exact file while enforcing stat and decoded-text limits.
+   *
+   * File size is rejected before adapter.read, then UTF-16 characters and
+   * encoded UTF-8 bytes are checked again after the physical read to close a
+   * stat/read race. Missing paths and directories remain scalar observations.
+   *
+   * @param path - Canonical Vault-relative path
+   * @param limitsValue - Exact positive byte and character limits
+   * @returns Bounded exact file content, directory, or missing state
+   */
+  async observeBounded(
+    path: string,
+    limitsValue: KnowledgeFileObservationLimits
+  ): Promise<KnowledgeFileObservation> {
+    this.assertForwardOwnerCurrent();
+    const exactPath = requireVaultPath(path);
+    let limits: Readonly<KnowledgeFileObservationLimits>;
+    try {
+      if (
+        typeof limitsValue !== "object" ||
+        limitsValue === null ||
+        Array.isArray(limitsValue) ||
+        (Object.getPrototypeOf(limitsValue) !== Object.prototype &&
+          Object.getPrototypeOf(limitsValue) !== null) ||
+        Reflect.ownKeys(limitsValue).length !== 2
+      ) {
+        throw new TypeError();
+      }
+      const maxBytes = Object.getOwnPropertyDescriptor(limitsValue, "maxBytes");
+      const maxCharacters = Object.getOwnPropertyDescriptor(limitsValue, "maxCharacters");
+      if (
+        !maxBytes?.enumerable ||
+        !("value" in maxBytes) ||
+        !maxCharacters?.enumerable ||
+        !("value" in maxCharacters) ||
+        !Number.isSafeInteger(maxBytes.value) ||
+        maxBytes.value <= 0 ||
+        !Number.isSafeInteger(maxCharacters.value) ||
+        maxCharacters.value <= 0
+      ) {
+        throw new TypeError();
+      }
+      limits = Object.freeze({
+        maxBytes: Number(maxBytes.value),
+        maxCharacters: Number(maxCharacters.value),
+      });
+    } catch {
+      throw new TypeError("The bounded knowledge file observation limits are invalid");
+    }
+    const stat = await this.vault.adapter.stat(exactPath);
+    this.assertForwardOwnerCurrent();
+    if (stat === null) return { kind: "missing" };
+    if (
+      typeof stat !== "object" ||
+      stat === null ||
+      (stat.type !== "file" && stat.type !== "folder") ||
+      !Number.isSafeInteger(stat.size) ||
+      stat.size < 0
+    ) {
+      throw new KnowledgeFileAdapterPayloadError();
+    }
+    if (stat.type === "folder") return { kind: "directory" };
+    if (stat.size > limits.maxBytes) throw new KnowledgeFileObservationLimitError();
+    const content = await this.vault.adapter.read(exactPath);
+    this.assertForwardOwnerCurrent();
+    if (typeof content !== "string") throw new KnowledgeFileAdapterPayloadError();
+    if (
+      content.length > limits.maxCharacters ||
+      new TextEncoder().encode(content).byteLength > limits.maxBytes
+    ) {
+      throw new KnowledgeFileObservationLimitError();
     }
     return { kind: "file", content };
   }
@@ -270,6 +505,7 @@ export class ObsidianKnowledgeFileStore implements KnowledgeFileStore {
     before: TransactionFileState,
     after: TransactionFileState
   ): Promise<KnowledgeFileCompareAndSwapResult> {
+    this.assertForwardOwnerCurrent();
     const exactPath = requireVaultPath(path);
     assertFileState(before, "before");
     assertFileState(after, "after");
@@ -284,15 +520,28 @@ export class ObsidianKnowledgeFileStore implements KnowledgeFileStore {
       throw new KnowledgeFileMutationUnsupportedError("delete");
     }
     if (before.kind === "missing" && after.kind === "file") {
-      return this.createIfAbsent(exactPath, after);
+      const result = await this.createIfAbsent(exactPath, after);
+      this.assertForwardOwnerCurrent();
+      return result;
     }
     if (before.kind === "file" && after.kind === "file") {
-      return this.updateExisting(exactPath, before, after);
+      const result = await this.updateExisting(exactPath, before, after);
+      this.assertForwardOwnerCurrent();
+      return result;
     }
     const observation = await this.observe(exactPath);
     return observationMatchesState(observation, after)
       ? { kind: "already_after" }
       : { kind: "conflict", observation };
+  }
+
+  /** Re-proves an optional forward owner before and after every physical boundary. */
+  private assertForwardOwnerCurrent(): void {
+    const state = requireObsidianKnowledgeFileStoreState(this);
+    if (state.executionOwner === undefined) return;
+    if (!ObsidianKnowledgeFileStore.matchesExecutionOwner(this, state.executionOwner)) {
+      throw new TypeError("The Obsidian knowledge file store generation is no longer current");
+    }
   }
 
   /** Applies one exclusive missing-to-file transition. */
@@ -307,7 +556,9 @@ export class ObsidianKnowledgeFileStore implements KnowledgeFileStore {
     if (initial.kind !== "missing") {
       return { kind: "conflict", observation: initial };
     }
+    this.assertForwardOwnerCurrent();
     const result = await this.creator.create(path, after.content);
+    this.assertForwardOwnerCurrent();
     const observation = await this.observe(path);
     if (observationMatchesState(observation, after)) {
       return { kind: result === "created" ? "applied" : "already_after" };
@@ -356,3 +607,6 @@ export class ObsidianKnowledgeFileStore implements KnowledgeFileStore {
       : { kind: "conflict", observation };
   }
 }
+
+Object.freeze(ObsidianKnowledgeFileStore.prototype);
+Object.freeze(ObsidianKnowledgeFileStore);

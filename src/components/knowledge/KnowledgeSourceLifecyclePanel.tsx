@@ -52,6 +52,13 @@ function getCustodyLabel(custody: KnowledgeSourceLifecycleItem["custody"]): stri
   return custody === "managed_copy" ? "Managed copy" : "User managed";
 }
 
+/** Returns the stable explanation for a currently blocked source removal. */
+function getRemovalBlockerMessage(source: Readonly<KnowledgeSourceLifecycleItem>): string {
+  return source.retirementBlockers.includes("forward_revision_overlay_active")
+    ? "Removal is unavailable while this source owns an active reviewed Wiki revision. Apply or supersede that revision before checking again."
+    : "Removal is currently unavailable. Clear pending Activity, Review, or Recovery work, then check again.";
+}
+
 /** Returns the pending label for one row or undefined when another row owns work. */
 function getPendingLabel(pending: PendingAction | undefined, sourceId: string): string | undefined {
   if (pending?.sourceId !== sourceId) return undefined;
@@ -163,8 +170,7 @@ function SourceLifecycleRow({
           </div>
           {!source.actions.canRemove && source.retirementBlockers.length > 0 ? (
             <p className="tw-m-0 tw-text-xs tw-text-muted" role="note">
-              Removal is currently unavailable. Clear pending Activity, Review, or Recovery work,
-              then check again.
+              {getRemovalBlockerMessage(source)}
             </p>
           ) : null}
           {missing ? (

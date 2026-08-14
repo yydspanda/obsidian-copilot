@@ -254,7 +254,7 @@ function isAuthenticValidationError(
 }
 
 /** Strictly captures a projected latest source-freshness completion. */
-function snapshotSourceFreshness(
+export function snapshotKnowledgeForwardRevisionSourceFreshness(
   value: unknown
 ): Readonly<KnowledgeForwardRevisionSourceFreshness> {
   const kind = readDataDiscriminant(value, "kind");
@@ -356,7 +356,9 @@ export function snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue(
     ) {
       invalid();
     }
-    const freshness = snapshotSourceFreshness(record.currentSourceFreshness);
+    const freshness = snapshotKnowledgeForwardRevisionSourceFreshness(
+      record.currentSourceFreshness
+    );
     if (
       Number(record.runtimeRevision) !== freshness.runtimeRevision ||
       record.runtimeDigest !== freshness.runtimeDigest ||

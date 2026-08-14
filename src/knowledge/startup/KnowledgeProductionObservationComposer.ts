@@ -6,6 +6,10 @@ import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledg
 import { KnowledgeProductionCandidateValidator } from "@/knowledge/compiler/KnowledgeProductionCandidateValidator";
 import { KnowledgeProductionModelRouteLease } from "@/knowledge/compiler/KnowledgeProductionModelRouteLease";
 import { KnowledgeProductionForwardRevisionDecisionCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionDecisionCoordinator";
+import {
+  KnowledgeProductionForwardRevisionApplyCoordinator,
+  KnowledgeProductionForwardRevisionApplyTransactionRunner,
+} from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import { KnowledgeProductionForwardRevisionValidationCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
 import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import {
@@ -42,6 +46,8 @@ import {
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeForwardRevisionDecisionPort,
+  KnowledgeRuntimeForwardRevisionApplyPort,
+  KnowledgeRuntimeForwardRevisionApplyRecoveryPort,
   KnowledgeRuntimeForwardRevisionValidationPort,
   KnowledgeRuntimeIngestExecutionProofPort,
   KnowledgeRuntimeManifestStorage,
@@ -180,7 +186,6 @@ interface KnowledgeProductionObservationComposition {
   runtime: KnowledgeRuntimeStore;
   executionOwner: KnowledgeExecutionOwner;
   workflowLease: KnowledgePluginProductionWorkflowLease;
-  loader: KnowledgeSourceWorkflowPlanLoader;
   owners: ReturnType<KnowledgePluginProductionWorkflowLease["getOwners"]>;
   artifactReader: ObsidianExactSourceArtifactReader;
   handoffs: ReadonlyMap<string, SourceObservationHandoff>;
@@ -209,6 +214,8 @@ interface KnowledgeProductionObservationInternalState {
   knownAppliedWikiOutputsCreated?: boolean;
   forwardRevisionValidationCoordinatorCreated?: boolean;
   forwardRevisionDecisionCoordinatorCreated?: boolean;
+  forwardRevisionApplyCoordinatorCreated?: boolean;
+  forwardRevisionApplyRecoveryRunnerCreated?: boolean;
   unsubscribeLease?: () => void;
   closeListeners: Set<() => void>;
 }
@@ -342,7 +349,7 @@ function assertCompositionCurrent(
   }
 }
 
-/** Builds exact Runtime, Manifest, reader, loader, and enqueue-only observation ports. */
+/** Builds exact Runtime, owner, reader, and enqueue-only pre-observation ports. */
 function composeObservation(
   owner: KnowledgeProductionObservationComposer,
   input: KnowledgeProductionObservationComposerInput,
@@ -362,7 +369,6 @@ function composeObservation(
   workflowLease.assertCurrent();
 
   const owners = workflowLease.getOwners();
-  const parsers = workflowLease.getParsers();
   const appOwner = app as App;
   const executionOwner = KnowledgePluginProductionWorkflowLease.consumeCompositionClaim(
     workflowLease,
@@ -414,25 +420,11 @@ function composeObservation(
   }
 
   const artifactReader = new ObsidianExactSourceArtifactReader(app as App);
-  const manifest = new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime));
-  const loader = new KnowledgeSourceWorkflowPlanLoader({
-    executionOwner,
-    manifest,
-    artifactReader,
-    pipelineProfile: workflowLease,
-    parsers,
-    generation: {
-      isCurrent: () =>
-        composition !== undefined &&
-        isCompositionCurrent(requireComposerState(owner), state.generation, composition),
-    },
-  });
   composition = Object.freeze({
     app: app as App,
     runtime,
     executionOwner,
     workflowLease,
-    loader,
     owners,
     artifactReader,
     handoffs,
@@ -445,6 +437,36 @@ function composeObservation(
   });
   workflowLease.assertCurrent();
   return composition;
+}
+
+/**
+ * Captures parser profiles and binds the workflow loader only after recovery is clear.
+ *
+ * Constructor-time recovery composition deliberately never calls this helper,
+ * so a broken parser registry cannot prevent an existing durable journal from
+ * reaching its commit-wins recovery boundary.
+ */
+function createObservationWorkflowPlanLoader(
+  state: KnowledgeProductionObservationInternalState,
+  generation: number,
+  composition: KnowledgeProductionObservationComposition,
+  signal: AbortSignal
+): KnowledgeSourceWorkflowPlanLoader {
+  assertCompositionCurrent(state, generation, composition, signal);
+  const parsers = composition.workflowLease.getParsers();
+  assertCompositionCurrent(state, generation, composition, signal);
+  return new KnowledgeSourceWorkflowPlanLoader({
+    executionOwner: composition.executionOwner,
+    manifest: new SourceManifestRepository(
+      new KnowledgeRuntimeManifestStorage(composition.runtime)
+    ),
+    artifactReader: composition.artifactReader,
+    pipelineProfile: composition.workflowLease,
+    parsers,
+    generation: {
+      isCurrent: () => isCompositionCurrent(state, generation, composition),
+    },
+  });
 }
 
 /** Creates and installs the watcher/reconciler/coordinator for one authenticated plan. */
@@ -635,7 +657,8 @@ export class KnowledgeProductionObservationComposer {
     let phase: "plan" | "observation" = "plan";
     try {
       assertCompositionCurrent(state, generation, composition, signal);
-      const plan = await composition.loader.load(composition.owners, signal);
+      const loader = createObservationWorkflowPlanLoader(state, generation, composition, signal);
+      const plan = await loader.load(composition.owners, signal);
       state.plan = plan;
       assertCompositionCurrent(state, generation, composition, signal);
       phase = "observation";
@@ -1201,6 +1224,7 @@ export class KnowledgeProductionObservationComposer {
       throw createAbortError();
     }
     try {
+      /** Reasserts that this composer and its production dependencies remain current. */
       const assertCurrent = (): void => {
         assertCompositionCurrent(state, state.generation, composition);
         this.assertHealthy();
@@ -1278,6 +1302,118 @@ export class KnowledgeProductionObservationComposer {
     }
   }
 
+  /** Creates one fresh forward-Apply revalidator for this exact released generation. */
+  createForwardRevisionApplyCoordinator(): KnowledgeProductionForwardRevisionApplyCoordinator {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    const plan = state.plan;
+    if (
+      !composition ||
+      !state.coordinator ||
+      !state.workerController ||
+      !plan ||
+      state.forwardRevisionApplyCoordinatorCreated
+    ) {
+      throw createAbortError();
+    }
+    try {
+      /** Reasserts that this composer and its production dependencies remain current. */
+      const assertCurrent = (): void => {
+        assertCompositionCurrent(state, state.generation, composition);
+        this.assertHealthy();
+      };
+      assertCurrent();
+      const executionLease = KnowledgePluginProductionWorkflowLease.getExecutionLease(
+        composition.workflowLease,
+        composition.executionOwner
+      );
+      const fileStore = ObsidianKnowledgeFileStore.createForExecutionOwner(
+        composition.app,
+        composition.app.vault,
+        composition.executionOwner
+      );
+      const transactionRunner = new KnowledgeProductionForwardRevisionApplyTransactionRunner(
+        new KnowledgeRuntimeForwardRevisionApplyRecoveryPort(
+          composition.runtime,
+          composition.proofPort,
+          executionLease
+        ),
+        fileStore,
+        composition.executionOwner
+      );
+      const coordinator = new KnowledgeProductionForwardRevisionApplyCoordinator(
+        new KnowledgeRuntimeForwardRevisionApplyPort(
+          composition.runtime,
+          composition.proofPort,
+          executionLease
+        ),
+        transactionRunner,
+        plan,
+        new ObsidianKnowledgeCompilerTargetResolver(composition.app, composition.executionOwner),
+        fileStore,
+        composition.executionOwner,
+        assertCurrent
+      );
+      assertCurrent();
+      state.forwardRevisionApplyCoordinatorCreated = true;
+      return coordinator;
+    } catch {
+      throw createAbortError();
+    }
+  }
+
+  /**
+   * Creates the startup-only runner for an already-durable forward Apply journal.
+   *
+   * This factory is intentionally available before observation, worker, parser,
+   * or model startup. The returned runner retains only commit-wins Runtime and
+   * Vault recovery authority after authenticating this exact live composition.
+   */
+  createForwardRevisionApplyRecoveryRunner(): KnowledgeProductionForwardRevisionApplyTransactionRunner {
+    const state = requireComposerState(this);
+    const composition = state.composition;
+    if (!composition || state.forwardRevisionApplyRecoveryRunnerCreated) {
+      throw createAbortError();
+    }
+    try {
+      assertCompositionCurrent(state, state.generation, composition);
+      const recovery = new KnowledgeRuntimeForwardRevisionApplyRecoveryPort(
+        composition.runtime,
+        composition.proofPort,
+        KnowledgePluginProductionWorkflowLease.getExecutionLease(
+          composition.workflowLease,
+          composition.executionOwner
+        )
+      );
+      const runner = new KnowledgeProductionForwardRevisionApplyTransactionRunner(
+        recovery,
+        ObsidianKnowledgeFileStore.createForExecutionOwner(
+          composition.app,
+          composition.app.vault,
+          composition.executionOwner
+        ),
+        composition.executionOwner
+      );
+      if (
+        !KnowledgeProductionForwardRevisionApplyTransactionRunner.matchesExecutionOwner(
+          runner,
+          composition.executionOwner
+        ) ||
+        !KnowledgeProductionForwardRevisionApplyTransactionRunner.matchesRuntimeAndVault(
+          runner,
+          composition.runtime,
+          composition.app.vault
+        )
+      ) {
+        throw createAbortError();
+      }
+      state.forwardRevisionApplyRecoveryRunnerCreated = true;
+      return runner;
+    } catch {
+      throw createAbortError();
+    }
+  }
+
   /**
    * Subscribes to synchronous generation closure without exposing internal state.
    *
@@ -1323,6 +1459,8 @@ export class KnowledgeProductionObservationComposer {
     state.knownAppliedWikiOutputsCreated = undefined;
     state.forwardRevisionValidationCoordinatorCreated = undefined;
     state.forwardRevisionDecisionCoordinatorCreated = undefined;
+    state.forwardRevisionApplyCoordinatorCreated = undefined;
+    state.forwardRevisionApplyRecoveryRunnerCreated = undefined;
     try {
       composition?.eventSink.close();
     } catch {

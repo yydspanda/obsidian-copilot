@@ -29,6 +29,9 @@ export function getKnowledgeStartupNotice(state: KnowledgePluginStartupState): s
     case "recovery_attention_required":
       return "Knowledge startup found durable work that needs an explicit recovery decision. Open Recovery to continue eligible work or abandon an eligible no-journal apply; new ingest work remains stopped.";
     case "recovery_blocked":
+      if (state.attentionKinds.includes("forward_revision_apply_recovery_required")) {
+        return "A reviewed Wiki revision could not be safely reconciled with the current note, so Knowledge startup remains blocked. No new AI or Wiki work will run until the durable conflict is resolved and startup is retried.";
+      }
       return "Knowledge startup is blocked by durable recovery state. Open Recovery to inspect and recheck it; unsafe actions remain disabled to protect existing notes.";
     case "source_recovery_required":
       return "Knowledge startup found a missing or moved source. Open Sources to recheck it or remove its registration; ingest, model calls, Review, Apply, Query, and Wiki writes remain stopped.";

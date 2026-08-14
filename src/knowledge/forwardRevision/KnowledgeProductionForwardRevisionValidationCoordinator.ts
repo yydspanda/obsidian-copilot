@@ -411,7 +411,7 @@ function assertAuthoritySandwich(
 }
 
 /** Projects parser observations into the strict identity-only durable read-set. */
-function createValidationReadSet(
+export function createKnowledgeForwardRevisionValidationReadSet(
   preparation: Readonly<KnowledgeSourceParsePreparation>
 ): readonly Readonly<KnowledgeForwardRevisionValidationArtifactIdentityV1>[] {
   return Object.freeze(
@@ -512,7 +512,7 @@ function assertPreparationAuthority(
 }
 
 /** Creates the exact public validator/profile identity used by one receipt. */
-function createValidationProfile(
+export function createKnowledgeForwardRevisionValidationProfile(
   preparation: Readonly<KnowledgeSourceParsePreparation>,
   pipelineProfile: JsonValue,
   executionPlanDigest: string
@@ -541,7 +541,7 @@ function createValidationProfile(
 }
 
 /** Requires the genuine deterministic validator's exact successful result shape. */
-function requireSuccessfulValidation(value: unknown): {
+export function requireSuccessfulKnowledgeForwardRevisionValidation(value: unknown): {
   readonly validation: Readonly<{ okfValid: true; citationsValid: true; linksValid: true }>;
   readonly warningSummary: Readonly<{
     version: 1;
@@ -869,7 +869,7 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
             )
           : { okfValid: false, linksValid: false };
       assertNotAborted(signal);
-      const validated = requireSuccessfulValidation({
+      const validated = requireSuccessfulKnowledgeForwardRevisionValidation({
         validation: {
           okfValid: generated.okfValid,
           citationsValid,
@@ -921,7 +921,8 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
       }
 
       stage = "validation";
-      const validationReadSet = createValidationReadSet(confirmedPreparation);
+      const validationReadSet =
+        createKnowledgeForwardRevisionValidationReadSet(confirmedPreparation);
       const bindingDigest = createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest(
         after.acceptanceAuthority,
         validationReadSet
@@ -937,7 +938,7 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
         command,
         afterContent,
         validation: validated.validation,
-        validationProfile: createValidationProfile(
+        validationProfile: createKnowledgeForwardRevisionValidationProfile(
           confirmedPreparation,
           pipelineProfile as unknown as JsonValue,
           planDigestAfter

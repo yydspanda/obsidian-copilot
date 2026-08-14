@@ -1,3 +1,10 @@
+jest.mock("obsidian", () => {
+  const mock = jest.requireActual<Record<string, unknown>>("../../../__mocks__/obsidian.js");
+  /** Minimal desktop adapter brand required by the genuine update-only recovery store. */
+  class FileSystemAdapter {}
+  return { ...mock, FileSystemAdapter };
+});
+
 import {
   ChangeSetTransaction,
   createTransactionCommitReceipt,
@@ -22,7 +29,16 @@ import {
   createKnowledgeForwardRevisionIntent,
   createKnowledgeForwardRevisionIntentDigest,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
+import {
+  projectKnowledgeForwardRevisionApplyJournalApplying,
+  projectKnowledgeForwardRevisionApplyJournalCommitted,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyJournal";
 import { KnowledgeProductionForwardRevisionProposalCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionProposalCoordinator";
+import {
+  KnowledgeForwardRevisionApplyCoordinatorError,
+  KnowledgeProductionForwardRevisionApplyCoordinator,
+  KnowledgeProductionForwardRevisionApplyTransactionRunner,
+} from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import { KnowledgeProductionForwardRevisionDecisionCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionDecisionCoordinator";
 import { KnowledgeProductionForwardRevisionValidationCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionValidationCoordinator";
 import { KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY } from "@/knowledge/capture/KnowledgeSourceOrigin";
@@ -98,6 +114,7 @@ import type {
   KnowledgeChangeSet,
   SourceManifest,
 } from "@/knowledge/model/types";
+import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { createNoJournalApplyRecoveryReference } from "@/knowledge/recovery/NoJournalApplyRecovery";
 import type { KnowledgeStartupReleaseRequest } from "@/knowledge/recovery/KnowledgeStartupRelease";
@@ -112,6 +129,7 @@ import {
 } from "@/knowledge/review/ReviewRejectTransition";
 import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import type { AtomicRuntimeFile } from "@/knowledge/runtime/AtomicRuntimeFile";
+import { ObsidianKnowledgeFileStore } from "@/knowledge/runtime/ObsidianKnowledgeFileStore";
 import { projectKnowledgeKnownAppliedWikiOutputIndex } from "@/knowledge/runtime/KnowledgeKnownAppliedWikiOutputProjector";
 import {
   KnowledgeApplyCommitAuthorityError,
@@ -123,6 +141,9 @@ import {
   KnowledgeRuntimeApplyCommitManifestPort,
   KnowledgeRuntimeAtomicWriteError,
   KnowledgeRuntimeForwardRevisionProposalPublicationPort,
+  KnowledgeRuntimeForwardRevisionApplyPort,
+  KnowledgeRuntimeForwardRevisionApplyRecoveryPort,
+  KnowledgeForwardRevisionApplyPortError,
   KnowledgeRuntimeForwardRevisionDecisionPort,
   KnowledgeForwardRevisionDecisionPortError,
   KnowledgeRuntimeForwardRevisionValidationPort,
@@ -157,6 +178,7 @@ import {
   createEmptyKnowledgeRuntimeStoreSnapshot,
   type KnowledgeApplyCommitLedgerRecord,
   type KnowledgeForwardRevisionProposalPublicationEvidence,
+  type KnowledgeForwardRevisionApplyAuthorityQuery,
   type KnowledgeRuntimeStudioBundleSnapshot,
   type KnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
@@ -164,7 +186,11 @@ import {
   KnowledgePluginProductionPreflightLifecycle,
   KnowledgePluginProductionWorkflowLease,
 } from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
-import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
+import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
+import {
+  createKnowledgeProductionPipelineResources,
+  type KnowledgeProductionPipelineResources,
+} from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import {
   createKnowledgeProductionWorkflowExecutionPairing,
   type KnowledgeProductionWorkflowExecutionPreflightClaim,
@@ -173,7 +199,7 @@ import {
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
 import type { App, DataAdapter, Vault } from "obsidian";
-import { TFile } from "obsidian";
+import { FileSystemAdapter, TFile } from "obsidian";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -407,7 +433,13 @@ function createMarkerlessCompletionRuntimeSnapshot(
     revision: 7,
     queues: [{ bundleId: "personal", value: queue }],
     reviews: [],
-    ...(version === KNOWLEDGE_RUNTIME_STORE_VERSION ? { forwardRevisionReviews: [] } : {}),
+    ...(version === KNOWLEDGE_RUNTIME_STORE_VERSION
+      ? {
+          forwardRevisionReviews: [],
+          activeForwardRevisionApply: null,
+          forwardRevisionApplyCommits: [],
+        }
+      : {}),
     manifests: [{ bundleId: "personal", value: createRegisteredManifest() }],
     activeTransaction: null,
     inputRevisions: [
@@ -1735,6 +1767,7 @@ async function createForwardPublicationHarness(
     citationArtifactId?: string;
     historicalCitation?: KnowledgeChangeSet["citations"][number];
     productionExecutionClaim?: KnowledgeProductionWorkflowExecutionRuntimeClaim;
+    maxTextCharacters?: number;
   }>
 ) {
   const historicalContent = fixture?.historicalContent ?? "# transaction-forward-historical\n";
@@ -1798,6 +1831,7 @@ async function createForwardPublicationHarness(
   const runtime = new KnowledgeRuntimeStore(current.file, {
     clock,
     productionExecutionClaim: fixture?.productionExecutionClaim,
+    maxTextCharacters: fixture?.maxTextCharacters,
   });
   return {
     file: current.file,
@@ -1810,7 +1844,8 @@ async function createForwardPublicationHarness(
 
 /** Creates one authentic preflight lease and consumes its exact composition owner. */
 async function createForwardDecisionExecutionLease(
-  executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim
+  executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim,
+  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
 ) {
   const modelName = "deepseek-v4-pro";
   const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
@@ -1853,7 +1888,7 @@ async function createForwardDecisionExecutionLease(
     fetchPort: async () => {
       throw new Error("Decision tests must not invoke the model route");
     },
-    createResources: () => createKnowledgeProductionPipelineResources(),
+    createResources,
   });
   const result = await lifecycle.load(new AbortController().signal);
   if (result.kind !== "configured") throw new Error("Expected configured preflight");
@@ -1909,9 +1944,15 @@ Grounded evidence for source-1
 `;
 
 /** Builds a genuine paired preflight/Runtime/Vault/validator/decision production chain. */
-async function createForwardDecisionCoordinatorFixture() {
+async function createForwardDecisionCoordinatorFixture(
+  maxTextCharacters?: number,
+  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
+) {
   const pairing = createKnowledgeProductionWorkflowExecutionPairing();
-  const lifecycle = await createForwardDecisionExecutionLease(pairing.preflightClaim);
+  const lifecycle = await createForwardDecisionExecutionLease(
+    pairing.preflightClaim,
+    createResources
+  );
   const sourcePath = "Sources/Source-1.md";
   const schemaPath = "Knowledge/schema.md";
   const pagePath = "Wiki/transaction-forward-historical.md";
@@ -1942,6 +1983,7 @@ async function createForwardDecisionCoordinatorFixture() {
       "primary"
     ),
     productionExecutionClaim: pairing.runtimeClaim,
+    maxTextCharacters,
   });
   await harness.port.publishForwardRevisionProposalAtomically(harness.evidence);
   const review = await harness.port.readForwardRevisionReview("personal");
@@ -1954,7 +1996,13 @@ async function createForwardDecisionCoordinatorFixture() {
   ]);
   const FileConstructor = TFile as unknown as new (path: string) => TFile;
   const loaded = [...files.keys()].map((path) => new FileConstructor(path));
-  const adapter = {
+  const wikiWrites = { processCalls: 0, transitions: 0 };
+  const wikiProcessFault: {
+    mode: "none" | "throw_before_write" | "throw_after_write";
+    beforeNextProcess?: () => void;
+  } = { mode: "none" };
+  const AdapterConstructor = FileSystemAdapter as unknown as new () => DataAdapter;
+  const adapter = Object.assign(new AdapterConstructor(), {
     /** Returns stable exact size metadata for one in-memory Vault file. */
     stat: async (path: string) => {
       const content = files.get(path);
@@ -1973,10 +2021,32 @@ async function createForwardDecisionCoordinatorFixture() {
       if (content === undefined) throw new Error("Missing in-memory Vault file");
       return content;
     },
-  } as unknown as DataAdapter;
+  });
   const vault = {
     adapter,
     getAllLoadedFiles: () => loaded,
+    getAbstractFileByPath: (path: string) => loaded.find((file) => file.path === path) ?? null,
+    /** Applies one in-memory exact file transform like Obsidian Vault.process. */
+    process: async (file: TFile, transform: (current: string) => string) => {
+      const beforeProcess = wikiProcessFault.beforeNextProcess;
+      wikiProcessFault.beforeNextProcess = undefined;
+      beforeProcess?.();
+      const current = files.get(file.path);
+      if (current === undefined) throw new Error("Missing in-memory Vault process target");
+      wikiWrites.processCalls += 1;
+      const fault = wikiProcessFault.mode;
+      wikiProcessFault.mode = "none";
+      if (fault === "throw_before_write") {
+        throw new Error("Simulated pre-write Vault process failure");
+      }
+      const next = transform(current);
+      if (next !== current) wikiWrites.transitions += 1;
+      files.set(file.path, next);
+      if (fault === "throw_after_write") {
+        throw new Error("Simulated post-write Vault process failure");
+      }
+      return next;
+    },
   } as unknown as Vault;
   const app = { vault } as App;
   KnowledgeExecutionOwner.bindVaultLifecycle(lifecycle.executionOwner, app, vault, adapter);
@@ -2029,7 +2099,14 @@ async function createForwardDecisionCoordinatorFixture() {
     ...harness,
     ...lifecycle,
     files,
+    wikiWrites,
+    wikiProcessFault,
+    app,
+    vault,
+    plan,
+    assertCurrent,
     pending,
+    proof,
     validator,
     decisions,
     coordinator: new KnowledgeProductionForwardRevisionDecisionCoordinator(
@@ -2039,6 +2116,103 @@ async function createForwardDecisionCoordinatorFixture() {
       assertCurrent
     ),
   };
+}
+
+/** Builds one accepted decision plus genuine pre-journal and recovery Apply boundaries. */
+async function createForwardApplyCoordinatorFixture(
+  maxTextCharacters?: number,
+  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
+) {
+  const fixture = await createForwardDecisionCoordinatorFixture(maxTextCharacters, createResources);
+  const command = createKnowledgeForwardRevisionReviewCommand({
+    action: "accept_exact",
+    proposal: fixture.pending.proposal,
+    proposalDigest: fixture.pending.proposalDigest,
+  });
+  await fixture.coordinator.decide(command, new AbortController().signal);
+  const acceptedState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+  const forward = acceptedState.forwardRevisionReviews[0]?.value as {
+    records: Array<{
+      decision: {
+        proposal: { proposalId: string; request: { pagePath: string } };
+        proposalDigest: string;
+        acceptedDecisionDigest: string;
+        applyClaim: { claimId: string };
+        applyClaimDigest: string;
+      };
+    }>;
+  };
+  const accepted = forward.records[0]?.decision;
+  if (!accepted) throw new Error("Expected accepted forward decision");
+  const request: KnowledgeForwardRevisionApplyAuthorityQuery = {
+    runtimeId: acceptedState.runtimeId,
+    bundleId: "personal",
+    pagePath: accepted.proposal.request.pagePath,
+    proposalId: accepted.proposal.proposalId,
+    proposalDigest: accepted.proposalDigest,
+    acceptedDecisionDigest: accepted.acceptedDecisionDigest,
+    applyClaimId: accepted.applyClaim.claimId,
+    applyClaimDigest: accepted.applyClaimDigest,
+  };
+  const port = new KnowledgeRuntimeForwardRevisionApplyPort(
+    fixture.runtime,
+    fixture.proof,
+    fixture.executionLease
+  );
+  const recovery = new KnowledgeRuntimeForwardRevisionApplyRecoveryPort(
+    fixture.runtime,
+    fixture.proof,
+    fixture.executionLease
+  );
+  const fileStore = ObsidianKnowledgeFileStore.createForExecutionOwner(
+    fixture.app,
+    fixture.vault,
+    fixture.executionOwner,
+    {
+      /** Forward Apply is update-only, so exclusive creation is unreachable. */
+      create: async () => {
+        throw new Error("Unexpected forward Apply create");
+      },
+    }
+  );
+  const runner = new KnowledgeProductionForwardRevisionApplyTransactionRunner(
+    recovery,
+    fileStore,
+    fixture.executionOwner,
+    () => 500
+  );
+  const coordinator = new KnowledgeProductionForwardRevisionApplyCoordinator(
+    port,
+    runner,
+    fixture.plan,
+    new ObsidianKnowledgeCompilerTargetResolver(fixture.app, fixture.executionOwner),
+    fileStore,
+    fixture.executionOwner,
+    fixture.assertCurrent
+  );
+  return {
+    ...fixture,
+    acceptedState,
+    request,
+    port,
+    recovery,
+    fileStore,
+    runner,
+    applyCoordinator: coordinator,
+  };
+}
+
+/** Builds one durable prepared journal plus its genuine post-journal recovery runner. */
+async function createPreparedForwardApplyCoordinatorFixture(
+  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
+) {
+  const fixture = await createForwardApplyCoordinatorFixture(undefined, createResources);
+  const ready = await fixture.applyCoordinator.revalidate(
+    fixture.request,
+    new AbortController().signal
+  );
+  const journal = await fixture.port.begin(ready.capability, new AbortController().signal);
+  return { ...fixture, journal };
 }
 
 /** Captures one expected promise rejection for authentic error-category assertions. */
@@ -3135,8 +3309,10 @@ describe("KnowledgeRuntimeStore", () => {
       ...legacy,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: migrated.runtimeId,
-      revision: 12,
+      revision: 13,
       forwardRevisionReviews: [],
+      activeForwardRevisionApply: null,
+      forwardRevisionApplyCommits: [],
       reviews: [
         {
           bundleId: "personal",
@@ -3218,7 +3394,7 @@ describe("KnowledgeRuntimeStore", () => {
     const authorityQueue = authority.queues[0].value as IngestQueueSnapshot;
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 12,
+      revision: 13,
       activeTransaction: { transactionId: proof.journal.transactionId },
       inputRevisions: [
         {
@@ -3267,7 +3443,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await file.read()).toBe(committed);
     expect(JSON.parse(committed)).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 12,
+      revision: 13,
     });
   });
 
@@ -3296,7 +3472,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: "1".repeat(32),
-      revision: 11,
+      revision: 12,
       queues: [
         {
           bundleId: "personal",
@@ -3424,8 +3600,15 @@ describe("KnowledgeRuntimeStore", () => {
       jobs: [completed],
     };
     delete completedQueue.applyClaim;
-    const { forwardRevisionReviews: _forwardRevisionReviews, ...previousWithoutForward } = previous;
+    const {
+      forwardRevisionReviews: _forwardRevisionReviews,
+      activeForwardRevisionApply: _activeForwardRevisionApply,
+      forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      ...previousWithoutForward
+    } = previous;
     void _forwardRevisionReviews;
+    void _activeForwardRevisionApply;
+    void _forwardRevisionApplyCommits;
     const previousV3 = {
       ...previousWithoutForward,
       version: 3,
@@ -6438,6 +6621,25 @@ describe("KnowledgeRuntimeStore", () => {
     });
     expect(await harness.file.read()).toBe(before);
 
+    const forwardOverlayCandidate: SourceManifest = {
+      ...manifest,
+      revision: 2,
+      extensions: {
+        obsidianCopilotKnowledgeForwardRevisionOverlays: {
+          version: 1,
+          kind: "forward_revision_overlay_extension",
+          overlays: [],
+        },
+      },
+    };
+    await expect(
+      harness.manifest.write("personal", forwardOverlayCandidate, 1)
+    ).rejects.toMatchObject({
+      name: KnowledgeRuntimeManifestProtectedStateError.name,
+      state: "forward_revision_overlay_extension",
+    });
+    expect(await harness.file.read()).toBe(before);
+
     const repository = new SourceManifestRepository(harness.manifest);
     await expect(
       repository.recordSuccessfulCompile("personal", "source-1", {
@@ -6457,6 +6659,52 @@ describe("KnowledgeRuntimeStore", () => {
       firstCreation.manifest.write("personal", firstSuccess, null)
     ).rejects.toBeInstanceOf(KnowledgeRuntimeManifestProtectedStateError);
     expect(await firstCreation.file.read()).toBe(firstBefore);
+  });
+
+  it("rejects a structurally valid orphan overlay before any generic Manifest write", async () => {
+    const harness = await createHarness();
+    const manifest = createRegisteredManifest();
+    manifest.extensions = {
+      obsidianCopilotKnowledgeForwardRevisionOverlays: {
+        version: 1,
+        kind: "forward_revision_overlay_extension",
+        entries: [
+          {
+            version: 1,
+            kind: "forward_revision_overlay_entry",
+            bundleId: "personal",
+            pagePath: "Wiki/Generated.md",
+            windowsPathKey: "wiki/generated.md",
+            sourceId: "source-1",
+            sourceBaseDigest: HASH_A,
+            baseContentHash: HASH_B,
+            effectiveContentHash: HASH_C,
+            forwardTransactionId: "forward-transaction-1",
+            acceptedDecisionDigest: HASH_A,
+            forwardLedgerIdentityDigest: HASH_B,
+            appliedAt: 100,
+          },
+        ],
+      },
+    };
+    const state = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
+    state.revision = 1;
+    state.manifests = [{ bundleId: "personal", value: manifest }];
+    harness.file.replaceContent(JSON.stringify(state));
+    const candidate: SourceManifest = {
+      ...manifest,
+      revision: manifest.revision + 1,
+      extensions: {
+        ...manifest.extensions,
+        unrelated: { retained: true },
+      },
+    };
+
+    const before = await harness.file.read();
+    await expect(
+      harness.manifest.write("personal", candidate, manifest.revision)
+    ).rejects.toBeInstanceOf(KnowledgeRuntimeStoreCorruptError);
+    expect(await harness.file.read()).toBe(before);
   });
 
   it("allows exactly one concurrent expected-null queue creation", async () => {
@@ -8673,6 +8921,14 @@ describe("KnowledgeRuntimeStore", () => {
       },
       { name: "transaction semantic corruption", value: { ...base, activeTransaction: {} } },
       {
+        name: "forward transaction semantic corruption",
+        value: { ...base, activeForwardRevisionApply: {} },
+      },
+      {
+        name: "forward ledger semantic corruption",
+        value: { ...base, forwardRevisionApplyCommits: [{}] },
+      },
+      {
         name: "duplicate Bundle slot",
         value: {
           ...base,
@@ -8960,8 +9216,15 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
   it("atomically migrates v5 through empty v1 and v2 forward namespaces", async () => {
     const file = new MemoryAtomicRuntimeFile();
     const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
-    const { forwardRevisionReviews: _forwardRevisionReviews, ...withoutForward } = current;
+    const {
+      forwardRevisionReviews: _forwardRevisionReviews,
+      activeForwardRevisionApply: _activeForwardRevisionApply,
+      forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      ...withoutForward
+    } = current;
     void _forwardRevisionReviews;
+    void _activeForwardRevisionApply;
+    void _forwardRevisionApplyCommits;
     const previous = { ...withoutForward, version: 5, revision: 7 };
     await file.initialize(JSON.stringify(previous));
 
@@ -8970,8 +9233,10 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(JSON.parse(await file.read())).toEqual({
       ...previous,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 9,
+      revision: 10,
       forwardRevisionReviews: [],
+      activeForwardRevisionApply: null,
+      forwardRevisionApplyCommits: [],
     });
   });
 
@@ -8987,7 +9252,16 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
       3
     );
     const previous = {
-      ...current,
+      ...(() => {
+        const {
+          activeForwardRevisionApply: _activeForwardRevisionApply,
+          forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+          ...runtimeV7Fields
+        } = current;
+        void _activeForwardRevisionApply;
+        void _forwardRevisionApplyCommits;
+        return runtimeV7Fields;
+      })(),
       version: 6,
       revision: 3,
       forwardRevisionReviews: [
@@ -9008,7 +9282,7 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     await new KnowledgeRuntimeStore(file).initialize();
 
     const migrated = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
-    expect(migrated).toMatchObject({ version: 7, revision: 4 });
+    expect(migrated).toMatchObject({ version: 8, revision: 5 });
     expect(migrated.forwardRevisionReviews[0].value).toMatchObject({
       version: 2,
       revision: 1,
@@ -9029,7 +9303,16 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     const file = new MemoryAtomicRuntimeFile();
     const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
     const previous = {
-      ...current,
+      ...(() => {
+        const {
+          activeForwardRevisionApply: _activeForwardRevisionApply,
+          forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+          ...runtimeV7Fields
+        } = current;
+        void _activeForwardRevisionApply;
+        void _forwardRevisionApplyCommits;
+        return runtimeV7Fields;
+      })(),
       version: 6,
       revision: 2,
       forwardRevisionReviews: ["personal", "work"].map((bundleId, index) => ({
@@ -9070,6 +9353,83 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
       name: KnowledgeRuntimeMigrationUnsafeError.name,
       reason: "revision_overflow",
     });
+  });
+
+  it("atomically adds empty forward Apply state to v7 without changing Review bytes", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
+    const {
+      activeForwardRevisionApply: _activeForwardRevisionApply,
+      forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      ...previousFields
+    } = current;
+    void _activeForwardRevisionApply;
+    void _forwardRevisionApplyCommits;
+    const published = createForwardPublishedFixture(
+      "personal",
+      "Wiki/V7.md",
+      current.runtimeId,
+      "# v7\n",
+      1,
+      3
+    );
+    const forwardReview = migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2({
+      version: 1,
+      bundleId: "personal",
+      revision: 1,
+      lastRequestRevision: 1,
+      records: [published],
+    });
+    const previous = {
+      ...previousFields,
+      version: 7,
+      revision: 3,
+      forwardRevisionReviews: [{ bundleId: "personal", value: forwardReview }],
+    };
+    await file.initialize(JSON.stringify(previous));
+
+    await new KnowledgeRuntimeStore(file).initialize();
+
+    const migrated = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(migrated).toEqual({
+      ...previous,
+      version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+      revision: 4,
+      activeForwardRevisionApply: null,
+      forwardRevisionApplyCommits: [],
+    });
+    expect(JSON.stringify(migrated.forwardRevisionReviews)).toBe(
+      JSON.stringify(previous.forwardRevisionReviews)
+    );
+  });
+
+  it("rejects a v7 Manifest that already owns the reserved forward overlay key", async () => {
+    const file = new MemoryAtomicRuntimeFile();
+    const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
+    const {
+      activeForwardRevisionApply: _activeForwardRevisionApply,
+      forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      ...previousFields
+    } = current;
+    void _activeForwardRevisionApply;
+    void _forwardRevisionApplyCommits;
+    const manifest = createManifest(1);
+    manifest.extensions = { obsidianCopilotKnowledgeForwardRevisionOverlays: null };
+    const previous = {
+      ...previousFields,
+      version: 7,
+      revision: 3,
+      manifests: [{ bundleId: "personal", value: manifest }],
+    };
+    await file.initialize(JSON.stringify(previous));
+    const before = await file.read();
+
+    await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toMatchObject({
+      name: KnowledgeRuntimeMigrationUnsafeError.name,
+      reason: "forward_revision_overlay_state_present",
+      bundleId: "personal",
+    });
+    expect(await file.read()).toBe(before);
   });
 
   it("publishes once, preserves legacy slots, and replays original publication revisions", async () => {
@@ -10291,6 +10651,627 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     fixture.lifecycle.close();
   });
 
+  it("reads accepted forward Apply authority only through the exact paired lifecycle", async () => {
+    const fixture = await createForwardDecisionCoordinatorFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    await fixture.coordinator.decide(command, new AbortController().signal);
+    const state = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const forward = state.forwardRevisionReviews[0]?.value as {
+      records: Array<{
+        state: string;
+        decision: {
+          proposal: { proposalId: string; request: { pagePath: string } };
+          proposalDigest: string;
+          acceptedDecisionDigest: string;
+          applyClaim: { claimId: string };
+          applyClaimDigest: string;
+        };
+      }>;
+    };
+    const accepted = forward.records[0]?.decision;
+    if (!accepted) throw new Error("Expected accepted forward decision");
+    const query: KnowledgeForwardRevisionApplyAuthorityQuery = {
+      runtimeId: state.runtimeId,
+      bundleId: "personal",
+      pagePath: accepted.proposal.request.pagePath,
+      proposalId: accepted.proposal.proposalId,
+      proposalDigest: accepted.proposalDigest,
+      acceptedDecisionDigest: accepted.acceptedDecisionDigest,
+      applyClaimId: accepted.applyClaim.claimId,
+      applyClaimDigest: accepted.applyClaimDigest,
+    };
+    const port = new KnowledgeRuntimeForwardRevisionApplyPort(
+      fixture.runtime,
+      fixture.proof,
+      fixture.executionLease
+    );
+    const before = await fixture.file.read();
+
+    const authority = await port.readAuthority(query, new AbortController().signal);
+    expect(authority).toMatchObject({
+      runtimeId: state.runtimeId,
+      acceptedDecisionDigest: accepted.acceptedDecisionDigest,
+      sourceBase: { bundleId: "personal", sourceId: "source-1" },
+    });
+    expect(authority?.manifestRevision).toBeGreaterThanOrEqual(0);
+    await expect(
+      port.readAuthority({ ...query, applyClaimDigest: HASH_A }, new AbortController().signal)
+    ).resolves.toBeNull();
+    expect(await fixture.file.read()).toBe(before);
+    expect(Object.keys(port)).toEqual([]);
+    expect(Object.isFrozen(port)).toBe(true);
+
+    fixture.lifecycle.invalidate();
+    await expect(port.readAuthority(query, new AbortController().signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("publishes one capability-bound prepared forward Apply journal before any Wiki write", async () => {
+    const fixture = await createForwardDecisionCoordinatorFixture();
+    const command = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: fixture.pending.proposal,
+      proposalDigest: fixture.pending.proposalDigest,
+    });
+    await fixture.coordinator.decide(command, new AbortController().signal);
+    const acceptedState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const forward = acceptedState.forwardRevisionReviews[0]?.value as {
+      records: Array<{
+        decision: {
+          proposal: { proposalId: string; request: { pagePath: string } };
+          proposalDigest: string;
+          acceptedDecisionDigest: string;
+          applyClaim: { claimId: string };
+          applyClaimDigest: string;
+        };
+      }>;
+    };
+    const accepted = forward.records[0]?.decision;
+    if (!accepted) throw new Error("Expected accepted forward decision");
+    const request: KnowledgeForwardRevisionApplyAuthorityQuery = {
+      runtimeId: acceptedState.runtimeId,
+      bundleId: "personal",
+      pagePath: accepted.proposal.request.pagePath,
+      proposalId: accepted.proposal.proposalId,
+      proposalDigest: accepted.proposalDigest,
+      acceptedDecisionDigest: accepted.acceptedDecisionDigest,
+      applyClaimId: accepted.applyClaim.claimId,
+      applyClaimDigest: accepted.applyClaimDigest,
+    };
+    const port = new KnowledgeRuntimeForwardRevisionApplyPort(
+      fixture.runtime,
+      fixture.proof,
+      fixture.executionLease
+    );
+    const fileStore = ObsidianKnowledgeFileStore.createForExecutionOwner(
+      fixture.app,
+      fixture.vault,
+      fixture.executionOwner,
+      {
+        /** Forward Apply is update-only, so exclusive creation is unreachable. */
+        create: async () => {
+          throw new Error("Unexpected forward Apply create");
+        },
+      }
+    );
+    const coordinator = new KnowledgeProductionForwardRevisionApplyCoordinator(
+      port,
+      new KnowledgeProductionForwardRevisionApplyTransactionRunner(
+        new KnowledgeRuntimeForwardRevisionApplyRecoveryPort(
+          fixture.runtime,
+          fixture.proof,
+          fixture.executionLease
+        ),
+        fileStore,
+        fixture.executionOwner
+      ),
+      fixture.plan,
+      new ObsidianKnowledgeCompilerTargetResolver(fixture.app, fixture.executionOwner),
+      fileStore,
+      fixture.executionOwner,
+      fixture.assertCurrent
+    );
+    const ready = await coordinator.revalidate(request, new AbortController().signal);
+    const beforeBegin = await fixture.file.read();
+    const beforeWiki = fixture.files.get(request.pagePath);
+    fixture.file.throwAfterCommitOnNextWrite();
+
+    const journal = await port.begin(ready.capability, new AbortController().signal);
+
+    expect(journal).toMatchObject({
+      phase: "prepared",
+      revision: 0,
+      runtimeId: acceptedState.runtimeId,
+      bundleId: "personal",
+      pagePath: request.pagePath,
+      acceptedDecisionDigest: request.acceptedDecisionDigest,
+      applyClaimId: request.applyClaimId,
+      beforeContent: FORWARD_DECISION_CURRENT_CONTENT,
+      afterContent: FORWARD_DECISION_HISTORICAL_CONTENT,
+    });
+    const preparedText = await fixture.file.read();
+    expect(preparedText).not.toBe(beforeBegin);
+    expect(fixture.files.get(request.pagePath)).toBe(beforeWiki);
+    expect(JSON.parse(preparedText)).toMatchObject({
+      revision: acceptedState.revision + 1,
+      activeTransaction: null,
+      activeForwardRevisionApply: journal,
+      forwardRevisionApplyCommits: [],
+    });
+    await expect(port.begin(ready.capability, new AbortController().signal)).resolves.toEqual(
+      journal
+    );
+    expect(await fixture.file.read()).toBe(preparedText);
+
+    await expect(fixture.runtime.beginForwardRevisionApply({})).rejects.toMatchObject({
+      name: "KnowledgeForwardRevisionApplyPortError",
+    });
+    expect(await fixture.file.read()).toBe(preparedText);
+    fixture.lifecycle.close();
+  });
+
+  it("commits one accepted revision through the genuine coordinator Apply entrypoint", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+
+    const result = await fixture.applyCoordinator.apply(
+      fixture.request,
+      new AbortController().signal
+    );
+    expect(result).toMatchObject({
+      kind: "committed",
+      bundleId: "personal",
+    });
+    if (result.kind !== "committed") throw new Error("Expected committed forward Apply");
+    expect(result.transactionId).toMatch(/^forward-revision-apply-transaction-/);
+    expect(result.ledgerId).toMatch(/^forward-revision-apply-ledger-/);
+
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 1 });
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized).toMatchObject({
+      revision: fixture.acceptedState.revision + 4,
+      activeForwardRevisionApply: null,
+      forwardRevisionApplyCommits: [
+        {
+          bundleId: "personal",
+          pagePath: fixture.request.pagePath,
+          acceptedDecisionDigest: fixture.request.acceptedDecisionDigest,
+        },
+      ],
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("serializes concurrent identical coordinator Apply calls without a second Wiki transition", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const [first, second] = await Promise.allSettled([
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal),
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal),
+    ]);
+
+    if (first.status !== "fulfilled" || first.value.kind !== "committed") {
+      throw new Error("Expected the first serialized Apply to commit");
+    }
+    expect(first.value).toMatchObject({ kind: "committed", bundleId: "personal" });
+    expect(first.value.transactionId).toMatch(/^forward-revision-apply-transaction-/);
+    if (second.status !== "rejected") {
+      throw new Error("Expected the serialized duplicate Apply to close before a second begin");
+    }
+    expect(KnowledgeForwardRevisionApplyCoordinatorError.inspect(second.reason)).toBe(
+      "authority_unavailable"
+    );
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 1 });
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized.activeForwardRevisionApply).toBeNull();
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    fixture.lifecycle.close();
+  });
+
+  it("confirms a Wiki write-then-throw and finalizes exactly one forward ledger", async () => {
+    const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    fixture.wikiProcessFault.mode = "throw_after_write";
+
+    const result = await fixture.runner.recoverActive(new AbortController().signal);
+
+    expect(result).toMatchObject({
+      kind: "committed",
+      bundleId: "personal",
+      transactionId: fixture.journal.transactionId,
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 1 });
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized.activeForwardRevisionApply).toBeNull();
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    fixture.lifecycle.close();
+  });
+
+  it("recovers a prepared journal before a broken parser profile is captured", async () => {
+    const baseResources = createKnowledgeProductionPipelineResources();
+    const baseParser = baseResources.parsers[0];
+    if (!baseParser) throw new Error("Expected one production parser");
+    const profileProbe = { calls: 0, fail: false };
+    const controlledParser: KnowledgeByteParser = Object.freeze({
+      /** Returns the production profile until restart arms the broken registry. */
+      getProfile: () => {
+        profileProbe.calls += 1;
+        if (profileProbe.fail) throw new Error("test-only parser profile failure");
+        return baseParser.getProfile();
+      },
+      /** Delegates exact source parsing to the production parser. */
+      parse: (...args: Parameters<KnowledgeByteParser["parse"]>) => baseParser.parse(...args),
+    });
+    const controlledResources: KnowledgeProductionPipelineResources = Object.freeze({
+      parsers: Object.freeze([controlledParser, ...baseResources.parsers.slice(1)]),
+      profileOptions: baseResources.profileOptions,
+    });
+    const fixture = await createPreparedForwardApplyCoordinatorFixture(() => controlledResources);
+    fixture.lifecycle.invalidate();
+    profileProbe.calls = 0;
+    profileProbe.fail = true;
+    const restarted = await fixture.lifecycle.load(new AbortController().signal);
+    if (restarted.kind !== "configured") throw new Error("Expected restarted preflight");
+    expect(profileProbe.calls).toBe(0);
+    const composer = new KnowledgeProductionObservationComposer({
+      app: fixture.app,
+      runtime: fixture.runtime,
+      workflowLease: restarted.admission.workflowLease,
+      workflowCompositionClaim: restarted.admission.workflowCompositionClaim,
+    });
+
+    const runner = composer.createForwardRevisionApplyRecoveryRunner();
+    expect(profileProbe.calls).toBe(0);
+    await expect(runner.recoverActive(new AbortController().signal)).resolves.toMatchObject({
+      kind: "committed",
+      bundleId: "personal",
+      transactionId: fixture.journal.transactionId,
+    });
+
+    expect(profileProbe.calls).toBe(0);
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized.activeForwardRevisionApply).toBeNull();
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+
+    composer.close();
+    fixture.lifecycle.close();
+  });
+
+  it("keeps an applying marker after a pre-write Wiki throw and converges on retry", async () => {
+    const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    fixture.wikiProcessFault.mode = "throw_before_write";
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "in_progress",
+        bundleId: "personal",
+        transactionId: fixture.journal.transactionId,
+        phase: "applying",
+      }
+    );
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_CURRENT_CONTENT);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 0 });
+    const applying = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(applying).toMatchObject({
+      activeForwardRevisionApply: { phase: "applying", revision: 1 },
+      forwardRevisionApplyCommits: [],
+    });
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "committed",
+        transactionId: fixture.journal.transactionId,
+      }
+    );
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 2, transitions: 1 });
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized.activeForwardRevisionApply).toBeNull();
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    fixture.lifecycle.close();
+  });
+
+  it("persists a sticky exact conflict when Wiki changes after the applying marker", async () => {
+    const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    const conflictingContent = "# concurrent third state\n";
+    fixture.wikiProcessFault.beforeNextProcess = () => {
+      fixture.files.set(fixture.request.pagePath, conflictingContent);
+    };
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "recovery_required",
+        bundleId: "personal",
+        transactionId: fixture.journal.transactionId,
+        journalRevision: 2,
+        conflictCode: "file_state_conflict",
+      }
+    );
+
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(conflictingContent);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 0 });
+    const blocked = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(blocked).toMatchObject({
+      activeForwardRevisionApply: {
+        phase: "recovery_required",
+        revision: 2,
+        conflict: {
+          code: "file_state_conflict",
+          actualKind: "file",
+          actualHash: createFileContentHash(conflictingContent),
+        },
+      },
+      forwardRevisionApplyCommits: [],
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("confirms an applying-marker commit-then-throw without replaying its Runtime revision", async () => {
+    const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    fixture.file.throwAfterCommitOnNextWrite();
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "committed",
+        transactionId: fixture.journal.transactionId,
+      }
+    );
+
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized).toMatchObject({
+      revision: fixture.acceptedState.revision + 4,
+      activeForwardRevisionApply: null,
+    });
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 1 });
+    fixture.lifecycle.close();
+  });
+
+  it("confirms a committed-marker commit-then-throw without duplicating finalization", async () => {
+    const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    fixture.file.throwAfterCommitOnNthWrite(2);
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "committed",
+        transactionId: fixture.journal.transactionId,
+      }
+    );
+
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized).toMatchObject({
+      revision: fixture.acceptedState.revision + 4,
+      activeForwardRevisionApply: null,
+    });
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 1 });
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toEqual({
+      kind: "idle",
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("converges prepared Apply after lease revocation and confirms a thrown final commit", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const ready = await fixture.applyCoordinator.revalidate(
+      fixture.request,
+      new AbortController().signal
+    );
+    const journal = await fixture.port.begin(ready.capability, new AbortController().signal);
+    let wikiBeforeApplyingCommit = false;
+    fixture.file.runAfterNextCommit(() => {
+      wikiBeforeApplyingCommit =
+        fixture.files.get(fixture.request.pagePath) === FORWARD_DECISION_CURRENT_CONTENT;
+    });
+    fixture.file.throwAfterCommitOnNthWrite(3);
+    fixture.lifecycle.invalidate();
+
+    const result = await fixture.runner.recoverActive(new AbortController().signal);
+    expect(result).toMatchObject({
+      kind: "committed",
+      bundleId: "personal",
+      transactionId: journal.transactionId,
+    });
+    if (result.kind !== "committed") throw new Error("Expected committed recovery");
+    expect(result.ledgerId).toMatch(/^forward-revision-apply-ledger-/);
+
+    expect(wikiBeforeApplyingCommit).toBe(true);
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized.activeForwardRevisionApply).toBeNull();
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    expect(finalized.forwardRevisionApplyCommits[0]).toMatchObject({
+      transactionId: journal.transactionId,
+      baseContentHash: journal.beforeHash,
+      effectiveContentHash: journal.afterHash,
+      manifestAfterRevision: journal.manifestBeforeRevision + 1,
+    });
+    expect(finalized.manifests[0]?.value).toMatchObject({
+      revision: journal.manifestBeforeRevision + 1,
+      extensions: {
+        obsidianCopilotKnowledgeForwardRevisionOverlays: {
+          entries: [
+            {
+              forwardTransactionId: journal.transactionId,
+              effectiveContentHash: journal.afterHash,
+            },
+          ],
+        },
+      },
+    });
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toEqual({
+      kind: "idle",
+    });
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    fixture.lifecycle.close();
+  });
+
+  it("persists rev3 sticky recovery when committed bytes drift before startup finalization", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const ready = await fixture.applyCoordinator.revalidate(
+      fixture.request,
+      new AbortController().signal
+    );
+    const prepared = await fixture.port.begin(ready.capability, new AbortController().signal);
+    const applying = projectKnowledgeForwardRevisionApplyJournalApplying(prepared, 500);
+    const committed = projectKnowledgeForwardRevisionApplyJournalCommitted(applying, 500);
+    const committedState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    committedState.revision += 2;
+    committedState.activeForwardRevisionApply = committed;
+    fixture.file.replaceContent(JSON.stringify(committedState));
+    fixture.files.set(fixture.request.pagePath, "# external edit after committed marker\n");
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "recovery_required",
+        transactionId: committed.transactionId,
+        journalRevision: 3,
+        conflictCode: "post_write_verification_failed",
+      }
+    );
+
+    const blocked = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(blocked.activeForwardRevisionApply).toMatchObject({
+      phase: "recovery_required",
+      revision: 3,
+      committedAt: committed.committedAt,
+      conflict: {
+        code: "post_write_verification_failed",
+        actualKind: "file",
+        actualHash: createFileContentHash("# external edit after committed marker\n"),
+      },
+    });
+    expect(blocked.forwardRevisionApplyCommits).toEqual([]);
+    fixture.lifecycle.close();
+  });
+
+  it("rejects structural recovery calls and proxy facades without changing Runtime", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const before = await fixture.file.read();
+    const proxy = new Proxy(fixture.recovery, {});
+
+    expect(Object.keys(fixture.recovery)).toEqual([]);
+    expect(Object.isFrozen(fixture.recovery)).toBe(true);
+    expect(
+      KnowledgeRuntimeForwardRevisionApplyRecoveryPort.matchesRuntime(
+        fixture.recovery,
+        fixture.runtime
+      )
+    ).toBe(true);
+    expect(
+      KnowledgeRuntimeForwardRevisionApplyRecoveryPort.matchesRuntime(
+        fixture.recovery,
+        new KnowledgeRuntimeStore(new MemoryAtomicRuntimeFile())
+      )
+    ).toBe(false);
+    expect(() => KnowledgeRuntimeForwardRevisionApplyRecoveryPort.assert(proxy)).toThrow();
+    await expect(proxy.readActive(new AbortController().signal)).rejects.toMatchObject({
+      name: "KnowledgeForwardRevisionApplyPortError",
+    });
+    await expect(fixture.recovery.advance({})).rejects.toMatchObject({
+      name: "KnowledgeForwardRevisionApplyPortError",
+    });
+    await expect(fixture.recovery.finalize({})).rejects.toMatchObject({
+      name: "KnowledgeForwardRevisionApplyPortError",
+    });
+    expect(await fixture.file.read()).toBe(before);
+    fixture.lifecycle.close();
+  });
+
+  it("fails closed before Wiki mutation when Runtime revision headroom is exhausted", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const exhausted = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    exhausted.revision = Number.MAX_SAFE_INTEGER - 3;
+    fixture.file.replaceContent(JSON.stringify(exhausted));
+    const beforeRuntime = await fixture.file.read();
+    const beforeWiki = fixture.files.get(fixture.request.pagePath);
+
+    await expect(
+      fixture.port.readAuthority(fixture.request, new AbortController().signal)
+    ).resolves.toBeNull();
+    await expect(
+      fixture.applyCoordinator.revalidate(fixture.request, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeForwardRevisionApplyCoordinatorError" });
+    expect(await fixture.file.read()).toBe(beforeRuntime);
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(beforeWiki);
+    fixture.lifecycle.close();
+  });
+
+  it("rejects Apply authority before Wiki mutation when the target Manifest cannot advance", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const exhausted = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    exhausted.revision = Number.MAX_SAFE_INTEGER - 4;
+    const manifest = exhausted.manifests[0]?.value as SourceManifest;
+    exhausted.manifests[0] = {
+      bundleId: "personal",
+      value: { ...manifest, revision: Number.MAX_SAFE_INTEGER },
+    };
+    fixture.file.replaceContent(JSON.stringify(exhausted));
+    const beforeRuntime = await fixture.file.read();
+    const beforeWiki = fixture.files.get(fixture.request.pagePath);
+
+    await expect(
+      fixture.port.readAuthority(fixture.request, new AbortController().signal)
+    ).resolves.toBeNull();
+    await expect(
+      fixture.applyCoordinator.revalidate(fixture.request, new AbortController().signal)
+    ).rejects.toMatchObject({ name: "KnowledgeForwardRevisionApplyCoordinatorError" });
+    expect(await fixture.file.read()).toBe(beforeRuntime);
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(beforeWiki);
+    fixture.lifecycle.close();
+  });
+
+  it("preflights every future journal and finalization shape against the Runtime text bound", async () => {
+    const probe = await createForwardApplyCoordinatorFixture();
+    const acceptedLength = (await probe.file.read()).length;
+    probe.lifecycle.close();
+    const fixture = await createForwardApplyCoordinatorFixture(acceptedLength + 4_096);
+    const ready = await fixture.applyCoordinator.revalidate(
+      fixture.request,
+      new AbortController().signal
+    );
+    const beforeRuntime = await fixture.file.read();
+    const beforeWiki = fixture.files.get(fixture.request.pagePath);
+
+    const error = await captureForwardDecisionRejection(
+      fixture.port.begin(ready.capability, new AbortController().signal)
+    );
+    expect(KnowledgeForwardRevisionApplyPortError.inspect(error)).toBe("resource_limit");
+    expect(await fixture.file.read()).toBe(beforeRuntime);
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(beforeWiki);
+    fixture.lifecycle.close();
+  });
+
+  it("blocks unrelated Runtime mutations for the lifetime of an active forward journal", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const ready = await fixture.applyCoordinator.revalidate(
+      fixture.request,
+      new AbortController().signal
+    );
+    const prepared = await fixture.port.begin(ready.capability, new AbortController().signal);
+    const before = await fixture.file.read();
+    const manifest = (JSON.parse(before) as KnowledgeRuntimeStoreSnapshot).manifests[0]
+      ?.value as SourceManifest;
+
+    await expect(
+      fixture.runtime.writeManifest(
+        "personal",
+        { ...manifest, revision: manifest.revision + 1 },
+        manifest.revision
+      )
+    ).rejects.toMatchObject({ name: "KnowledgeRuntimeManifestReservationError" });
+    expect(await fixture.file.read()).toBe(before);
+    expect(JSON.parse(before)).toMatchObject({ activeForwardRevisionApply: prepared });
+    fixture.lifecycle.close();
+  });
+
   it("revokes the genuine coordinator generation before validation with zero Runtime writes", async () => {
     const fixture = await createForwardDecisionCoordinatorFixture();
     const command = createKnowledgeForwardRevisionReviewCommand({
@@ -10391,6 +11372,22 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
         })()
       )
     ).toBe("dependency_invalid");
+    expect(
+      KnowledgeForwardRevisionApplyPortError.inspect(
+        (() => {
+          try {
+            new KnowledgeRuntimeForwardRevisionApplyRecoveryPort(
+              harness.runtime,
+              proof,
+              other.executionLease
+            );
+          } catch (error: unknown) {
+            return error;
+          }
+          throw new Error("Expected the cross-pair recovery port to reject");
+        })()
+      )
+    ).toBe("dependency_invalid");
     expect(await harness.file.read()).toBe(beforeText);
     other.lifecycle.close();
   });
@@ -10467,8 +11464,15 @@ describe("KnowledgeRuntimeStore source retirement", () => {
   it("migrates runtime v4 through the v5, v6, and v7 downgrade fences", async () => {
     const file = new MemoryAtomicRuntimeFile();
     const current = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
-    const { forwardRevisionReviews: _forwardRevisionReviews, ...previousV4 } = current;
+    const {
+      forwardRevisionReviews: _forwardRevisionReviews,
+      activeForwardRevisionApply: _activeForwardRevisionApply,
+      forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      ...previousV4
+    } = current;
     void _forwardRevisionReviews;
+    void _activeForwardRevisionApply;
+    void _forwardRevisionApplyCommits;
     await file.initialize(
       JSON.stringify({
         ...previousV4,
@@ -10482,7 +11486,7 @@ describe("KnowledgeRuntimeStore source retirement", () => {
     expect(JSON.parse(await file.read())).toEqual({
       ...current,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 10,
+      revision: 11,
     });
   });
 
@@ -10500,9 +11504,15 @@ describe("KnowledgeRuntimeStore source retirement", () => {
         source: manifest.entries[0],
       })
     );
-    const { forwardRevisionReviews: _forwardRevisionReviews, ...previousV4 } =
-      createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
+    const {
+      forwardRevisionReviews: _forwardRevisionReviews,
+      activeForwardRevisionApply: _activeForwardRevisionApply,
+      forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      ...previousV4
+    } = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
     void _forwardRevisionReviews;
+    void _activeForwardRevisionApply;
+    void _forwardRevisionApplyCommits;
     await file.initialize(
       JSON.stringify({
         ...previousV4,

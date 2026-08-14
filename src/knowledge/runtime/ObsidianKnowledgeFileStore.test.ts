@@ -31,10 +31,15 @@ import path from "node:path";
 
 import { FileSystemAdapter, TFile, type Vault } from "obsidian";
 
+import {
+  createKnowledgeExecutionOwner,
+  KnowledgeExecutionOwner,
+} from "@/knowledge/ingest/KnowledgeExecutionOwner";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 import {
   KnowledgeFileAdapterPayloadError,
   KnowledgeFileMutationUnsupportedError,
+  KnowledgeFileObservationLimitError,
   KnowledgeFileParentUnavailableError,
   ObsidianKnowledgeFileStore,
   WINDOWS_KNOWLEDGE_FILE_MUTATION_CAPABILITIES,
@@ -67,8 +72,10 @@ class MemoryVaultHarness {
   readonly directories = new Set<string>(["Wiki"]);
   processWriteCount = 0;
   creatorCallCount = 0;
+  readCallCount = 0;
   afterProcess?: (path: string) => void;
   malformedStat = false;
+  statSizeOverride?: number;
   processFailure?: Error;
   processReturnOverride?: string;
 
@@ -84,10 +91,16 @@ class MemoryVaultHarness {
       const content = this.files.get(targetPath);
       return content === undefined
         ? null
-        : { type: "file" as const, ctime: 0, mtime: 0, size: content.length };
+        : {
+            type: "file" as const,
+            ctime: 0,
+            mtime: 0,
+            size: this.statSizeOverride ?? new TextEncoder().encode(content).byteLength,
+          };
     },
     /** Reads exact in-memory text. */
     read: async (targetPath: string) => {
+      this.readCallCount += 1;
       const content = this.files.get(targetPath);
       if (content === undefined) {
         throw new Error("Missing in-memory file");
@@ -168,6 +181,47 @@ describe("ObsidianKnowledgeFileStore", () => {
       kind: "file",
       content: "# 标题\r\nemoji 🦌  \r\n",
     });
+  });
+
+  it("rejects an oversized stat before reading and rechecks decoded text after read", async () => {
+    const harness = new MemoryVaultHarness();
+    harness.files.set("Wiki/Page.md", "small");
+    const store = harness.createStore();
+    harness.statSizeOverride = 9;
+
+    await expect(
+      store.observeBounded("Wiki/Page.md", { maxBytes: 8, maxCharacters: 8 })
+    ).rejects.toBeInstanceOf(KnowledgeFileObservationLimitError);
+    expect(harness.readCallCount).toBe(0);
+
+    harness.statSizeOverride = 1;
+    harness.files.set("Wiki/Page.md", "超大");
+    await expect(
+      store.observeBounded("Wiki/Page.md", { maxBytes: 5, maxCharacters: 8 })
+    ).rejects.toBeInstanceOf(KnowledgeFileObservationLimitError);
+    expect(harness.readCallCount).toBe(1);
+  });
+
+  it("rejects malformed bounded stat sizes and hostile limit records without reading", async () => {
+    const harness = new MemoryVaultHarness();
+    harness.files.set("Wiki/Page.md", "body");
+    const store = harness.createStore();
+    harness.statSizeOverride = Number.NaN;
+
+    await expect(
+      store.observeBounded("Wiki/Page.md", { maxBytes: 8, maxCharacters: 8 })
+    ).rejects.toBeInstanceOf(KnowledgeFileAdapterPayloadError);
+    expect(harness.readCallCount).toBe(0);
+
+    const hostile = Object.defineProperty({}, "maxBytes", {
+      enumerable: true,
+      get: () => 8,
+    });
+    Object.defineProperty(hostile, "maxCharacters", { enumerable: true, value: 8 });
+    await expect(store.observeBounded("Wiki/Page.md", hostile as never)).rejects.toBeInstanceOf(
+      TypeError
+    );
+    expect(harness.readCallCount).toBe(0);
   });
 
   it("atomically updates exact before content and verifies the after state", async () => {
@@ -344,6 +398,40 @@ describe("ObsidianKnowledgeFileStore", () => {
       requiresExistingParentForCreate: true,
     });
     expect(Object.isFrozen(store.mutationCapabilities)).toBe(true);
+  });
+
+  it("binds forward mutation only to one exact current App/Vault owner", async () => {
+    const harness = new MemoryVaultHarness();
+    const app = { vault: harness.vault };
+    const owner = createKnowledgeExecutionOwner();
+    KnowledgeExecutionOwner.bindVaultLifecycle(owner, app, harness.vault, harness.vault.adapter);
+    const store = ObsidianKnowledgeFileStore.createForExecutionOwner(
+      app,
+      harness.vault,
+      owner,
+      harness.creator
+    );
+    const otherOwner = createKnowledgeExecutionOwner();
+    KnowledgeExecutionOwner.bindVaultLifecycle(
+      otherOwner,
+      app,
+      harness.vault,
+      harness.vault.adapter
+    );
+
+    expect(Object.isFrozen(store)).toBe(true);
+    expect(ObsidianKnowledgeFileStore.matchesExecutionOwner(store, owner)).toBe(true);
+    expect(ObsidianKnowledgeFileStore.matchesExecutionOwner(store, otherOwner)).toBe(false);
+    expect(ObsidianKnowledgeFileStore.matchesExecutionOwner(new Proxy(store, {}), owner)).toBe(
+      false
+    );
+    expect(() =>
+      ObsidianKnowledgeFileStore.assert(Object.create(ObsidianKnowledgeFileStore.prototype))
+    ).toThrow(TypeError);
+
+    app.vault = { ...harness.vault } as Vault;
+    expect(ObsidianKnowledgeFileStore.matchesExecutionOwner(store, owner)).toBe(false);
+    await expect(store.observe("Wiki/Page.md")).rejects.toBeInstanceOf(TypeError);
   });
 
   it("rejects invalid path, state hash, and adapter stat payload", async () => {

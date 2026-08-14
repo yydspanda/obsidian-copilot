@@ -244,7 +244,10 @@ describe("KnowledgeProductionSourceLifecycleCoordinator", () => {
   it("blocks retirement before the atomic port and detects token drift on reproof", async () => {
     const blockedHarness = createHarness({
       candidates: createCandidateSnapshot([
-        createCandidate({ blockers: ["bundle_work_active"], status: "blocked" }),
+        createCandidate({
+          blockers: ["forward_revision_overlay_active"],
+          status: "blocked",
+        }),
       ]),
     });
     await expectLifecycleError(
