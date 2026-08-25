@@ -1,6 +1,6 @@
 # Knowledge Studio 与 Activity
 
-> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-12。
+> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-25。
 
 ## 本页目标
 
@@ -29,16 +29,19 @@ Knowledge Studio 是个人知识库的控制台；`Activity` 是其中的持久�
 
 ### 界面术语
 
-| 英文界面           | 本手册中的中文 | 用途                              |
-| ------------------ | -------------- | --------------------------------- |
-| `Knowledge Studio` | 知识工作台     | 管理 Knowledge 全流程             |
-| `Setup & status`   | 设置与状态     | 分开查看本地 Workspace/模型就绪度 |
-| `Import folder`    | 导入文件夹     | 把外部文件夹复制为 Vault 来源快照 |
-| `Query`            | 查询           | 只查询已接受、已应用的 Wiki       |
-| `Activity`         | 活动/任务      | 查看后台摄入、编译与应用状态      |
-| `Review`           | 审核           | 决定候选修改是否可以写入 Wiki     |
-| `Recovery`         | 恢复           | 处理不能由普通重试解决的事务状态  |
-| `Apply`            | 应用到 Wiki    | 把已接受的候选修改事务性写入 Wiki |
+| 英文界面                | 本手册中的中文 | 用途                                                 |
+| ----------------------- | -------------- | ---------------------------------------------------- |
+| `Knowledge Studio`      | 知识工作台     | 管理 Knowledge 全流程                                |
+| `Setup & status`        | 设置与状态     | 分开查看本地 Workspace/模型就绪度                    |
+| `Import folder`         | 导入文件夹     | 把外部文件夹复制为 Vault 来源快照                    |
+| `Query`                 | 查询           | 只查询已接受、已应用的 Wiki                          |
+| `Activity`              | 活动/任务      | 查看后台摄入、编译与应用状态                         |
+| `Review`                | 审核           | 决定候选修改是否可以写入 Wiki                        |
+| `Recovery`              | 恢复           | 处理不能由普通重试解决的事务状态                     |
+| `Apply`                 | 应用到 Wiki    | 把已接受的候选修改事务性写入 Wiki                    |
+| `Known applied outputs` | 已知应用输出   | 查看按精确正文合并的 Source / Forward 历史           |
+| `Source Apply`          | 来源应用版本   | 最后一次普通 Source Apply 提交的页面基线             |
+| `Forward revision`      | 前向修订       | 在不冒充重新编译的前提下，对当前 Wiki 页的已审核修订 |
 
 `Recovery` 只有存在需要处理的恢复项时才显示；`Query` 只有当前适配器提供了查询能力时才显示。
 
@@ -155,6 +158,14 @@ Activity 只展示有限数量的旧终态行；如果出现 “older terminal j
 
 只在候选修改已持久保存、队列状态允许开始审核时显示。点击后会切换到 `Review` 并打开对应提案。详见 [Review 与 Apply](review-and-apply.md)。
 
+## 当前页的 Source / Forward 来源
+
+已应用 Wiki 页同时保留两项内部事实：最后一次普通 Source Apply 提交的基线，以及当前应读取的 effective 页头。没有 Forward revision 时两者相同；有活跃 Forward revision 时，检查器会明确显示 `Forward revision` 来源和 Source evidence 的适用边界。系统会在内部校验 Source-applied 哈希、effective 哈希和精确链路，不会把手工正文伪装成新的 Source Apply。
+
+Forward 页仍可以显示原 Source citations，但它们只证明原来的来源片段，不是对人工改写内容的新证据。同一页可以安全连续提交多次 Forward revision；每次都必须从上一个 effective 页头精确开始，并且任何时刻只有一个当前页头。
+
+Forward Review 接受后但 journal 尚未开始时，会显示 `Accepted revision ready to apply`。你可以重新 `Validate and apply`，或在系统仍能证明没有文件写入时选择 `End without writing`。后者只结束流程，不修改 Wiki，也不是回滚。进入 sticky Forward recovery 后，普通 Retry/Resume 不能绕过精确核对；当前卡片会提供 `Recheck / retry exact Apply` 和 `Keep current (no write)`，两者都会重新观察当前字节，并且不会覆盖第三状态。详见 [维护与恢复](maintenance-and-recovery.md#forward-revision-startup-recovery)。
+
 ## `no_changes` 为什么没有单独页签
 
 `no_changes` 是后台编译的正常成功结果，不会制造空提案。你通常会看到：
@@ -164,6 +175,8 @@ Activity 只展示有限数量的旧终态行；如果出现 “older terminal j
 - Wiki 文件保持不变。
 
 这表示系统已经证明当前来源和现有 Wiki 不需要产生修改。不要因为 Review 为空就立即重复导入；重复处理可能带来不必要的模型费用。
+
+如果该页当前有一个已验证的 Forward 页头，`no_changes` 会保留它。只有后续普通 Source Apply 确实成功提交了同一 Source 的该精确页面，才会取代这个 Forward 页头；其他页的 Apply 也不会移除它。
 
 ## “Durable Activity is not connected” 表示什么
 
@@ -210,7 +223,7 @@ Completed（no_changes）             Awaiting review
 - 一直 `Queued`：检查 Bundle 是否被暂停、是否 rate limited，或是否有 Recovery/Finalizing 阻断。
 - `Failed` 没有 `Retry`：该失败不适合盲目重跑，或已有更新的同源任务；按失败阶段处理来源、配置或恢复状态。
 - `Finalizing`：不要重复 Submit、关闭中断或手工修改目标文件；先等待持久确认。
-- `Recovery required`：转到 `Recovery`，只执行界面给出的 `Continue`、`Abandon` 或重新检查动作。
+- `Recovery required`：转到 `Recovery`。普通 Apply 只执行界面在当前精确状态下提供的 `Continue`、`Abandon` 或 `Check again`；Forward sticky recovery 使用其 Review 卡片上的两个精确动作。它们只允许新鲜复查后的有界精确重试，或保留当前文件且不写入，永远没有强制覆盖。
 - Activity 已 `Completed`、Review 为空、Wiki 不变：这通常是 `no_changes`。
 
 详见 [维护与恢复](maintenance-and-recovery.md) 和 [故障排查](troubleshooting.md)。
@@ -222,6 +235,8 @@ Completed（no_changes）             Awaiting review
 - `Resume` 可能允许已有排队任务继续；`Retry` 会重新排队，因此后续编译可能再次调用 DeepSeek并产生费用。
 - 一次正常的新来源编译通常包含分析与生成两个 DeepSeek 请求。
 - Activity 显示的是受控持久状态；禁止手工编辑插件的 Runtime、Manifest 或事务记录来改变它。
+
+> Source / Forward 当前页头、重复 Forward 和对应恢复动作尚未完成用户计划的真实 Windows Obsidian 实机验收；现有自动化和 Windows 路径边界检查不等于已获平台认证。
 
 ## 相关页面
 

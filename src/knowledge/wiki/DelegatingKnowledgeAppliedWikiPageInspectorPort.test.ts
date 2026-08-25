@@ -7,6 +7,7 @@ import {
 } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
 
 const PAGE_REF = "a".repeat(64);
+const PAGE_HASH = "d".repeat(64);
 const SOURCE_REF = "b".repeat(64);
 const EVIDENCE_REF = "c".repeat(64);
 
@@ -16,6 +17,10 @@ function createSession(pagePath = "Wiki/Applied.md"): KnowledgeAppliedWikiPageIn
     pageRef: PAGE_REF,
     displayPagePath: pagePath,
     ownership: "generated",
+    sourceAppliedContentHash: PAGE_HASH,
+    effectiveContentHash: PAGE_HASH,
+    origin: { kind: "source_apply" },
+    evidenceScope: "source_applied_content",
     sources: [
       {
         sourceRef: SOURCE_REF,
@@ -69,6 +74,7 @@ describe("DelegatingKnowledgeAppliedWikiPageInspectorPort", () => {
     expect(session).toEqual(delegate.delegateSession);
     expect(session).not.toBe(delegate.delegateSession);
     expect(session.sources).not.toBe(delegate.delegateSession.sources);
+    expect(session.origin).not.toBe(delegate.delegateSession.origin);
     expect(session.sources[0].evidence).not.toBe(delegate.delegateSession.sources[0].evidence);
     expect(Object.isFrozen(session)).toBe(true);
     expect(Object.isFrozen(session.sources)).toBe(true);

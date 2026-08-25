@@ -3,6 +3,10 @@ import {
   KnowledgeProductionCompileInputError,
 } from "@/knowledge/compiler/KnowledgeProductionCompileInput";
 import type { KnowledgeAuthorizedCompilePreparation } from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
+import {
+  KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY,
+  createKnowledgeForwardRevisionOverlayEntry,
+} from "@/knowledge/manifest/KnowledgeForwardRevisionOverlay";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 import {
   type SourceArtifactObservation,
@@ -191,6 +195,61 @@ describe("createKnowledgeProductionCompileInput", () => {
         expectedContentHash: sharedHash,
       },
     ]);
+  });
+
+  it("uses the active forward-revision head without rewriting the source-applied base", () => {
+    const sourceAppliedContentHash = createFileContentHash("source applied");
+    const effectiveContentHash = createFileContentHash("forward effective");
+    const overlay = createKnowledgeForwardRevisionOverlayEntry({
+      bundleId: "personal",
+      pagePath: "Wiki/Personal.md",
+      sourceId: SOURCE_ID,
+      sourceBaseDigest: "c".repeat(64),
+      sourceAppliedContentHash,
+      previousEffectiveContentHash: sourceAppliedContentHash,
+      effectiveContentHash,
+      forwardTransactionId: "forward-transaction-1",
+      acceptedDecisionDigest: "d".repeat(64),
+      forwardLedgerIdentityDigest: "e".repeat(64),
+      appliedAt: 50,
+    });
+    const manifest: SourceManifest = {
+      version: 1,
+      bundleId: "personal",
+      revision: 5,
+      entries: [
+        {
+          sourceId: SOURCE_ID,
+          sourceKey: "sources/primary.md",
+          sourcePath: "Sources/Primary.md",
+          custody: "user_managed",
+          lastSuccessful: createLastSuccessful([
+            {
+              path: "Wiki/Personal.md",
+              ownership: "generated",
+              contentHash: sourceAppliedContentHash,
+            },
+          ]),
+        },
+      ],
+      extensions: {
+        [KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]: {
+          version: 2,
+          kind: "forward_revision_overlay_extension",
+          entries: [overlay],
+        },
+      },
+    };
+
+    const input = createKnowledgeProductionCompileInput(
+      createPreparation([createTextArtifact()], manifest),
+      51
+    );
+
+    expect(input.targetAuthorizations[0]?.expectedContentHash).toBe(effectiveContentHash);
+    expect(manifest.entries[0].lastSuccessful?.generatedPages[0].contentHash).toBe(
+      sourceAppliedContentHash
+    );
   });
 
   it("fails closed for empty material, absent primary authority, missing hashes, and bounds", () => {

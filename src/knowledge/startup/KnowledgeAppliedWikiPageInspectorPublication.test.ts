@@ -29,6 +29,10 @@ function createSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
     pageRef: "a".repeat(64),
     displayPagePath: "Wiki/Topic.md",
     ownership: "generated",
+    sourceAppliedContentHash: "d".repeat(64),
+    effectiveContentHash: "d".repeat(64),
+    origin: Object.freeze({ kind: "source_apply" as const }),
+    evidenceScope: "source_applied_content",
     sources: Object.freeze([
       Object.freeze({
         sourceRef: "b".repeat(64),

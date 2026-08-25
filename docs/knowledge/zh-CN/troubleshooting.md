@@ -197,6 +197,28 @@ Rate limited 表示提供商或队列要求等待。普通用户 Pause 可以在
 
 Windows 写入适配器要求新文件的父 Wiki 目录已经存在。先在安全状态下创建所需父目录，再重新产生/处理提案；系统不会为此隐式创建未知目录。
 
+### Known applied outputs 没有 Propose this output
+
+先看该行显示的不可提案原因。常见情形是：当前 Wiki 已被外部改动、所选项就是当前 effective 页头、详情过大，或该历史行只有 `Forward revision Apply` 来源。当前 Forward-only 历史输出还不能作为另一提案的候选正文；混合来源行只有在当前详情可由普通 Source Apply 证明时才可用。不要修改私有历史记录来解锁按钮。
+
+### Accepted revision ready to apply 一直保留
+
+这表示 Forward 接受决定已持久化，但 journal 和 Wiki 写入还没开始。若仍要应用，点击 `Validate and apply` 重新执行精确核对。若改变主意，且界面仍显示写入未开始，点击 `End without writing`；结果会记录为写入前结束，Wiki 不变。这不是回滚，也不会创建 overlay 或 Apply ledger。
+
+### Forward Apply needs recovery 没有普通 Retry
+
+这是预期的 sticky 保护。先备份 Vault。当前 Forward `recovery_required` 卡片会显示两个专用按钮：
+
+- `Recheck / retry exact Apply` 始终先重读当前字节。如果已经是精确 accepted after-state，只完成持久确认，不再写一次；只有文件仍是 exact-before 且 journal 仍处于允许重试的写入阶段时，本次命令才执行一次 exact CAS；第三状态保持阻断且不覆盖；
+- `Keep current (no write)` 始终先重读当前字节；exact-after 会收敛成已提交，普通、仍可重试的 exact-before 会被拒绝。允许零写入终结时，它按 journal 阶段如实记录“写入前放弃”“写入结果不确定后外部取代”或“已提交后外部取代”，不会把所有情况统一冒充成外部取代或成功 Apply；
+- 没有 force；不能强制覆盖或猜测回滚。
+
+点击后等待当前命令完成和持久快照刷新；命令进行中两个按钮都会禁用。如果 `Keep current (no write)` 被拒绝，说明当前精确状态还不允许零写入终结；不要用普通 Resume、重复 Apply 或编辑私有记录绕过。
+
+### Source 重新编译后 Forward 页头还在
+
+先看这次任务是否真正成功 Apply 了同一 Source 的同一个精确页面。只有这样的后续 Source Apply ledger 才会取代该页 Forward 层。其他页的 Apply 和真实 `no_changes` 都会保留 Forward 页头；这是为了不把“未重写该页”冒充成已编译的取代版本。
+
 ## 文本与 Schema 解析问题
 
 ### `.md`、`.markdown` 或 `.txt` 在 Parsing 失败
@@ -237,6 +259,12 @@ Schema 必须非空、严格 UTF-8，且不超过 1,000,000 bytes。修复后，
 Query 只搜索已接受、已 Apply、且哈希仍验证通过的 Wiki。未审核 Source、普通 Vault 笔记和已外部改变的 Wiki 不会被偷偷加入。
 
 先完成 Review/Apply，或换一个与已应用 Wiki 更接近的问题。
+
+### Query 命中了 Forward 修订，但引用仍是原 Source
+
+这是预期的证据边界。Query 会按已验证的 effective 当前页头检索，所以可以读到 Forward 正文；但证据按钮仍只指向原 Source citations。它们不会对人工改写的新句子自动产生额外证明。对重要表述，打开引用并自行核对原文。
+
+有效 Forward 页头不需要模型 repair 才能被 Query 读取。若任一页的 Forward 链路孤立、歧义或与 Vault 字节不符，完整 Query 快照会在有界重试后安全失败；当前实现不会只排除该页后继续，也不会悄悄回退到 Source 基线或调用模型修复它。
 
 ### Insufficient evidence
 
@@ -281,6 +309,8 @@ Query 只搜索已接受、已 Apply、且哈希仍验证通过的 Wiki。未审
 ## 数据、网络与费用影响
 
 排查 Studio 配置、Recovery、路径和本地文件通常不需要模型。查看 Setup 三卡不会联系模型 provider；打开现有 Copilot 设置可能触发插件更新检查。Retry、重新编译、Query 和 Save 后的编译可能调用 DeepSeek；确认状态后再操作。
+
+Source / Forward effective 页头、重复 Forward 和上述 sticky recovery 动作已有自动化与 Windows 路径边界检查，但尚未完成用户计划的真实 Windows Obsidian 实机验收。排查时不要把这一轮自动化通过误报为已经完成平台验收。
 
 ## 相关页面
 

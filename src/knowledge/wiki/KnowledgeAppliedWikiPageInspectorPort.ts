@@ -1,6 +1,7 @@
 import type { GeneratedPageOwnership, SourceCustody } from "@/knowledge/model/types";
 import type { KnowledgeReviewEvidenceSummary } from "@/knowledge/review/KnowledgeReviewEvidence";
 import { parseVaultPath } from "@/knowledge/paths/vaultPath";
+import type { KnowledgeEffectivePageOrigin } from "@/knowledge/manifest/KnowledgeEffectivePageProjection";
 
 /** Fixed disclosure bounds for one applied-Wiki inspection session. */
 export const KNOWLEDGE_APPLIED_WIKI_INSPECTION_LIMITS = Object.freeze({
@@ -8,6 +9,9 @@ export const KNOWLEDGE_APPLIED_WIKI_INSPECTION_LIMITS = Object.freeze({
   maxSources: 16,
   maxEvidence: 64,
 });
+
+/** Citations prove the retained Source apply, never later manually revised wording. */
+export const KNOWLEDGE_APPLIED_WIKI_EVIDENCE_SCOPE = "source_applied_content" as const;
 
 /** Canonical user-owned page selection captured synchronously from an Obsidian TFile. */
 export interface KnowledgeAppliedWikiPageInspectionRequest {
@@ -67,14 +71,20 @@ export interface KnowledgeAppliedWikiSourceSummary {
 /**
  * Frozen display capability for one exact current applied Wiki page.
  *
- * This DTO deliberately contains no Bundle id, Source id, content hash, Runtime
- * revision, actionable locator, or file-operation authority. Its object identity
- * is the capability accepted by `openEvidence`.
+ * Source and effective hashes plus the exact origin disclose whether the current
+ * bytes came from Source apply or a forward revision. Evidence remains scoped to
+ * the retained Source-applied material and does not prove manually revised text.
+ * The DTO contains no actionable locator or file-operation authority. Its object
+ * identity is the capability accepted by `openEvidence`.
  */
 export interface KnowledgeAppliedWikiPageInspectionSession {
   readonly pageRef: string;
   readonly displayPagePath: string;
   readonly ownership: GeneratedPageOwnership;
+  readonly sourceAppliedContentHash: string;
+  readonly effectiveContentHash: string;
+  readonly origin: Readonly<KnowledgeEffectivePageOrigin>;
+  readonly evidenceScope: typeof KNOWLEDGE_APPLIED_WIKI_EVIDENCE_SCOPE;
   readonly sources: readonly Readonly<KnowledgeAppliedWikiSourceSummary>[];
   readonly omittedSourceCount: number;
 }

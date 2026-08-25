@@ -30,9 +30,14 @@ import {
   createKnowledgeForwardRevisionIntentDigest,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
 import {
+  createKnowledgeForwardRevisionPreparedApplyJournal,
   projectKnowledgeForwardRevisionApplyJournalApplying,
   projectKnowledgeForwardRevisionApplyJournalCommitted,
+  projectKnowledgeForwardRevisionApplyJournalRecoveryRequired,
+  snapshotKnowledgeForwardRevisionApplyJournal,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyJournal";
+import { createKnowledgeForwardRevisionApplyRevalidationReceipt } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyRevalidation";
+import { createKnowledgeForwardRevisionApplyRecoveryExpectation } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyRecoveryExpectation";
 import { KnowledgeProductionForwardRevisionProposalCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionProposalCoordinator";
 import {
   KnowledgeForwardRevisionApplyCoordinatorError,
@@ -44,21 +49,30 @@ import { KnowledgeProductionForwardRevisionValidationCoordinator } from "@/knowl
 import { KNOWLEDGE_SOURCE_ORIGIN_EXTENSION_KEY } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   createKnowledgeForwardRevisionPendingProposalRecord,
+  createKnowledgeForwardRevisionPendingProposalRecordDigest,
   createKnowledgeForwardRevisionRequest,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposal";
 import {
   createKnowledgeForwardRevisionPublishedProposal,
   snapshotKnowledgeForwardRevisionReviewSnapshot,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshot";
-import { migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
+import {
+  createKnowledgeForwardRevisionPendingReviewEntryV2,
+  createKnowledgeForwardRevisionTerminalReviewEntryV2,
+  migrateKnowledgeForwardRevisionReviewSnapshotV1ToV2,
+  snapshotKnowledgeForwardRevisionReviewSnapshotV2,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
+import { createKnowledgeForwardRevisionAcceptedDecisionRecord } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
 import { createKnowledgeForwardRevisionProposalAuthorityQuery } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalAuthority";
 import {
   createKnowledgeForwardRevisionValidationAuthorityQuery,
   snapshotKnowledgeForwardRevisionValidationAuthority,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationAuthority";
 import { createKnowledgeForwardRevisionReviewCommand } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
+import { createKnowledgeForwardRevisionValidationReceipt } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
 import {
   KnowledgeForwardRevisionStudioProjectionLimitError,
+  createKnowledgeForwardRevisionStudioAcceptedIdentity,
   projectKnowledgeForwardRevisionStudioSnapshot,
   snapshotKnowledgeForwardRevisionStudioSnapshot,
   type KnowledgeForwardRevisionStudioSnapshot,
@@ -102,6 +116,11 @@ import {
   createNoChangesManifestCommitPlanDigest,
   parseKnowledgeNoChangesCommitMarker,
 } from "@/knowledge/manifest/NoChangesManifestCommit";
+import { projectKnowledgeEffectiveManifestPages } from "@/knowledge/manifest/KnowledgeEffectivePageProjection";
+import {
+  KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY,
+  snapshotKnowledgeForwardRevisionOverlayExtension,
+} from "@/knowledge/manifest/KnowledgeForwardRevisionOverlay";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import { SourceManifestRevisionConflictError } from "@/knowledge/manifest/SourceManifestStorage";
 import {
@@ -110,6 +129,7 @@ import {
   projectKnowledgeSourceRetirement,
 } from "@/knowledge/manifest/SourceRetirement";
 import {
+  canonicalizeJson,
   createFileContentHash,
   createQuoteHash,
   createSourceContentHash,
@@ -126,6 +146,7 @@ import { createNoJournalApplyRecoveryReference } from "@/knowledge/recovery/NoJo
 import type { KnowledgeStartupReleaseRequest } from "@/knowledge/recovery/KnowledgeStartupRelease";
 import {
   ReviewStorageRevisionConflictError,
+  validateChangeSetReviewSnapshot,
   type ChangeSetReviewSnapshot,
 } from "@/knowledge/review/ReviewStorage";
 import {
@@ -208,6 +229,7 @@ import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki
 import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
 import type { App, DataAdapter, Vault } from "obsidian";
 import { FileSystemAdapter, TFile } from "obsidian";
+import { sha256 } from "@/utils/hash";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -446,6 +468,9 @@ function createMarkerlessCompletionRuntimeSnapshot(
           forwardRevisionReviews: [],
           activeForwardRevisionApply: null,
           forwardRevisionApplyCommits: [],
+          forwardRevisionSupersessions: [],
+          forwardRevisionAbandonments: [],
+          forwardRevisionRecoveryTerminals: [],
         }
       : {}),
     manifests: [{ bundleId: "personal", value: createRegisteredManifest() }],
@@ -803,6 +828,11 @@ function createManifestCommitPlanFixture(
     }
     return { path: page.path, ownership: page.ownership, contentHash: page.contentHash };
   });
+  const effectiveByKey = new Map(
+    projectKnowledgeEffectiveManifestPages(manifest)
+      .filter((page) => page.sourceIds.includes(source.sourceId))
+      .map((page) => [page.windowsPathKey, page] as const)
+  );
   return {
     version: 1,
     kind: "source_compile",
@@ -819,6 +849,7 @@ function createManifestCommitPlanFixture(
       const base = baseGeneratedPages.find(
         (page) => toWindowsPathKey(page.path) === toWindowsPathKey(change.path)
       );
+      const effective = effectiveByKey.get(toWindowsPathKey(change.path));
       return {
         changeId: change.id,
         path: change.path,
@@ -826,6 +857,9 @@ function createManifestCommitPlanFixture(
         access: base ? ("authorized" as const) : ("create_only" as const),
         ownership: base?.ownership ?? ("generated" as const),
         wasTrackedByPrimarySource: base !== undefined,
+        ...(base && effective && effective.effectiveContentHash !== base.contentHash
+          ? { expectedContentHash: effective.effectiveContentHash }
+          : {}),
       };
     }),
   };
@@ -919,43 +953,58 @@ function createForwardCurrentUpdateProof(
   beforeContent: string,
   afterContent = "# Current forward target\n",
   sourceContentHash = HASH_A,
-  pipelineFingerprint = HASH_B
+  pipelineFingerprint = HASH_B,
+  options: Readonly<{
+    inputRevision?: number;
+    idSuffix?: string;
+    transactionId?: string;
+    startedAt?: number;
+    committedAt?: number;
+    citations?: KnowledgeChangeSet["citations"];
+  }> = {}
 ): {
   journal: ChangeSetTransactionJournal & { phase: "committed" };
   receipt: TransactionCommitReceipt;
 } {
   const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
-  const basePage = source?.lastSuccessful?.generatedPages.find((page) => page.path === pagePath);
-  if (!source || !basePage?.contentHash) {
+  const lastSuccessful = source?.lastSuccessful;
+  const basePage = lastSuccessful?.generatedPages.find((page) => page.path === pagePath);
+  if (!source || !lastSuccessful || !basePage?.contentHash) {
     throw new Error("Expected one exact historical generated page");
   }
+  const inputRevision = options.inputRevision ?? 2;
+  const idSuffix = options.idSuffix ?? "forward-current";
+  const transactionId = options.transactionId ?? "transaction-forward-current";
+  const startedAt = options.startedAt ?? 330;
+  const committedAt = options.committedAt ?? 340;
+  const beforeHash = createFileContentHash(beforeContent);
   const afterHash = createFileContentHash(afterContent);
   const changeSet: KnowledgeChangeSet = {
-    id: "changeset-forward-current",
+    id: `changeset-${idSuffix}`,
     bundleId: "personal",
     operation: "ingest",
     sourceRefs: ["source-1"],
     changes: [
       {
-        id: "change-forward-current",
+        id: `change-${idSuffix}`,
         operation: "update",
         path: pagePath,
         sourceRefs: ["source-1"],
         reason: "Advance one generated page",
-        beforeHash: basePage.contentHash,
+        beforeHash,
         afterContent,
         afterHash,
       },
     ],
-    citations: [createSourceCitation()],
+    citations: options.citations ?? [createSourceCitation()],
     validation: { okfValid: true, citationsValid: true, linksValid: true },
     status: "accepted",
-    createdAt: 330,
+    createdAt: startedAt,
   };
   const plan = createManifestCommitPlanFixture(
     manifest,
     changeSet,
-    2,
+    inputRevision,
     sourceContentHash,
     pipelineFingerprint
   );
@@ -976,7 +1025,7 @@ function createForwardCurrentUpdateProof(
     sourceId: source.sourceId,
     sourceContentHash,
     pipelineFingerprint,
-    inputRevision: 2,
+    inputRevision,
     manifestCommitPlanDigest: createManifestCommitPlanDigest(plan),
     changeSetId: changeSet.id,
     expectedManifestRevision: manifest.revision,
@@ -985,7 +1034,7 @@ function createForwardCurrentUpdateProof(
   };
   const journal: ChangeSetTransactionJournal & { phase: "committed" } = {
     version: TRANSACTION_JOURNAL_VERSION,
-    transactionId: "transaction-forward-current",
+    transactionId,
     revision: 4,
     bundleId: manifest.bundleId,
     bundle: createBundle(),
@@ -994,32 +1043,273 @@ function createForwardCurrentUpdateProof(
     manifestCommitIntent: intent,
     manifestCommitIntentDigest: createManifestCommitIntentDigest(intent),
     jobClaim: {
-      jobId: "job-forward-current",
+      jobId: `job-${idSuffix}`,
       attempt: 1,
-      startedAt: 330,
+      startedAt,
       sourceId: source.sourceId,
       sourceContentHash,
       pipelineFingerprint,
-      inputRevision: 2,
+      inputRevision,
     },
     changeSet,
     targets: [
       {
-        changeId: "change-forward-current",
+        changeId: `change-${idSuffix}`,
         path: pagePath,
         windowsPathKey: toWindowsPathKey(pagePath),
         operation: "update",
-        before: { kind: "file", content: beforeContent, contentHash: basePage.contentHash },
+        before: { kind: "file", content: beforeContent, contentHash: beforeHash },
         after: { kind: "file", content: afterContent, contentHash: afterHash },
       },
     ],
     appliedCount: 1,
-    createdAt: 330,
-    updatedAt: 340,
+    createdAt: startedAt,
+    updatedAt: committedAt,
     phase: "committed",
-    committedAt: 340,
+    committedAt,
   };
   return { journal, receipt: createTransactionCommitReceipt(journal) };
+}
+
+/** Creates one ordinary Source Apply that deletes the exact effective Forward target. */
+function createForwardCurrentDeleteProof(
+  manifest: SourceManifest,
+  pagePath: string,
+  beforeContent: string,
+  sourceContentHash: string,
+  pipelineFingerprint: string
+): {
+  journal: ChangeSetTransactionJournal & { phase: "committed" };
+  receipt: TransactionCommitReceipt;
+} {
+  const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
+  const lastSuccessful = source?.lastSuccessful;
+  const basePage = lastSuccessful?.generatedPages.find((page) => page.path === pagePath);
+  if (!source || !lastSuccessful || !basePage?.contentHash) {
+    throw new Error("Expected one exact generated page to delete");
+  }
+  const beforeHash = createFileContentHash(beforeContent);
+  const replacementPath = "Wiki/source-delete-replacement.md";
+  const replacementContent = "# Source replacement page\n";
+  const replacementHash = createFileContentHash(replacementContent);
+  const changeSet: KnowledgeChangeSet = {
+    id: "changeset-source-delete-forward",
+    bundleId: manifest.bundleId,
+    operation: "ingest",
+    sourceRefs: [source.sourceId],
+    changes: [
+      {
+        id: "change-source-delete-forward",
+        operation: "delete",
+        path: pagePath,
+        sourceRefs: [source.sourceId],
+        reason: "Delete one generated page",
+        beforeHash,
+      },
+      {
+        id: "change-source-delete-replacement",
+        operation: "create",
+        path: replacementPath,
+        sourceRefs: [source.sourceId],
+        reason: "Create the replacement generated page",
+        expectedAbsent: true,
+        afterContent: replacementContent,
+        afterHash: replacementHash,
+      },
+    ],
+    citations: [],
+    validation: { okfValid: true, citationsValid: true, linksValid: true },
+    status: "accepted",
+    createdAt: 800,
+  };
+  const plan = createManifestCommitPlanFixture(
+    manifest,
+    changeSet,
+    3,
+    sourceContentHash,
+    pipelineFingerprint
+  );
+  const intent: ManifestCommitIntent = {
+    version: 1,
+    kind: "source_compile",
+    bundleId: manifest.bundleId,
+    sourceId: source.sourceId,
+    sourceContentHash,
+    pipelineFingerprint,
+    inputRevision: 3,
+    manifestCommitPlanDigest: createManifestCommitPlanDigest(plan),
+    changeSetId: changeSet.id,
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    generatedPages: [
+      ...lastSuccessful.generatedPages
+        .filter((page) => page.path !== pagePath)
+        .map((page) => {
+          if (!page.contentHash) throw new Error("Expected content-addressed generated page");
+          return { path: page.path, ownership: page.ownership, contentHash: page.contentHash };
+        }),
+      { path: replacementPath, ownership: "generated" as const, contentHash: replacementHash },
+    ].sort((left, right) =>
+      toWindowsPathKey(left.path).localeCompare(toWindowsPathKey(right.path))
+    ),
+  };
+  const journal: ChangeSetTransactionJournal & { phase: "committed" } = {
+    version: TRANSACTION_JOURNAL_VERSION,
+    transactionId: "transaction-source-delete-forward",
+    revision: 4,
+    bundleId: manifest.bundleId,
+    bundle: createBundle(),
+    changeSetId: changeSet.id,
+    changeSetDigest: createChangeSetTransactionDigest(changeSet),
+    manifestCommitIntent: intent,
+    manifestCommitIntentDigest: createManifestCommitIntentDigest(intent),
+    jobClaim: {
+      jobId: "job-source-delete-forward",
+      attempt: 1,
+      startedAt: 820,
+      sourceId: source.sourceId,
+      sourceContentHash,
+      pipelineFingerprint,
+      inputRevision: 3,
+    },
+    changeSet,
+    targets: [
+      {
+        changeId: "change-source-delete-forward",
+        path: pagePath,
+        windowsPathKey: toWindowsPathKey(pagePath),
+        operation: "delete",
+        before: { kind: "file", content: beforeContent, contentHash: beforeHash },
+        after: { kind: "missing" },
+      },
+      {
+        changeId: "change-source-delete-replacement",
+        path: replacementPath,
+        windowsPathKey: toWindowsPathKey(replacementPath),
+        operation: "create",
+        before: { kind: "missing" },
+        after: {
+          kind: "file",
+          content: replacementContent,
+          contentHash: replacementHash,
+        },
+      },
+    ],
+    appliedCount: 2,
+    createdAt: 820,
+    updatedAt: 840,
+    phase: "committed",
+    committedAt: 840,
+  };
+  return { journal, receipt: createTransactionCommitReceipt(journal) };
+}
+
+/** Reconstructs a strict Runtime-v8 ledger and Manifest head from one v9 forward commit. */
+function createRuntimeV8ForwardHead(
+  manifest: SourceManifest,
+  ledger: KnowledgeRuntimeStoreSnapshot["forwardRevisionApplyCommits"][number]
+): Readonly<{ manifest: SourceManifest; ledger: Readonly<Record<string, unknown>> }> {
+  const identityPayload = {
+    version: 1,
+    kind: "forward_revision_apply_ledger_identity",
+    transactionId: ledger.transactionId,
+    committedJournalDigest: ledger.committedJournalDigest,
+    runtimeId: ledger.runtimeId,
+    bundleId: ledger.bundleId,
+    sourceId: ledger.sourceId,
+    pagePath: ledger.pagePath,
+    windowsPathKey: ledger.windowsPathKey,
+    acceptedDecisionDigest: ledger.acceptedDecisionDigest,
+    applyClaimId: ledger.applyClaimId,
+    applyClaimDigest: ledger.applyClaimDigest,
+    proposalId: ledger.proposalId,
+    proposalDigest: ledger.proposalDigest,
+    originalValidationReceiptDigest: ledger.originalValidationReceiptDigest,
+    revalidationReceiptDigest: ledger.revalidationReceiptDigest,
+    sourceBaseDigest: ledger.sourceBaseDigest,
+    baseContentHash: ledger.sourceAppliedContentHash,
+    effectiveContentHash: ledger.effectiveContentHash,
+    manifestBeforeRevision: ledger.manifestBeforeRevision,
+    manifestBeforeDigest: ledger.manifestBeforeDigest,
+    appliedAt: ledger.appliedAt,
+  };
+  const forwardLedgerIdentityDigest = sha256(
+    `knowledge-forward-revision-apply-ledger-identity-v1\n${canonicalizeJson(identityPayload)}`
+  );
+  const extension = snapshotKnowledgeForwardRevisionOverlayExtension(
+    manifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+  );
+  const overlay = extension.entries.find(
+    (candidate) => candidate.forwardTransactionId === ledger.transactionId
+  );
+  if (!overlay || extension.entries.length !== 1) {
+    throw new Error("Expected one active forward overlay for Runtime-v8 migration");
+  }
+  const legacyManifest: SourceManifest = {
+    ...manifest,
+    extensions: {
+      ...manifest.extensions,
+      [KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]: {
+        version: 1,
+        kind: "forward_revision_overlay_extension",
+        entries: [
+          {
+            version: 1,
+            kind: "forward_revision_overlay_entry",
+            bundleId: overlay.bundleId,
+            pagePath: overlay.pagePath,
+            windowsPathKey: overlay.windowsPathKey,
+            sourceId: overlay.sourceId,
+            sourceBaseDigest: overlay.sourceBaseDigest,
+            baseContentHash: overlay.sourceAppliedContentHash,
+            effectiveContentHash: overlay.effectiveContentHash,
+            forwardTransactionId: overlay.forwardTransactionId,
+            acceptedDecisionDigest: overlay.acceptedDecisionDigest,
+            forwardLedgerIdentityDigest,
+            appliedAt: overlay.appliedAt,
+          },
+        ],
+      },
+    },
+  };
+  const payload = {
+    version: 1,
+    kind: "forward_revision_apply_ledger_record",
+    transactionId: ledger.transactionId,
+    committedJournalDigest: ledger.committedJournalDigest,
+    runtimeId: ledger.runtimeId,
+    bundleId: ledger.bundleId,
+    sourceId: ledger.sourceId,
+    pagePath: ledger.pagePath,
+    windowsPathKey: ledger.windowsPathKey,
+    acceptedDecisionDigest: ledger.acceptedDecisionDigest,
+    applyClaimId: ledger.applyClaimId,
+    applyClaimDigest: ledger.applyClaimDigest,
+    proposalId: ledger.proposalId,
+    proposalDigest: ledger.proposalDigest,
+    originalValidationReceiptDigest: ledger.originalValidationReceiptDigest,
+    revalidationReceiptDigest: ledger.revalidationReceiptDigest,
+    sourceBaseDigest: ledger.sourceBaseDigest,
+    baseContentHash: ledger.sourceAppliedContentHash,
+    effectiveContentHash: ledger.effectiveContentHash,
+    manifestBeforeRevision: ledger.manifestBeforeRevision,
+    manifestBeforeDigest: ledger.manifestBeforeDigest,
+    forwardLedgerIdentityDigest,
+    manifestAfterRevision: legacyManifest.revision,
+    manifestAfterDigest: createSourceManifestDigest(legacyManifest),
+    appliedAt: ledger.appliedAt,
+  };
+  const ledgerDigest = sha256(
+    `knowledge-forward-revision-apply-ledger-record-v1\n${canonicalizeJson(payload)}`
+  );
+  return Object.freeze({
+    manifest: legacyManifest,
+    ledger: Object.freeze({
+      ...payload,
+      ledgerId: `forward-revision-apply-ledger-${ledgerDigest}`,
+      ledgerDigest,
+    }),
+  });
 }
 
 /** Creates one prepared revision-zero journal against an exact Manifest read-set. */
@@ -1459,6 +1749,42 @@ function createApplyAuthoritySlots(
   };
 }
 
+/** Retains prior immutable Review records while installing a later Source Apply claim. */
+function retainApplyReviewHistory(
+  state: KnowledgeRuntimeStoreSnapshot,
+  authority: Pick<KnowledgeRuntimeStoreSnapshot, "queues" | "reviews" | "inputRevisions">
+): Pick<KnowledgeRuntimeStoreSnapshot, "queues" | "reviews" | "inputRevisions"> {
+  const previous = state.reviews.find((slot) => slot.bundleId === "personal")?.value as
+    | ChangeSetReviewSnapshot
+    | undefined;
+  const current = authority.reviews.find((slot) => slot.bundleId === "personal")?.value as
+    | ChangeSetReviewSnapshot
+    | undefined;
+  if (!previous || !current) throw new Error("Expected Source Apply Review history");
+  const nextReview: ChangeSetReviewSnapshot = {
+    ...current,
+    revision: previous.revision + 1,
+    records: [...previous.records, ...current.records],
+  };
+  const validation = validateChangeSetReviewSnapshot(nextReview);
+  if (!validation.valid) {
+    throw new Error(
+      `Invalid retained Source Apply Review: ${validation.diagnostics
+        .map((diagnostic) => `${diagnostic.code}:${diagnostic.field}`)
+        .join(",")}`
+    );
+  }
+  return {
+    ...authority,
+    reviews: [
+      {
+        bundleId: "personal",
+        value: nextReview,
+      },
+    ],
+  };
+}
+
 /**
  * Creates the Queue hand-off retained after Manifest success and before journal acknowledgement.
  *
@@ -1595,31 +1921,35 @@ async function createApplyHarness(
 /** Reconstructs exact forward-publication evidence from a two-Apply Runtime history. */
 function createForwardPublicationEvidence(
   state: KnowledgeRuntimeStoreSnapshot,
-  selectedContent = "# transaction-forward-historical\n"
+  selectedContent = "# transaction-forward-historical\n",
+  selectedTransactionId = "transaction-forward-historical"
 ): KnowledgeForwardRevisionProposalPublicationEvidence {
   const pagePath = "Wiki/transaction-forward-historical.md";
   const selectedContentHash = createFileContentHash(selectedContent);
   const historical = state.applyCommits.find(
-    (record) => record.transactionId === "transaction-forward-historical"
+    (record) => record.transactionId === selectedTransactionId
   );
   const review = state.reviews.find((slot) => slot.bundleId === "personal")
     ?.value as ChangeSetReviewSnapshot;
   const accepted = review.records.find(
     (record) =>
-      record.outcome === "accepted" &&
-      record.acceptedChangeSet.id === "changeset-transaction-forward-historical"
+      record.outcome === "accepted" && record.acceptedChangeSet.id === historical?.changeSetId
   );
   const manifest = state.manifests.find((slot) => slot.bundleId === "personal")
     ?.value as SourceManifest;
   const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
   const currentPage = source?.lastSuccessful?.generatedPages.find((page) => page.path === pagePath);
+  const effectivePage = projectKnowledgeEffectiveManifestPages(manifest).find(
+    (page) => page.path === pagePath
+  );
   if (
     !historical ||
     !accepted ||
     accepted.outcome !== "accepted" ||
     !source ||
     !source.lastSuccessful ||
-    !currentPage?.contentHash
+    !currentPage?.contentHash ||
+    !effectivePage
   ) {
     throw new Error("Expected exact forward publication authority fixtures");
   }
@@ -1667,7 +1997,7 @@ function createForwardPublicationEvidence(
       manifestRevision: manifest.revision,
       manifestDigest: createSourceManifestDigest(manifest),
       manifestBaseHash: currentPage.contentHash,
-      vaultObservedBeforeHash: currentPage.contentHash,
+      vaultObservedBeforeHash: effectivePage.effectiveContentHash,
     },
   });
   const historicalChange = accepted.acceptedChangeSet.changes.find(
@@ -1707,7 +2037,7 @@ function createForwardPublicationEvidence(
     },
     selectedContent,
     selectedContentHash,
-    vaultObservedBeforeHash: currentPage.contentHash,
+    vaultObservedBeforeHash: effectivePage.effectiveContentHash,
   };
 }
 
@@ -1832,19 +2162,19 @@ async function createForwardPublicationHarness(
   const currentContent = fixture?.currentContent ?? "# Current forward target\n";
   const sourceContentHash = fixture?.sourceContentHash ?? HASH_A;
   const pipelineFingerprint = fixture?.pipelineFingerprint ?? HASH_B;
+  const sourceCitation =
+    fixture?.historicalCitation ??
+    createSourceCitation(
+      "source-1",
+      fixture?.citationArtifactContentHash ?? HASH_A,
+      fixture?.citationArtifactId ?? "artifact-source-1"
+    );
   const historicalManifest = createRegisteredManifest();
   const historicalProof = createCommittedApplyProof(
     historicalManifest,
     "transaction-forward-historical",
     1,
-    [
-      fixture?.historicalCitation ??
-        createSourceCitation(
-          "source-1",
-          fixture?.citationArtifactContentHash ?? HASH_A,
-          fixture?.citationArtifactId ?? "artifact-source-1"
-        ),
-    ],
+    [sourceCitation],
     { afterContent: historicalContent, sourceContentHash, pipelineFingerprint }
   );
   const first = await createApplyHarness(historicalManifest, historicalProof);
@@ -1857,7 +2187,8 @@ async function createForwardPublicationHarness(
     historicalContent,
     currentContent,
     sourceContentHash,
-    pipelineFingerprint
+    pipelineFingerprint,
+    { citations: [sourceCitation] }
   );
   const current = await createApplyHarness(firstCommittedManifest, currentProof);
   const currentState = JSON.parse(await current.file.read()) as KnowledgeRuntimeStoreSnapshot;
@@ -1998,7 +2329,8 @@ Grounded evidence for source-1
 /** Builds a genuine paired preflight/Runtime/Vault/validator/decision production chain. */
 async function createForwardDecisionCoordinatorFixture(
   maxTextCharacters?: number,
-  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
+  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources,
+  clock: () => number = () => 500
 ) {
   const pairing = createKnowledgeProductionWorkflowExecutionPairing();
   const lifecycle = await createForwardDecisionExecutionLease(
@@ -2024,7 +2356,7 @@ async function createForwardDecisionCoordinatorFixture(
     },
   ]).getSource("personal", "source-1");
   if (!watched) throw new Error("Expected one watched production source");
-  const harness = await createForwardPublicationHarness(() => 500, undefined, {
+  const harness = await createForwardPublicationHarness(clock, undefined, {
     historicalContent: FORWARD_DECISION_HISTORICAL_CONTENT,
     currentContent: FORWARD_DECISION_CURRENT_CONTENT,
     sourceContentHash: createSourceContentHash(sourceBytes),
@@ -2126,7 +2458,7 @@ async function createForwardDecisionCoordinatorFixture(
       return artifact;
     },
   });
-  const plan = await new KnowledgeSourceWorkflowPlanLoader({
+  const planLoader = new KnowledgeSourceWorkflowPlanLoader({
     executionOwner: lifecycle.executionOwner,
     manifest: {
       load: (bundleId: string) => harness.runtime.readManifest(bundleId),
@@ -2135,7 +2467,8 @@ async function createForwardDecisionCoordinatorFixture(
     pipelineProfile: lifecycle.workflowLease,
     parsers: lifecycle.workflowLease.getParsers(),
     generation: { isCurrent: () => lifecycle.workflowLease.isCurrent() },
-  }).load(owners, new AbortController().signal);
+  });
+  const plan = await planLoader.load(owners, new AbortController().signal);
   const queue = new KnowledgeRuntimeQueueStorage(harness.runtime, lifecycle.executionOwner);
   const proof = new KnowledgeRuntimeIngestExecutionProofPort(harness.runtime, queue);
   const assertCurrent = () => lifecycle.workflowLease.assertCurrent();
@@ -2159,6 +2492,8 @@ async function createForwardDecisionCoordinatorFixture(
     wikiProcessFault,
     app,
     vault,
+    artifactReader,
+    planLoader,
     plan,
     assertCurrent,
     pending,
@@ -2174,12 +2509,58 @@ async function createForwardDecisionCoordinatorFixture(
   };
 }
 
+/** Rebuilds the read-only workflow plan after one later source observation commits. */
+async function createRefreshedForwardDecisionCoordinator(
+  fixture: Pick<
+    Awaited<ReturnType<typeof createForwardDecisionCoordinatorFixture>>,
+    | "runtime"
+    | "executionOwner"
+    | "planLoader"
+    | "workflowLease"
+    | "proof"
+    | "app"
+    | "assertCurrent"
+    | "decisions"
+  >
+): Promise<
+  Readonly<{
+    plan: Awaited<ReturnType<KnowledgeSourceWorkflowPlanLoader["load"]>>;
+    coordinator: KnowledgeProductionForwardRevisionDecisionCoordinator;
+  }>
+> {
+  const plan = await fixture.planLoader.load(
+    fixture.workflowLease.getOwners(),
+    new AbortController().signal
+  );
+  const validator = new KnowledgeProductionForwardRevisionValidationCoordinator(
+    new KnowledgeRuntimeForwardRevisionValidationPort(fixture.runtime, fixture.proof),
+    plan,
+    new ObsidianKnowledgeCompilerTargetResolver(fixture.app, fixture.executionOwner),
+    fixture.executionOwner,
+    fixture.assertCurrent
+  );
+  return Object.freeze({
+    plan,
+    coordinator: new KnowledgeProductionForwardRevisionDecisionCoordinator(
+      validator,
+      fixture.decisions,
+      fixture.executionOwner,
+      fixture.assertCurrent
+    ),
+  });
+}
+
 /** Builds one accepted decision plus genuine pre-journal and recovery Apply boundaries. */
 async function createForwardApplyCoordinatorFixture(
   maxTextCharacters?: number,
-  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
+  createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources,
+  clock: () => number = () => 500
 ) {
-  const fixture = await createForwardDecisionCoordinatorFixture(maxTextCharacters, createResources);
+  const fixture = await createForwardDecisionCoordinatorFixture(
+    maxTextCharacters,
+    createResources,
+    clock
+  );
   const command = createKnowledgeForwardRevisionReviewCommand({
     action: "accept_exact",
     proposal: fixture.pending.proposal,
@@ -2235,7 +2616,7 @@ async function createForwardApplyCoordinatorFixture(
     recovery,
     fileStore,
     fixture.executionOwner,
-    () => 500
+    clock
   );
   const coordinator = new KnowledgeProductionForwardRevisionApplyCoordinator(
     port,
@@ -2250,6 +2631,7 @@ async function createForwardApplyCoordinatorFixture(
     ...fixture,
     acceptedState,
     request,
+    publicationPort: fixture.port,
     port,
     recovery,
     fileStore,
@@ -2269,6 +2651,186 @@ async function createPreparedForwardApplyCoordinatorFixture(
   );
   const journal = await fixture.port.begin(ready.capability, new AbortController().signal);
   return { ...fixture, journal };
+}
+
+/** Reads the sole accepted-ready Forward row and reduces it to the public Apply query. */
+async function readAcceptedForwardApplyQuery(
+  runtime: KnowledgeRuntimeStore,
+  bundleId = "personal"
+): Promise<Readonly<KnowledgeForwardRevisionApplyAuthorityQuery>> {
+  const snapshot = await runtime.readForwardRevisionStudioBundle(bundleId);
+  const accepted = snapshot.activeRecords.find((record) => record.state === "accepted_ready");
+  if (!accepted || accepted.state !== "accepted_ready") {
+    throw new Error("Expected one accepted-ready Forward row");
+  }
+  const identity = createKnowledgeForwardRevisionStudioAcceptedIdentity(accepted.acceptedDecision);
+  return Object.freeze({
+    runtimeId: identity.resource.runtimeId,
+    bundleId: identity.resource.bundleId,
+    pagePath: identity.resource.pagePath,
+    proposalId: identity.proposalId,
+    proposalDigest: identity.proposalDigest,
+    acceptedDecisionDigest: identity.acceptedDecisionDigest,
+    applyClaimId: identity.applyClaimId,
+    applyClaimDigest: identity.applyClaimDigest,
+  });
+}
+
+/** Creates an exact explicit-recovery expectation from one parsed Runtime snapshot. */
+function createForwardRecoveryExpectation(state: KnowledgeRuntimeStoreSnapshot) {
+  const journal = state.activeForwardRevisionApply;
+  if (!journal || journal.phase !== "recovery_required") {
+    throw new Error("Expected one sticky Forward recovery journal");
+  }
+  return createKnowledgeForwardRevisionApplyRecoveryExpectation(journal);
+}
+
+/**
+ * Rebuilds one genuine prepared Forward lifecycle just below its predecessor time floor.
+ *
+ * Every proposal, validation, acceptance, revalidation, claim, and journal digest is
+ * re-minted by its strict leaf creator. The returned state can therefore be rejected
+ * only by Runtime's cross-state predecessor-lineage semantics.
+ */
+function rebuildPreparedForwardApplyBelowLineageFloor(
+  state: KnowledgeRuntimeStoreSnapshot,
+  lineageAppliedAtFloor: number
+): Readonly<{
+  state: KnowledgeRuntimeStoreSnapshot;
+  prepared: NonNullable<KnowledgeRuntimeStoreSnapshot["activeForwardRevisionApply"]> & {
+    readonly phase: "prepared";
+  };
+}> {
+  const active = snapshotKnowledgeForwardRevisionApplyJournal(state.activeForwardRevisionApply);
+  if (active.phase !== "prepared" || lineageAppliedAtFloor < 1) {
+    throw new Error("Expected one prepared Forward successor and a positive lineage floor");
+  }
+  const timestamp = lineageAppliedAtFloor - 1;
+  const reviewSlot = state.forwardRevisionReviews.find(
+    (candidate) => candidate.bundleId === active.bundleId
+  );
+  if (!reviewSlot) throw new Error("Expected the active Forward Review slot");
+  const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2(reviewSlot.value);
+  const acceptedEntry = review.records.find(
+    (entry) =>
+      entry.state === "accepted" &&
+      entry.decision.acceptedDecisionDigest === active.acceptedDecisionDigest
+  );
+  if (!acceptedEntry || acceptedEntry.state !== "accepted") {
+    throw new Error("Expected the active accepted Forward Review entry");
+  }
+
+  const originalAccepted = active.acceptedDecision;
+  const originalRequest = originalAccepted.proposal.request;
+  const request = createKnowledgeForwardRevisionRequest({
+    requestRevision: originalRequest.requestRevision,
+    runtimeId: originalRequest.runtimeId,
+    bundleId: originalRequest.bundleId,
+    pagePath: originalRequest.pagePath,
+    intent: originalRequest.intent,
+    intentDigest: originalRequest.intentDigest,
+    historicalReviewAuthority: originalRequest.historicalReviewAuthority,
+    selectedContent: originalRequest.selectedContent,
+    selectedContentHash: originalRequest.selectedContentHash,
+    requestedAt: timestamp,
+  });
+  const proposal = createKnowledgeForwardRevisionPendingProposalRecord({
+    request,
+    recordedAt: timestamp,
+  });
+  const proposalDigest = createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal);
+  const command = createKnowledgeForwardRevisionReviewCommand({
+    action: "accept_exact",
+    proposal,
+    proposalDigest,
+  });
+  const originalReceipt = originalAccepted.validationReceipt;
+  if (originalReceipt.action !== "accept_exact") {
+    throw new Error("Expected an exact-accept Forward fixture");
+  }
+  const validation = Object.freeze({
+    okfValid: true,
+    citationsValid: true,
+    linksValid: true,
+  });
+  const lowOriginalReceipt = createKnowledgeForwardRevisionValidationReceipt({
+    proposal,
+    proposalDigest,
+    command,
+    afterContent: originalAccepted.afterContent,
+    validation,
+    validationProfile: originalReceipt.validationProfile,
+    acceptanceAuthority: originalAccepted.acceptanceAuthority,
+    historicalCitations: originalReceipt.historicalCitations,
+    validationReadSet: originalReceipt.validationReadSet,
+    sourceArtifactObservationBindingDigest: originalReceipt.sourceArtifactObservationBindingDigest,
+    warningSummary: originalReceipt.warningSummary,
+    validatedAt: timestamp,
+  });
+  const accepted = createKnowledgeForwardRevisionAcceptedDecisionRecord({
+    proposal,
+    proposalDigest,
+    command,
+    afterContent: originalAccepted.afterContent,
+    acceptanceAuthority: originalAccepted.acceptanceAuthority,
+    validationReceipt: lowOriginalReceipt,
+    validationReceiptDigest: lowOriginalReceipt.receiptDigest,
+    acceptedAt: timestamp,
+  });
+  const lowAcceptedEntry = createKnowledgeForwardRevisionTerminalReviewEntryV2({
+    decision: accepted,
+    publishedRuntimeRevision: acceptedEntry.publishedRuntimeRevision,
+    proposalStoreRevision: acceptedEntry.proposalStoreRevision,
+    decidedRuntimeRevision: acceptedEntry.decidedRuntimeRevision,
+    decisionStoreRevision: acceptedEntry.decisionStoreRevision,
+  });
+  const lowReview = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+    ...review,
+    records: review.records.map((entry) => (entry === acceptedEntry ? lowAcceptedEntry : entry)),
+  });
+
+  const freshReceipt = active.revalidationReceipt.freshValidationReceipt;
+  const lowFreshReceipt = createKnowledgeForwardRevisionValidationReceipt({
+    proposal,
+    proposalDigest,
+    command,
+    afterContent: accepted.afterContent,
+    validation,
+    validationProfile: freshReceipt.validationProfile,
+    acceptanceAuthority: active.revalidationReceipt.applyAuthority,
+    historicalCitations: freshReceipt.historicalCitations,
+    validationReadSet: freshReceipt.validationReadSet,
+    sourceArtifactObservationBindingDigest: freshReceipt.sourceArtifactObservationBindingDigest,
+    warningSummary: freshReceipt.warningSummary,
+    validatedAt: timestamp,
+  });
+  const revalidationReceipt = createKnowledgeForwardRevisionApplyRevalidationReceipt({
+    acceptedDecision: accepted,
+    freshValidationReceipt: lowFreshReceipt,
+    applyAuthority: active.revalidationReceipt.applyAuthority,
+    sourceBase: active.revalidationReceipt.sourceBase,
+    vaultObservedBeforeHash: active.revalidationReceipt.vaultObservedBeforeHash,
+    vaultObservedAfterHash: active.revalidationReceipt.vaultObservedAfterHash,
+    revalidatedAt: timestamp,
+  });
+  const prepared = createKnowledgeForwardRevisionPreparedApplyJournal({
+    transactionId: active.transactionId,
+    acceptedDecision: accepted,
+    revalidationReceipt,
+    manifestBeforeRevision: active.manifestBeforeRevision,
+    manifestBeforeDigest: active.manifestBeforeDigest,
+    beforeContent: active.beforeContent,
+    afterContent: active.afterContent,
+    createdAt: timestamp,
+  });
+  const lowState: KnowledgeRuntimeStoreSnapshot = {
+    ...state,
+    forwardRevisionReviews: state.forwardRevisionReviews.map((slot) =>
+      slot === reviewSlot ? { ...slot, value: lowReview } : slot
+    ),
+    activeForwardRevisionApply: prepared,
+  };
+  return Object.freeze({ state: lowState, prepared });
 }
 
 /** Captures one expected promise rejection for authentic error-category assertions. */
@@ -2310,11 +2872,14 @@ function createForwardCurrentTargetVisitor(
 
 /** Commits one exact latest no-changes outcome over the forward target source. */
 async function commitForwardNoChanges(
-  harness: Awaited<ReturnType<typeof createForwardPublicationHarness>>,
+  harness: Pick<Awaited<ReturnType<typeof createForwardPublicationHarness>>, "file" | "runtime">,
   sourceContentHash: string
 ): Promise<void> {
   const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
   const manifest = state.manifests[0].value as SourceManifest;
+  const source = manifest.entries.find((entry) => entry.sourceId === "source-1");
+  const pipelineFingerprint = source?.lastSuccessful?.pipelineFingerprint;
+  if (!pipelineFingerprint) throw new Error("Expected one applied source pipeline");
   const allocation = await new KnowledgeRuntimeInputRevisionAllocator(harness.runtime).allocate({
     bundleId: "personal",
     sourceId: "source-1",
@@ -2323,14 +2888,14 @@ async function commitForwardNoChanges(
   const bound = await new KnowledgeRuntimeInputObservationBinder(harness.runtime).bind({
     observationToken: allocation.observationToken,
     sourceContentHash,
-    pipelineFingerprint: HASH_B,
+    pipelineFingerprint,
   });
   if (bound.kind !== "ready") throw new Error("Expected one fresh no-changes observation");
   const plan = createRuntimeNoChangesPlan(
     manifest,
     allocation.inputRevision,
     sourceContentHash,
-    HASH_B
+    pipelineFingerprint
   );
   const queue = new IngestQueue(
     new KnowledgeRuntimeQueueStorage(harness.runtime),
@@ -2435,6 +3000,42 @@ function createForwardPublishedFixture(
     publishedRuntimeRevision,
     proposalStoreRevision: requestRevision,
   });
+}
+
+/** Appends one leaf-valid same-page pending successor to a detached Runtime snapshot. */
+function appendSamePageForwardSuccessor(
+  state: KnowledgeRuntimeStoreSnapshot,
+  pagePath: string
+): KnowledgeRuntimeStoreSnapshot {
+  const next = JSON.parse(JSON.stringify(state)) as KnowledgeRuntimeStoreSnapshot;
+  const slot = next.forwardRevisionReviews.find((candidate) => candidate.bundleId === "personal");
+  if (!slot) throw new Error("Expected one personal forward Review slot");
+  const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2(slot.value);
+  const requestRevision = review.lastRequestRevision + 1;
+  const proposalStoreRevision = review.revision + 1;
+  const publishedRuntimeRevision = next.revision + 1;
+  const published = createForwardPublishedFixture(
+    "personal",
+    pagePath,
+    next.runtimeId,
+    `# Cross-state successor ${requestRevision}\n`,
+    requestRevision,
+    publishedRuntimeRevision
+  );
+  const successor = createKnowledgeForwardRevisionPendingReviewEntryV2({
+    proposal: published.proposal,
+    publishedRuntimeRevision,
+    proposalStoreRevision,
+  });
+  slot.value = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+    version: 2,
+    bundleId: review.bundleId,
+    revision: proposalStoreRevision,
+    lastRequestRevision: requestRevision,
+    records: [...review.records, successor],
+  });
+  next.revision = publishedRuntimeRevision;
+  return next;
 }
 
 /** Creates an initialized store and all persistence facades. */
@@ -3079,7 +3680,10 @@ describe("KnowledgeRuntimeStore", () => {
           path: "Wiki/transaction-applied-provenance.md",
           windowsPathKey: "wiki/transaction-applied-provenance.md",
           ownership: "generated",
+          sourceAppliedContentHash: createFileContentHash("# transaction-applied-provenance\n"),
+          effectiveContentHash: createFileContentHash("# transaction-applied-provenance\n"),
           contentHash: createFileContentHash("# transaction-applied-provenance\n"),
+          origin: { kind: "source_apply" },
           sources: [
             {
               sourceId: "source-1",
@@ -3177,7 +3781,7 @@ describe("KnowledgeRuntimeStore", () => {
     if (!authority) throw new Error("Expected applied source freshness authority");
     expect(authority.runtimeDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(authority).toEqual({
-      version: 1,
+      version: 2,
       kind: "applied",
       runtimeId: state.runtimeId,
       runtimeRevision: state.revision,
@@ -3194,7 +3798,10 @@ describe("KnowledgeRuntimeStore", () => {
           path: "Wiki/transaction-applied-freshness.md",
           windowsPathKey: "wiki/transaction-applied-freshness.md",
           ownership: "generated",
+          sourceAppliedContentHash: createFileContentHash("# transaction-applied-freshness\n"),
+          effectiveContentHash: createFileContentHash("# transaction-applied-freshness\n"),
           contentHash: createFileContentHash("# transaction-applied-freshness\n"),
+          origin: { kind: "source_apply" },
         },
       ],
       transactionId: "transaction-applied-freshness",
@@ -3294,7 +3901,7 @@ describe("KnowledgeRuntimeStore", () => {
     }
   );
 
-  it("excludes a retained unchanged page from a later exact source commit", async () => {
+  it("retains historical exact provenance for a page unchanged by a later source commit", async () => {
     const firstManifest = createRegisteredManifest();
     const firstProof = createCommittedApplyProof(firstManifest, "transaction-retained-first", 1, [
       createSourceCitation(),
@@ -3322,11 +3929,89 @@ describe("KnowledgeRuntimeStore", () => {
     const projection = await second.runtime.readAppliedProvenance("personal");
 
     expect(projection.pages.map((page) => page.path)).toEqual([
+      "Wiki/transaction-retained-first.md",
       "Wiki/transaction-retained-second.md",
     ]);
-    expect(projection.pages[0].sources[0].changeSetId).toBe(
-      "changeset-transaction-retained-second"
+    expect(projection.pages.map((page) => page.sources[0].changeSetId)).toEqual([
+      "changeset-transaction-retained-first",
+      "changeset-transaction-retained-second",
+    ]);
+  });
+
+  it("does not fall back when the newest exact page writer has no source citation", async () => {
+    const pagePath = "Wiki/transaction-provenance-return.md";
+    const originalContent = "# Original provenance body\n";
+    const intermediateContent = "# Intermediate provenance body\n";
+    const firstManifest = createRegisteredManifest();
+    const firstProof = createCommittedApplyProof(
+      firstManifest,
+      "transaction-provenance-return",
+      1,
+      [createSourceCitation()],
+      { afterContent: originalContent }
     );
+    const first = await createApplyHarness(firstManifest, firstProof);
+    await first.port.recordCommitted(first.journal, first.receipt);
+    const firstState = JSON.parse(await first.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const firstCommittedManifest = firstState.manifests[0].value as SourceManifest;
+
+    const secondProof = createForwardCurrentUpdateProof(
+      firstCommittedManifest,
+      pagePath,
+      originalContent,
+      intermediateContent,
+      HASH_C,
+      HASH_B,
+      {
+        inputRevision: 2,
+        idSuffix: "provenance-away",
+        transactionId: "transaction-provenance-away",
+        citations: [createSourceCitation("source-1", HASH_C)],
+      }
+    );
+    const second = await createApplyHarness(firstCommittedManifest, secondProof);
+    const secondState = JSON.parse(await second.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const firstReview = firstState.reviews[0].value as ChangeSetReviewSnapshot;
+    const secondReview = secondState.reviews[0].value as ChangeSetReviewSnapshot;
+    secondReview.revision = 2;
+    secondReview.records = [...firstReview.records, ...secondReview.records];
+    secondState.applyCommits = firstState.applyCommits;
+    second.file.replaceContent(JSON.stringify(secondState));
+    await second.port.recordCommitted(second.journal, second.receipt);
+    const secondCommittedState = JSON.parse(
+      await second.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+    const secondCommittedManifest = secondCommittedState.manifests[0].value as SourceManifest;
+
+    const thirdProof = createForwardCurrentUpdateProof(
+      secondCommittedManifest,
+      pagePath,
+      intermediateContent,
+      originalContent,
+      sha256("returned source content"),
+      HASH_B,
+      {
+        inputRevision: 3,
+        idSuffix: "provenance-return",
+        transactionId: "transaction-provenance-return-latest",
+        startedAt: 430,
+        committedAt: 440,
+        citations: [],
+      }
+    );
+    const third = await createApplyHarness(secondCommittedManifest, thirdProof);
+    const thirdState = JSON.parse(await third.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const retainedReview = secondCommittedState.reviews[0].value as ChangeSetReviewSnapshot;
+    const thirdReview = thirdState.reviews[0].value as ChangeSetReviewSnapshot;
+    thirdReview.revision = retainedReview.revision + 1;
+    thirdReview.records = [...retainedReview.records, ...thirdReview.records];
+    thirdState.applyCommits = secondCommittedState.applyCommits;
+    third.file.replaceContent(JSON.stringify(thirdState));
+    await third.port.recordCommitted(third.journal, third.receipt);
+
+    await expect(third.runtime.readAppliedProvenance("personal")).resolves.toMatchObject({
+      pages: [],
+    });
   });
 
   it("de-duplicates a shared page and retains only its exact current-version writer", async () => {
@@ -3365,10 +4050,13 @@ describe("KnowledgeRuntimeStore", () => {
       ...legacy,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: migrated.runtimeId,
-      revision: 13,
+      revision: 14,
       forwardRevisionReviews: [],
       activeForwardRevisionApply: null,
       forwardRevisionApplyCommits: [],
+      forwardRevisionSupersessions: [],
+      forwardRevisionAbandonments: [],
+      forwardRevisionRecoveryTerminals: [],
       reviews: [
         {
           bundleId: "personal",
@@ -3450,7 +4138,7 @@ describe("KnowledgeRuntimeStore", () => {
     const authorityQueue = authority.queues[0].value as IngestQueueSnapshot;
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 13,
+      revision: 14,
       activeTransaction: { transactionId: proof.journal.transactionId },
       inputRevisions: [
         {
@@ -3499,7 +4187,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await file.read()).toBe(committed);
     expect(JSON.parse(committed)).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 13,
+      revision: 14,
     });
   });
 
@@ -3528,7 +4216,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(migrated).toMatchObject({
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
       runtimeId: "1".repeat(32),
-      revision: 12,
+      revision: 13,
       queues: [
         {
           bundleId: "personal",
@@ -3660,11 +4348,17 @@ describe("KnowledgeRuntimeStore", () => {
       forwardRevisionReviews: _forwardRevisionReviews,
       activeForwardRevisionApply: _activeForwardRevisionApply,
       forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      forwardRevisionSupersessions: _forwardRevisionSupersessions,
+      forwardRevisionAbandonments: _forwardRevisionAbandonments,
+      forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
       ...previousWithoutForward
     } = previous;
     void _forwardRevisionReviews;
     void _activeForwardRevisionApply;
     void _forwardRevisionApplyCommits;
+    void _forwardRevisionSupersessions;
+    void _forwardRevisionAbandonments;
+    void _forwardRevisionRecoveryTerminals;
     const previousV3 = {
       ...previousWithoutForward,
       version: 3,
@@ -7042,7 +7736,7 @@ describe("KnowledgeRuntimeStore", () => {
     if (!freshnessAuthority) throw new Error("Expected no-change source freshness authority");
     expect(freshnessAuthority.runtimeDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(freshnessAuthority).toEqual({
-      version: 1,
+      version: 2,
       kind: "no_changes",
       runtimeId: state.runtimeId,
       runtimeRevision: state.revision,
@@ -9276,11 +9970,17 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
       forwardRevisionReviews: _forwardRevisionReviews,
       activeForwardRevisionApply: _activeForwardRevisionApply,
       forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      forwardRevisionSupersessions: _forwardRevisionSupersessions,
+      forwardRevisionAbandonments: _forwardRevisionAbandonments,
+      forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
       ...withoutForward
     } = current;
     void _forwardRevisionReviews;
     void _activeForwardRevisionApply;
     void _forwardRevisionApplyCommits;
+    void _forwardRevisionSupersessions;
+    void _forwardRevisionAbandonments;
+    void _forwardRevisionRecoveryTerminals;
     const previous = { ...withoutForward, version: 5, revision: 7 };
     await file.initialize(JSON.stringify(previous));
 
@@ -9289,10 +9989,13 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(JSON.parse(await file.read())).toEqual({
       ...previous,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 10,
+      revision: 11,
       forwardRevisionReviews: [],
       activeForwardRevisionApply: null,
       forwardRevisionApplyCommits: [],
+      forwardRevisionSupersessions: [],
+      forwardRevisionAbandonments: [],
+      forwardRevisionRecoveryTerminals: [],
     });
   });
 
@@ -9312,10 +10015,16 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
         const {
           activeForwardRevisionApply: _activeForwardRevisionApply,
           forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+          forwardRevisionSupersessions: _forwardRevisionSupersessions,
+          forwardRevisionAbandonments: _forwardRevisionAbandonments,
+          forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
           ...runtimeV7Fields
         } = current;
         void _activeForwardRevisionApply;
         void _forwardRevisionApplyCommits;
+        void _forwardRevisionSupersessions;
+        void _forwardRevisionAbandonments;
+        void _forwardRevisionRecoveryTerminals;
         return runtimeV7Fields;
       })(),
       version: 6,
@@ -9338,7 +10047,7 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     await new KnowledgeRuntimeStore(file).initialize();
 
     const migrated = JSON.parse(await file.read()) as KnowledgeRuntimeStoreSnapshot;
-    expect(migrated).toMatchObject({ version: 8, revision: 5 });
+    expect(migrated).toMatchObject({ version: KNOWLEDGE_RUNTIME_STORE_VERSION, revision: 6 });
     expect(migrated.forwardRevisionReviews[0].value).toMatchObject({
       version: 2,
       revision: 1,
@@ -9363,10 +10072,16 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
         const {
           activeForwardRevisionApply: _activeForwardRevisionApply,
           forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+          forwardRevisionSupersessions: _forwardRevisionSupersessions,
+          forwardRevisionAbandonments: _forwardRevisionAbandonments,
+          forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
           ...runtimeV7Fields
         } = current;
         void _activeForwardRevisionApply;
         void _forwardRevisionApplyCommits;
+        void _forwardRevisionSupersessions;
+        void _forwardRevisionAbandonments;
+        void _forwardRevisionRecoveryTerminals;
         return runtimeV7Fields;
       })(),
       version: 6,
@@ -9417,10 +10132,16 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     const {
       activeForwardRevisionApply: _activeForwardRevisionApply,
       forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      forwardRevisionSupersessions: _forwardRevisionSupersessions,
+      forwardRevisionAbandonments: _forwardRevisionAbandonments,
+      forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
       ...previousFields
     } = current;
     void _activeForwardRevisionApply;
     void _forwardRevisionApplyCommits;
+    void _forwardRevisionSupersessions;
+    void _forwardRevisionAbandonments;
+    void _forwardRevisionRecoveryTerminals;
     const published = createForwardPublishedFixture(
       "personal",
       "Wiki/V7.md",
@@ -9450,13 +10171,82 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     expect(migrated).toEqual({
       ...previous,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 4,
+      revision: 5,
       activeForwardRevisionApply: null,
       forwardRevisionApplyCommits: [],
+      forwardRevisionSupersessions: [],
+      forwardRevisionAbandonments: [],
+      forwardRevisionRecoveryTerminals: [],
     });
     expect(JSON.stringify(migrated.forwardRevisionReviews)).toBe(
       JSON.stringify(previous.forwardRevisionReviews)
     );
+  });
+
+  it("migrates one active Runtime-v8 forward head without rewriting its Manifest anchor", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const manifest = finalized.manifests[0]?.value as SourceManifest;
+    const currentLedger = finalized.forwardRevisionApplyCommits[0];
+    if (!manifest || !currentLedger) throw new Error("Expected one finalized forward head");
+    const legacy = createRuntimeV8ForwardHead(manifest, currentLedger);
+    const {
+      forwardRevisionSupersessions: _supersessions,
+      forwardRevisionAbandonments: _abandonments,
+      forwardRevisionRecoveryTerminals: _recoveryTerminals,
+      ...runtimeV8Fields
+    } = finalized;
+    void _supersessions;
+    void _abandonments;
+    void _recoveryTerminals;
+    const previous = {
+      ...runtimeV8Fields,
+      version: 8,
+      manifests: [{ bundleId: "personal", value: legacy.manifest }],
+      forwardRevisionApplyCommits: [legacy.ledger],
+    };
+    const legacyManifestText = JSON.stringify(legacy.manifest);
+    fixture.file.replaceContent(JSON.stringify(previous));
+
+    await new KnowledgeRuntimeStore(fixture.file).initialize();
+
+    const migrated = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(migrated).toMatchObject({
+      version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+      revision: previous.revision + 1,
+      forwardRevisionSupersessions: [],
+      forwardRevisionAbandonments: [],
+      forwardRevisionRecoveryTerminals: [],
+    });
+    expect(JSON.stringify(migrated.manifests[0]?.value)).toBe(legacyManifestText);
+    expect(migrated.forwardRevisionApplyCommits).toHaveLength(1);
+    expect(migrated.forwardRevisionApplyCommits[0]).toMatchObject({
+      version: 2,
+      sourceBase: {
+        bundleId: currentLedger.bundleId,
+        sourceId: currentLedger.sourceId,
+        lastSuccessful: currentLedger.sourceBase.lastSuccessful,
+        runtimeSourceCommitExtension: currentLedger.sourceBase.runtimeSourceCommitExtension,
+      },
+      sourceBaseDigest: legacy.ledger.sourceBaseDigest,
+      sourceAppliedContentHash: currentLedger.sourceAppliedContentHash,
+      previousEffectiveContentHash: currentLedger.sourceAppliedContentHash,
+      effectiveContentHash: currentLedger.effectiveContentHash,
+      legacyForwardLedgerIdentityDigest: legacy.ledger.forwardLedgerIdentityDigest,
+      manifestAfterDigest: legacy.ledger.manifestAfterDigest,
+    });
+    expect(migrated.forwardRevisionApplyCommits[0]?.forwardLedgerIdentityDigest).not.toBe(
+      legacy.ledger.forwardLedgerIdentityDigest
+    );
+    expect(projectKnowledgeEffectiveManifestPages(migrated.manifests[0].value)[0]).toMatchObject({
+      sourceAppliedContentHash: currentLedger.sourceAppliedContentHash,
+      effectiveContentHash: currentLedger.effectiveContentHash,
+      origin: { kind: "forward_revision" },
+    });
+    fixture.lifecycle.close();
   });
 
   it("rejects a v7 Manifest that already owns the reserved forward overlay key", async () => {
@@ -9465,10 +10255,16 @@ describe("KnowledgeRuntimeStore forward revision proposal publication", () => {
     const {
       activeForwardRevisionApply: _activeForwardRevisionApply,
       forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      forwardRevisionSupersessions: _forwardRevisionSupersessions,
+      forwardRevisionAbandonments: _forwardRevisionAbandonments,
+      forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
       ...previousFields
     } = current;
     void _activeForwardRevisionApply;
     void _forwardRevisionApplyCommits;
+    void _forwardRevisionSupersessions;
+    void _forwardRevisionAbandonments;
+    void _forwardRevisionRecoveryTerminals;
     const manifest = createManifest(1);
     manifest.extensions = { obsidianCopilotKnowledgeForwardRevisionOverlays: null };
     const previous = {
@@ -10106,6 +10902,8 @@ describe("KnowledgeRuntimeStore forward revision Studio projection", () => {
         review,
         activeApply: applyingJournal,
         applyCommits: [],
+        abandonments: [],
+        recoveryTerminals: [],
       }).activeRecords[0]
     ).toMatchObject({ state: "applying", applyPhase: "applying" });
     expect(
@@ -10116,6 +10914,8 @@ describe("KnowledgeRuntimeStore forward revision Studio projection", () => {
         review,
         activeApply: committedJournal,
         applyCommits: [],
+        abandonments: [],
+        recoveryTerminals: [],
       }).activeRecords[0]
     ).toMatchObject({ state: "applying", applyPhase: "committed" });
 
@@ -10206,6 +11006,8 @@ describe("KnowledgeRuntimeStore forward revision Studio projection", () => {
       review: createPendingReview(256),
       activeApply: null,
       applyCommits: [],
+      abandonments: [],
+      recoveryTerminals: [],
     });
     expect(atLimit.activeRecords).toHaveLength(256);
     expect(atLimit.activeRecords.every((record) => record.state === "pending")).toBe(true);
@@ -10219,6 +11021,8 @@ describe("KnowledgeRuntimeStore forward revision Studio projection", () => {
         review: createPendingReview(257),
         activeApply: null,
         applyCommits: [],
+        abandonments: [],
+        recoveryTerminals: [],
       });
     } catch (error) {
       overflow = error;
@@ -10272,6 +11076,8 @@ describe("KnowledgeRuntimeStore forward revision Studio projection", () => {
       bundleId: "personal",
       activeApply: null,
       applyCommits: [],
+      abandonments: [],
+      recoveryTerminals: [],
     };
     expect(projectKnowledgeForwardRevisionStudioSnapshot(input)).toMatchObject({
       bundleId: "personal",
@@ -11306,6 +12112,7 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     expect(authority).toMatchObject({
       runtimeId: state.runtimeId,
       acceptedDecisionDigest: accepted.acceptedDecisionDigest,
+      lineageAppliedAtFloor: 0,
       sourceBase: { bundleId: "personal", sourceId: "source-1" },
     });
     expect(authority?.manifestRevision).toBeGreaterThanOrEqual(0);
@@ -11484,6 +12291,599 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     fixture.lifecycle.close();
   });
 
+  it("atomically supersedes one Forward head with a later ordinary Source Apply", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const forwardState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const forwardManifest = forwardState.manifests[0]?.value as SourceManifest;
+    const forwardLedger = forwardState.forwardRevisionApplyCommits[0];
+    const source = forwardManifest.entries.find((entry) => entry.sourceId === "source-1");
+    if (!forwardLedger || !source?.lastSuccessful) {
+      throw new Error("Expected one active Forward head and its source base");
+    }
+    const sourceSuccessorContent = "# Source successor after Forward\n";
+    const sourceProof = createForwardCurrentUpdateProof(
+      forwardManifest,
+      fixture.request.pagePath,
+      FORWARD_DECISION_HISTORICAL_CONTENT,
+      sourceSuccessorContent,
+      HASH_C,
+      source.lastSuccessful.pipelineFingerprint,
+      {
+        inputRevision: 3,
+        idSuffix: "source-after-forward",
+        transactionId: "transaction-source-after-forward",
+        startedAt: 600,
+        committedAt: 610,
+      }
+    );
+    const authority = retainApplyReviewHistory(
+      forwardState,
+      createApplyAuthoritySlots(forwardManifest, sourceProof.journal)
+    );
+    fixture.file.replaceContent(
+      JSON.stringify({
+        ...forwardState,
+        ...authority,
+        activeTransaction: null,
+      })
+    );
+    await expect(
+      new KnowledgeRuntimeApplyAuthorityPort(fixture.runtime).verify({
+        transactionId: sourceProof.journal.transactionId,
+        bundle: sourceProof.journal.bundle,
+        changeSet: sourceProof.journal.changeSet,
+        changeSetDigest: sourceProof.journal.changeSetDigest,
+        jobClaim: sourceProof.journal.jobClaim,
+        manifestCommitIntent: sourceProof.journal.manifestCommitIntent,
+        manifestCommitIntentDigest: sourceProof.journal.manifestCommitIntentDigest,
+      })
+    ).resolves.toEqual({ minimumTimestamp: forwardLedger.appliedAt });
+    fixture.files.set(fixture.request.pagePath, sourceSuccessorContent);
+    fixture.file.replaceContent(
+      JSON.stringify({
+        ...forwardState,
+        ...authority,
+        activeTransaction: sourceProof.journal,
+      })
+    );
+
+    await new KnowledgeRuntimeApplyCommitManifestPort(fixture.runtime).recordCommitted(
+      sourceProof.journal,
+      sourceProof.receipt
+    );
+
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const finalizedManifest = finalized.manifests[0]?.value as SourceManifest;
+    const supersession = finalized.forwardRevisionSupersessions[0];
+    expect(finalized.forwardRevisionApplyCommits).toEqual([forwardLedger]);
+    expect(finalized.forwardRevisionSupersessions).toHaveLength(1);
+    expect(supersession).toMatchObject({
+      predecessor: {
+        ledgerKind: "forward_revision_apply",
+        transactionId: forwardLedger.transactionId,
+        ledgerIdentityDigest: forwardLedger.forwardLedgerIdentityDigest,
+        afterHash: forwardLedger.effectiveContentHash,
+      },
+      successor: {
+        ledgerKind: "source_apply",
+        transactionId: sourceProof.journal.transactionId,
+        casBeforeHash: forwardLedger.effectiveContentHash,
+        afterHash: createFileContentHash(sourceSuccessorContent),
+      },
+      supersededAt: sourceProof.journal.committedAt,
+    });
+    expect(supersession?.predecessor.afterHash).toBe(supersession?.successor.casBeforeHash);
+    expect(
+      finalizedManifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    ).toBeUndefined();
+    expect(
+      projectKnowledgeEffectiveManifestPages(finalizedManifest).find(
+        (page) => page.path === fixture.request.pagePath
+      )
+    ).toMatchObject({
+      sourceAppliedContentHash: createFileContentHash(sourceSuccessorContent),
+      effectiveContentHash: createFileContentHash(sourceSuccessorContent),
+      origin: { kind: "source_apply" },
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(sourceSuccessorContent);
+    fixture.lifecycle.close();
+  });
+
+  it("keeps the Forward head unchanged while reviewed Source deletes remain disabled", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const forwardState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const forwardManifest = forwardState.manifests[0]?.value as SourceManifest;
+    const forwardLedger = forwardState.forwardRevisionApplyCommits[0];
+    const source = forwardManifest.entries.find((entry) => entry.sourceId === "source-1");
+    if (!forwardLedger || !source?.lastSuccessful) {
+      throw new Error("Expected one active Forward head");
+    }
+    const pipelineFingerprint = source.lastSuccessful.pipelineFingerprint;
+    const beforeRuntime = await fixture.file.read();
+
+    expect(() =>
+      createForwardCurrentDeleteProof(
+        forwardManifest,
+        fixture.request.pagePath,
+        FORWARD_DECISION_HISTORICAL_CONTENT,
+        HASH_C,
+        pipelineFingerprint
+      )
+    ).toThrow(/strict domain contract/);
+
+    expect(await fixture.file.read()).toBe(beforeRuntime);
+    const overlay = snapshotKnowledgeForwardRevisionOverlayExtension(
+      forwardManifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    );
+    expect(overlay.entries[0]?.forwardTransactionId).toBe(forwardLedger.transactionId);
+    expect(
+      projectKnowledgeEffectiveManifestPages(forwardManifest).find(
+        (page) => page.path === fixture.request.pagePath
+      )
+    ).toMatchObject({ origin: { kind: "forward_revision" } });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    fixture.lifecycle.close();
+  });
+
+  it("retains a Forward head when a later same-source Apply touches only another page", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const forwardState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const forwardManifest = forwardState.manifests[0]?.value as SourceManifest;
+    const source = forwardManifest.entries.find((entry) => entry.sourceId === "source-1");
+    if (!source?.lastSuccessful) throw new Error("Expected one active source");
+    const retainedSourceLedger = forwardState.applyCommits.find(
+      (ledger) =>
+        ledger.bundleId === forwardManifest.bundleId &&
+        ledger.sourceId === source.sourceId &&
+        ledger.changeSetId === source.lastSuccessful?.changeSetId
+    );
+    if (!retainedSourceLedger) throw new Error("Expected retained Source Apply evidence");
+    const baseProof = createCommittedApplyProof(
+      forwardManifest,
+      "transaction-source-adjacent",
+      3,
+      [],
+      {
+        afterContent: "# Adjacent source page\n",
+        sourceContentHash: HASH_C,
+        pipelineFingerprint: source.lastSuccessful.pipelineFingerprint,
+      }
+    );
+    const adjacentJournal: ChangeSetTransactionJournal & { phase: "committed" } = {
+      ...baseProof.journal,
+      updatedAt: 700,
+      committedAt: 700,
+    };
+    const adjacentReceipt = createTransactionCommitReceipt(adjacentJournal);
+    const authority = retainApplyReviewHistory(
+      forwardState,
+      createApplyAuthoritySlots(forwardManifest, adjacentJournal)
+    );
+    fixture.file.replaceContent(
+      JSON.stringify({
+        ...forwardState,
+        ...authority,
+        activeTransaction: adjacentJournal,
+      })
+    );
+
+    await new KnowledgeRuntimeApplyCommitManifestPort(fixture.runtime).recordCommitted(
+      adjacentJournal,
+      adjacentReceipt
+    );
+
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const manifest = finalized.manifests[0]?.value as SourceManifest;
+    const overlay = snapshotKnowledgeForwardRevisionOverlayExtension(
+      manifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    );
+    expect(finalized.forwardRevisionSupersessions).toEqual([]);
+    expect(finalized.forwardRevisionApplyCommits).toEqual(forwardState.forwardRevisionApplyCommits);
+    expect(overlay.entries).toHaveLength(1);
+    expect(overlay.entries[0]?.forwardTransactionId).toBe(
+      forwardState.forwardRevisionApplyCommits[0]?.transactionId
+    );
+    expect(
+      projectKnowledgeEffectiveManifestPages(manifest).find(
+        (page) => page.path === fixture.request.pagePath
+      )
+    ).toMatchObject({
+      sourceAppliedContentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+      effectiveContentHash: createFileContentHash(FORWARD_DECISION_HISTORICAL_CONTENT),
+      origin: { kind: "forward_revision" },
+    });
+    expect(
+      projectKnowledgeEffectiveManifestPages(manifest).find(
+        (page) => page.path === "Wiki/transaction-source-adjacent.md"
+      )
+    ).toMatchObject({ origin: { kind: "source_apply" } });
+    const provenance = await fixture.runtime.readAppliedProvenance("personal");
+    const retainedPage = provenance.pages.find((page) => page.path === fixture.request.pagePath);
+    expect(retainedPage?.sources).toHaveLength(1);
+    expect(retainedPage).toMatchObject({
+      sourceAppliedContentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+      effectiveContentHash: createFileContentHash(FORWARD_DECISION_HISTORICAL_CONTENT),
+      origin: { kind: "forward_revision" },
+      sources: [
+        {
+          sourceId: "source-1",
+          inputRevision: retainedSourceLedger.inputRevision,
+          changeSetId: retainedSourceLedger.changeSetId,
+        },
+      ],
+    });
+    fixture.lifecycle.close();
+  });
+
+  it("retains the active Forward head across a later no_changes source outcome", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const before = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const beforeManifest = before.manifests[0]?.value as SourceManifest;
+    const beforeOverlay = snapshotKnowledgeForwardRevisionOverlayExtension(
+      beforeManifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    );
+    const writesBefore = { ...fixture.wikiWrites };
+
+    await commitForwardNoChanges(fixture, HASH_C);
+
+    const after = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const afterManifest = after.manifests[0]?.value as SourceManifest;
+    expect(
+      snapshotKnowledgeForwardRevisionOverlayExtension(
+        afterManifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+      )
+    ).toEqual(beforeOverlay);
+    expect(after.forwardRevisionApplyCommits).toEqual(before.forwardRevisionApplyCommits);
+    expect(after.forwardRevisionSupersessions).toEqual([]);
+    expect(
+      projectKnowledgeEffectiveManifestPages(afterManifest).find(
+        (page) => page.path === fixture.request.pagePath
+      )
+    ).toMatchObject({
+      sourceAppliedContentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+      effectiveContentHash: createFileContentHash(FORWARD_DECISION_HISTORICAL_CONTENT),
+      origin: { kind: "forward_revision" },
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    expect(fixture.wikiWrites).toEqual(writesBefore);
+    fixture.lifecycle.close();
+  });
+
+  it("chains repeated Forward Applies monotonically when every second clock rolls back", async () => {
+    let clock = 500;
+    const fixture = await createForwardApplyCoordinatorFixture(
+      undefined,
+      createKnowledgeProductionPipelineResources,
+      () => clock
+    );
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const committedFirst = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const firstLedger = committedFirst.forwardRevisionApplyCommits[0];
+    if (!firstLedger) throw new Error("Expected first Forward ledger");
+    expect(firstLedger.appliedAt).toBe(500);
+    clock = 400;
+    const source = (committedFirst.manifests[0]?.value as SourceManifest).entries.find(
+      (entry) => entry.sourceId === "source-1"
+    );
+    if (!source?.lastSuccessful) throw new Error("Expected current source identity");
+    await commitForwardNoChanges(fixture, source.lastSuccessful.sourceContentHash);
+    const firstState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const secondEvidence = createForwardPublicationEvidence(
+      firstState,
+      FORWARD_DECISION_CURRENT_CONTENT,
+      "transaction-forward-current"
+    );
+
+    await fixture.publicationPort.publish(secondEvidence);
+    const review = await fixture.publicationPort.readForwardRevisionReview("personal");
+    const pending = review.records.find((record) => record.state === "pending");
+    if (!pending || pending.state !== "pending") throw new Error("Expected second proposal");
+    expect(pending.proposal.request.requestedAt).toBeGreaterThanOrEqual(firstLedger.appliedAt);
+    const refreshed = await createRefreshedForwardDecisionCoordinator(fixture);
+    const secondCommand = createKnowledgeForwardRevisionReviewCommand({
+      action: "accept_exact",
+      proposal: pending.proposal,
+      proposalDigest: pending.proposalDigest,
+    });
+    const secondDecision = await refreshed.coordinator.decide(
+      secondCommand,
+      new AbortController().signal
+    );
+    expect(secondDecision).toMatchObject({ kind: "accepted" });
+    const secondRequest = await readAcceptedForwardApplyQuery(fixture.runtime);
+    await expect(
+      fixture.port.readAuthority(secondRequest, new AbortController().signal)
+    ).resolves.toMatchObject({ lineageAppliedAtFloor: firstLedger.appliedAt });
+    const secondApplyCoordinator = new KnowledgeProductionForwardRevisionApplyCoordinator(
+      fixture.port,
+      fixture.runner,
+      refreshed.plan,
+      new ObsidianKnowledgeCompilerTargetResolver(fixture.app, fixture.executionOwner),
+      fixture.fileStore,
+      fixture.executionOwner,
+      fixture.assertCurrent
+    );
+
+    await expect(
+      secondApplyCoordinator.apply(secondRequest, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const secondLedger = finalized.forwardRevisionApplyCommits.find(
+      (record) => record.transactionId !== firstLedger.transactionId
+    );
+    const manifest = finalized.manifests[0]?.value as SourceManifest;
+    const overlay = snapshotKnowledgeForwardRevisionOverlayExtension(
+      manifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    );
+    if (!secondLedger) throw new Error("Expected second Forward ledger");
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(2);
+    expect(finalized.forwardRevisionSupersessions).toHaveLength(1);
+    expect(secondLedger.appliedAt).toBeGreaterThanOrEqual(firstLedger.appliedAt);
+    expect(finalized.forwardRevisionSupersessions[0]?.supersededAt).toBeGreaterThanOrEqual(
+      firstLedger.appliedAt
+    );
+    expect(finalized.forwardRevisionSupersessions[0]).toMatchObject({
+      predecessor: {
+        ledgerKind: "forward_revision_apply",
+        transactionId: firstLedger.transactionId,
+        ledgerIdentityDigest: firstLedger.forwardLedgerIdentityDigest,
+        afterHash: firstLedger.effectiveContentHash,
+      },
+      successor: {
+        ledgerKind: "forward_revision_apply",
+        transactionId: secondLedger.transactionId,
+        ledgerIdentityDigest: secondLedger.forwardLedgerIdentityDigest,
+        casBeforeHash: firstLedger.effectiveContentHash,
+        afterHash: secondLedger.effectiveContentHash,
+      },
+    });
+    expect(secondLedger.previousEffectiveContentHash).toBe(firstLedger.effectiveContentHash);
+    expect(overlay.entries).toHaveLength(1);
+    expect(overlay.entries[0]).toMatchObject({
+      forwardTransactionId: secondLedger.transactionId,
+      previousEffectiveContentHash: firstLedger.effectiveContentHash,
+      effectiveContentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+    });
+    expect(
+      projectKnowledgeEffectiveManifestPages(manifest).find(
+        (page) => page.path === fixture.request.pagePath
+      )
+    ).toMatchObject({
+      effectiveContentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+      origin: { kind: "forward_revision" },
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_CURRENT_CONTENT);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 2, transitions: 2 });
+    fixture.lifecycle.close();
+  });
+
+  it("rejects leaf-valid low-time applying, recovery, and committed Forward successors at v9 initialization", async () => {
+    let clock = 500;
+    const fixture = await createForwardApplyCoordinatorFixture(
+      undefined,
+      createKnowledgeProductionPipelineResources,
+      () => clock
+    );
+    await expect(
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const firstCommitted = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const predecessor = firstCommitted.forwardRevisionApplyCommits[0];
+    if (!predecessor) throw new Error("Expected the predecessor Forward ledger");
+
+    clock = 400;
+    const source = (firstCommitted.manifests[0]?.value as SourceManifest).entries.find(
+      (entry) => entry.sourceId === "source-1"
+    );
+    if (!source?.lastSuccessful) throw new Error("Expected current source identity");
+    await commitForwardNoChanges(fixture, source.lastSuccessful.sourceContentHash);
+    const predecessorState = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    await fixture.publicationPort.publish(
+      createForwardPublicationEvidence(
+        predecessorState,
+        FORWARD_DECISION_CURRENT_CONTENT,
+        "transaction-forward-current"
+      )
+    );
+    const review = await fixture.publicationPort.readForwardRevisionReview("personal");
+    const pending = review.records.find((record) => record.state === "pending");
+    if (!pending || pending.state !== "pending") throw new Error("Expected second proposal");
+    const refreshed = await createRefreshedForwardDecisionCoordinator(fixture);
+    await expect(
+      refreshed.coordinator.decide(
+        createKnowledgeForwardRevisionReviewCommand({
+          action: "accept_exact",
+          proposal: pending.proposal,
+          proposalDigest: pending.proposalDigest,
+        }),
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({ kind: "accepted" });
+    const secondRequest = await readAcceptedForwardApplyQuery(fixture.runtime);
+    const secondCoordinator = new KnowledgeProductionForwardRevisionApplyCoordinator(
+      fixture.port,
+      fixture.runner,
+      refreshed.plan,
+      new ObsidianKnowledgeCompilerTargetResolver(fixture.app, fixture.executionOwner),
+      fixture.fileStore,
+      fixture.executionOwner,
+      fixture.assertCurrent
+    );
+    const ready = await secondCoordinator.revalidate(secondRequest, new AbortController().signal);
+    await fixture.port.begin(ready.capability, new AbortController().signal);
+    const highPreparedState = JSON.parse(
+      await fixture.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+    const low = rebuildPreparedForwardApplyBelowLineageFloor(
+      highPreparedState,
+      predecessor.appliedAt
+    );
+    const applying = projectKnowledgeForwardRevisionApplyJournalApplying(
+      low.prepared,
+      low.prepared.createdAt
+    );
+    const recovery = projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(applying, {
+      code: "file_state_conflict",
+      actualKind: "file",
+      actualHash: createFileContentHash("# distinct low-time recovery state\n"),
+      detectedAt: low.prepared.createdAt,
+    });
+    const committed = projectKnowledgeForwardRevisionApplyJournalCommitted(
+      applying,
+      low.prepared.createdAt
+    );
+    const writesBeforeInitialization = { ...fixture.wikiWrites };
+
+    expect(low.state.version).toBe(KNOWLEDGE_RUNTIME_STORE_VERSION);
+    expect(low.prepared.createdAt).toBe(predecessor.appliedAt - 1);
+    for (const journal of [applying, recovery, committed]) {
+      expect(() => snapshotKnowledgeForwardRevisionApplyJournal(journal)).not.toThrow();
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(
+        JSON.stringify({
+          ...low.state,
+          revision: low.state.revision + journal.revision,
+          activeForwardRevisionApply: journal,
+        })
+      );
+      await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
+        KnowledgeRuntimeStoreCorruptError
+      );
+    }
+    expect(fixture.wikiWrites).toEqual(writesBeforeInitialization);
+    fixture.lifecycle.close();
+  });
+
+  it("rejects leaf-valid same-page successors while the prior accepted lifecycle is open", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const acceptedReady = fixture.acceptedState;
+    const ready = await fixture.applyCoordinator.revalidate(
+      fixture.request,
+      new AbortController().signal
+    );
+    await fixture.port.begin(ready.capability, new AbortController().signal);
+    const prepared = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+
+    fixture.wikiProcessFault.mode = "throw_before_write";
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      { kind: "in_progress", phase: "applying" }
+    );
+    const applying = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+
+    fixture.files.set(fixture.request.pagePath, "# Cross-state recovery conflict\n");
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      { kind: "recovery_required" }
+    );
+    const recovery = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+
+    for (const state of [acceptedReady, prepared, applying, recovery]) {
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(
+        JSON.stringify(appendSamePageForwardSuccessor(state, fixture.request.pagePath))
+      );
+      await expect(new KnowledgeRuntimeStore(file).initialize()).rejects.toBeInstanceOf(
+        KnowledgeRuntimeStoreCorruptError
+      );
+    }
+    fixture.lifecycle.close();
+  });
+
+  it("accepts same-page successors after every durable prior lifecycle terminal", async () => {
+    const ledgerFixture = await createForwardApplyCoordinatorFixture();
+    await expect(
+      ledgerFixture.applyCoordinator.apply(ledgerFixture.request, new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "committed" });
+    const ledgerState = JSON.parse(
+      await ledgerFixture.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+
+    const abandonmentFixture = await createForwardApplyCoordinatorFixture();
+    const abandonmentStudio = new KnowledgeRuntimeForwardRevisionStudioPort(
+      abandonmentFixture.runtime
+    );
+    const abandonmentSnapshot = await abandonmentStudio.readForwardRevisionStudioBundle("personal");
+    const acceptedReady = abandonmentSnapshot.activeRecords.find(
+      (record) => record.state === "accepted_ready"
+    );
+    if (!acceptedReady || acceptedReady.state !== "accepted_ready") {
+      throw new Error("Expected accepted-ready abandonment fixture");
+    }
+    await abandonmentStudio.abandonForwardRevisionAcceptedReady(
+      createKnowledgeForwardRevisionStudioAcceptedIdentity(acceptedReady.acceptedDecision),
+      abandonmentSnapshot.runtimeRevision
+    );
+    const abandonmentState = JSON.parse(
+      await abandonmentFixture.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+
+    const recoveryFixture = await createPreparedForwardApplyCoordinatorFixture();
+    recoveryFixture.files.set(
+      recoveryFixture.request.pagePath,
+      "# Cross-state terminal recovery conflict\n"
+    );
+    await expect(
+      recoveryFixture.runner.recoverActive(new AbortController().signal)
+    ).resolves.toMatchObject({ kind: "recovery_required" });
+    const recoveryExpectation = createForwardRecoveryExpectation(
+      JSON.parse(await recoveryFixture.file.read()) as KnowledgeRuntimeStoreSnapshot
+    );
+    await expect(
+      recoveryFixture.runner.resolveRecovery(
+        recoveryExpectation,
+        "keep_current",
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({ kind: "kept_current" });
+    const recoveryTerminalState = JSON.parse(
+      await recoveryFixture.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+
+    const rejectedFixture = await createForwardDecisionCoordinatorFixture();
+    const rejectCommand = createKnowledgeForwardRevisionReviewCommand({
+      action: "reject",
+      proposal: rejectedFixture.pending.proposal,
+      proposalDigest: rejectedFixture.pending.proposalDigest,
+    });
+    await rejectedFixture.coordinator.decide(rejectCommand, new AbortController().signal);
+    const rejectedState = JSON.parse(
+      await rejectedFixture.file.read()
+    ) as KnowledgeRuntimeStoreSnapshot;
+
+    const terminals = [
+      { state: ledgerState, pagePath: ledgerFixture.request.pagePath },
+      { state: abandonmentState, pagePath: abandonmentFixture.request.pagePath },
+      { state: recoveryTerminalState, pagePath: recoveryFixture.request.pagePath },
+      { state: rejectedState, pagePath: rejectedFixture.pending.proposal.request.pagePath },
+    ];
+    for (const terminal of terminals) {
+      const file = new MemoryAtomicRuntimeFile();
+      await file.initialize(
+        JSON.stringify(appendSamePageForwardSuccessor(terminal.state, terminal.pagePath))
+      );
+      await expect(new KnowledgeRuntimeStore(file).initialize()).resolves.toBeUndefined();
+    }
+
+    ledgerFixture.lifecycle.close();
+    abandonmentFixture.lifecycle.close();
+    recoveryFixture.lifecycle.close();
+    rejectedFixture.lifecycle.close();
+  });
+
   it("publishes value-only hints for every forward Apply phase and final ledger convergence", async () => {
     const fixture = await createForwardApplyCoordinatorFixture();
     const personalReads: Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>[] = [];
@@ -11583,6 +12983,48 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
     expect(finalized.activeForwardRevisionApply).toBeNull();
     expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    fixture.lifecycle.close();
+  });
+
+  it("serializes accepted-ready abandonment against Apply without split-brain terminal evidence", async () => {
+    const fixture = await createForwardApplyCoordinatorFixture();
+    const studio = new KnowledgeRuntimeForwardRevisionStudioPort(fixture.runtime);
+    const snapshot = await studio.readForwardRevisionStudioBundle("personal");
+    const accepted = snapshot.activeRecords.find((record) => record.state === "accepted_ready");
+    if (!accepted || accepted.state !== "accepted_ready") {
+      throw new Error("Expected accepted-ready Studio authority");
+    }
+    const acceptedIdentity = createKnowledgeForwardRevisionStudioAcceptedIdentity(
+      accepted.acceptedDecision
+    );
+
+    const outcomes = await Promise.allSettled([
+      studio.abandonForwardRevisionAcceptedReady(acceptedIdentity, snapshot.runtimeRevision),
+      fixture.applyCoordinator.apply(fixture.request, new AbortController().signal),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const abandonmentCount = finalized.forwardRevisionAbandonments.length;
+    const ledgerCount = finalized.forwardRevisionApplyCommits.length;
+    expect(abandonmentCount + ledgerCount).toBe(1);
+    expect(finalized.activeForwardRevisionApply).toBeNull();
+    expect(finalized.forwardRevisionRecoveryTerminals).toEqual([]);
+    expect(finalized.forwardRevisionSupersessions).toEqual([]);
+    expect(fixture.wikiWrites.transitions).toBe(ledgerCount);
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(
+      ledgerCount === 1 ? FORWARD_DECISION_HISTORICAL_CONTENT : FORWARD_DECISION_CURRENT_CONTENT
+    );
+    const durable = await studio.readForwardRevisionStudioBundle("personal");
+    if (abandonmentCount === 1) {
+      expect(durable.activeRecords).toEqual([
+        expect.objectContaining({ state: "abandoned", pagePath: fixture.request.pagePath }),
+      ]);
+      expect(durable.committedCount).toBe(0);
+    } else {
+      expect(durable.activeRecords).toEqual([]);
+      expect(durable.committedCount).toBe(1);
+    }
     fixture.lifecycle.close();
   });
 
@@ -11690,6 +13132,58 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     fixture.lifecycle.close();
   });
 
+  it("keeps a rev1 conflict sticky until exact-before bytes are restored for explicit retry", async () => {
+    const fixture = await createPreparedForwardApplyCoordinatorFixture();
+    const conflictingContent = "# prepared recovery third state\n";
+    fixture.files.set(fixture.request.pagePath, conflictingContent);
+
+    await expect(fixture.runner.recoverActive(new AbortController().signal)).resolves.toMatchObject(
+      {
+        kind: "recovery_required",
+        transactionId: fixture.journal.transactionId,
+        journalRevision: 1,
+        conflictCode: "file_state_conflict",
+      }
+    );
+    expect(fixture.wikiWrites).toEqual({ processCalls: 0, transitions: 0 });
+    const recoveryExpectation = createForwardRecoveryExpectation(
+      JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot
+    );
+    await expect(
+      fixture.runner.resolveRecovery(
+        recoveryExpectation,
+        "retry_exact",
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({
+      kind: "recovery_required",
+      transactionId: fixture.journal.transactionId,
+      journalRevision: 1,
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(conflictingContent);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 0, transitions: 0 });
+
+    fixture.files.set(fixture.request.pagePath, FORWARD_DECISION_CURRENT_CONTENT);
+    await expect(
+      fixture.runner.resolveRecovery(
+        recoveryExpectation,
+        "retry_exact",
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({
+      kind: "committed",
+      transactionId: fixture.journal.transactionId,
+    });
+
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(FORWARD_DECISION_HISTORICAL_CONTENT);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 1 });
+    const finalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(finalized.activeForwardRevisionApply).toBeNull();
+    expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
+    expect(finalized.forwardRevisionRecoveryTerminals).toEqual([]);
+    fixture.lifecycle.close();
+  });
+
   it("persists a sticky exact conflict when Wiki changes after the applying marker", async () => {
     const fixture = await createPreparedForwardApplyCoordinatorFixture();
     const conflictingContent = "# concurrent third state\n";
@@ -11722,6 +13216,60 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
       },
       forwardRevisionApplyCommits: [],
     });
+    const recoveryExpectation = createForwardRecoveryExpectation(blocked);
+    await expect(
+      fixture.runner.resolveRecovery(
+        recoveryExpectation,
+        "retry_exact",
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({
+      kind: "recovery_required",
+      transactionId: fixture.journal.transactionId,
+      journalRevision: 2,
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(conflictingContent);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 0 });
+
+    await expect(
+      fixture.runner.resolveRecovery(
+        recoveryExpectation,
+        "keep_current",
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({
+      kind: "kept_current",
+      transactionId: fixture.journal.transactionId,
+      outcome: "write_outcome_uncertain_external_supersession",
+    });
+    const terminalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(terminalized.activeForwardRevisionApply).toBeNull();
+    expect(terminalized.forwardRevisionApplyCommits).toEqual([]);
+    expect(terminalized.forwardRevisionRecoveryTerminals).toEqual([
+      expect.objectContaining({
+        outcome: "write_outcome_uncertain_external_supersession",
+        vaultMutation: "none",
+        observation: {
+          version: 1,
+          kind: "forward_revision_external_observation",
+          actualKind: "file",
+          actualHash: createFileContentHash(conflictingContent),
+          observedAt: 500,
+        },
+      }),
+    ]);
+    await expect(
+      fixture.runtime.readForwardRevisionStudioBundle("personal")
+    ).resolves.toMatchObject({
+      activeRecords: [
+        {
+          state: "kept_current",
+          outcome: "write_outcome_uncertain_external_supersession",
+        },
+      ],
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(conflictingContent);
+    expect(fixture.wikiWrites).toEqual({ processCalls: 1, transitions: 0 });
     fixture.lifecycle.close();
   });
 
@@ -11844,7 +13392,8 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
     expect(finalized.forwardRevisionApplyCommits).toHaveLength(1);
     expect(finalized.forwardRevisionApplyCommits[0]).toMatchObject({
       transactionId: journal.transactionId,
-      baseContentHash: journal.beforeHash,
+      sourceAppliedContentHash: journal.sourceAppliedContentHash,
+      previousEffectiveContentHash: journal.beforeHash,
       effectiveContentHash: journal.afterHash,
       manifestAfterRevision: journal.manifestBeforeRevision + 1,
     });
@@ -11922,6 +13471,60 @@ describe("KnowledgeRuntimeStore forward revision atomic decision", () => {
       },
     });
     expect(blocked.forwardRevisionApplyCommits).toEqual([]);
+    const recoveryExpectation = createForwardRecoveryExpectation(blocked);
+
+    await expect(
+      fixture.runner.resolveRecovery(
+        recoveryExpectation,
+        "keep_current",
+        new AbortController().signal
+      )
+    ).resolves.toMatchObject({
+      kind: "kept_current",
+      transactionId: committed.transactionId,
+      outcome: "committed_then_external_supersession",
+    });
+    const terminalized = JSON.parse(await fixture.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    const terminalManifest = terminalized.manifests[0]?.value as SourceManifest;
+    expect(terminalized.activeForwardRevisionApply).toBeNull();
+    expect(terminalized.forwardRevisionApplyCommits).toHaveLength(1);
+    expect(terminalized.forwardRevisionRecoveryTerminals).toHaveLength(1);
+    expect(terminalized.forwardRevisionRecoveryTerminals[0]).toMatchObject({
+      outcome: "committed_then_external_supersession",
+      vaultMutation: "none",
+      journal: {
+        journalRevision: 3,
+        transactionId: committed.transactionId,
+        committedAt: committed.committedAt,
+      },
+    });
+    expect(
+      terminalManifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    ).toBeUndefined();
+    expect(
+      projectKnowledgeEffectiveManifestPages(terminalManifest).find(
+        (page) => page.path === fixture.request.pagePath
+      )
+    ).toMatchObject({
+      sourceAppliedContentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+      effectiveContentHash: createFileContentHash(FORWARD_DECISION_CURRENT_CONTENT),
+      origin: { kind: "source_apply" },
+    });
+    await expect(
+      fixture.runtime.readForwardRevisionStudioBundle("personal")
+    ).resolves.toMatchObject({
+      activeRecords: [
+        {
+          state: "kept_current",
+          outcome: "committed_then_external_supersession",
+        },
+      ],
+      committedCount: 1,
+    });
+    expect(fixture.files.get(fixture.request.pagePath)).toBe(
+      "# external edit after committed marker\n"
+    );
+    expect(fixture.wikiWrites).toEqual({ processCalls: 0, transitions: 0 });
     fixture.lifecycle.close();
   });
 
@@ -12249,11 +13852,17 @@ describe("KnowledgeRuntimeStore source retirement", () => {
       forwardRevisionReviews: _forwardRevisionReviews,
       activeForwardRevisionApply: _activeForwardRevisionApply,
       forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      forwardRevisionSupersessions: _forwardRevisionSupersessions,
+      forwardRevisionAbandonments: _forwardRevisionAbandonments,
+      forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
       ...previousV4
     } = current;
     void _forwardRevisionReviews;
     void _activeForwardRevisionApply;
     void _forwardRevisionApplyCommits;
+    void _forwardRevisionSupersessions;
+    void _forwardRevisionAbandonments;
+    void _forwardRevisionRecoveryTerminals;
     await file.initialize(
       JSON.stringify({
         ...previousV4,
@@ -12267,7 +13876,7 @@ describe("KnowledgeRuntimeStore source retirement", () => {
     expect(JSON.parse(await file.read())).toEqual({
       ...current,
       version: KNOWLEDGE_RUNTIME_STORE_VERSION,
-      revision: 11,
+      revision: 12,
     });
   });
 
@@ -12289,11 +13898,17 @@ describe("KnowledgeRuntimeStore source retirement", () => {
       forwardRevisionReviews: _forwardRevisionReviews,
       activeForwardRevisionApply: _activeForwardRevisionApply,
       forwardRevisionApplyCommits: _forwardRevisionApplyCommits,
+      forwardRevisionSupersessions: _forwardRevisionSupersessions,
+      forwardRevisionAbandonments: _forwardRevisionAbandonments,
+      forwardRevisionRecoveryTerminals: _forwardRevisionRecoveryTerminals,
       ...previousV4
     } = createEmptyKnowledgeRuntimeStoreSnapshot("1".repeat(32));
     void _forwardRevisionReviews;
     void _activeForwardRevisionApply;
     void _forwardRevisionApplyCommits;
+    void _forwardRevisionSupersessions;
+    void _forwardRevisionAbandonments;
+    void _forwardRevisionRecoveryTerminals;
     await file.initialize(
       JSON.stringify({
         ...previousV4,

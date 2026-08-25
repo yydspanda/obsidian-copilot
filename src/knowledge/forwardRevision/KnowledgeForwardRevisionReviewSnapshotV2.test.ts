@@ -36,6 +36,17 @@ import {
   createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest,
   createKnowledgeForwardRevisionValidationReceipt,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
+import {
+  createKnowledgeForwardRevisionAbandonmentRecord,
+  createKnowledgeForwardRevisionExternalObservation,
+  createKnowledgeForwardRevisionRecoveryJournalRef,
+  createKnowledgeForwardRevisionRecoveryTerminalRecord,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal";
+import {
+  KnowledgeForwardRevisionStudioProjectionError,
+  createKnowledgeForwardRevisionStudioAcceptedIdentity,
+  projectKnowledgeForwardRevisionStudioSnapshot,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 
 const HISTORICAL_CONTENT = "# Historical output\n";
@@ -533,22 +544,22 @@ describe("KnowledgeForwardRevisionReviewSnapshotV2", () => {
     }
   });
 
-  it("keeps pending and accepted pages exclusive while rejected pages are released", () => {
+  it("releases a page after either terminal Review decision while keeping pending exclusive", () => {
     const accepted = createAcceptedEntry(createProposal(1), 1, 11, 2, 21);
     const alias = createPendingEntry(
       createProposal(2, "wiki/topic.md", "transaction-alias"),
       3,
       22
     );
-    expect(() =>
+    expect(
       snapshotKnowledgeForwardRevisionReviewSnapshotV2({
         version: 2,
         bundleId: "personal",
         revision: 3,
         lastRequestRevision: 2,
         records: [accepted, alias],
-      })
-    ).toThrow(KnowledgeForwardRevisionReviewSnapshotV2ValidationError);
+      }).records.map((entry) => entry.state)
+    ).toEqual(["accepted", "pending"]);
 
     const rejected = createRejectedEntry(createProposal(1), 1, 11, 2, 12);
     const replacement = createPendingEntry(
@@ -565,6 +576,22 @@ describe("KnowledgeForwardRevisionReviewSnapshotV2", () => {
         records: [rejected, replacement],
       }).records
     ).toHaveLength(2);
+
+    const stillPending = createPendingEntry(createProposal(1), 1, 11);
+    const concurrentAlias = createPendingEntry(
+      createProposal(2, "wiki/topic.md", "transaction-concurrent"),
+      2,
+      12
+    );
+    expect(() =>
+      snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+        version: 2,
+        bundleId: "personal",
+        revision: 2,
+        lastRequestRevision: 2,
+        records: [stillPending, concurrentAlias],
+      })
+    ).toThrow(KnowledgeForwardRevisionReviewSnapshotV2ValidationError);
   });
 
   it("requires page rejection to commit before a case-folded replacement is published", () => {
@@ -885,5 +912,171 @@ describe("KnowledgeForwardRevisionReviewSnapshotV2", () => {
       KnowledgeForwardRevisionReviewSnapshotV2ValidationError
     );
     expect(parseKnowledgeForwardRevisionReviewSnapshotV2({ version: 1 }).ok).toBe(false);
+  });
+
+  it("projects only an exact accepted abandonment into the no-write terminal Studio state", () => {
+    const acceptedEntry = createAcceptedEntry(createProposal(), 1, 1, 2, 20);
+    if (acceptedEntry.state !== "accepted") throw new Error("Expected an accepted fixture");
+    const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+      version: 2,
+      bundleId: "personal",
+      revision: 2,
+      lastRequestRevision: 1,
+      records: [acceptedEntry],
+    });
+    const abandonment = createKnowledgeForwardRevisionAbandonmentRecord({
+      acceptedIdentity: createKnowledgeForwardRevisionStudioAcceptedIdentity(
+        acceptedEntry.decision
+      ),
+      abandonedAt: acceptedEntry.decision.acceptedAt + 1,
+    });
+    const input = {
+      runtimeId: acceptedEntry.decision.proposal.request.runtimeId,
+      runtimeRevision: 21,
+      bundleId: "personal",
+      review,
+      activeApply: null,
+      applyCommits: [],
+      abandonments: [abandonment],
+      recoveryTerminals: [],
+    };
+
+    const projected = projectKnowledgeForwardRevisionStudioSnapshot(input);
+
+    expect(projected.activeRecords).toHaveLength(1);
+    expect(projected.activeRecords[0]).toMatchObject({
+      state: "abandoned",
+      abandonedAt: abandonment.abandonedAt,
+      abandonmentDigest: abandonment.abandonmentDigest,
+      decisionDigest: acceptedEntry.decisionDigest,
+    });
+    expect(() =>
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        ...input,
+        abandonments: [abandonment, abandonment],
+      })
+    ).toThrow(KnowledgeForwardRevisionStudioProjectionError);
+
+    const foreignAccepted = createAcceptedEntry(createProposal(2, "Wiki/Other.md"), 2, 2, 3, 20);
+    if (foreignAccepted.state !== "accepted") throw new Error("Expected an accepted fixture");
+    const foreignAbandonment = createKnowledgeForwardRevisionAbandonmentRecord({
+      acceptedIdentity: createKnowledgeForwardRevisionStudioAcceptedIdentity(
+        foreignAccepted.decision
+      ),
+      abandonedAt: foreignAccepted.decision.acceptedAt + 1,
+    });
+    expect(() =>
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        ...input,
+        abandonments: [foreignAbandonment],
+      })
+    ).toThrow(KnowledgeForwardRevisionStudioProjectionError);
+  });
+
+  it("exact-joins one sticky recovery terminal without exposing its terminal identity", () => {
+    const acceptedEntry = createAcceptedEntry(createProposal(), 1, 1, 2, 20);
+    if (acceptedEntry.state !== "accepted") throw new Error("Expected an accepted fixture");
+    const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+      version: 2,
+      bundleId: "personal",
+      revision: 2,
+      lastRequestRevision: 1,
+      records: [acceptedEntry],
+    });
+    const acceptedIdentity = createKnowledgeForwardRevisionStudioAcceptedIdentity(
+      acceptedEntry.decision
+    );
+    const observedAt = acceptedEntry.decision.acceptedAt + 1;
+    const journal = createKnowledgeForwardRevisionRecoveryJournalRef({
+      resource: acceptedIdentity.resource,
+      transactionId: "forward-transaction-recovery",
+      recoveryJournalDigest: HASH_E,
+      journalRevision: 2,
+      acceptedDecisionDigest: acceptedIdentity.acceptedDecisionDigest,
+      applyClaimId: acceptedIdentity.applyClaimId,
+      applyClaimDigest: acceptedIdentity.applyClaimDigest,
+      beforeHash: acceptedEntry.decision.acceptanceAuthority.vaultObservedBeforeHash,
+      afterHash: acceptedIdentity.acceptedAfterHash,
+      updatedAt: observedAt,
+    });
+    const terminal = createKnowledgeForwardRevisionRecoveryTerminalRecord({
+      acceptedIdentity,
+      journal,
+      observation: createKnowledgeForwardRevisionExternalObservation({
+        actualKind: "file",
+        actualHash: HASH_A,
+        observedAt,
+      }),
+      terminalizedAt: observedAt + 1,
+    });
+    const input = {
+      runtimeId: acceptedEntry.decision.proposal.request.runtimeId,
+      runtimeRevision: 21,
+      bundleId: "personal",
+      review,
+      activeApply: null,
+      applyCommits: [],
+      abandonments: [],
+      recoveryTerminals: [terminal],
+    };
+
+    const projected = projectKnowledgeForwardRevisionStudioSnapshot(input);
+
+    expect(projected.activeRecords).toHaveLength(1);
+    expect(projected.activeRecords[0]).toMatchObject({
+      state: "kept_current",
+      outcome: "write_outcome_uncertain_external_supersession",
+      terminalizedAt: terminal.terminalizedAt,
+      decisionDigest: acceptedEntry.decisionDigest,
+    });
+    expect(Object.hasOwn(projected.activeRecords[0], "terminalizationId")).toBe(false);
+    expect(Object.hasOwn(projected.activeRecords[0], "terminalizationDigest")).toBe(false);
+    expect(() =>
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        ...input,
+        recoveryTerminals: [terminal, terminal],
+      })
+    ).toThrow(KnowledgeForwardRevisionStudioProjectionError);
+
+    const abandonment = createKnowledgeForwardRevisionAbandonmentRecord({
+      acceptedIdentity,
+      abandonedAt: terminal.terminalizedAt,
+    });
+    expect(() =>
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        ...input,
+        abandonments: [abandonment],
+      })
+    ).toThrow(KnowledgeForwardRevisionStudioProjectionError);
+
+    const foreignEntry = createAcceptedEntry(createProposal(2, "Wiki/Other.md"), 2, 2, 3, 20);
+    if (foreignEntry.state !== "accepted") throw new Error("Expected an accepted fixture");
+    const foreignIdentity = createKnowledgeForwardRevisionStudioAcceptedIdentity(
+      foreignEntry.decision
+    );
+    const foreignJournal = createKnowledgeForwardRevisionRecoveryJournalRef({
+      resource: foreignIdentity.resource,
+      transactionId: journal.transactionId,
+      recoveryJournalDigest: journal.recoveryJournalDigest,
+      journalRevision: 2,
+      acceptedDecisionDigest: foreignIdentity.acceptedDecisionDigest,
+      applyClaimId: foreignIdentity.applyClaimId,
+      applyClaimDigest: foreignIdentity.applyClaimDigest,
+      beforeHash: foreignEntry.decision.acceptanceAuthority.vaultObservedBeforeHash,
+      afterHash: foreignIdentity.acceptedAfterHash,
+      updatedAt: journal.updatedAt,
+    });
+    const foreignTerminal = createKnowledgeForwardRevisionRecoveryTerminalRecord({
+      acceptedIdentity: foreignIdentity,
+      journal: foreignJournal,
+      observation: terminal.observation,
+      terminalizedAt: terminal.terminalizedAt,
+    });
+    expect(() =>
+      projectKnowledgeForwardRevisionStudioSnapshot({
+        ...input,
+        recoveryTerminals: [foreignTerminal],
+      })
+    ).toThrow(KnowledgeForwardRevisionStudioProjectionError);
   });
 });

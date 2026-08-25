@@ -1,15 +1,24 @@
 import {
   KnowledgeForwardRevisionApplyJournalValidationError,
+  createKnowledgeForwardRevisionApplyJournalDigest,
   createKnowledgeForwardRevisionPreparedApplyJournal,
   projectKnowledgeForwardRevisionApplyJournalApplying,
   projectKnowledgeForwardRevisionApplyJournalCommitted,
   projectKnowledgeForwardRevisionApplyJournalRecoveryRequired,
+  projectKnowledgeForwardRevisionRecoveryJournalCommitted,
   snapshotKnowledgeForwardRevisionApplyJournal,
+  type KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyJournal";
+import {
+  createKnowledgeForwardRevisionApplyRecoveryExpectation,
+  knowledgeForwardRevisionApplyRecoveryExpectationMatchesJournal,
+  snapshotKnowledgeForwardRevisionApplyRecoveryExpectation,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyRecoveryExpectation";
 import {
   KnowledgeForwardRevisionApplyLedgerValidationError,
   createKnowledgeForwardRevisionApplyLedgerIdentityDigest,
   createKnowledgeForwardRevisionApplyLedgerRecord,
+  migrateKnowledgeForwardRevisionApplyLedgerRecordV1,
   snapshotKnowledgeForwardRevisionApplyLedgerRecordForCommittedJournal,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyLedger";
 import {
@@ -23,6 +32,17 @@ import {
   createKnowledgeForwardRevisionAcceptedDecisionRecord,
   type KnowledgeForwardRevisionAcceptanceAuthority,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
+import {
+  createKnowledgeForwardRevisionAcceptedClaimIdentity,
+  createKnowledgeForwardRevisionExternalObservation,
+  createKnowledgeForwardRevisionLifecycleResourceIdentity,
+  createKnowledgeForwardRevisionRecoveryJournalRef,
+  createKnowledgeForwardRevisionRecoveryTerminalRecord,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal";
+import {
+  KnowledgeForwardRevisionRecoveryTerminalTransitionValidationError,
+  snapshotKnowledgeForwardRevisionRecoveryTerminalTransition,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionRecoveryTerminalTransition";
 import {
   createKnowledgeForwardRevisionIntent,
   createKnowledgeForwardRevisionIntentDigest,
@@ -42,8 +62,9 @@ import {
   projectKnowledgeForwardRevisionOverlayAddition,
 } from "@/knowledge/manifest/KnowledgeForwardRevisionOverlay";
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
-import { createFileContentHash } from "@/knowledge/model/fingerprint";
+import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
 import type { SourceManifest, SourceManifestEntry } from "@/knowledge/model/types";
+import { sha256 } from "@/utils/hash";
 
 const HISTORICAL_CONTENT = "# Historical output\n";
 const CURRENT_CONTENT = "# Current output\n";
@@ -302,6 +323,124 @@ function createApplyFixture() {
   };
 }
 
+/** Creates one exact no-write terminal proof for an active recovery journal. */
+function createRecoveryTerminalForJournal(
+  journal: Readonly<KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2>,
+  observedAt: number
+) {
+  const resource = createKnowledgeForwardRevisionLifecycleResourceIdentity({
+    runtimeId: journal.runtimeId,
+    bundleId: journal.bundleId,
+    sourceId: journal.sourceId,
+    pagePath: journal.pagePath,
+  });
+  const acceptedIdentity = createKnowledgeForwardRevisionAcceptedClaimIdentity({
+    resource,
+    acceptedDecisionDigest: journal.acceptedDecisionDigest,
+    applyClaimId: journal.applyClaimId,
+    applyClaimDigest: journal.applyClaimDigest,
+    proposalId: journal.proposalId,
+    proposalDigest: journal.proposalDigest,
+    acceptedAfterHash: journal.afterHash,
+    acceptedAt: journal.acceptedDecision.acceptedAt,
+  });
+  const journalBase = {
+    resource,
+    transactionId: journal.transactionId,
+    recoveryJournalDigest: createKnowledgeForwardRevisionApplyJournalDigest(journal),
+    acceptedDecisionDigest: journal.acceptedDecisionDigest,
+    applyClaimId: journal.applyClaimId,
+    applyClaimDigest: journal.applyClaimDigest,
+    beforeHash: journal.beforeHash,
+    afterHash: journal.afterHash,
+    updatedAt: observedAt,
+  } as const;
+  const journalRef = createKnowledgeForwardRevisionRecoveryJournalRef(
+    journal.revision === 3
+      ? { ...journalBase, journalRevision: 3, committedAt: journal.committedAt! }
+      : journal.revision === 2
+        ? { ...journalBase, journalRevision: 2 }
+        : { ...journalBase, journalRevision: 1 }
+  );
+  return createKnowledgeForwardRevisionRecoveryTerminalRecord({
+    acceptedIdentity,
+    journal: journalRef,
+    observation: createKnowledgeForwardRevisionExternalObservation({
+      actualKind: "missing",
+      observedAt,
+    }),
+    terminalizedAt: observedAt,
+  });
+}
+
+/** Reconstructs one authentic v1 ledger fixture from shared canonical scalar fields. */
+function createLegacyLedgerFixture(
+  ledger: ReturnType<typeof createKnowledgeForwardRevisionApplyLedgerRecord>
+) {
+  const identityPayload = {
+    version: 1,
+    kind: "forward_revision_apply_ledger_identity",
+    transactionId: ledger.transactionId,
+    committedJournalDigest: ledger.committedJournalDigest,
+    runtimeId: ledger.runtimeId,
+    bundleId: ledger.bundleId,
+    sourceId: ledger.sourceId,
+    pagePath: ledger.pagePath,
+    windowsPathKey: ledger.windowsPathKey,
+    acceptedDecisionDigest: ledger.acceptedDecisionDigest,
+    applyClaimId: ledger.applyClaimId,
+    applyClaimDigest: ledger.applyClaimDigest,
+    proposalId: ledger.proposalId,
+    proposalDigest: ledger.proposalDigest,
+    originalValidationReceiptDigest: ledger.originalValidationReceiptDigest,
+    revalidationReceiptDigest: ledger.revalidationReceiptDigest,
+    sourceBaseDigest: ledger.sourceBaseDigest,
+    baseContentHash: ledger.sourceAppliedContentHash,
+    effectiveContentHash: ledger.effectiveContentHash,
+    manifestBeforeRevision: ledger.manifestBeforeRevision,
+    manifestBeforeDigest: ledger.manifestBeforeDigest,
+    appliedAt: ledger.appliedAt,
+  };
+  const forwardLedgerIdentityDigest = sha256(
+    `knowledge-forward-revision-apply-ledger-identity-v1\n${canonicalizeJson(identityPayload)}`
+  );
+  const payload = {
+    version: 1 as const,
+    kind: "forward_revision_apply_ledger_record" as const,
+    transactionId: ledger.transactionId,
+    committedJournalDigest: ledger.committedJournalDigest,
+    runtimeId: ledger.runtimeId,
+    bundleId: ledger.bundleId,
+    sourceId: ledger.sourceId,
+    pagePath: ledger.pagePath,
+    windowsPathKey: ledger.windowsPathKey,
+    acceptedDecisionDigest: ledger.acceptedDecisionDigest,
+    applyClaimId: ledger.applyClaimId,
+    applyClaimDigest: ledger.applyClaimDigest,
+    proposalId: ledger.proposalId,
+    proposalDigest: ledger.proposalDigest,
+    originalValidationReceiptDigest: ledger.originalValidationReceiptDigest,
+    revalidationReceiptDigest: ledger.revalidationReceiptDigest,
+    sourceBaseDigest: ledger.sourceBaseDigest,
+    baseContentHash: ledger.sourceAppliedContentHash,
+    effectiveContentHash: ledger.effectiveContentHash,
+    manifestBeforeRevision: ledger.manifestBeforeRevision,
+    manifestBeforeDigest: ledger.manifestBeforeDigest,
+    forwardLedgerIdentityDigest,
+    manifestAfterRevision: ledger.manifestAfterRevision,
+    manifestAfterDigest: ledger.manifestAfterDigest,
+    appliedAt: ledger.appliedAt,
+  };
+  const ledgerDigest = sha256(
+    `knowledge-forward-revision-apply-ledger-record-v1\n${canonicalizeJson(payload)}`
+  );
+  return Object.freeze({
+    ...payload,
+    ledgerId: `forward-revision-apply-ledger-${ledgerDigest}`,
+    ledgerDigest,
+  });
+}
+
 describe("forward Apply durable protocol", () => {
   it("binds a fresh receipt to the exact accepted decision and stable source base", () => {
     const fixture = createApplyFixture();
@@ -384,6 +523,18 @@ describe("forward Apply durable protocol", () => {
       revision: 3,
       committedAt: committed.committedAt,
     });
+    expect(projectKnowledgeForwardRevisionRecoveryJournalCommitted(recovery, 143)).toMatchObject({
+      phase: "committed",
+      revision: 2,
+      committedAt: 143,
+    });
+    expect(
+      projectKnowledgeForwardRevisionRecoveryJournalCommitted(postCommitDrift, 144)
+    ).toMatchObject({
+      phase: "committed",
+      revision: 2,
+      committedAt: committed.committedAt,
+    });
     const oversizedPostCommitDrift = projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(
       committed,
       {
@@ -419,12 +570,135 @@ describe("forward Apply durable protocol", () => {
       { ...prepared, revision: 1 },
       { ...applying, revision: 99 },
       { ...committed, committedAt: committed.updatedAt + 1 },
+      { ...postCommitDrift, committedAt: postCommitDrift.createdAt - 1 },
       { ...committed, beforeContent: "tampered" },
     ]) {
       expect(() => snapshotKnowledgeForwardRevisionApplyJournal(invalidJournal)).toThrow(
         KnowledgeForwardRevisionApplyJournalValidationError
       );
     }
+  });
+
+  it("exactly rejoins no-write terminal proofs for recovery revisions one through three", () => {
+    const { prepared, applying, committed } = createApplyFixture();
+    const recoveries = [
+      projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(prepared, {
+        code: "file_state_conflict",
+        actualKind: "missing",
+        detectedAt: 140,
+      }),
+      projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(applying, {
+        code: "file_state_conflict",
+        actualKind: "missing",
+        detectedAt: 141,
+      }),
+      projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(committed, {
+        code: "post_write_verification_failed",
+        actualKind: "missing",
+        detectedAt: 142,
+      }),
+    ] as const;
+
+    recoveries.forEach((recovery, index) => {
+      const terminal = createRecoveryTerminalForJournal(recovery, 150 + index);
+      const transition = snapshotKnowledgeForwardRevisionRecoveryTerminalTransition(
+        recovery,
+        terminal
+      );
+
+      expect(transition.previousJournal).toEqual(recovery);
+      expect(transition.previousJournalDigest).toBe(
+        createKnowledgeForwardRevisionApplyJournalDigest(recovery)
+      );
+      expect(transition.observation).toEqual({ kind: "missing" });
+      expect(transition.observedAt).toBe(150 + index);
+      expect(Object.isFrozen(transition)).toBe(true);
+    });
+
+    expect(() =>
+      snapshotKnowledgeForwardRevisionRecoveryTerminalTransition(
+        recoveries[1],
+        createRecoveryTerminalForJournal(recoveries[0], 160)
+      )
+    ).toThrow(KnowledgeForwardRevisionRecoveryTerminalTransitionValidationError);
+    expect(() =>
+      snapshotKnowledgeForwardRevisionRecoveryTerminalTransition(
+        recoveries[0],
+        createRecoveryTerminalForJournal(recoveries[0], recoveries[0].updatedAt - 1)
+      )
+    ).toThrow(KnowledgeForwardRevisionRecoveryTerminalTransitionValidationError);
+  });
+
+  it("binds an explicit recovery expectation to the full accepted identity and exact journal head", () => {
+    const { prepared } = createApplyFixture();
+    const recoveryA = projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(prepared, {
+      code: "file_state_conflict",
+      actualKind: "missing",
+      detectedAt: 140,
+    });
+    const recoveryB = projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(prepared, {
+      code: "file_state_conflict",
+      actualKind: "directory",
+      detectedAt: 141,
+    });
+    const expectation = createKnowledgeForwardRevisionApplyRecoveryExpectation(recoveryA);
+
+    expect(snapshotKnowledgeForwardRevisionApplyRecoveryExpectation(expectation)).toEqual(
+      expectation
+    );
+    expect(
+      knowledgeForwardRevisionApplyRecoveryExpectationMatchesJournal(expectation, recoveryA)
+    ).toBe(true);
+    expect(
+      knowledgeForwardRevisionApplyRecoveryExpectationMatchesJournal(expectation, recoveryB)
+    ).toBe(false);
+    expect(() => createKnowledgeForwardRevisionApplyRecoveryExpectation(prepared)).toThrow(
+      "requires a sticky journal"
+    );
+
+    const accepted = expectation.acceptedIdentity;
+    const foreignAcceptedIdentity = createKnowledgeForwardRevisionAcceptedClaimIdentity({
+      resource: createKnowledgeForwardRevisionLifecycleResourceIdentity({
+        runtimeId: accepted.resource.runtimeId,
+        bundleId: accepted.resource.bundleId,
+        sourceId: accepted.resource.sourceId,
+        pagePath: "Wiki/Other.md",
+      }),
+      acceptedDecisionDigest: accepted.acceptedDecisionDigest,
+      applyClaimId: accepted.applyClaimId,
+      applyClaimDigest: accepted.applyClaimDigest,
+      proposalId: accepted.proposalId,
+      proposalDigest: accepted.proposalDigest,
+      acceptedAfterHash: accepted.acceptedAfterHash,
+      acceptedAt: accepted.acceptedAt,
+    });
+    const foreignExpectation = snapshotKnowledgeForwardRevisionApplyRecoveryExpectation({
+      ...expectation,
+      acceptedIdentity: foreignAcceptedIdentity,
+    });
+    expect(
+      knowledgeForwardRevisionApplyRecoveryExpectationMatchesJournal(foreignExpectation, recoveryA)
+    ).toBe(false);
+  });
+
+  it("migrates a v1 journal base into explicit source and predecessor hashes", () => {
+    const { prepared } = createApplyFixture();
+    const {
+      sourceAppliedContentHash: _sourceAppliedContentHash,
+      previousEffectiveContentHash: _previousEffectiveContentHash,
+      ...legacyPayload
+    } = prepared;
+    void _sourceAppliedContentHash;
+    void _previousEffectiveContentHash;
+
+    const migrated = snapshotKnowledgeForwardRevisionApplyJournal({
+      ...legacyPayload,
+      version: 1,
+    });
+
+    expect(migrated.version).toBe(2);
+    expect(migrated.sourceAppliedContentHash).toBe(prepared.beforeHash);
+    expect(migrated.previousEffectiveContentHash).toBe(prepared.beforeHash);
   });
 
   it("forms an acyclic overlay identity before final Manifest and full ledger digest", () => {
@@ -444,7 +718,8 @@ describe("forward Apply durable protocol", () => {
       pagePath: fixture.committed.pagePath,
       sourceId: fixture.committed.sourceId,
       sourceBaseDigest: fixture.committed.sourceBaseDigest,
-      baseContentHash: fixture.committed.beforeHash,
+      sourceAppliedContentHash: fixture.committed.sourceAppliedContentHash,
+      previousEffectiveContentHash: fixture.committed.previousEffectiveContentHash,
       effectiveContentHash: fixture.committed.afterHash,
       forwardTransactionId: fixture.committed.transactionId,
       acceptedDecisionDigest: fixture.committed.acceptedDecisionDigest,
@@ -465,6 +740,26 @@ describe("forward Apply durable protocol", () => {
     });
 
     expect(ledger.forwardLedgerIdentityDigest).toBe(identityDigest);
+    expect(ledger.legacyForwardLedgerIdentityDigest).toBeNull();
+    expect(ledger.sourceBase).toEqual(fixture.sourceBase);
+    expect(ledger.sourceAppliedContentHash).toBe(fixture.committed.sourceAppliedContentHash);
+    expect(ledger.previousEffectiveContentHash).toBe(
+      fixture.committed.previousEffectiveContentHash
+    );
+    const legacy = createLegacyLedgerFixture(ledger);
+    const migrated = migrateKnowledgeForwardRevisionApplyLedgerRecordV1(legacy, {
+      sourceBase: fixture.sourceBase,
+      manifestAfterDigest: legacy.manifestAfterDigest,
+    });
+    expect(migrated.forwardLedgerIdentityDigest).not.toBe(legacy.forwardLedgerIdentityDigest);
+    expect(migrated.legacyForwardLedgerIdentityDigest).toBe(legacy.forwardLedgerIdentityDigest);
+    expect(migrated.manifestAfterDigest).toBe(legacy.manifestAfterDigest);
+    expect(() =>
+      migrateKnowledgeForwardRevisionApplyLedgerRecordV1(legacy, {
+        sourceBase: fixture.sourceBase,
+        manifestAfterDigest: HASH_A,
+      })
+    ).toThrow(KnowledgeForwardRevisionApplyLedgerValidationError);
     expect(ledger.manifestAfterDigest).toBe(createSourceManifestDigest(manifestAfter));
     expect(ledger).not.toHaveProperty("beforeContent");
     expect(ledger).not.toHaveProperty("afterContent");

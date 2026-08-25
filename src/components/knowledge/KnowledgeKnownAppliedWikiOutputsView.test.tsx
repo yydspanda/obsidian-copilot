@@ -17,6 +17,7 @@ import type {
 import type {
   KnowledgeKnownAppliedWikiOutputDetail,
   KnowledgeKnownAppliedWikiOutputDetailResult,
+  KnowledgeKnownAppliedWikiOutputOriginSummary,
   KnowledgeKnownAppliedWikiOutputsPageResult,
   KnowledgeKnownAppliedWikiOutputsPort,
   KnowledgeKnownAppliedWikiOutputsSession,
@@ -33,13 +34,30 @@ function outputRef(index: number): string {
   return `known-wiki-output-${index.toString(16).padStart(64, "0")}`;
 }
 
+/** Creates one immutable source-Apply provenance aggregate. */
+function createOrigins(
+  appliedAt: number,
+  verifiedApplyCount = 1
+): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
+  return Object.freeze([
+    Object.freeze({
+      kind: "source_apply" as const,
+      verifiedApplyCount,
+      newestAppliedAt: appliedAt,
+      newestManifestRevision: 1,
+    }),
+  ]);
+}
+
 /** Creates one immutable output summary at an explicit global position. */
 function createSummary(index: number, current = false) {
   return Object.freeze({
     outputRef: outputRef(index),
     appliedAt: 1_765_000_000_000 - index,
     verifiedApplyCount: 1,
+    origins: createOrigins(1_765_000_000_000 - index),
     relation: current ? ("current_applied" as const) : ("earlier_known" as const),
+    proposalCapability: current ? ("selected_is_current" as const) : ("available" as const),
   });
 }
 
@@ -75,13 +93,19 @@ function createSession(
         outputRef: FIRST_OUTPUT_REF,
         appliedAt: 1_765_000_000_000,
         verifiedApplyCount: 1,
+        origins: createOrigins(1_765_000_000_000),
         relation: currentState === "applied" ? "current_applied" : "latest_known",
+        proposalCapability:
+          currentState === "applied" ? "selected_is_current" : "current_not_applied",
       }),
       Object.freeze({
         outputRef: SECOND_OUTPUT_REF,
         appliedAt: 1_764_000_000_000,
         verifiedApplyCount: 3,
+        origins: createOrigins(1_764_000_000_000, 3),
         relation: "earlier_known" as const,
+        proposalCapability:
+          currentState === "applied" ? ("available" as const) : ("current_not_applied" as const),
       }),
     ]),
     ...overrides,
@@ -92,25 +116,35 @@ function createSession(
 function createHistory(
   overrides: Partial<KnowledgeKnownAppliedWikiOutputsPort> = {}
 ): KnowledgeKnownAppliedWikiOutputsPort {
-  const detail: Readonly<KnowledgeKnownAppliedWikiOutputDetail> = Object.freeze({
-    outputRef: FIRST_OUTPUT_REF,
-    appliedAt: 1_765_000_000_000,
-    verifiedApplyCount: 1,
-    content: "known output\r\n  exact spaces",
-  });
+  const content = "known output\r\n  exact spaces";
   return {
     inspectKnownOutputs: jest.fn(async () => createSession()),
     listMore: jest.fn(async () =>
       Object.freeze({ kind: "loaded", value: Object.freeze({ items: Object.freeze([]) }) })
     ),
-    readOutput: jest.fn(async () => Object.freeze({ kind: "loaded", value: detail })),
+    readOutput: jest.fn(async (session, ref) => {
+      const summary = session.items.find((item) => item.outputRef === ref);
+      return summary
+        ? Object.freeze({
+            kind: "loaded" as const,
+            value: Object.freeze({
+              outputRef: ref,
+              appliedAt: summary.appliedAt,
+              verifiedApplyCount: summary.verifiedApplyCount,
+              origins: summary.origins,
+              proposalCapability: summary.proposalCapability,
+              content,
+            }),
+          })
+        : Object.freeze({ kind: "stale" as const });
+    }),
     compareWithCurrent: jest.fn(async () =>
       Object.freeze({
         kind: "loaded",
         value: Object.freeze({
-          outputRef: detail.outputRef,
+          outputRef: FIRST_OUTPUT_REF,
           currentState: "applied",
-          knownContent: detail.content,
+          knownContent: content,
           currentContent: "current output\n   three spaces",
         }),
       })
@@ -134,6 +168,8 @@ function createProposalEligibleHistory(
           outputRef: ref,
           appliedAt: summary.appliedAt,
           verifiedApplyCount: summary.verifiedApplyCount,
+          origins: summary.origins,
+          proposalCapability: summary.proposalCapability,
           content: ref === SECOND_OUTPUT_REF ? "historical proposal body" : "current body",
         }),
       });
@@ -192,6 +228,70 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
     expect(screen.getByText("3 verified Apply records")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "View exact output" })).toHaveLength(2);
     expect(screen.queryByRole("button", { name: /restore|revert|rollback|propose/i })).toBeNull();
+  });
+
+  it("renders both verified origins for a mixed content hash without inventing one origin", async () => {
+    const appliedAt = 1_765_000_000_000;
+    const mixed = Object.freeze({
+      outputRef: FIRST_OUTPUT_REF,
+      appliedAt,
+      verifiedApplyCount: 2,
+      origins: Object.freeze([
+        Object.freeze({
+          kind: "source_apply" as const,
+          verifiedApplyCount: 1,
+          newestAppliedAt: appliedAt - 1,
+          newestManifestRevision: 9,
+        }),
+        Object.freeze({
+          kind: "forward_revision" as const,
+          verifiedApplyCount: 1,
+          newestAppliedAt: appliedAt,
+          newestManifestRevision: 10,
+        }),
+      ]),
+      relation: "current_applied" as const,
+      proposalCapability: "selected_is_current" as const,
+    });
+    const session = createSession({
+      knownOutputCount: 1,
+      items: Object.freeze([mixed]),
+      nextCursor: undefined,
+    });
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createHistory({ inspectKnownOutputs: jest.fn(async () => session) })}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+      />
+    );
+    await flushPromises();
+
+    expect(screen.getByText("Source Apply · 1")).toBeTruthy();
+    expect(screen.getByText("Forward revision Apply · 1")).toBeTruthy();
+  });
+
+  it("rejects a row whose proposal capability contradicts its proven current relation", async () => {
+    const session = createSession();
+    const forged = Object.freeze({
+      ...session,
+      items: Object.freeze([
+        Object.freeze({ ...session.items[0], proposalCapability: "available" as const }),
+        session.items[1],
+      ]),
+    }) as Readonly<KnowledgeKnownAppliedWikiOutputsSession>;
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createHistory({ inspectKnownOutputs: jest.fn(async () => forged) })}
+        proposalAction={createProposalAction(async () => ({ kind: "unavailable" }))}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+      />
+    );
+    await flushPromises();
+
+    expect(screen.getByRole("alert").textContent).toContain("could not be verified");
+    expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
   });
 
   it("rejects an inconsistent first page before rendering any output action", async () => {
@@ -257,14 +357,7 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
 
   it("invalidates the session instead of rendering an oversized metadata page", async () => {
     const oversizedItems = Object.freeze(
-      Array.from({ length: 21 }, (_, index) =>
-        Object.freeze({
-          outputRef: `known-wiki-output-${index.toString(16).padStart(64, "0")}`,
-          appliedAt: 1_765_000_000_000 - index,
-          verifiedApplyCount: 1,
-          relation: "earlier_known" as const,
-        })
-      )
+      Array.from({ length: 21 }, (_, index) => createSummary(index))
     );
     const firstItems = Object.freeze(
       Array.from({ length: 20 }, (_, index) => createSummary(index, index === 0))
@@ -487,6 +580,8 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
         outputRef,
         appliedAt: 1_765_000_000_000,
         verifiedApplyCount: 1,
+        origins: createOrigins(1_765_000_000_000),
+        proposalCapability: "selected_is_current",
         content: tooLarge,
       }),
     });
@@ -519,6 +614,8 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
             outputRef: FIRST_OUTPUT_REF,
             appliedAt: 1_765_000_000_001,
             verifiedApplyCount: 1,
+            origins: createOrigins(1_765_000_000_001),
+            proposalCapability: "selected_is_current" as const,
             content: "misbound output",
           }),
         })
@@ -570,6 +667,8 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
       outputRef: FIRST_OUTPUT_REF,
       appliedAt: 1_765_000_000_000,
       verifiedApplyCount: 1,
+      origins: createOrigins(1_765_000_000_000),
+      proposalCapability: "selected_is_current",
       content: "must remain hidden",
     });
     await act(async () => {
@@ -611,6 +710,45 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
     await flushPromises();
     expect(screen.getByRole("heading", { name: "Compare with current file" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
+  });
+
+  it("explains that a canonical Forward-origin row cannot use Source-history proposal authority", async () => {
+    const base = createSession();
+    const session = createSession({
+      items: Object.freeze([
+        base.items[0],
+        Object.freeze({
+          ...base.items[1],
+          origins: Object.freeze([
+            Object.freeze({
+              kind: "forward_revision" as const,
+              verifiedApplyCount: 3,
+              newestAppliedAt: base.items[1].appliedAt,
+              newestManifestRevision: 1,
+            }),
+          ]),
+          proposalCapability: "forward_origin_not_supported" as const,
+        }),
+      ]),
+    });
+    const proposeKnownOutput = jest.fn(async () => ({ kind: "unavailable" as const }));
+    render(
+      <KnowledgeKnownAppliedWikiOutputsView
+        history={createProposalEligibleHistory(session)}
+        proposalAction={{ proposeKnownOutput }}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onBack={jest.fn()}
+      />
+    );
+    await flushPromises();
+    fireEvent.click(screen.getAllByRole("button", { name: "View exact output" })[1]);
+    await flushPromises();
+
+    expect(screen.queryByRole("button", { name: "Propose this output" })).toBeNull();
+    expect(
+      screen.getByText(/current proposal protocol accepts only Source Apply history/)
+    ).toBeTruthy();
+    expect(proposeKnownOutput).not.toHaveBeenCalled();
   });
 
   it.each(["drifted", "missing"] as const)(
@@ -731,6 +869,13 @@ describe("KnowledgeKnownAppliedWikiOutputsView", () => {
     [
       Object.freeze({ kind: "not_eligible" as const, reason: "selected_is_current" as const }),
       "already matches",
+    ],
+    [
+      Object.freeze({
+        kind: "not_eligible" as const,
+        reason: "forward_origin_not_supported" as const,
+      }),
+      "not supported by the current Source-history proposal protocol",
     ],
   ])("renders one bounded failure for %o", async (result, expectedText) => {
     const onPublished = jest.fn();

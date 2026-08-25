@@ -219,7 +219,7 @@ function snapshotQueryInput(
     !pagePath ||
     !isDigest(record.selectedContentHash) ||
     !Number.isSafeInteger(record.selectedAppliedAt) ||
-    Number(record.selectedAppliedAt) < 1 ||
+    Number(record.selectedAppliedAt) < 0 ||
     !Number.isSafeInteger(record.selectedVerifiedApplyCount) ||
     Number(record.selectedVerifiedApplyCount) < 1 ||
     Number(record.selectedVerifiedApplyCount) >
@@ -327,7 +327,6 @@ export function snapshotKnowledgeForwardRevisionProposalAuthority(
       intent.pagePath !== query.pagePath ||
       intent.historical.selectedContentHash !== query.selectedContentHash ||
       intent.historical.appliedAt !== query.selectedAppliedAt ||
-      intent.current.manifestBaseHash !== query.vaultObservedBeforeHash ||
       intent.current.vaultObservedBeforeHash !== query.vaultObservedBeforeHash
     ) {
       invalid();

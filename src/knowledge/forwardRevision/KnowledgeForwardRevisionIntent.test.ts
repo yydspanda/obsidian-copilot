@@ -118,16 +118,16 @@ describe("KnowledgeForwardRevisionIntent", () => {
     });
   });
 
-  it("retains dual current hashes and requires their first-release equality", () => {
+  it("retains distinct source-applied and effective current hashes", () => {
     const input = createInput();
     const mismatched = {
       ...input,
       current: { ...input.current, vaultObservedBeforeHash: HASH_B },
     };
 
-    expect(() => createKnowledgeForwardRevisionIntent(mismatched)).toThrow(
-      KnowledgeForwardRevisionIntentValidationError
-    );
+    const successor = createKnowledgeForwardRevisionIntent(mismatched);
+    expect(successor.current.manifestBaseHash).toBe(HASH_A);
+    expect(successor.current.vaultObservedBeforeHash).toBe(HASH_B);
     const intent = createKnowledgeForwardRevisionIntent(input);
     expect(intent.current.manifestBaseHash).toBe(HASH_A);
     expect(intent.current.vaultObservedBeforeHash).toBe(HASH_A);
@@ -192,7 +192,7 @@ describe("KnowledgeForwardRevisionIntent", () => {
         ...input,
         historical: { ...input.historical, selectedContentHash: input.current.manifestBaseHash },
       },
-      { ...input, historical: { ...input.historical, appliedAt: 0 } },
+      { ...input, historical: { ...input.historical, appliedAt: -1 } },
       { ...input, current: { ...input.current, manifestRevision: 0 } },
     ];
 

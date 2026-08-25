@@ -308,7 +308,7 @@ function createForwardChange(
     path: request.pagePath,
     sourceRefs,
     reason: "Apply the reviewed forward revision",
-    beforeHash: request.intent.current.manifestBaseHash,
+    beforeHash: request.intent.current.vaultObservedBeforeHash,
     afterContent,
     afterHash,
   });
@@ -781,9 +781,7 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
       assertCoordinatorCurrent(state);
       assertNotAborted(signal);
       if (
-        createFileContentHash(currentContent) !== before.acceptanceAuthority.manifestBaseHash ||
-        before.acceptanceAuthority.manifestBaseHash !==
-          before.acceptanceAuthority.vaultObservedBeforeHash
+        createFileContentHash(currentContent) !== before.acceptanceAuthority.vaultObservedBeforeHash
       ) {
         fail("page_stale");
       }
@@ -795,7 +793,8 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
         assertNotAborted(signal);
         if (
           confirmedContent !== currentContent ||
-          createFileContentHash(confirmedContent) !== before.acceptanceAuthority.manifestBaseHash
+          createFileContentHash(confirmedContent) !==
+            before.acceptanceAuthority.vaultObservedBeforeHash
         ) {
           fail("page_stale");
         }
@@ -843,7 +842,7 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
       const forwardBoundaryValid =
         change.operation === "update" &&
         change.path === proposal.request.pagePath &&
-        change.beforeHash === before.acceptanceAuthority.manifestBaseHash &&
+        change.beforeHash === before.acceptanceAuthority.vaultObservedBeforeHash &&
         change.sourceRefs.length === 1 &&
         change.sourceRefs[0] === primarySourceId &&
         isPathWithinRoot(change.path, preparation.bundle.wikiRoot) &&
@@ -889,7 +888,8 @@ export class KnowledgeProductionForwardRevisionValidationCoordinator {
       assertNotAborted(signal);
       if (
         confirmedContent !== currentContent ||
-        createFileContentHash(confirmedContent) !== before.acceptanceAuthority.manifestBaseHash
+        createFileContentHash(confirmedContent) !==
+          before.acceptanceAuthority.vaultObservedBeforeHash
       ) {
         fail("page_stale");
       }

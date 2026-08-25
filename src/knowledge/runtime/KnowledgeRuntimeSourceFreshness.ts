@@ -1,9 +1,13 @@
 import type { NoChangesManifestCommitReason } from "@/knowledge/manifest/NoChangesManifestCommit";
+import {
+  snapshotKnowledgeForwardRevisionOverlayEntry,
+  type KnowledgeForwardRevisionOverlayEntry,
+} from "@/knowledge/manifest/KnowledgeForwardRevisionOverlay";
 import type { GeneratedPageOwnership } from "@/knowledge/model/types";
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 /** Current contract version of the Runtime-owned source freshness authority. */
-export const KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION = 1 as const;
+export const KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION = 2 as const;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const NO_CHANGES_ID_PATTERN = /^knowledge-no-changes-[a-f0-9]{64}$/;
@@ -43,7 +47,17 @@ const NO_CHANGES_AUTHORITY_KEYS = [
   "committedManifestRevision",
   "completedAt",
 ] as const;
-const GENERATED_PAGE_KEYS = ["path", "windowsPathKey", "ownership", "contentHash"] as const;
+const GENERATED_PAGE_KEYS = [
+  "path",
+  "windowsPathKey",
+  "ownership",
+  "sourceAppliedContentHash",
+  "effectiveContentHash",
+  "contentHash",
+  "origin",
+] as const;
+const SOURCE_APPLY_ORIGIN_KEYS = ["kind"] as const;
+const FORWARD_REVISION_ORIGIN_KEYS = ["kind", "overlay"] as const;
 const NO_CHANGES_REASONS: readonly NoChangesManifestCommitReason[] = Object.freeze([
   "analysis_no_targets",
   "resolved_no_targets",
@@ -55,7 +69,15 @@ export interface KnowledgeRuntimeFreshnessGeneratedPage {
   readonly path: string;
   readonly windowsPathKey: string;
   readonly ownership: GeneratedPageOwnership;
+  readonly sourceAppliedContentHash: string;
+  readonly effectiveContentHash: string;
   readonly contentHash: string;
+  readonly origin:
+    | Readonly<{ kind: "source_apply" }>
+    | Readonly<{
+        kind: "forward_revision";
+        overlay: Readonly<KnowledgeForwardRevisionOverlayEntry>;
+      }>;
 }
 
 /** Fields shared by Apply and no-changes freshness outcomes. */
@@ -216,7 +238,9 @@ function snapshotDensePageArray(value: unknown): readonly unknown[] | undefined 
 
 /** Snapshots and validates exact current generated pages. */
 function parseGeneratedPages(
-  value: unknown
+  value: unknown,
+  bundleId: string,
+  sourceId: string
 ): readonly Readonly<KnowledgeRuntimeFreshnessGeneratedPage>[] {
   const rawPages = snapshotDensePageArray(value);
   if (!rawPages) return throwInvalidAuthority();
@@ -232,20 +256,75 @@ function parseGeneratedPages(
       (page.ownership !== "generated" &&
         page.ownership !== "shared" &&
         page.ownership !== "user") ||
-      !isSha256(page.contentHash)
+      !isSha256(page.sourceAppliedContentHash) ||
+      !isSha256(page.effectiveContentHash) ||
+      page.contentHash !== page.effectiveContentHash
     ) {
       return throwInvalidAuthority();
     }
     if (pathKeys.has(page.windowsPathKey)) return throwInvalidAuthority();
     pathKeys.add(page.windowsPathKey);
+    const origin = parseGeneratedPageOrigin(
+      page.origin,
+      bundleId,
+      sourceId,
+      parsedPath.path,
+      page.sourceAppliedContentHash,
+      page.effectiveContentHash,
+      page.ownership
+    );
     return Object.freeze({
       path: parsedPath.path,
       windowsPathKey: page.windowsPathKey,
       ownership: page.ownership,
-      contentHash: page.contentHash,
+      sourceAppliedContentHash: page.sourceAppliedContentHash,
+      effectiveContentHash: page.effectiveContentHash,
+      contentHash: page.effectiveContentHash,
+      origin,
     });
   });
   return Object.freeze(pages);
+}
+
+/** Strictly parses and correlates one generated page's current provenance. */
+function parseGeneratedPageOrigin(
+  value: unknown,
+  bundleId: string,
+  sourceId: string,
+  path: string,
+  sourceAppliedContentHash: string,
+  effectiveContentHash: string,
+  ownership: GeneratedPageOwnership
+): KnowledgeRuntimeFreshnessGeneratedPage["origin"] {
+  const kind = readAuthorityKind(value);
+  if (kind === "source_apply") {
+    const record = snapshotExactRecord(value, SOURCE_APPLY_ORIGIN_KEYS);
+    if (!record || sourceAppliedContentHash !== effectiveContentHash) {
+      return throwInvalidAuthority();
+    }
+    return Object.freeze({ kind: "source_apply" as const });
+  }
+  if (kind !== "forward_revision") return throwInvalidAuthority();
+  const record = snapshotExactRecord(value, FORWARD_REVISION_ORIGIN_KEYS);
+  if (!record) return throwInvalidAuthority();
+  let overlay: Readonly<KnowledgeForwardRevisionOverlayEntry>;
+  try {
+    overlay = snapshotKnowledgeForwardRevisionOverlayEntry(record.overlay);
+  } catch {
+    return throwInvalidAuthority();
+  }
+  if (
+    ownership !== "generated" ||
+    overlay.bundleId !== bundleId ||
+    overlay.sourceId !== sourceId ||
+    overlay.pagePath !== path ||
+    overlay.windowsPathKey !== toWindowsPathKey(path) ||
+    overlay.sourceAppliedContentHash !== sourceAppliedContentHash ||
+    overlay.effectiveContentHash !== effectiveContentHash
+  ) {
+    return throwInvalidAuthority();
+  }
+  return Object.freeze({ kind: "forward_revision" as const, overlay });
 }
 
 /** Reads the kind data descriptor without invoking a hostile accessor. */
@@ -276,19 +355,21 @@ function parseAuthorityCommon(record: Readonly<Record<string, unknown>>) {
   ) {
     return throwInvalidAuthority();
   }
+  const bundleId = record.bundleId;
+  const sourceId = record.sourceId;
   return Object.freeze({
     version: KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION,
     runtimeId: record.runtimeId,
     runtimeRevision: record.runtimeRevision,
     runtimeDigest: record.runtimeDigest,
-    bundleId: record.bundleId,
-    sourceId: record.sourceId,
+    bundleId,
+    sourceId,
     sourceContentHash: record.sourceContentHash,
     pipelineFingerprint: record.pipelineFingerprint,
     inputRevision: record.inputRevision,
     manifestRevision: record.manifestRevision,
     manifestDigest: record.manifestDigest,
-    generatedPages: parseGeneratedPages(record.generatedPages),
+    generatedPages: parseGeneratedPages(record.generatedPages, bundleId, sourceId),
   });
 }
 

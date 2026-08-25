@@ -37,6 +37,10 @@ const SELECTED_IS_CURRENT_RESULT = Object.freeze({
   kind: "not_eligible" as const,
   reason: "selected_is_current" as const,
 });
+const FORWARD_ORIGIN_NOT_SUPPORTED_RESULT = Object.freeze({
+  kind: "not_eligible" as const,
+  reason: "forward_origin_not_supported" as const,
+});
 
 /** One trusted Bundle root used only to resolve an authentic session page. */
 export interface KnowledgeForwardRevisionProposalBundleBinding {
@@ -57,7 +61,8 @@ export interface KnowledgeProductionForwardRevisionProposalCoordinatorInput {
 /** Closed safe reasons why a selected known output is not proposal-eligible. */
 export type KnowledgeForwardRevisionProposalIneligibilityReason =
   | "current_not_applied"
-  | "selected_is_current";
+  | "selected_is_current"
+  | "forward_origin_not_supported";
 
 /** Closed proposal-only result that never represents Wiki write authority. */
 export type KnowledgeForwardRevisionProposalResult =
@@ -467,6 +472,18 @@ export class KnowledgeProductionForwardRevisionProposalCoordinator {
       assertInvocation(state, signal);
       if (detail.kind !== "loaded") return mapDetailTerminal(detail);
       if (detail.value.outputRef !== outputRef) return UNAVAILABLE_RESULT;
+      if (detail.value.proposalCapability === "current_not_applied") {
+        return CURRENT_NOT_APPLIED_RESULT;
+      }
+      if (detail.value.proposalCapability === "selected_is_current") {
+        return SELECTED_IS_CURRENT_RESULT;
+      }
+      if (detail.value.proposalCapability === "forward_origin_not_supported") {
+        return FORWARD_ORIGIN_NOT_SUPPORTED_RESULT;
+      }
+      if (detail.value.proposalCapability === "detail_too_large") return TOO_LARGE_RESULT;
+      const sourceOrigin = detail.value.origins.find((origin) => origin.kind === "source_apply");
+      if (!sourceOrigin) return FORWARD_ORIGIN_NOT_SUPPORTED_RESULT;
 
       assertInvocation(state, signal);
       const comparison = snapshotKnowledgeKnownAppliedWikiOutputComparisonResult(
@@ -490,8 +507,8 @@ export class KnowledgeProductionForwardRevisionProposalCoordinator {
         bundleId: bundle.bundleId,
         pagePath: session.displayPagePath,
         selectedContentHash,
-        selectedAppliedAt: detail.value.appliedAt,
-        selectedVerifiedApplyCount: detail.value.verifiedApplyCount,
+        selectedAppliedAt: sourceOrigin.newestAppliedAt,
+        selectedVerifiedApplyCount: sourceOrigin.verifiedApplyCount,
         vaultObservedBeforeHash,
       });
       assertInvocation(state, signal);

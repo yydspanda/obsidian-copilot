@@ -63,6 +63,8 @@ const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"
   retry: "Queuing the selected job for retry…",
   submit_review: "Submitting the review decision…",
   submit_forward_revision: "Submitting the forward revision decision…",
+  retry_forward_revision_recovery: "Rechecking the exact Forward Apply state…",
+  keep_current_forward_revision: "Rechecking before keeping the current Wiki value…",
   check_source: "Checking the selected source…",
   retire_source: "Removing the selected source…",
   continue_recovery: "Continuing the selected recovery…",
@@ -277,6 +279,10 @@ function formatForwardRevisionState(state: KnowledgeForwardRevisionStudioReview[
       return "Needs decision";
     case "accepted_ready":
       return "Accepted · ready to apply";
+    case "abandoned":
+      return "Ended before write";
+    case "kept_current":
+      return "Kept current Wiki value";
     case "applying":
       return "Applying";
     case "recovery_required":
@@ -284,7 +290,7 @@ function formatForwardRevisionState(state: KnowledgeForwardRevisionStudioReview[
   }
 }
 
-/** Renders an accepted or journal-owned forward row without exposing protocol identities. */
+/** Renders one non-pending forward row without exposing protocol identities. */
 function ForwardRevisionStatusPanel({
   review,
   state,
@@ -318,8 +324,8 @@ function ForwardRevisionStatusPanel({
           </p>
         ) : null}
         <p className="tw-m-0 tw-text-xs tw-text-muted" role="note">
-          This first release has no abandon or force-apply action. If current validation cannot
-          pass, the accepted decision stays visible and no file is overwritten.
+          End without writing is available only while no Apply journal or Wiki write has begun. It
+          ends this accepted workflow and does not modify the Wiki file.
         </p>
         <div className="tw-flex tw-flex-wrap tw-gap-2">
           <Button
@@ -330,10 +336,62 @@ function ForwardRevisionStatusPanel({
             {busy ? <Loader2 aria-hidden="true" className="tw-size-3 tw-animate-spin" /> : null}
             Validate and apply
           </Button>
+          <Button
+            disabled={busy || state.snapshot?.commandCapabilities.forwardRevisionReview !== true}
+            type="button"
+            variant="secondary"
+            onClick={() => void controller.abandonForwardRevision(review.reviewRef)}
+          >
+            End without writing
+          </Button>
           <Button type="button" variant="ghost" onClick={() => controller.selectTab("activity")}>
             Back to activity
           </Button>
         </div>
+      </section>
+    );
+  }
+  if (review.state === "abandoned") {
+    return (
+      <section
+        aria-label="Forward revision ended before write"
+        className="tw-space-y-2 tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-4"
+        role="status"
+      >
+        <div className="tw-flex tw-items-center tw-gap-2">
+          <CheckCircle2 aria-hidden="true" className="tw-size-4" />
+          <h2 className="tw-m-0 tw-text-lg tw-font-semibold">Accepted workflow ended</h2>
+        </div>
+        <p className="tw-m-0 tw-break-all tw-font-mono tw-text-sm">{review.pagePath}</p>
+        <p className="tw-m-0 tw-text-sm tw-text-muted">
+          This workflow ended before any Apply journal or Wiki write began. No file was changed;
+          this is not a rollback or force action.
+        </p>
+      </section>
+    );
+  }
+  if (review.state === "kept_current") {
+    const outcomeMessage =
+      review.outcome === "abandoned_before_write"
+        ? "The prepared recovery ended before a Wiki write began."
+        : review.outcome === "write_outcome_uncertain_external_supersession"
+          ? "An external change superseded the journal before the earlier write outcome could be proven."
+          : "A proven Copilot commit was later superseded by an external change.";
+    return (
+      <section
+        aria-label="Forward revision kept current Wiki value"
+        className="tw-space-y-2 tw-rounded-xl tw-border tw-border-solid tw-border-border tw-p-4"
+        role="status"
+      >
+        <div className="tw-flex tw-items-center tw-gap-2">
+          <CheckCircle2 aria-hidden="true" className="tw-size-4" />
+          <h2 className="tw-m-0 tw-text-lg tw-font-semibold">Current Wiki value kept</h2>
+        </div>
+        <p className="tw-m-0 tw-break-all tw-font-mono tw-text-sm">{review.pagePath}</p>
+        <p className="tw-m-0 tw-text-sm tw-text-muted">
+          {outcomeMessage} Recovery retained the freshly observed Wiki value and performed no
+          additional file mutation. This terminal state is not a force action or rollback.
+        </p>
       </section>
     );
   }
@@ -357,10 +415,18 @@ function ForwardRevisionStatusPanel({
       </section>
     );
   }
+  const retryBusy =
+    state.pendingAction?.kind === "retry_forward_revision_recovery" &&
+    state.pendingAction.targetId === review.reviewRef;
+  const keepCurrentBusy =
+    state.pendingAction?.kind === "keep_current_forward_revision" &&
+    state.pendingAction.targetId === review.reviewRef;
+  const commandsEnabled = state.snapshot?.commandCapabilities.forwardRevisionReview === true;
   return (
     <section
+      aria-busy={retryBusy || keepCurrentBusy}
       aria-label="Forward revision recovery required"
-      className="tw-border-error tw-space-y-2 tw-rounded-xl tw-border tw-border-solid tw-bg-error tw-p-4"
+      className="tw-border-error tw-space-y-3 tw-rounded-xl tw-border tw-border-solid tw-bg-error tw-p-4"
       role="alert"
     >
       <div className="tw-flex tw-items-center tw-gap-2">
@@ -370,9 +436,42 @@ function ForwardRevisionStatusPanel({
       <p className="tw-m-0 tw-break-all tw-font-mono tw-text-sm">{review.pagePath}</p>
       <p className="tw-m-0 tw-text-sm">
         The Wiki file no longer matches either exact journal state. Copilot will not overwrite it.
-        Startup remains stopped and no automatic retry will overwrite the file. Inspect or restore
-        the exact file state, then use the supported recovery workflow before continuing.
+        Startup remains stopped and no automatic retry will overwrite the file.
       </p>
+      <div className="tw-space-y-1 tw-text-xs">
+        <p className="tw-m-0">
+          <span className="tw-font-semibold">Recheck / retry exact Apply</span> reads the file again
+          first. Exact-before bytes may receive one bounded compare-and-swap retry. Bytes already
+          equal to the exact accepted after-state finish recovery without another write. Missing,
+          directory, oversized, or other conflicting bytes remain blocked and are never overwritten.
+        </p>
+        <p className="tw-m-0">
+          <span className="tw-font-semibold">Keep current (no write)</span> also rechecks first. It
+          closes recovery only when the journal can truthfully retain the freshly observed value; it
+          performs no Wiki write and is refused while an exact safe retry is still required.
+        </p>
+      </div>
+      <div className="tw-flex tw-flex-wrap tw-gap-2">
+        <Button
+          disabled={busy || !commandsEnabled}
+          type="button"
+          onClick={() => void controller.retryForwardRevisionRecovery(review.reviewRef)}
+        >
+          {retryBusy ? <Loader2 aria-hidden="true" className="tw-size-3 tw-animate-spin" /> : null}
+          Recheck / retry exact Apply
+        </Button>
+        <Button
+          disabled={busy || !commandsEnabled}
+          type="button"
+          variant="secondary"
+          onClick={() => void controller.keepCurrentForwardRevision(review.reviewRef)}
+        >
+          {keepCurrentBusy ? (
+            <Loader2 aria-hidden="true" className="tw-size-3 tw-animate-spin" />
+          ) : null}
+          Keep current (no write)
+        </Button>
+      </div>
     </section>
   );
 }

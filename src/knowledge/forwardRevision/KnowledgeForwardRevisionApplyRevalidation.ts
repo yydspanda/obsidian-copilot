@@ -444,7 +444,6 @@ export function snapshotKnowledgeForwardRevisionApplyRevalidationReceiptForAccep
       sourceBase.sourceId !== accepted.proposal.request.intent.current.primarySourceId ||
       canonicalizeJson(sourceBase.currentSourceFreshness) !==
         canonicalizeJson(applyAuthority.currentSourceFreshness) ||
-      record.vaultObservedBeforeHash !== applyAuthority.manifestBaseHash ||
       record.vaultObservedBeforeHash !== applyAuthority.vaultObservedBeforeHash ||
       record.vaultObservedAfterHash !== record.vaultObservedBeforeHash ||
       freshValidationReceipt.validatedAt < accepted.acceptedAt ||
@@ -548,7 +547,6 @@ export function snapshotKnowledgeForwardRevisionApplyRevalidationReceipt(
       createKnowledgeForwardRevisionAcceptanceAuthorityDigest(applyAuthority) !==
         record.applyAuthorityDigest ||
       createKnowledgeForwardRevisionSourceBaseDigest(sourceBase) !== record.sourceBaseDigest ||
-      record.vaultObservedBeforeHash !== applyAuthority.manifestBaseHash ||
       record.vaultObservedBeforeHash !== applyAuthority.vaultObservedBeforeHash ||
       record.vaultObservedAfterHash !== record.vaultObservedBeforeHash ||
       Number(record.revalidatedAt) < freshValidationReceipt.validatedAt

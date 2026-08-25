@@ -1,6 +1,6 @@
 # 维护与恢复
 
-> 适用范围：Windows 个人版。恢复功能是对持久状态的受限操作，不是通用“强制修复”按钮。
+> 适用范围：Windows 个人版。恢复功能是对持久状态的受限操作，不是通用“强制修复”按钮。最近核对：2026-08-25。
 
 ## 本页目标
 
@@ -64,11 +64,27 @@ Git 通常不覆盖插件所有私有状态。需要真正可恢复的快照时�
 
 从 `Known applied outputs` 提出的历史版本若未能在接受后立即开始 journal，会独立显示在 `Review`：
 
-- `Accepted revision ready to apply` 表示决定已持久保存但尚未创建文件 journal；它不会因为 reload/disable 消失，可再次点击 `Validate and apply` 重试新鲜核对。当前没有 abandon 或强制跳过核对的按钮。
+- `Accepted revision ready to apply` 表示决定已持久保存但尚未创建文件 journal；它不会因为 reload/disable 消失。若仍要应用，点击 `Validate and apply` 重试当前精确核对。若改变主意，可在界面仍能证明 journal 和 Wiki 写入从未开始时点击 `End without writing`；这会记录“写入前结束”，不改 Wiki，也不创建 journal、Apply ledger 或 overlay。
 - `Applying accepted revision` 表示 durable journal 已拥有这次单页转换。若它长时间停留，重新加载插件会在启动期只凭持久 journal 和当前文件字节继续核对，不会调用模型、parser parse 或网络。
-- `Forward Apply needs recovery` 表示文件既不匹配 journal 的精确 before，也不匹配精确 after，或写后验证无法可靠完成。此状态是 sticky、只读且没有普通 Retry/Resume 按钮；系统不会自动覆盖文件，重新加载也不会清除冲突。
+- `Forward Apply needs recovery` 表示文件既不匹配 journal 的精确 before，也不匹配精确 after，或写后验证无法可靠完成。此状态是 sticky，没有普通 Retry/Resume；当前 Review 卡片会提供两个专用动作，但系统不会自动覆盖文件，reload 也不会自行清除冲突。
 
-遇到 sticky Forward recovery 时，先备份整个 Vault，并记录界面显示的页面路径与冲突类别。不要直接编辑 Runtime、Manifest、journal 或 ledger，也不要反复点击普通 Apply。当前产品表面不提供危险的强制继续/回滚动作；在恢复流程明确支持该状态前，应保持插件停止写入并使用受支持的故障排查或人工支持流程。
+遇到 sticky Forward recovery 时，先备份整个 Vault，并记录界面显示的页面路径与冲突类别。不要直接编辑 Runtime、Manifest、journal 或 ledger，也不要反复点击普通 Apply。
+
+Forward 恢复执行器始终先重新读取当前 Wiki 的精确字节，再决定哪一个动作合法。当前 Studio 已在 `recovery_required` 卡片接入 `Recheck / retry exact Apply` 和 `Keep current (no write)`；只有当前 generation 提供 Forward 命令能力且没有其他命令在进行时，按钮才可用。它们不接受用户自报的文件状态，每次都先由恢复边界重新观察。
+
+| 恢复动作                      | 精确观察后的行为                                                                                                                                                | 会不会写 Wiki                                                                    |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `Recheck / retry exact Apply` | 始终先重读文件。已是精确 accepted after-state 时只收敛确认；仍是 exact-before 且 journal 处于允许重试的写入阶段时，本次命令才做一次 exact CAS；第三状态保持阻断 | 只有合格 exact-before 可能写；after-state 与冲突状态都不写                       |
+| `Keep current (no write)`     | 始终先重读文件。exact-after 收敛为已提交；普通、仍可重试的 exact-before 会被拒绝；其余只在当前 journal 阶段允许零写入终结时才保留当前字节                       | 从不写；终局按阶段记录“写入前放弃 / 写入结果不确定后外部取代 / 已提交后外部取代” |
+| 强制覆盖                      | 永远不合法                                                                                                                                                      | 没有 force 路径，不会猜测、回滚或覆盖外部字节                                    |
+
+`Keep current (no write)` 不是把冲突冒充为 Apply 成功，也不会把每一种 journal 阶段统一冒充为“外部取代”。它保留 Vault 字节不变：写入前阶段记录“写入前放弃”，写入结果不确定阶段记录“不确定写入后外部取代”，已有提交标记的阶段记录“已提交后外部取代”。任何路径都不会为了结束 recovery 而强制写文件。
+
+### Forward 链与 Source Apply 取代
+
+同一 Bundle / Source / Wiki 页的多次 Forward 修订会形成一条精确链：每一次都必须从上一个 effective 当前哈希开始，但仍保留最后一次 Source Apply 哈希作为不变的来源基线。一次成功的后续 Forward Apply 可以在精确身份和 CAS 链路一致时取代上一次 Forward。
+
+普通 Source Apply 只在它成功提交了同一 Source 的这一个精确目标页时，才能成为持久的取代证明并移除该页的活跃 Forward 层。对其他页的 Apply 会保留这个 Forward 页头；真实 `no_changes` 也会保留它，因为 `no_changes` 只证明无需写入，不会虚构一笔新 Source Apply ledger。
 
 ## Recovery 动作
 
@@ -163,6 +179,8 @@ Obsidian 文件菜单只能提示并导航到 Studio，不能拦截键盘或 Win
 - 重新编译 Source 或 repair compile 可能调用 DeepSeek，并产生费用。
 - 精确未变化、且输出仍完整的观察会复用持久成功证明，不应再次调用模型。
 - 完整 Vault 备份可能包含个人资料、聊天记录和插件配置，请加密并控制访问。
+
+> 重复 Forward、精确恢复动作和 Source Apply 取代规则已有自动化与 Windows 路径/大小写边界检查，但尚未完成用户计划的真实 Windows Obsidian 实机验收。
 
 ## 相关页面
 

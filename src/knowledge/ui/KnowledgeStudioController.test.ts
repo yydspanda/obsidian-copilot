@@ -205,6 +205,24 @@ function createForwardPendingReview(): Readonly<KnowledgeForwardRevisionStudioPe
   });
 }
 
+/** Creates one sticky Forward recovery row with an exact opaque snapshot identity. */
+function createForwardRecoveryReview(
+  snapshotRef = FORWARD_SNAPSHOT_REF
+): Readonly<Extract<KnowledgeForwardRevisionStudioReview, { state: "recovery_required" }>> {
+  return Object.freeze({
+    state: "recovery_required" as const,
+    reviewRef: FORWARD_REVIEW_REF,
+    snapshotRef,
+    pagePath: "Wiki/Page.md",
+    updatedAt: 30,
+    acceptedAt: 25,
+    manualOverride: false,
+    conflictCode: "file_state_conflict" as const,
+    actualKind: "file" as const,
+    detectedAt: 29,
+  });
+}
+
 /** Embeds exact forward work in an otherwise ready Studio snapshot. */
 function createForwardSnapshot(
   revisionToken: string,
@@ -1729,6 +1747,254 @@ describe("KnowledgeStudioController", () => {
       },
     });
     expect(state.feedback?.message).toContain("remains visible and retryable");
+  });
+
+  it("submits accepted-ready abandonment and reloads the no-write terminal state", async () => {
+    const accepted = Object.freeze({
+      state: "accepted_ready" as const,
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      pagePath: "Wiki/Page.md",
+      updatedAt: 30,
+      acceptedAt: 25,
+      manualOverride: false,
+    });
+    const abandoned = Object.freeze({
+      ...accepted,
+      state: "abandoned" as const,
+      snapshotRef: `forward-studio-snapshot-${"1".repeat(64)}`,
+      updatedAt: 31,
+      abandonedAt: 31,
+    });
+    const snapshots = [
+      createForwardSnapshot("abandon-before", [accepted]),
+      createForwardSnapshot("abandon-after", [abandoned]),
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift() ?? createForwardSnapshot("abandon-after", [abandoned]),
+      undefined,
+      undefined,
+      undefined,
+      async () => ({ kind: "abandoned" })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.abandonForwardRevision(FORWARD_REVIEW_REF);
+
+    expect(port.forwardRevisionCalls).toHaveLength(1);
+    expect(port.forwardRevisionCalls[0]?.command).toMatchObject({
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      action: "abandon",
+    });
+    expect(controller.getState()).toMatchObject({
+      snapshot: {
+        revisionToken: "abandon-after",
+        forwardRevisionReviews: [{ state: "abandoned", abandonedAt: 31 }],
+      },
+      feedback: {
+        kind: "success",
+        message:
+          "The accepted revision ended before any Apply journal or Wiki write began. No file was changed.",
+      },
+    });
+  });
+
+  it("reloads a kept-current terminal after recovery retains the observed Wiki value", async () => {
+    const accepted = Object.freeze({
+      state: "accepted_ready" as const,
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      pagePath: "Wiki/Page.md",
+      updatedAt: 30,
+      acceptedAt: 25,
+      manualOverride: false,
+    });
+    const keptCurrent = Object.freeze({
+      ...accepted,
+      state: "kept_current" as const,
+      snapshotRef: `forward-studio-snapshot-${"2".repeat(64)}`,
+      updatedAt: 32,
+      terminalizedAt: 32,
+      outcome: "write_outcome_uncertain_external_supersession" as const,
+    });
+    const snapshots = [
+      createForwardSnapshot("kept-before", [accepted]),
+      createForwardSnapshot("kept-after", [keptCurrent]),
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift() ?? createForwardSnapshot("kept-after", [keptCurrent]),
+      undefined,
+      undefined,
+      undefined,
+      async () => ({ kind: "kept_current" })
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.applyForwardRevision(FORWARD_REVIEW_REF);
+
+    expect(controller.getState()).toMatchObject({
+      snapshot: {
+        revisionToken: "kept-after",
+        forwardRevisionReviews: [
+          {
+            state: "kept_current",
+            terminalizedAt: 32,
+            outcome: "write_outcome_uncertain_external_supersession",
+          },
+        ],
+      },
+      feedback: {
+        kind: "success",
+        message:
+          "Recovery ended without another Wiki write. The freshly observed current file was kept.",
+      },
+    });
+  });
+
+  it("submits sticky exact-retry and zero-write keep-current commands from fresh rows", async () => {
+    const recoveryBefore = createForwardRecoveryReview();
+    const recoveryAfterRetry = Object.freeze({
+      ...createForwardRecoveryReview(`forward-studio-snapshot-${"3".repeat(64)}`),
+      updatedAt: 31,
+      detectedAt: 31,
+    });
+    const keptCurrent = Object.freeze({
+      state: "kept_current" as const,
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: `forward-studio-snapshot-${"4".repeat(64)}`,
+      pagePath: "Wiki/Page.md",
+      updatedAt: 32,
+      acceptedAt: 25,
+      terminalizedAt: 32,
+      manualOverride: false,
+      outcome: "write_outcome_uncertain_external_supersession" as const,
+    });
+    const snapshots = [
+      createForwardSnapshot("recovery-before", [recoveryBefore]),
+      createForwardSnapshot("recovery-rechecked", [recoveryAfterRetry]),
+      createForwardSnapshot("recovery-kept", [keptCurrent]),
+    ];
+    const results: KnowledgeForwardRevisionStudioSubmissionResult[] = [
+      { kind: "recovery_required" },
+      { kind: "kept_current" },
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift() ?? createForwardSnapshot("recovery-kept", [keptCurrent]),
+      undefined,
+      undefined,
+      undefined,
+      async () => results.shift() ?? { kind: "unavailable" }
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.retryForwardRevisionRecovery(FORWARD_REVIEW_REF);
+
+    expect(port.forwardRevisionCalls[0]?.command).toEqual({
+      version: 1,
+      kind: "forward_revision_studio_command",
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      action: "retry_recovery",
+    });
+    expect(controller.getState()).toMatchObject({
+      snapshot: {
+        revisionToken: "recovery-rechecked",
+        forwardRevisionReviews: [
+          { state: "recovery_required", snapshotRef: recoveryAfterRetry.snapshotRef },
+        ],
+      },
+      feedback: {
+        kind: "blocked",
+        message:
+          "The exact state was rechecked, but the file is still not safe for another Apply. No conflicting value was overwritten.",
+      },
+    });
+
+    await controller.keepCurrentForwardRevision(FORWARD_REVIEW_REF);
+
+    expect(port.forwardRevisionCalls[1]?.command).toEqual({
+      version: 1,
+      kind: "forward_revision_studio_command",
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: recoveryAfterRetry.snapshotRef,
+      action: "keep_current",
+    });
+    expect(controller.getState()).toMatchObject({
+      snapshot: {
+        revisionToken: "recovery-kept",
+        forwardRevisionReviews: [{ state: "kept_current", terminalizedAt: 32 }],
+      },
+      feedback: {
+        kind: "success",
+        message:
+          "Recovery ended without another Wiki write. The freshly observed current file was kept.",
+      },
+    });
+  });
+
+  it("serializes sticky Forward recovery and publishes its specific busy identity", async () => {
+    const recovery = createForwardRecoveryReview();
+    const result = createDeferred<KnowledgeForwardRevisionStudioSubmissionResult>();
+    const snapshots = [
+      createForwardSnapshot("recovery-busy-before", [recovery]),
+      createForwardSnapshot("recovery-busy-after", [recovery]),
+    ];
+    const port = new FakeKnowledgeStudioPort(
+      async () => snapshots.shift() ?? createForwardSnapshot("recovery-busy-after", [recovery]),
+      undefined,
+      undefined,
+      undefined,
+      async () => result.promise
+    );
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    const retry = controller.retryForwardRevisionRecovery(FORWARD_REVIEW_REF);
+    await flushAsync();
+    expect(controller.getState().pendingAction).toEqual({
+      kind: "retry_forward_revision_recovery",
+      targetId: FORWARD_REVIEW_REF,
+    });
+
+    await controller.keepCurrentForwardRevision(FORWARD_REVIEW_REF);
+    expect(port.forwardRevisionCalls).toHaveLength(1);
+
+    result.resolve({ kind: "recovery_required" });
+    await retry;
+    expect(controller.getState().pendingAction).toBeUndefined();
+  });
+
+  it("does not submit sticky Forward recovery without current generation capability", async () => {
+    const recovery = createForwardRecoveryReview();
+    const ready = createForwardSnapshot("recovery-read-only", [recovery]);
+    const snapshot: KnowledgeStudioSnapshot = {
+      ...ready,
+      commandCapabilities: {
+        ...ready.commandCapabilities,
+        forwardRevisionReview: false,
+      },
+    };
+    const port = new FakeKnowledgeStudioPort(async () => snapshot);
+    const controller = new KnowledgeStudioController(port, port);
+    controller.start("personal");
+    await flushAsync();
+
+    await controller.retryForwardRevisionRecovery(FORWARD_REVIEW_REF);
+    await controller.keepCurrentForwardRevision(FORWARD_REVIEW_REF);
+
+    expect(port.forwardRevisionCalls).toHaveLength(0);
+    expect(controller.getState().feedback).toEqual({
+      kind: "blocked",
+      message: "Forward Review decisions and Apply are unavailable from the current snapshot.",
+    });
   });
 
   it("describes a durable but paused forward journal without promising background progress", async () => {

@@ -4,6 +4,10 @@ import {
   deriveKnowledgeSourceCompileAuthority,
   type KnowledgeSourceCompileOperation,
 } from "@/knowledge/capture/KnowledgeSourceOrigin";
+import {
+  projectKnowledgeEffectiveManifestPages,
+  type KnowledgeEffectiveManifestPage,
+} from "@/knowledge/manifest/KnowledgeEffectivePageProjection";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import { parseKnowledgeChangeSet, parseSourceManifest } from "@/knowledge/model/schemas";
 import type {
@@ -52,6 +56,8 @@ export interface ManifestCommitMutation {
   access: "authorized" | "create_only";
   ownership: GeneratedPageOwnership;
   wasTrackedByPrimarySource: boolean;
+  /** Effective CAS head when it differs from the source-applied base page. */
+  expectedContentHash?: string;
 }
 
 /** Fields shared by every source-backed proposal-time Manifest plan. */
@@ -150,6 +156,7 @@ const manifestCommitMutationSchema: z.ZodType<ManifestCommitMutation> = z
     access: z.enum(["authorized", "create_only"]),
     ownership: z.enum(["generated", "shared", "user"]),
     wasTrackedByPrimarySource: z.boolean(),
+    expectedContentHash: sha256Schema.optional(),
   })
   .strict();
 
@@ -362,7 +369,13 @@ function normalizeMutations(
   mutations: readonly ManifestCommitMutation[]
 ): ManifestCommitMutation[] {
   return mutations
-    .map((mutation) => ({ ...mutation }))
+    .map((mutation) => {
+      const { expectedContentHash, ...required } = mutation;
+      return {
+        ...required,
+        ...(expectedContentHash === undefined ? {} : { expectedContentHash }),
+      };
+    })
     .sort((left, right) => {
       const pathComparison = compareVaultPaths(left.path, right.path);
       return pathComparison === 0 ? compareText(left.changeId, right.changeId) : pathComparison;
@@ -392,6 +405,57 @@ function collectTrackedManifestPages(manifest: SourceManifest): Map<string, Trac
     });
   });
   return byKey;
+}
+
+/**
+ * Projects effective pages owned by one source into a Windows-keyed authority map.
+ *
+ * @param manifest - Exact current Manifest including any active forward overlay
+ * @param sourceId - Primary source whose mutations are being authorized
+ * @param diagnostics - Mutable deterministic diagnostics
+ * @param field - Sanitized diagnostic field for projection failures
+ * @returns Effective pages owned by the source, or an empty map on failure
+ */
+function collectEffectiveSourcePages(
+  manifest: SourceManifest,
+  sourceId: string,
+  diagnostics: KnowledgeDiagnostic[],
+  field: string
+): ReadonlyMap<string, Readonly<KnowledgeEffectiveManifestPage>> {
+  try {
+    return new Map(
+      projectKnowledgeEffectiveManifestPages(manifest)
+        .filter((page) => page.sourceIds.includes(sourceId))
+        .map((page) => [page.windowsPathKey, page])
+    );
+  } catch {
+    addError(
+      diagnostics,
+      "manifest_commit_effective_pages_invalid",
+      field,
+      "Manifest page authority or active forward-revision lineage is invalid"
+    );
+    return new Map();
+  }
+}
+
+/**
+ * Returns the exact existing-file hash authorized by one planned mutation.
+ *
+ * An absent per-mutation override preserves the legacy source-applied CAS
+ * meaning, so existing v1 plans keep their byte identity and semantics.
+ *
+ * @param mutation - Strict planned mutation
+ * @param baseByKey - Source-applied base pages keyed by Windows identity
+ * @returns Effective override or source-applied base hash
+ */
+function getMutationExpectedContentHash(
+  mutation: ManifestCommitMutation,
+  baseByKey: ReadonlyMap<string, ManifestCommitPage>
+): string | undefined {
+  return (
+    mutation.expectedContentHash ?? baseByKey.get(toWindowsPathKey(mutation.path))?.contentHash
+  );
 }
 
 /**
@@ -692,6 +756,19 @@ function validatePlanMutations(
       );
     }
     if (
+      mutation.expectedContentHash !== undefined &&
+      (!basePage ||
+        mutation.operation === "create" ||
+        mutation.expectedContentHash === basePage.contentHash)
+    ) {
+      addError(
+        diagnostics,
+        "manifest_commit_mutation_effective_hash_invalid",
+        `${field}.expectedContentHash`,
+        "A distinct effective CAS hash is valid only for an existing tracked mutation"
+      );
+    }
+    if (
       (mutation.operation === "update" || mutation.operation === "delete") &&
       !mutation.wasTrackedByPrimarySource
     ) {
@@ -733,7 +810,8 @@ function validatePlanMutations(
         mutation.operation !== plan.mutations[index]?.operation ||
         mutation.access !== plan.mutations[index]?.access ||
         mutation.ownership !== plan.mutations[index]?.ownership ||
-        mutation.wasTrackedByPrimarySource !== plan.mutations[index]?.wasTrackedByPrimarySource
+        mutation.wasTrackedByPrimarySource !== plan.mutations[index]?.wasTrackedByPrimarySource ||
+        mutation.expectedContentHash !== plan.mutations[index]?.expectedContentHash
     )
   ) {
     addError(
@@ -1039,6 +1117,9 @@ function validatePlanChangeSetCoverage(
   }
 
   const mutationsById = new Map(plan.mutations.map((mutation) => [mutation.changeId, mutation]));
+  const baseByKey = new Map(
+    plan.baseGeneratedPages.map((page) => [toWindowsPathKey(page.path), page])
+  );
   const changeIds = new Set(parsedChangeSet.changes.map((change) => change.id));
   parsedChangeSet.changes.forEach((change, index) => {
     const mutation = mutationsById.get(change.id);
@@ -1066,6 +1147,19 @@ function validatePlanChangeSetCoverage(
         `changeSet.changes[${index}].operation`,
         "Accepted change operation must match its planned operation"
       );
+    }
+    if (change.operation !== "create" && mutation.expectedContentHash !== undefined) {
+      const expectedContentHash = getMutationExpectedContentHash(mutation, baseByKey);
+      if (expectedContentHash === undefined || change.beforeHash !== expectedContentHash) {
+        addError(
+          diagnostics,
+          change.operation === "delete"
+            ? "manifest_commit_delete_hash_mismatch"
+            : "manifest_commit_update_hash_mismatch",
+          `changeSet.changes[${index}].beforeHash`,
+          "Existing-file precondition must match its planned effective CAS hash"
+        );
+      }
     }
     if (!change.sourceRefs.includes(plan.sourceId)) {
       addError(
@@ -1207,8 +1301,50 @@ export function createManifestCommitPlan(input: CreateManifestCommitPlanInput): 
       .filter((page): page is ManifestCommitPage => page.contentHash !== undefined)
       .map((page) => ({ ...page, contentHash: page.contentHash }))
   );
-  const mutations = normalizeMutations(input.mutations);
   const baseByKey = new Map(baseGeneratedPages.map((page) => [toWindowsPathKey(page.path), page]));
+  const effectiveByKey = collectEffectiveSourcePages(
+    manifest,
+    input.sourceId,
+    diagnostics,
+    "manifest.extensions"
+  );
+  const mutations = normalizeMutations(input.mutations).map((mutation, index) => {
+    const required: ManifestCommitMutation = {
+      changeId: mutation.changeId,
+      path: mutation.path,
+      operation: mutation.operation,
+      access: mutation.access,
+      ownership: mutation.ownership,
+      wasTrackedByPrimarySource: mutation.wasTrackedByPrimarySource,
+    };
+    const key = toWindowsPathKey(mutation.path);
+    const basePage = baseByKey.get(key);
+    const effectivePage = effectiveByKey.get(key);
+    if (basePage && !effectivePage) {
+      addError(
+        diagnostics,
+        "manifest_commit_effective_page_missing",
+        `mutations[${index}].path`,
+        "Tracked mutation is absent from the effective Manifest page projection"
+      );
+    }
+    if (basePage && effectivePage && effectivePage.effectiveContentHash !== basePage.contentHash) {
+      if (mutation.operation === "create") {
+        addError(
+          diagnostics,
+          "manifest_commit_overlay_create_invalid",
+          `mutations[${index}].operation`,
+          "An active forward-revision page requires an existing-file CAS mutation"
+        );
+        return required;
+      }
+      return {
+        ...required,
+        expectedContentHash: effectivePage.effectiveContentHash,
+      };
+    }
+    return required;
+  });
   const trackedPagesByKey = collectTrackedManifestPages(manifest);
   const changesById = new Map(changeSet.changes.map((change) => [change.id, change]));
   mutations.forEach((mutation, index) => {
@@ -1356,28 +1492,26 @@ export function projectManifestCommitIntent(
     const mutation = mutationsById.get(change.id)!;
     const key = toWindowsPathKey(change.path);
     const basePage = pagesByKey.get(key);
+    const expectedContentHash = getMutationExpectedContentHash(mutation, pagesByKey);
     if (change.operation === "delete") {
-      if (!basePage || change.beforeHash !== basePage.contentHash) {
+      if (!basePage || change.beforeHash !== expectedContentHash) {
         addError(
           diagnostics,
           "manifest_commit_delete_hash_mismatch",
           change.path,
-          "Delete precondition must match the plan's last-generated hash"
+          "Delete precondition must match the plan's effective CAS hash"
         );
         return;
       }
       pagesByKey.delete(key);
       return;
     }
-    if (
-      change.operation === "update" &&
-      (!basePage || change.beforeHash !== basePage.contentHash)
-    ) {
+    if (change.operation === "update" && (!basePage || change.beforeHash !== expectedContentHash)) {
       addError(
         diagnostics,
         "manifest_commit_update_hash_mismatch",
         change.path,
-        "Update precondition must match the plan's last-generated hash"
+        "Update precondition must match the plan's effective CAS hash"
       );
       return;
     }
@@ -1589,12 +1723,19 @@ export function validateManifestCommitIntentForCommit(
   const pagesByKey = new Map(
     normalizedBase.map((page) => [toWindowsPathKey(page.path), { ...page }])
   );
+  const effectiveByKey = collectEffectiveSourcePages(
+    manifest,
+    intent.sourceId,
+    diagnostics,
+    "manifest.extensions"
+  );
   const trackedPagesByKey = collectTrackedManifestPages(manifest);
 
   changeSet.changes.forEach((change, index) => {
     const field = `changeSet.changes[${index}]`;
     const key = toWindowsPathKey(change.path);
     const basePage = pagesByKey.get(key);
+    const effectivePage = effectiveByKey.get(key);
     const trackedPages = trackedPagesByKey.get(key) ?? [];
     const existingSources = new Set(trackedPages.map(({ sourceId }) => sourceId));
     if (!change.sourceRefs.includes(intent.sourceId)) {
@@ -1623,6 +1764,15 @@ export function validateManifestCommitIntentForCommit(
           `${field}.sourceRefs`,
           diagnostics
         );
+        if (effectivePage && effectivePage.effectiveContentHash !== basePage.contentHash) {
+          addError(
+            diagnostics,
+            "manifest_commit_overlay_create_invalid",
+            `${field}.operation`,
+            "An active forward-revision page requires an existing-file CAS mutation"
+          );
+          return;
+        }
       }
       pagesByKey.set(key, {
         path: change.path,
@@ -1647,6 +1797,7 @@ export function validateManifestCommitIntentForCommit(
       `${field}.sourceRefs`,
       diagnostics
     );
+    const expectedContentHash = effectivePage?.effectiveContentHash ?? basePage.contentHash;
     if (change.operation === "delete") {
       if (
         basePage.ownership !== "generated" ||
@@ -1661,24 +1812,24 @@ export function validateManifestCommitIntentForCommit(
         );
         return;
       }
-      if (change.beforeHash !== basePage.contentHash) {
+      if (change.beforeHash !== expectedContentHash) {
         addError(
           diagnostics,
           "manifest_commit_delete_hash_mismatch",
           `${field}.beforeHash`,
-          "Delete precondition must match the Manifest's last-generated hash"
+          "Delete precondition must match the Manifest's effective CAS hash"
         );
         return;
       }
       pagesByKey.delete(key);
       return;
     }
-    if (change.beforeHash !== basePage.contentHash) {
+    if (change.beforeHash !== expectedContentHash) {
       addError(
         diagnostics,
         "manifest_commit_update_hash_mismatch",
         `${field}.beforeHash`,
-        "Update precondition must match the Manifest's last-generated hash"
+        "Update precondition must match the Manifest's effective CAS hash"
       );
       return;
     }

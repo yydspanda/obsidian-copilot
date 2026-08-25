@@ -59,6 +59,11 @@ export interface ChangeSetTransactionAuthorityRequest {
   manifestCommitIntentDigest: string;
 }
 
+/** Detached logical-time floor proved before one source transaction starts. */
+export interface ChangeSetTransactionAuthorityProof {
+  readonly minimumTimestamp: number;
+}
+
 /** Durable authority boundary required by every transaction runtime. */
 export interface ChangeSetTransactionAuthorityPort {
   /**
@@ -68,8 +73,11 @@ export interface ChangeSetTransactionAuthorityPort {
    * storage CAS repeats the same proof atomically to close the preflight race.
    *
    * @param request - Strict detached apply identity
+   * @returns Frozen logical-time floor owned by the proved durable predecessors
    */
-  verify(request: ChangeSetTransactionAuthorityRequest): Promise<void>;
+  verify(
+    request: ChangeSetTransactionAuthorityRequest
+  ): Promise<Readonly<ChangeSetTransactionAuthorityProof>>;
 }
 
 /** Content-addressed final state safe to copy into manifest bookkeeping. */
@@ -316,6 +324,28 @@ function assertNonNegativeSafeInteger(value: unknown, field: string): void {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${field} must be a non-negative safe integer`);
   }
+}
+
+/**
+ * Snapshots the exact logical-time floor returned by durable apply authority.
+ *
+ * @param value - Untrusted authority result
+ * @returns Frozen timestamp proof safe to use before journal publication
+ */
+function snapshotAuthorityProof(value: unknown): Readonly<ChangeSetTransactionAuthorityProof> {
+  const descriptor = isRecord(value)
+    ? Object.getOwnPropertyDescriptor(value, "minimumTimestamp")
+    : undefined;
+  if (
+    !isRecord(value) ||
+    Reflect.ownKeys(value).length !== 1 ||
+    !descriptor ||
+    !("value" in descriptor)
+  ) {
+    throw new TypeError("authority proof must contain only minimumTimestamp");
+  }
+  assertNonNegativeSafeInteger(descriptor.value, "authority.minimumTimestamp");
+  return Object.freeze({ minimumTimestamp: descriptor.value as number });
 }
 
 /**
@@ -643,17 +673,21 @@ export class ChangeSetTransaction {
         pipelineFingerprint: input.jobClaim.pipelineFingerprint,
         inputRevision: input.jobClaim.inputRevision,
       };
-      await this.authority.verify({
-        transactionId,
-        bundle: validated.bundle,
-        changeSet: validated.changeSet,
-        changeSetDigest: validated.changeSetDigest,
-        jobClaim,
-        manifestCommitIntent,
-        manifestCommitIntentDigest: input.manifestCommitIntentDigest,
-      });
+      const authority = snapshotAuthorityProof(
+        await this.authority.verify({
+          transactionId,
+          bundle: validated.bundle,
+          changeSet: validated.changeSet,
+          changeSetDigest: validated.changeSetDigest,
+          jobClaim,
+          manifestCommitIntent,
+          manifestCommitIntentDigest: input.manifestCommitIntentDigest,
+        })
+      );
       const prepared = await this.validator.prepare(validated.changeSet, validated.bundle);
-      const createdAt = this.readTimestamp(input.jobClaim.startedAt);
+      const createdAt = this.readTimestamp(
+        Math.max(input.jobClaim.startedAt, authority.minimumTimestamp)
+      );
       const journal: ChangeSetTransactionJournal = {
         version: TRANSACTION_JOURNAL_VERSION,
         transactionId,

@@ -5,6 +5,7 @@ import {
   createTransactionCommitReceiptDigest,
   transactionCommitReceiptMatchesJournal,
   type ChangeSetTransactionApplyInput,
+  type ChangeSetTransactionAuthorityProof,
   type ChangeSetTransactionAuthorityPort,
   type ChangeSetTransactionAuthorityRequest,
   type TransactionCommitReceipt,
@@ -21,6 +22,7 @@ import {
   projectKnowledgeForwardRevisionApplyJournalApplying,
   projectKnowledgeForwardRevisionApplyJournalCommitted,
   projectKnowledgeForwardRevisionApplyJournalRecoveryRequired,
+  projectKnowledgeForwardRevisionRecoveryJournalCommitted,
   snapshotKnowledgeForwardRevisionApplyJournal,
   type KnowledgeForwardRevisionApplyJournalV1,
   type KnowledgeForwardRevisionPreparedApplyJournalV1,
@@ -28,11 +30,34 @@ import {
 import {
   createKnowledgeForwardRevisionApplyLedgerIdentityDigest,
   createKnowledgeForwardRevisionApplyLedgerRecord,
+  migrateKnowledgeForwardRevisionApplyLedgerRecordV1,
   parseKnowledgeForwardRevisionApplyLedgerRecord,
   snapshotKnowledgeForwardRevisionApplyLedgerRecord,
+  snapshotKnowledgeForwardRevisionApplyLedgerRecordV1,
   snapshotKnowledgeForwardRevisionApplyLedgerRecordForCommittedJournal,
-  type KnowledgeForwardRevisionApplyLedgerRecordV1,
+  type KnowledgeForwardRevisionApplyLedgerRecord,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyLedger";
+import {
+  createKnowledgeForwardRevisionAbandonmentRecord,
+  createKnowledgeForwardRevisionAcceptedClaimIdentity,
+  createKnowledgeForwardRevisionExternalObservation,
+  createKnowledgeForwardRevisionLedgerLineageRef,
+  createKnowledgeForwardRevisionLifecycleResourceIdentity,
+  createKnowledgeForwardRevisionRecoveryJournalRef,
+  createKnowledgeForwardRevisionRecoveryTerminalRecord,
+  createKnowledgeForwardRevisionSupersessionRecord,
+  parseKnowledgeForwardRevisionAbandonmentRecord,
+  parseKnowledgeForwardRevisionRecoveryTerminalRecord,
+  parseKnowledgeForwardRevisionSupersessionRecord,
+  snapshotKnowledgeForwardRevisionAcceptedClaimIdentity,
+  snapshotKnowledgeForwardRevisionAbandonmentRecord,
+  snapshotKnowledgeForwardRevisionRecoveryTerminalRecord,
+  snapshotKnowledgeForwardRevisionSupersessionRecord,
+  type KnowledgeForwardRevisionAbandonmentRecordV1,
+  type KnowledgeForwardRevisionRecoveryTerminalRecordV1,
+  type KnowledgeForwardRevisionSupersessionRecordV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal";
+import { snapshotKnowledgeForwardRevisionRecoveryTerminalTransition } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionRecoveryTerminalTransition";
 import {
   createKnowledgeForwardRevisionSourceBase,
   createKnowledgeForwardRevisionSourceBaseDigest,
@@ -45,6 +70,7 @@ import {
   freezeForwardApplyJson,
   isForwardApplyDigest,
   isForwardApplyIdentifier,
+  isForwardApplyNonNegativeInteger,
   isForwardApplyPositiveInteger,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyProtocol";
 import {
@@ -65,6 +91,7 @@ import {
   parseKnowledgeForwardRevisionReviewSnapshotV2,
   projectKnowledgeForwardRevisionReviewEntryProposalV2,
   snapshotKnowledgeForwardRevisionReviewSnapshotV2,
+  type KnowledgeForwardRevisionReviewEntryV2,
   type KnowledgeForwardRevisionTerminalReviewEntryV2,
   type KnowledgeForwardRevisionReviewSnapshotV2,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
@@ -212,8 +239,13 @@ import {
   createKnowledgeForwardRevisionOverlayEntry,
   parseKnowledgeForwardRevisionOverlayExtension,
   projectKnowledgeForwardRevisionOverlayAddition,
-  type KnowledgeForwardRevisionOverlayEntryV1,
+  projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit,
+  type KnowledgeForwardRevisionOverlayEntry,
 } from "@/knowledge/manifest/KnowledgeForwardRevisionOverlay";
+import {
+  projectKnowledgeEffectiveManifestPages,
+  type KnowledgeEffectiveManifestPage,
+} from "@/knowledge/manifest/KnowledgeEffectivePageProjection";
 import {
   SourceManifestRevisionConflictError,
   type SourceManifestStorage,
@@ -232,6 +264,7 @@ import type {
   KnowledgeBundleConfig,
   KnowledgeChangeSet,
   KnowledgeDiagnostic,
+  KnowledgeFileChange,
   KnowledgeIngestJob,
   SourceCustody,
   SourceCompileSnapshot,
@@ -300,7 +333,7 @@ import {
 import { sha256 } from "@/utils/hash";
 
 /** Current format of the Vault-private atomic knowledge runtime store. */
-export const KNOWLEDGE_RUNTIME_STORE_VERSION = 8 as const;
+export const KNOWLEDGE_RUNTIME_STORE_VERSION = 9 as const;
 
 export { KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY };
 
@@ -312,6 +345,9 @@ const RUNTIME_V6_STORE_VERSION = 6 as const;
 
 /** Previous Runtime envelope without the dedicated forward-Apply journal and ledger. */
 const RUNTIME_V7_STORE_VERSION = 7 as const;
+
+/** Previous Runtime envelope with one active overlay head but no terminal lineage. */
+const RUNTIME_V8_STORE_VERSION = 8 as const;
 
 /** Previous runtime envelope without the source-retirement downgrade fence. */
 const RUNTIME_V4_STORE_VERSION = 4 as const;
@@ -438,7 +474,26 @@ export interface KnowledgeRuntimeStoreSnapshot {
   activeForwardRevisionApply: KnowledgeForwardRevisionApplyJournalV1 | null;
   inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
   applyCommits: KnowledgeApplyCommitLedgerRecord[];
-  forwardRevisionApplyCommits: KnowledgeForwardRevisionApplyLedgerRecordV1[];
+  forwardRevisionApplyCommits: KnowledgeForwardRevisionApplyLedgerRecord[];
+  forwardRevisionSupersessions: KnowledgeForwardRevisionSupersessionRecordV1[];
+  forwardRevisionAbandonments: KnowledgeForwardRevisionAbandonmentRecordV1[];
+  forwardRevisionRecoveryTerminals: KnowledgeForwardRevisionRecoveryTerminalRecordV1[];
+}
+
+/** Runtime-v8 envelope accepted only by the lifecycle-lineage migration. */
+interface KnowledgeRuntimeStoreSnapshotV8 {
+  version: typeof RUNTIME_V8_STORE_VERSION;
+  runtimeId: string;
+  revision: number;
+  queues: KnowledgeRuntimeBundleSlot[];
+  reviews: KnowledgeRuntimeBundleSlot[];
+  forwardRevisionReviews: KnowledgeRuntimeBundleSlot[];
+  manifests: KnowledgeRuntimeBundleSlot[];
+  activeTransaction: object | null;
+  activeForwardRevisionApply: object | null;
+  inputRevisions: KnowledgeRuntimeInputRevisionBundle[];
+  applyCommits: KnowledgeApplyCommitLedgerRecord[];
+  forwardRevisionApplyCommits: object[];
 }
 
 /** Runtime-v7 envelope accepted only by the dedicated forward-Apply migration. */
@@ -522,7 +577,11 @@ export interface KnowledgeRuntimeAppliedPageProvenance {
   readonly path: string;
   readonly windowsPathKey: string;
   readonly ownership: GeneratedPageOwnership;
+  readonly sourceAppliedContentHash: string;
+  readonly effectiveContentHash: string;
+  /** Compatibility alias for the current effective head. */
   readonly contentHash: string;
+  readonly origin: Readonly<KnowledgeEffectiveManifestPage["origin"]>;
   readonly sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[];
 }
 
@@ -638,6 +697,7 @@ export interface KnowledgeForwardRevisionApplyAuthority {
   readonly acceptedDecisionDigest: string;
   readonly sourceBase: Readonly<KnowledgeForwardRevisionSourceBaseV1>;
   readonly sourceBaseDigest: string;
+  readonly lineageAppliedAtFloor: number;
   readonly manifestRevision: number;
   readonly manifestDigest: string;
 }
@@ -664,6 +724,7 @@ const FORWARD_REVISION_APPLY_AUTHORITY_KEYS = [
   "acceptedDecisionDigest",
   "sourceBase",
   "sourceBaseDigest",
+  "lineageAppliedAtFloor",
   "manifestRevision",
   "manifestDigest",
 ] as const;
@@ -743,6 +804,7 @@ export function snapshotKnowledgeForwardRevisionApplyAuthority(
       !isForwardApplyPositiveInteger(record.decisionStoreRevision) ||
       !isForwardApplyDigest(record.acceptedDecisionDigest) ||
       !isForwardApplyDigest(record.sourceBaseDigest) ||
+      !isForwardApplyNonNegativeInteger(record.lineageAppliedAtFloor) ||
       !isForwardApplyPositiveInteger(record.manifestRevision) ||
       !isForwardApplyDigest(record.manifestDigest)
     ) {
@@ -799,6 +861,7 @@ export function snapshotKnowledgeForwardRevisionApplyAuthority(
       acceptedDecisionDigest: record.acceptedDecisionDigest,
       sourceBase,
       sourceBaseDigest: record.sourceBaseDigest,
+      lineageAppliedAtFloor: record.lineageAppliedAtFloor,
       manifestRevision: record.manifestRevision,
       manifestDigest: record.manifestDigest,
     });
@@ -1164,6 +1227,23 @@ const runtimeV7StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV7> =
   })
   .strict();
 
+const runtimeV8StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV8> = z
+  .object({
+    version: z.literal(RUNTIME_V8_STORE_VERSION),
+    runtimeId: opaqueIdSchema,
+    revision: nonNegativeSafeIntegerSchema,
+    queues: z.array(runtimeBundleSlotSchema),
+    reviews: z.array(runtimeBundleSlotSchema),
+    forwardRevisionReviews: z.array(runtimeBundleSlotSchema),
+    manifests: z.array(runtimeBundleSlotSchema),
+    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeForwardRevisionApply: z.union([z.record(z.unknown()), z.null()]),
+    inputRevisions: z.array(runtimeInputRevisionBundleSchema),
+    applyCommits: z.array(applyCommitLedgerRecordSchema),
+    forwardRevisionApplyCommits: z.array(z.record(z.unknown())),
+  })
+  .strict();
+
 const legacyEmptyReviewSnapshotSchema = z
   .object({
     version: z.literal(1),
@@ -1192,8 +1272,23 @@ const knowledgeRuntimeStoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapsh
     inputRevisions: z.array(runtimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
     forwardRevisionApplyCommits: z.array(
-      z.custom<KnowledgeForwardRevisionApplyLedgerRecordV1>(
+      z.custom<KnowledgeForwardRevisionApplyLedgerRecord>(
         (value) => parseKnowledgeForwardRevisionApplyLedgerRecord(value).ok
+      )
+    ),
+    forwardRevisionSupersessions: z.array(
+      z.custom<KnowledgeForwardRevisionSupersessionRecordV1>(
+        (value) => parseKnowledgeForwardRevisionSupersessionRecord(value).ok
+      )
+    ),
+    forwardRevisionAbandonments: z.array(
+      z.custom<KnowledgeForwardRevisionAbandonmentRecordV1>(
+        (value) => parseKnowledgeForwardRevisionAbandonmentRecord(value).ok
+      )
+    ),
+    forwardRevisionRecoveryTerminals: z.array(
+      z.custom<KnowledgeForwardRevisionRecoveryTerminalRecordV1>(
+        (value) => parseKnowledgeForwardRevisionRecoveryTerminalRecord(value).ok
       )
     ),
   })
@@ -1268,6 +1363,7 @@ export type KnowledgeRuntimeMigrationUnsafeReason =
   | "manifest_reserved_commit_metadata_present"
   | "source_retirement_state_present"
   | "forward_revision_overlay_state_present"
+  | "forward_revision_source_base_unavailable"
   | "revision_overflow";
 
 /** Reports a valid v1 envelope whose durable work makes automatic migration unsafe. */
@@ -1325,7 +1421,8 @@ export type KnowledgeApplyCommitAuthorityErrorReason =
   | "source_high_watermark_missing"
   | "source_high_watermark_mismatch"
   | "input_revision_missing"
-  | "input_revision_behind";
+  | "input_revision_behind"
+  | "forward_lineage_time_mismatch";
 
 /** Reports missing or conflicting durable authority for one source apply. */
 export class KnowledgeApplyCommitAuthorityError extends TransactionStorageAuthorityError {
@@ -1624,6 +1721,9 @@ export function createEmptyKnowledgeRuntimeStoreSnapshot(
     inputRevisions: [],
     applyCommits: [],
     forwardRevisionApplyCommits: [],
+    forwardRevisionSupersessions: [],
+    forwardRevisionAbandonments: [],
+    forwardRevisionRecoveryTerminals: [],
   };
 }
 
@@ -1646,6 +1746,15 @@ export function parseKnowledgeRuntimeStoreSnapshot(value: unknown): KnowledgeRun
   snapshot.forwardRevisionApplyCommits = snapshot.forwardRevisionApplyCommits.map((record) =>
     snapshotKnowledgeForwardRevisionApplyLedgerRecord(record)
   );
+  snapshot.forwardRevisionSupersessions = snapshot.forwardRevisionSupersessions.map((record) =>
+    snapshotKnowledgeForwardRevisionSupersessionRecord(record)
+  );
+  snapshot.forwardRevisionAbandonments = snapshot.forwardRevisionAbandonments.map((record) =>
+    snapshotKnowledgeForwardRevisionAbandonmentRecord(record)
+  );
+  snapshot.forwardRevisionRecoveryTerminals = snapshot.forwardRevisionRecoveryTerminals.map(
+    (record) => snapshotKnowledgeForwardRevisionRecoveryTerminalRecord(record)
+  );
   assertUniqueBundleSlots(snapshot.queues);
   assertUniqueBundleSlots(snapshot.reviews);
   assertUniqueBundleSlots(snapshot.forwardRevisionReviews);
@@ -1662,23 +1771,20 @@ export function parseKnowledgeRuntimeStoreSnapshot(value: unknown): KnowledgeRun
 
 /** Rejects duplicate identities in the dedicated forward-Apply success ledger. */
 function assertUniqueForwardRevisionApplyCommits(
-  records: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[],
+  records: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[],
   legacyRecords: readonly Readonly<KnowledgeApplyCommitLedgerRecord>[]
 ): void {
   const ledgerIds = new Set<string>();
   const transactionIds = new Set(legacyRecords.map((record) => record.transactionId));
   const identityDigests = new Set<string>();
-  const pageKeys = new Set<string>();
   const decisionDigests = new Set<string>();
   const claimIds = new Set<string>();
   const claimDigests = new Set<string>();
   for (const record of records) {
-    const pageKey = record.windowsPathKey;
     if (
       ledgerIds.has(record.ledgerId) ||
       transactionIds.has(record.transactionId) ||
       identityDigests.has(record.forwardLedgerIdentityDigest) ||
-      pageKeys.has(pageKey) ||
       decisionDigests.has(record.acceptedDecisionDigest) ||
       claimIds.has(record.applyClaimId) ||
       claimDigests.has(record.applyClaimDigest)
@@ -1688,7 +1794,6 @@ function assertUniqueForwardRevisionApplyCommits(
     ledgerIds.add(record.ledgerId);
     transactionIds.add(record.transactionId);
     identityDigests.add(record.forwardLedgerIdentityDigest);
-    pageKeys.add(pageKey);
     decisionDigests.add(record.acceptedDecisionDigest);
     claimIds.add(record.applyClaimId);
     claimDigests.add(record.applyClaimDigest);
@@ -1900,11 +2005,41 @@ function projectForwardRevisionApplyAuthority(
   if (matches.length !== 1) return null;
   const accepted = matches[0];
   const decision = accepted.decision;
+  const acceptedKey = createForwardRevisionAcceptedLifecycleKey({
+    bundleId: query.bundleId,
+    proposalId: query.proposalId,
+    proposalDigest: query.proposalDigest,
+    acceptedDecisionDigest: query.acceptedDecisionDigest,
+    applyClaimId: query.applyClaimId,
+    applyClaimDigest: query.applyClaimDigest,
+  });
   if (
     decision.proposal.request.pagePath !== query.pagePath ||
     decision.applyClaim.runtimeId !== state.runtimeId ||
     decision.applyClaim.bundleId !== query.bundleId ||
-    decision.applyClaim.pagePath !== query.pagePath
+    decision.applyClaim.pagePath !== query.pagePath ||
+    state.forwardRevisionAbandonments.some(
+      (record) =>
+        createForwardRevisionAcceptedLifecycleKey({
+          bundleId: record.acceptedIdentity.resource.bundleId,
+          proposalId: record.acceptedIdentity.proposalId,
+          proposalDigest: record.acceptedIdentity.proposalDigest,
+          acceptedDecisionDigest: record.acceptedIdentity.acceptedDecisionDigest,
+          applyClaimId: record.acceptedIdentity.applyClaimId,
+          applyClaimDigest: record.acceptedIdentity.applyClaimDigest,
+        }) === acceptedKey
+    ) ||
+    state.forwardRevisionRecoveryTerminals.some(
+      (record) =>
+        createForwardRevisionAcceptedLifecycleKey({
+          bundleId: record.acceptedIdentity.resource.bundleId,
+          proposalId: record.acceptedIdentity.proposalId,
+          proposalDigest: record.acceptedIdentity.proposalDigest,
+          acceptedDecisionDigest: record.acceptedIdentity.acceptedDecisionDigest,
+          applyClaimId: record.acceptedIdentity.applyClaimId,
+          applyClaimDigest: record.acceptedIdentity.applyClaimDigest,
+        }) === acceptedKey
+    )
   ) {
     return null;
   }
@@ -1928,40 +2063,33 @@ function projectForwardRevisionApplyAuthority(
     return null;
   }
   const windowsPathKey = toWindowsPathKey(query.pagePath);
-  if (
-    currentManifests.some(({ manifest: currentManifest }) =>
-      listManifestForwardRevisionOverlays(currentManifest).some(
-        (entry) => entry.windowsPathKey === windowsPathKey
-      )
-    )
-  ) {
-    return null;
-  }
   const sourceId = decision.proposal.request.intent.current.primarySourceId;
   const source = manifest.entries.find((entry) => entry.sourceId === sourceId);
   if (!source || findKnowledgeSourceRetirement(manifest, sourceId)) return null;
   const pages = currentManifests.flatMap(({ bundleId, manifest: currentManifest }) =>
-    currentManifest.entries.flatMap((owner) =>
-      (owner.lastSuccessful?.generatedPages ?? [])
-        .filter((page) => toWindowsPathKey(page.path) === windowsPathKey)
-        .map((page) => ({ bundleId, owner, page }))
-    )
+    projectKnowledgeEffectiveManifestPages(currentManifest)
+      .filter((page) => page.windowsPathKey === windowsPathKey)
+      .map((page) => ({ bundleId, page }))
   );
   const owned = pages[0];
   const page = owned?.page;
   if (
     pages.length !== 1 ||
     owned?.bundleId !== query.bundleId ||
-    owned.owner.sourceId !== sourceId ||
     !page ||
     page.path !== query.pagePath ||
     page.ownership !== "generated" ||
-    page.contentHash !== decision.acceptanceAuthority.manifestBaseHash
+    page.sourceIds.length !== 1 ||
+    page.sourceIds[0] !== sourceId ||
+    page.sourceAppliedContentHash !== decision.acceptanceAuthority.manifestBaseHash ||
+    page.effectiveContentHash !== decision.acceptanceAuthority.vaultObservedBeforeHash
   ) {
     return null;
   }
   const sourceBase = recomputeForwardRevisionSourceBase(state, manifest, sourceId);
   if (!sourceBase) return null;
+  const lineageAppliedAtFloor =
+    page.origin.kind === "forward_revision" ? page.origin.overlay.appliedAt : 0;
   return snapshotKnowledgeForwardRevisionApplyAuthority(
     {
       query,
@@ -1974,6 +2102,7 @@ function projectForwardRevisionApplyAuthority(
       acceptedDecisionDigest: decision.acceptedDecisionDigest,
       sourceBase,
       sourceBaseDigest: createKnowledgeForwardRevisionSourceBaseDigest(sourceBase),
+      lineageAppliedAtFloor,
       manifestRevision: manifest.revision,
       manifestDigest: createSourceManifestDigest(manifest),
     },
@@ -2009,6 +2138,7 @@ function createPreparedForwardRevisionApplyJournal(
     projection.afterHash !== createFileContentHash(projection.afterContent) ||
     projection.afterContent !== acceptedDecision.afterContent ||
     projection.afterHash !== acceptedDecision.acceptedAfterHash ||
+    revalidationReceipt.revalidatedAt < afterAuthority.lineageAppliedAtFloor ||
     !exactJsonValuesEqual(acceptedDecision, afterAuthority.acceptedDecision) ||
     !exactJsonValuesEqual(sourceBase, afterAuthority.sourceBase) ||
     !exactJsonValuesEqual(sourceBase, revalidationReceipt.sourceBase) ||
@@ -2056,6 +2186,26 @@ const FORWARD_APPLY_FINALIZE_KEYS = [
   "previousJournal",
   "previousJournalDigest",
   "observation",
+] as const;
+const FORWARD_APPLY_TERMINALIZE_KEYS = [
+  "version",
+  "kind",
+  "transition",
+  "previousJournal",
+  "previousJournalDigest",
+  "observation",
+  "observedAt",
+] as const;
+const FORWARD_APPLY_RECOVERY_COMMITTED_KEYS = [
+  "version",
+  "kind",
+  "transition",
+  "previousJournal",
+  "previousJournalDigest",
+  "nextJournal",
+  "nextJournalDigest",
+  "observation",
+  "observedAt",
 ] as const;
 const FORWARD_APPLY_FILE_OBSERVATION_KEYS = ["kind", "contentHash"] as const;
 const FORWARD_APPLY_NON_FILE_OBSERVATION_KEYS = ["kind"] as const;
@@ -2107,7 +2257,13 @@ function snapshotForwardRevisionApplyTransitionProjection(
     })();
     const record = captureForwardApplyRecord(
       value,
-      transition === "finalize" ? FORWARD_APPLY_FINALIZE_KEYS : FORWARD_APPLY_TRANSITION_KEYS
+      transition === "finalize"
+        ? FORWARD_APPLY_FINALIZE_KEYS
+        : transition === "terminalize"
+          ? FORWARD_APPLY_TERMINALIZE_KEYS
+          : transition === "recovery_committed"
+            ? FORWARD_APPLY_RECOVERY_COMMITTED_KEYS
+            : FORWARD_APPLY_TRANSITION_KEYS
     );
     if (
       !record ||
@@ -2120,6 +2276,28 @@ function snapshotForwardRevisionApplyTransitionProjection(
     const previousJournalDigest = createKnowledgeForwardRevisionApplyJournalDigest(previousJournal);
     const observation = snapshotForwardRevisionApplyTransitionObservation(record.observation);
     if (record.previousJournalDigest !== previousJournalDigest) throw new TypeError();
+    if (transition === "terminalize") {
+      if (
+        previousJournal.phase !== "recovery_required" ||
+        !Number.isSafeInteger(record.observedAt) ||
+        Number(record.observedAt) < previousJournal.updatedAt ||
+        (observation.kind === "file" &&
+          (observation.contentHash === previousJournal.afterHash ||
+            (previousJournal.revision !== 3 &&
+              observation.contentHash === previousJournal.beforeHash)))
+      ) {
+        throw new TypeError();
+      }
+      return Object.freeze({
+        version: 1 as const,
+        kind: "forward_revision_apply_transition_capability_projection" as const,
+        transition,
+        previousJournal,
+        previousJournalDigest,
+        observation,
+        observedAt: Number(record.observedAt),
+      });
+    }
     if (transition === "finalize") {
       if (
         previousJournal.phase !== "committed" ||
@@ -2135,6 +2313,40 @@ function snapshotForwardRevisionApplyTransitionProjection(
         previousJournal,
         previousJournalDigest,
         observation,
+      });
+    }
+    if (transition === "recovery_committed") {
+      if (
+        previousJournal.phase !== "recovery_required" ||
+        observation.kind !== "file" ||
+        observation.contentHash !== previousJournal.afterHash ||
+        !Number.isSafeInteger(record.observedAt) ||
+        Number(record.observedAt) < previousJournal.updatedAt
+      ) {
+        throw new TypeError();
+      }
+      const nextJournal = snapshotKnowledgeForwardRevisionApplyJournal(record.nextJournal);
+      const nextJournalDigest = createKnowledgeForwardRevisionApplyJournalDigest(nextJournal);
+      const expected = projectKnowledgeForwardRevisionRecoveryJournalCommitted(
+        previousJournal,
+        Number(record.observedAt)
+      );
+      if (
+        record.nextJournalDigest !== nextJournalDigest ||
+        !exactJsonValuesEqual(nextJournal, expected)
+      ) {
+        throw new TypeError();
+      }
+      return Object.freeze({
+        version: 1 as const,
+        kind: "forward_revision_apply_transition_capability_projection" as const,
+        transition,
+        previousJournal,
+        previousJournalDigest,
+        nextJournal,
+        nextJournalDigest,
+        observation,
+        observedAt: Number(record.observedAt),
       });
     }
     if (
@@ -2214,7 +2426,7 @@ function projectForwardRevisionApplyFinalization(
   journalValue: unknown
 ): Readonly<{
   next: KnowledgeRuntimeStoreSnapshot;
-  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>;
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>;
 }> {
   const journal = snapshotKnowledgeForwardRevisionApplyJournal(journalValue);
   if (journal.phase !== "committed") {
@@ -2249,22 +2461,32 @@ function projectForwardRevisionApplyFinalization(
     state.forwardRevisionApplyCommits.some(
       (record) =>
         record.transactionId === journal.transactionId ||
-        record.windowsPathKey === journal.windowsPathKey ||
         record.acceptedDecisionDigest === journal.acceptedDecisionDigest ||
         record.applyClaimId === journal.applyClaimId ||
         record.applyClaimDigest === journal.applyClaimDigest
-    ) ||
-    state.manifests.some((slot) => {
-      const parsed = parseSourceManifest(slot.value);
-      if (!parsed.ok || !validateSourceManifest(parsed.value).valid) {
-        throw new KnowledgeRuntimeStoreCorruptError();
-      }
-      return listManifestForwardRevisionOverlays(parsed.value).some(
-        (entry) => entry.windowsPathKey === journal.windowsPathKey
-      );
-    })
+    )
   ) {
     throw createForwardRevisionApplyPortError("conflict");
+  }
+  const predecessorOverlay = listManifestForwardRevisionOverlays(manifest).find(
+    (entry) => entry.windowsPathKey === journal.windowsPathKey
+  );
+  const predecessorLedger = predecessorOverlay
+    ? state.forwardRevisionApplyCommits.find((record) =>
+        forwardRevisionOverlayMatchesLedger(predecessorOverlay, record)
+      )
+    : undefined;
+  if (
+    (predecessorOverlay !== undefined && predecessorLedger === undefined) ||
+    (predecessorOverlay === undefined &&
+      journal.previousEffectiveContentHash !== journal.sourceAppliedContentHash) ||
+    (predecessorOverlay !== undefined &&
+      (predecessorOverlay.effectiveContentHash !== journal.previousEffectiveContentHash ||
+        predecessorOverlay.sourceAppliedContentHash !== journal.sourceAppliedContentHash ||
+        predecessorOverlay.sourceId !== journal.sourceId ||
+        predecessorOverlay.pagePath !== journal.pagePath))
+  ) {
+    throw createForwardRevisionApplyPortError("authority_unavailable");
   }
   const forwardLedgerIdentityDigest = createKnowledgeForwardRevisionApplyLedgerIdentityDigest(
     journal,
@@ -2275,7 +2497,8 @@ function projectForwardRevisionApplyFinalization(
     pagePath: journal.pagePath,
     sourceId: journal.sourceId,
     sourceBaseDigest: journal.sourceBaseDigest,
-    baseContentHash: journal.beforeHash,
+    sourceAppliedContentHash: journal.sourceAppliedContentHash,
+    previousEffectiveContentHash: journal.previousEffectiveContentHash,
     effectiveContentHash: journal.afterHash,
     forwardTransactionId: journal.transactionId,
     acceptedDecisionDigest: journal.acceptedDecisionDigest,
@@ -2298,6 +2521,13 @@ function projectForwardRevisionApplyFinalization(
   if (ledger.forwardLedgerIdentityDigest !== forwardLedgerIdentityDigest) {
     throw new KnowledgeRuntimeStoreCorruptError();
   }
+  const supersession = predecessorLedger
+    ? createKnowledgeForwardRevisionSupersessionRecord({
+        predecessor: createForwardRevisionLedgerLineageRefForLedger(predecessorLedger),
+        successor: createForwardRevisionLedgerLineageRefForLedger(ledger),
+        supersededAt: ledger.appliedAt,
+      })
+    : undefined;
   const nextRevision = (() => {
     try {
       return nextStoreRevision(state);
@@ -2314,6 +2544,12 @@ function projectForwardRevisionApplyFinalization(
       forwardRevisionApplyCommits: [...state.forwardRevisionApplyCommits, ledger].sort(
         (left, right) => compareIdentifiers(left.transactionId, right.transactionId)
       ),
+      forwardRevisionSupersessions:
+        supersession === undefined
+          ? state.forwardRevisionSupersessions
+          : [...state.forwardRevisionSupersessions, supersession].sort((left, right) =>
+              compareIdentifiers(left.supersessionId, right.supersessionId)
+            ),
     },
     ledger,
   });
@@ -2323,7 +2559,7 @@ function projectForwardRevisionApplyFinalization(
 function confirmForwardRevisionApplyFinalization(
   state: KnowledgeRuntimeStoreSnapshot,
   journalValue: unknown
-): Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1> | undefined {
+): Readonly<KnowledgeForwardRevisionApplyLedgerRecord> | undefined {
   const journal = snapshotKnowledgeForwardRevisionApplyJournal(journalValue);
   if (journal.phase !== "committed" || state.activeForwardRevisionApply !== null) {
     return undefined;
@@ -2332,25 +2568,169 @@ function confirmForwardRevisionApplyFinalization(
     (record) => record.transactionId === journal.transactionId
   );
   if (matches.length !== 1) return undefined;
-  const manifestRaw = findBundleSlot(state, "manifests", journal.bundleId);
-  if (manifestRaw === null) return undefined;
-  const parsedManifest = parseSourceManifest(manifestRaw);
-  if (!parsedManifest.ok || !validateSourceManifest(parsedManifest.value).valid) return undefined;
-  const sourceBase = recomputeForwardRevisionSourceBase(
-    state,
-    parsedManifest.value,
-    journal.sourceId
-  );
-  if (!sourceBase) return undefined;
   try {
     return snapshotKnowledgeForwardRevisionApplyLedgerRecordForCommittedJournal(
       matches[0],
       journal,
-      sourceBase
+      matches[0].sourceBase
     );
   } catch {
     return undefined;
   }
+}
+
+/** Projects one no-write sticky-recovery terminalization from an exact observation proof. */
+function projectForwardRevisionRecoveryTerminalization(
+  state: KnowledgeRuntimeStoreSnapshot,
+  projection: Extract<
+    KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1,
+    { transition: "terminalize" }
+  >,
+  terminalizedAt: number
+): Readonly<{
+  next: KnowledgeRuntimeStoreSnapshot;
+  terminal: Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>;
+}> {
+  const journal = snapshotKnowledgeForwardRevisionApplyJournal(projection.previousJournal);
+  if (journal.phase !== "recovery_required") {
+    throw createForwardRevisionApplyPortError("conflict");
+  }
+  const acceptedIdentity = createForwardRevisionAcceptedClaimIdentityForDecision(
+    state.runtimeId,
+    journal.acceptedDecision
+  );
+  const resource = createForwardRevisionLifecycleResourceForDecision(
+    state.runtimeId,
+    journal.acceptedDecision
+  );
+  const recoveryJournalBase = {
+    resource,
+    transactionId: journal.transactionId,
+    recoveryJournalDigest: projection.previousJournalDigest,
+    acceptedDecisionDigest: journal.acceptedDecisionDigest,
+    applyClaimId: journal.applyClaimId,
+    applyClaimDigest: journal.applyClaimDigest,
+    beforeHash: journal.beforeHash,
+    afterHash: journal.afterHash,
+    updatedAt: projection.observedAt,
+  };
+  const recoveryJournal = createKnowledgeForwardRevisionRecoveryJournalRef(
+    journal.revision === 3
+      ? { ...recoveryJournalBase, journalRevision: 3, committedAt: journal.committedAt! }
+      : journal.revision === 2
+        ? { ...recoveryJournalBase, journalRevision: 2 }
+        : { ...recoveryJournalBase, journalRevision: 1 }
+  );
+  const observation = createKnowledgeForwardRevisionExternalObservation(
+    projection.observation.kind === "file"
+      ? {
+          actualKind: "file" as const,
+          actualHash: projection.observation.contentHash,
+          observedAt: projection.observedAt,
+        }
+      : {
+          actualKind: projection.observation.kind,
+          observedAt: projection.observedAt,
+        }
+  );
+  const terminal = createKnowledgeForwardRevisionRecoveryTerminalRecord({
+    acceptedIdentity,
+    journal: recoveryJournal,
+    observation,
+    terminalizedAt,
+  });
+  if (journal.revision !== 3) {
+    return Object.freeze({
+      next: {
+        ...state,
+        revision: nextStoreRevision(state),
+        activeForwardRevisionApply: null,
+        forwardRevisionRecoveryTerminals: [
+          ...state.forwardRevisionRecoveryTerminals,
+          terminal,
+        ].sort((left, right) =>
+          compareIdentifiers(left.terminalizationId, right.terminalizationId)
+        ),
+      },
+      terminal,
+    });
+  }
+
+  const committedJournal = projectKnowledgeForwardRevisionRecoveryJournalCommitted(
+    journal,
+    projection.observedAt
+  );
+  const finalized = projectForwardRevisionApplyFinalization(state, committedJournal);
+  const finalizedManifestRaw = findBundleSlot(
+    finalized.next,
+    "manifests",
+    committedJournal.bundleId
+  );
+  if (finalizedManifestRaw === null) throw new KnowledgeRuntimeStoreCorruptError();
+  let finalizedManifest = parseSourceManifest(finalizedManifestRaw);
+  if (!finalizedManifest.ok) throw new KnowledgeRuntimeStoreCorruptError();
+  const activeOverlay = listManifestForwardRevisionOverlays(finalizedManifest.value).find(
+    (entry) => entry.forwardTransactionId === committedJournal.transactionId
+  );
+  if (activeOverlay === undefined) throw new KnowledgeRuntimeStoreCorruptError();
+  const manifestWithoutTerminalOverlay =
+    projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(
+      finalizedManifest.value,
+      activeOverlay
+    );
+  const sourceBase = finalized.ledger.sourceBase;
+  const terminalLedger = createKnowledgeForwardRevisionApplyLedgerRecord({
+    committedJournal,
+    sourceBase,
+    manifestAfterRevision: manifestWithoutTerminalOverlay.revision,
+    manifestAfterDigest: createSourceManifestDigest(manifestWithoutTerminalOverlay),
+    appliedAt: committedJournal.committedAt,
+  });
+  if (terminalLedger.forwardLedgerIdentityDigest !== finalized.ledger.forwardLedgerIdentityDigest) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return Object.freeze({
+    next: {
+      ...finalized.next,
+      manifests: replaceBundleSlot(
+        finalized.next.manifests,
+        committedJournal.bundleId,
+        manifestWithoutTerminalOverlay
+      ),
+      forwardRevisionApplyCommits: finalized.next.forwardRevisionApplyCommits
+        .map((record) =>
+          record.transactionId === terminalLedger.transactionId ? terminalLedger : record
+        )
+        .sort((left, right) => compareIdentifiers(left.transactionId, right.transactionId)),
+      forwardRevisionRecoveryTerminals: [
+        ...finalized.next.forwardRevisionRecoveryTerminals,
+        terminal,
+      ].sort((left, right) => compareIdentifiers(left.terminalizationId, right.terminalizationId)),
+    },
+    terminal,
+  });
+}
+
+/** Rejoins an ambiguously committed recovery terminal to its exact projection. */
+function confirmForwardRevisionRecoveryTerminalization(
+  state: KnowledgeRuntimeStoreSnapshot,
+  projection: Extract<
+    KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1,
+    { transition: "terminalize" }
+  >
+): Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> | undefined {
+  if (state.activeForwardRevisionApply !== null) return undefined;
+  const matches = state.forwardRevisionRecoveryTerminals.filter(
+    (record) =>
+      record.journal.transactionId === projection.previousJournal.transactionId &&
+      record.journal.recoveryJournalDigest === projection.previousJournalDigest &&
+      record.observation.observedAt === projection.observedAt &&
+      record.observation.actualKind === projection.observation.kind &&
+      (record.observation.actualKind !== "file" ||
+        (projection.observation.kind === "file" &&
+          record.observation.actualHash === projection.observation.contentHash))
+  );
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** Selects a deterministic valid digest unequal to both journal content hashes. */
@@ -2364,6 +2744,39 @@ function createForwardRevisionApplyResourceProbeHash(
     if (digest !== journal.beforeHash && digest !== journal.afterHash) return digest;
   }
   throw createForwardRevisionApplyPortError("resource_limit");
+}
+
+/** Requires one journal timestamp to preserve its exact predecessor Forward lineage. */
+function assertForwardRevisionApplyLineageTimestampFloor(
+  state: KnowledgeRuntimeStoreSnapshot,
+  journal: Readonly<KnowledgeForwardRevisionApplyJournalV1>
+): void {
+  const manifestRaw = findBundleSlot(state, "manifests", journal.bundleId);
+  if (manifestRaw === null) throw createForwardRevisionApplyPortError("authority_unavailable");
+  const parsedManifest = parseSourceManifest(manifestRaw);
+  if (
+    !parsedManifest.ok ||
+    !validateSourceManifest(parsedManifest.value).valid ||
+    parsedManifest.value.bundleId !== journal.bundleId
+  ) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  const predecessor = listManifestForwardRevisionOverlays(parsedManifest.value).find(
+    (entry) => entry.windowsPathKey === journal.windowsPathKey
+  );
+  if (
+    (predecessor === undefined &&
+      journal.previousEffectiveContentHash !== journal.sourceAppliedContentHash) ||
+    (predecessor !== undefined &&
+      (predecessor.bundleId !== journal.bundleId ||
+        predecessor.pagePath !== journal.pagePath ||
+        predecessor.sourceId !== journal.sourceId ||
+        predecessor.sourceAppliedContentHash !== journal.sourceAppliedContentHash ||
+        predecessor.effectiveContentHash !== journal.previousEffectiveContentHash ||
+        journal.createdAt < predecessor.appliedAt))
+  ) {
+    throw createForwardRevisionApplyPortError("authority_unavailable");
+  }
 }
 
 /** Proves begin can durably reach committed+finalized or sticky rev3 recovery without exhaustion. */
@@ -2449,6 +2862,43 @@ function assertForwardRevisionApplyExclusiveMutation(
   if (current.activeForwardRevisionApply === null) return;
   const previous = snapshotKnowledgeForwardRevisionApplyJournal(current.activeForwardRevisionApply);
   if (next.activeForwardRevisionApply === null) {
+    if (previous.phase === "recovery_required") {
+      const currentTerminalIds = new Set(
+        current.forwardRevisionRecoveryTerminals.map((record) => record.terminalizationId)
+      );
+      const appended = next.forwardRevisionRecoveryTerminals.filter(
+        (record) => !currentTerminalIds.has(record.terminalizationId)
+      );
+      if (appended.length !== 1) {
+        throw createForwardRevisionApplyPortError("conflict");
+      }
+      let transition: ReturnType<typeof snapshotKnowledgeForwardRevisionRecoveryTerminalTransition>;
+      try {
+        transition = snapshotKnowledgeForwardRevisionRecoveryTerminalTransition(
+          previous,
+          appended[0]
+        );
+      } catch {
+        throw createForwardRevisionApplyPortError("conflict");
+      }
+      const expected = projectForwardRevisionRecoveryTerminalization(
+        current,
+        Object.freeze({
+          version: 1 as const,
+          kind: "forward_revision_apply_transition_capability_projection" as const,
+          transition: "terminalize" as const,
+          previousJournal: transition.previousJournal,
+          previousJournalDigest: transition.previousJournalDigest,
+          observation: transition.observation,
+          observedAt: transition.observedAt,
+        }),
+        transition.terminal.terminalizedAt
+      ).next;
+      if (!exactJsonValuesEqual(next, expected)) {
+        throw createForwardRevisionApplyPortError("conflict");
+      }
+      return;
+    }
     if (previous.phase !== "committed") {
       throw createForwardRevisionApplyPortError("conflict");
     }
@@ -2464,6 +2914,12 @@ function assertForwardRevisionApplyExclusiveMutation(
       return projectKnowledgeForwardRevisionApplyJournalApplying(previous, candidate.updatedAt);
     }
     if (candidate.phase === "committed") {
+      if (previous.phase === "recovery_required") {
+        return projectKnowledgeForwardRevisionRecoveryJournalCommitted(
+          previous,
+          previous.revision === 3 ? previous.updatedAt : candidate.committedAt
+        );
+      }
       return projectKnowledgeForwardRevisionApplyJournalCommitted(previous, candidate.committedAt);
     }
     if (candidate.phase === "recovery_required") {
@@ -2488,6 +2944,246 @@ function assertForwardRevisionApplyExclusiveMutation(
   }
 }
 
+/** Creates the canonical join key shared by accepted forward lifecycle records. */
+function createForwardRevisionAcceptedLifecycleKey(identity: {
+  bundleId: string;
+  proposalId: string;
+  proposalDigest: string;
+  acceptedDecisionDigest: string;
+  applyClaimId: string;
+  applyClaimDigest: string;
+}): string {
+  return [
+    identity.bundleId,
+    identity.proposalId,
+    identity.proposalDigest,
+    identity.acceptedDecisionDigest,
+    identity.applyClaimId,
+    identity.applyClaimDigest,
+  ].join("\n");
+}
+
+/** Creates the exact lifecycle resource bound to one accepted decision. */
+function createForwardRevisionLifecycleResourceForDecision(
+  runtimeId: string,
+  decision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>
+) {
+  return createKnowledgeForwardRevisionLifecycleResourceIdentity({
+    runtimeId,
+    bundleId: decision.proposal.request.bundleId,
+    sourceId: decision.proposal.request.intent.current.primarySourceId,
+    pagePath: decision.proposal.request.pagePath,
+  });
+}
+
+/** Creates the exact terminal identity bound to one accepted decision. */
+function createForwardRevisionAcceptedClaimIdentityForDecision(
+  runtimeId: string,
+  decision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>
+) {
+  return createKnowledgeForwardRevisionAcceptedClaimIdentity({
+    resource: createForwardRevisionLifecycleResourceForDecision(runtimeId, decision),
+    acceptedDecisionDigest: decision.acceptedDecisionDigest,
+    applyClaimId: decision.applyClaim.claimId,
+    applyClaimDigest: decision.applyClaimDigest,
+    proposalId: decision.proposal.proposalId,
+    proposalDigest: decision.proposalDigest,
+    acceptedAfterHash: decision.acceptedAfterHash,
+    acceptedAt: decision.acceptedAt,
+  });
+}
+
+/** Reports whether one accepted review has a durable lifecycle outcome and no open Apply claim. */
+function acceptedForwardRevisionReviewIsTerminal(
+  state: KnowledgeRuntimeStoreSnapshot,
+  decision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>
+): boolean {
+  const key = createForwardRevisionAcceptedLifecycleKey({
+    bundleId: decision.proposal.request.bundleId,
+    proposalId: decision.proposal.proposalId,
+    proposalDigest: decision.proposalDigest,
+    acceptedDecisionDigest: decision.acceptedDecisionDigest,
+    applyClaimId: decision.applyClaim.claimId,
+    applyClaimDigest: decision.applyClaimDigest,
+  });
+  if (
+    state.activeForwardRevisionApply !== null &&
+    createForwardRevisionAcceptedLifecycleKey(state.activeForwardRevisionApply) === key
+  ) {
+    return false;
+  }
+  return (
+    state.forwardRevisionApplyCommits.some(
+      (record) => createForwardRevisionAcceptedLifecycleKey(record) === key
+    ) ||
+    state.forwardRevisionAbandonments.some(
+      (record) =>
+        createForwardRevisionAcceptedLifecycleKey({
+          bundleId: record.acceptedIdentity.resource.bundleId,
+          proposalId: record.acceptedIdentity.proposalId,
+          proposalDigest: record.acceptedIdentity.proposalDigest,
+          acceptedDecisionDigest: record.acceptedIdentity.acceptedDecisionDigest,
+          applyClaimId: record.acceptedIdentity.applyClaimId,
+          applyClaimDigest: record.acceptedIdentity.applyClaimDigest,
+        }) === key
+    ) ||
+    state.forwardRevisionRecoveryTerminals.some(
+      (record) =>
+        createForwardRevisionAcceptedLifecycleKey({
+          bundleId: record.acceptedIdentity.resource.bundleId,
+          proposalId: record.acceptedIdentity.proposalId,
+          proposalDigest: record.acceptedIdentity.proposalDigest,
+          acceptedDecisionDigest: record.acceptedIdentity.acceptedDecisionDigest,
+          applyClaimId: record.acceptedIdentity.applyClaimId,
+          applyClaimDigest: record.acceptedIdentity.applyClaimDigest,
+        }) === key
+    )
+  );
+}
+
+/** Creates the content-free lineage reference for one forward Apply ledger. */
+function createForwardRevisionLedgerLineageRefForLedger(
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
+) {
+  return createKnowledgeForwardRevisionLedgerLineageRef({
+    ledgerKind: "forward_revision_apply",
+    resource: createKnowledgeForwardRevisionLifecycleResourceIdentity({
+      runtimeId: ledger.runtimeId,
+      bundleId: ledger.bundleId,
+      sourceId: ledger.sourceId,
+      pagePath: ledger.pagePath,
+    }),
+    transactionId: ledger.transactionId,
+    ledgerIdentityDigest: ledger.forwardLedgerIdentityDigest,
+    casBeforeHash: ledger.previousEffectiveContentHash,
+    afterHash: ledger.effectiveContentHash,
+    appliedAt: ledger.appliedAt,
+  });
+}
+
+/** Creates the deterministic terminal identity for a successfully deleted generated page. */
+function createSourceApplyDeletedPageHash(
+  ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
+  change: Extract<KnowledgeFileChange, { operation: "delete" }>
+): string {
+  return sha256(
+    `knowledge-source-apply-deleted-page-v1\n${canonicalizeJson({
+      version: 1,
+      kind: "knowledge_source_apply_deleted_page",
+      runtimeTransactionId: ledger.transactionId,
+      bundleId: ledger.bundleId,
+      sourceId: ledger.sourceId,
+      pagePath: change.path,
+      windowsPathKey: toWindowsPathKey(change.path),
+      beforeHash: change.beforeHash,
+    })}`
+  );
+}
+
+/** Returns the exact post-Apply identity for one updated or deleted generated page. */
+function getSourceApplyPageAfterHash(
+  ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
+  change: Extract<KnowledgeFileChange, { operation: "update" | "delete" }>
+): string {
+  return change.operation === "update"
+    ? change.afterHash
+    : createSourceApplyDeletedPageHash(ledger, change);
+}
+
+/** Hashes one ordinary source Apply ledger together with one exact page effect. */
+function createSourceApplyPageLedgerIdentityDigest(
+  ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
+  change: Extract<KnowledgeFileChange, { operation: "update" | "delete" }>
+): string {
+  return sha256(
+    `knowledge-source-apply-page-ledger-identity-v1\n${canonicalizeJson({
+      version: 1,
+      kind: "knowledge_source_apply_page_ledger_identity",
+      ledger,
+      operation: change.operation,
+      pagePath: change.path,
+      windowsPathKey: toWindowsPathKey(change.path),
+      beforeHash: change.beforeHash,
+      afterHash: getSourceApplyPageAfterHash(ledger, change),
+      sourceRefs: [...change.sourceRefs].sort(compareIdentifiers),
+    })}`
+  );
+}
+
+/** Rejoins one ordinary source Apply ledger to its unique retained accepted Review. */
+function requireAcceptedSourceApplyRecordForLedger(
+  state: KnowledgeRuntimeStoreSnapshot,
+  ledger: Readonly<KnowledgeApplyCommitLedgerRecord>
+): Readonly<AcceptedChangeSetReviewRecord> {
+  const rawReview = findBundleSlot(state, "reviews", ledger.bundleId);
+  if (rawReview === null) throw new KnowledgeRuntimeStoreCorruptError();
+  const parsedReview = parseChangeSetReviewSnapshot(rawReview);
+  if (!parsedReview.ok || !validateChangeSetReviewSnapshot(parsedReview.value).valid) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  const accepted = parsedReview.value.records.filter(
+    (record): record is AcceptedChangeSetReviewRecord =>
+      record.outcome === "accepted" && ledgerMatchesAcceptedRecord(ledger, ledger.bundleId, record)
+  );
+  if (accepted.length !== 1) throw new KnowledgeRuntimeStoreCorruptError();
+  return accepted[0];
+}
+
+/** Reconstructs one ordinary source Apply page successor from retained Review evidence. */
+function projectSourceApplyPageLedgerLineageRef(
+  state: KnowledgeRuntimeStoreSnapshot,
+  ledger: Readonly<KnowledgeApplyCommitLedgerRecord>,
+  pagePath: string
+) {
+  const accepted = requireAcceptedSourceApplyRecordForLedger(state, ledger);
+  const changes = accepted.acceptedChangeSet.changes.filter(
+    (change): change is Extract<KnowledgeFileChange, { operation: "update" | "delete" }> =>
+      (change.operation === "update" || change.operation === "delete") &&
+      change.path === pagePath &&
+      toWindowsPathKey(change.path) === toWindowsPathKey(pagePath) &&
+      change.sourceRefs.includes(ledger.sourceId)
+  );
+  if (changes.length !== 1) throw new KnowledgeRuntimeStoreCorruptError();
+  const change = changes[0];
+  return createKnowledgeForwardRevisionLedgerLineageRef({
+    ledgerKind: "source_apply",
+    resource: createKnowledgeForwardRevisionLifecycleResourceIdentity({
+      runtimeId: state.runtimeId,
+      bundleId: ledger.bundleId,
+      sourceId: ledger.sourceId,
+      pagePath,
+    }),
+    transactionId: ledger.transactionId,
+    ledgerIdentityDigest: createSourceApplyPageLedgerIdentityDigest(ledger, change),
+    casBeforeHash: change.beforeHash,
+    afterHash: getSourceApplyPageAfterHash(ledger, change),
+    appliedAt: ledger.recordedAt,
+  });
+}
+
+/** Reports whether one active overlay is the exact head produced by a ledger. */
+function forwardRevisionOverlayMatchesLedger(
+  overlay: Readonly<KnowledgeForwardRevisionOverlayEntry>,
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
+): boolean {
+  return (
+    overlay.bundleId === ledger.bundleId &&
+    overlay.sourceId === ledger.sourceId &&
+    overlay.pagePath === ledger.pagePath &&
+    overlay.windowsPathKey === ledger.windowsPathKey &&
+    overlay.sourceBaseDigest === ledger.sourceBaseDigest &&
+    overlay.sourceAppliedContentHash === ledger.sourceAppliedContentHash &&
+    overlay.previousEffectiveContentHash === ledger.previousEffectiveContentHash &&
+    overlay.effectiveContentHash === ledger.effectiveContentHash &&
+    overlay.forwardTransactionId === ledger.transactionId &&
+    overlay.acceptedDecisionDigest === ledger.acceptedDecisionDigest &&
+    (overlay.forwardLedgerIdentityDigest === ledger.forwardLedgerIdentityDigest ||
+      (ledger.legacyForwardLedgerIdentityDigest !== null &&
+        overlay.forwardLedgerIdentityDigest === ledger.legacyForwardLedgerIdentityDigest)) &&
+    overlay.appliedAt === ledger.appliedAt
+  );
+}
+
 /** Validates the complete dedicated forward journal/ledger/overlay graph. */
 function assertForwardRevisionApplySemantics(
   state: KnowledgeRuntimeStoreSnapshot,
@@ -2497,7 +3193,7 @@ function assertForwardRevisionApplySemantics(
     KnowledgeForwardRevisionTerminalReviewEntryV2,
     { state: "accepted" }
   >;
-  const overlays = new Map<string, Readonly<KnowledgeForwardRevisionOverlayEntryV1>>();
+  const overlays = new Map<string, Readonly<KnowledgeForwardRevisionOverlayEntry>>();
   const pageOwners = new Map<
     string,
     Array<{
@@ -2526,17 +3222,31 @@ function assertForwardRevisionApplySemantics(
   const acceptedEntries = new Map<string, AcceptedEntry>();
   for (const slot of state.forwardRevisionReviews) {
     const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2(slot.value);
+    const previousEntriesByPage = new Map<
+      string,
+      Readonly<KnowledgeForwardRevisionReviewEntryV2>
+    >();
     for (const entry of review.records) {
+      const publication = projectKnowledgeForwardRevisionReviewEntryProposalV2(entry);
+      const pageKey = toWindowsPathKey(publication.proposal.request.pagePath);
+      const previous = previousEntriesByPage.get(pageKey);
+      if (
+        previous?.state === "accepted" &&
+        !acceptedForwardRevisionReviewIsTerminal(state, previous.decision)
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      previousEntriesByPage.set(pageKey, entry);
       if (entry.state !== "accepted") continue;
       const decision = entry.decision;
-      const key = [
-        slot.bundleId,
-        decision.proposal.proposalId,
-        decision.proposalDigest,
-        decision.acceptedDecisionDigest,
-        decision.applyClaim.claimId,
-        decision.applyClaimDigest,
-      ].join("\n");
+      const key = createForwardRevisionAcceptedLifecycleKey({
+        bundleId: slot.bundleId,
+        proposalId: decision.proposal.proposalId,
+        proposalDigest: decision.proposalDigest,
+        acceptedDecisionDigest: decision.acceptedDecisionDigest,
+        applyClaimId: decision.applyClaim.claimId,
+        applyClaimDigest: decision.applyClaimDigest,
+      });
       if (acceptedEntries.has(key)) throw new KnowledgeRuntimeStoreCorruptError();
       acceptedEntries.set(key, entry);
     }
@@ -2551,86 +3261,305 @@ function assertForwardRevisionApplySemantics(
     applyClaimId: string;
     applyClaimDigest: string;
   }): AcceptedEntry | undefined =>
-    acceptedEntries.get(
-      [
-        identity.bundleId,
-        identity.proposalId,
-        identity.proposalDigest,
-        identity.acceptedDecisionDigest,
-        identity.applyClaimId,
-        identity.applyClaimDigest,
-      ].join("\n")
-    );
-  const sourceBases = new Map<string, Readonly<KnowledgeForwardRevisionSourceBaseV1>>();
-  /** Recomputes and memoizes one Bundle/source base for forward Apply validation. */
-  const getSourceBase = (
-    bundleId: string,
-    sourceId: string
-  ): Readonly<KnowledgeForwardRevisionSourceBaseV1> | undefined => {
-    const key = `${bundleId}\n${sourceId}`;
-    if (sourceBases.has(key)) return sourceBases.get(key);
-    const manifest = manifests.get(bundleId);
-    if (!manifest) return undefined;
-    const sourceBase = recomputeForwardRevisionSourceBase(state, manifest, sourceId);
-    if (sourceBase) sourceBases.set(key, sourceBase);
-    return sourceBase;
-  };
+    acceptedEntries.get(createForwardRevisionAcceptedLifecycleKey(identity));
 
+  const ledgersByIdentity = new Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecord>>();
+  const ledgersByTransaction = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
+  >();
+  const ledgerAcceptedKeys = new Map<string, string>();
   for (const ledger of state.forwardRevisionApplyCommits) {
     const manifest = manifests.get(ledger.bundleId);
-    const overlay = overlays.get(ledger.windowsPathKey);
     const accepted = findAccepted(ledger);
-    if (!manifest || !overlay || !accepted) throw new KnowledgeRuntimeStoreCorruptError();
-    const sourceBase = getSourceBase(ledger.bundleId, ledger.sourceId);
-    const owners = pageOwners.get(ledger.windowsPathKey) ?? [];
-    const owner = owners[0];
+    if (!manifest || !accepted) throw new KnowledgeRuntimeStoreCorruptError();
     const decision = accepted.decision;
     if (
       ledger.runtimeId !== state.runtimeId ||
       ledger.manifestAfterRevision > manifest.revision ||
       (ledger.manifestAfterRevision === manifest.revision &&
         ledger.manifestAfterDigest !== createSourceManifestDigest(manifest)) ||
-      !sourceBase ||
-      createKnowledgeForwardRevisionSourceBaseDigest(sourceBase) !== ledger.sourceBaseDigest ||
+      createKnowledgeForwardRevisionSourceBaseDigest(ledger.sourceBase) !==
+        ledger.sourceBaseDigest ||
+      ledger.sourceBase.bundleId !== ledger.bundleId ||
+      ledger.sourceBase.sourceId !== ledger.sourceId ||
       ledger.sourceId !== decision.proposal.request.intent.current.primarySourceId ||
       ledger.pagePath !== decision.proposal.request.pagePath ||
       ledger.windowsPathKey !== toWindowsPathKey(decision.proposal.request.pagePath) ||
-      ledger.baseContentHash !== decision.acceptanceAuthority.manifestBaseHash ||
-      ledger.baseContentHash !== decision.acceptanceAuthority.vaultObservedBeforeHash ||
+      ledger.sourceAppliedContentHash !== decision.acceptanceAuthority.manifestBaseHash ||
+      ledger.previousEffectiveContentHash !==
+        decision.acceptanceAuthority.vaultObservedBeforeHash ||
       ledger.originalValidationReceiptDigest !== decision.validationReceiptDigest ||
       ledger.appliedAt < decision.acceptedAt ||
-      owners.length !== 1 ||
-      owner?.bundleId !== ledger.bundleId ||
-      owner?.source.sourceId !== ledger.sourceId ||
-      owner.page.path !== ledger.pagePath ||
-      owner.page.ownership !== "generated" ||
-      owner.page.contentHash !== ledger.baseContentHash ||
-      overlay.sourceId !== ledger.sourceId ||
-      overlay.pagePath !== ledger.pagePath ||
-      overlay.sourceBaseDigest !== ledger.sourceBaseDigest ||
-      overlay.baseContentHash !== ledger.baseContentHash ||
-      overlay.effectiveContentHash !== ledger.effectiveContentHash ||
-      overlay.forwardTransactionId !== ledger.transactionId ||
-      overlay.acceptedDecisionDigest !== ledger.acceptedDecisionDigest ||
-      overlay.forwardLedgerIdentityDigest !== ledger.forwardLedgerIdentityDigest ||
-      overlay.appliedAt !== ledger.appliedAt ||
       decision.afterContent.length === 0 ||
-      decision.acceptedAfterHash !== ledger.effectiveContentHash
+      decision.acceptedAfterHash !== ledger.effectiveContentHash ||
+      ledgersByIdentity.has(ledger.forwardLedgerIdentityDigest) ||
+      ledgersByTransaction.has(ledger.transactionId)
     ) {
       throw new KnowledgeRuntimeStoreCorruptError();
     }
-    overlays.delete(ledger.windowsPathKey);
+    ledgersByIdentity.set(ledger.forwardLedgerIdentityDigest, ledger);
+    ledgersByTransaction.set(ledger.transactionId, ledger);
+    ledgerAcceptedKeys.set(
+      ledger.forwardLedgerIdentityDigest,
+      createForwardRevisionAcceptedLifecycleKey(ledger)
+    );
+  }
+
+  const abandonmentByAcceptedKey = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>
+  >();
+  for (const abandonment of state.forwardRevisionAbandonments) {
+    const accepted = findAccepted({
+      bundleId: abandonment.acceptedIdentity.resource.bundleId,
+      proposalId: abandonment.acceptedIdentity.proposalId,
+      proposalDigest: abandonment.acceptedIdentity.proposalDigest,
+      acceptedDecisionDigest: abandonment.acceptedIdentity.acceptedDecisionDigest,
+      applyClaimId: abandonment.acceptedIdentity.applyClaimId,
+      applyClaimDigest: abandonment.acceptedIdentity.applyClaimDigest,
+    });
+    if (
+      !accepted ||
+      abandonment.acceptedIdentity.resource.runtimeId !== state.runtimeId ||
+      !exactJsonValuesEqual(
+        abandonment.acceptedIdentity,
+        createForwardRevisionAcceptedClaimIdentityForDecision(state.runtimeId, accepted.decision)
+      )
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    const key = createForwardRevisionAcceptedLifecycleKey({
+      bundleId: abandonment.acceptedIdentity.resource.bundleId,
+      proposalId: abandonment.acceptedIdentity.proposalId,
+      proposalDigest: abandonment.acceptedIdentity.proposalDigest,
+      acceptedDecisionDigest: abandonment.acceptedIdentity.acceptedDecisionDigest,
+      applyClaimId: abandonment.acceptedIdentity.applyClaimId,
+      applyClaimDigest: abandonment.acceptedIdentity.applyClaimDigest,
+    });
+    if (abandonmentByAcceptedKey.has(key)) throw new KnowledgeRuntimeStoreCorruptError();
+    abandonmentByAcceptedKey.set(key, abandonment);
+  }
+
+  const recoveryByAcceptedKey = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>
+  >();
+  for (const terminal of state.forwardRevisionRecoveryTerminals) {
+    const identity = terminal.acceptedIdentity;
+    const accepted = findAccepted({
+      bundleId: identity.resource.bundleId,
+      proposalId: identity.proposalId,
+      proposalDigest: identity.proposalDigest,
+      acceptedDecisionDigest: identity.acceptedDecisionDigest,
+      applyClaimId: identity.applyClaimId,
+      applyClaimDigest: identity.applyClaimDigest,
+    });
+    if (
+      !accepted ||
+      identity.resource.runtimeId !== state.runtimeId ||
+      !exactJsonValuesEqual(
+        identity,
+        createForwardRevisionAcceptedClaimIdentityForDecision(state.runtimeId, accepted.decision)
+      )
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    const key = createForwardRevisionAcceptedLifecycleKey({
+      bundleId: identity.resource.bundleId,
+      proposalId: identity.proposalId,
+      proposalDigest: identity.proposalDigest,
+      acceptedDecisionDigest: identity.acceptedDecisionDigest,
+      applyClaimId: identity.applyClaimId,
+      applyClaimDigest: identity.applyClaimDigest,
+    });
+    if (recoveryByAcceptedKey.has(key) || abandonmentByAcceptedKey.has(key)) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    recoveryByAcceptedKey.set(key, terminal);
+  }
+
+  const outgoingByLedgerIdentity = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionSupersessionRecordV1>
+  >();
+  const incomingByLedgerIdentity = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionSupersessionRecordV1>
+  >();
+  const activeForwardHeadsBySource = new Map<
+    string,
+    Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecord>>
+  >();
+  const supersessionIds = new Set<string>();
+  const supersessionSuccessorKeys = new Set<string>();
+  for (const supersession of state.forwardRevisionSupersessions) {
+    const successorKey = canonicalizeJson(supersession.successor);
+    if (
+      supersessionIds.has(supersession.supersessionId) ||
+      supersessionSuccessorKeys.has(successorKey)
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    supersessionIds.add(supersession.supersessionId);
+    supersessionSuccessorKeys.add(successorKey);
+    const predecessor = ledgersByIdentity.get(supersession.predecessor.ledgerIdentityDigest);
+    if (
+      !predecessor ||
+      outgoingByLedgerIdentity.has(predecessor.forwardLedgerIdentityDigest) ||
+      !exactJsonValuesEqual(
+        supersession.predecessor,
+        createForwardRevisionLedgerLineageRefForLedger(predecessor)
+      )
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    if (supersession.successor.ledgerKind === "forward_revision_apply") {
+      const successor = ledgersByIdentity.get(supersession.successor.ledgerIdentityDigest);
+      if (
+        !successor ||
+        incomingByLedgerIdentity.has(successor.forwardLedgerIdentityDigest) ||
+        !exactJsonValuesEqual(
+          supersession.successor,
+          createForwardRevisionLedgerLineageRefForLedger(successor)
+        )
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      incomingByLedgerIdentity.set(successor.forwardLedgerIdentityDigest, supersession);
+    } else {
+      const sourceLedger = state.applyCommits.find(
+        (candidate) => candidate.transactionId === supersession.successor.transactionId
+      );
+      if (
+        !sourceLedger ||
+        !exactJsonValuesEqual(
+          supersession.successor,
+          projectSourceApplyPageLedgerLineageRef(
+            state,
+            sourceLedger,
+            supersession.predecessor.resource.pagePath
+          )
+        )
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+    outgoingByLedgerIdentity.set(predecessor.forwardLedgerIdentityDigest, supersession);
+  }
+
+  for (const ledger of state.forwardRevisionApplyCommits) {
+    const incoming = incomingByLedgerIdentity.get(ledger.forwardLedgerIdentityDigest);
+    if (!incoming && ledger.previousEffectiveContentHash !== ledger.sourceAppliedContentHash) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    const overlay = overlays.get(ledger.windowsPathKey);
+    const ownsOverlay =
+      overlay !== undefined && forwardRevisionOverlayMatchesLedger(overlay, ledger);
+    const outgoing = outgoingByLedgerIdentity.get(ledger.forwardLedgerIdentityDigest);
+    const acceptedKey = ledgerAcceptedKeys.get(ledger.forwardLedgerIdentityDigest)!;
+    const recovery = recoveryByAcceptedKey.get(acceptedKey);
+    const committedRecovery =
+      recovery?.outcome === "committed_then_external_supersession" &&
+      recovery.journal.transactionId === ledger.transactionId &&
+      recovery.journal.beforeHash === ledger.previousEffectiveContentHash &&
+      recovery.journal.afterHash === ledger.effectiveContentHash &&
+      recovery.journal.committedAt === ledger.appliedAt;
+    const terminalCount =
+      Number(ownsOverlay) + Number(outgoing !== undefined) + Number(committedRecovery);
+    if (terminalCount !== 1 || (recovery !== undefined && !committedRecovery)) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    if (ownsOverlay) {
+      const owners = pageOwners.get(ledger.windowsPathKey) ?? [];
+      const owner = owners[0];
+      if (
+        owners.length !== 1 ||
+        owner?.bundleId !== ledger.bundleId ||
+        owner.source.sourceId !== ledger.sourceId ||
+        owner.page.path !== ledger.pagePath ||
+        owner.page.ownership !== "generated" ||
+        owner.page.contentHash !== ledger.sourceAppliedContentHash
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      const sourceKey = `${ledger.bundleId}\u0000${ledger.sourceId}`;
+      const heads =
+        activeForwardHeadsBySource.get(sourceKey) ??
+        new Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecord>>();
+      heads.set(ledger.windowsPathKey, ledger);
+      activeForwardHeadsBySource.set(sourceKey, heads);
+      overlays.delete(ledger.windowsPathKey);
+    }
   }
   if (overlays.size > 0) throw new KnowledgeRuntimeStoreCorruptError();
 
-  if (state.activeForwardRevisionApply === null) return;
+  for (const sourceLedger of state.applyCommits) {
+    const sourceKey = `${sourceLedger.bundleId}\u0000${sourceLedger.sourceId}`;
+    const activeHeads = activeForwardHeadsBySource.get(sourceKey);
+    if (
+      !activeHeads ||
+      ![...activeHeads.values()].some(
+        (forwardLedger) => sourceLedger.manifestAfterRevision > forwardLedger.manifestAfterRevision
+      )
+    ) {
+      continue;
+    }
+    const accepted = requireAcceptedSourceApplyRecordForLedger(state, sourceLedger);
+    for (const change of accepted.acceptedChangeSet.changes) {
+      const forwardLedger = activeHeads.get(toWindowsPathKey(change.path));
+      if (
+        forwardLedger &&
+        sourceLedger.manifestAfterRevision > forwardLedger.manifestAfterRevision
+      ) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+    }
+  }
+
+  for (const ledger of state.forwardRevisionApplyCommits) {
+    const seen = new Set<string>();
+    let current: Readonly<KnowledgeForwardRevisionApplyLedgerRecord> | undefined = ledger;
+    while (current) {
+      if (seen.has(current.forwardLedgerIdentityDigest)) {
+        throw new KnowledgeRuntimeStoreCorruptError();
+      }
+      seen.add(current.forwardLedgerIdentityDigest);
+      const edge = outgoingByLedgerIdentity.get(current.forwardLedgerIdentityDigest);
+      current =
+        edge?.successor.ledgerKind === "forward_revision_apply"
+          ? ledgersByIdentity.get(edge.successor.ledgerIdentityDigest)
+          : undefined;
+    }
+  }
+
+  const acceptedLedgerKeys = [...ledgerAcceptedKeys.values()];
+  for (const [key, recovery] of recoveryByAcceptedKey) {
+    const hasLedger = acceptedLedgerKeys.includes(key);
+    if (recovery.outcome === "committed_then_external_supersession" ? !hasLedger : hasLedger) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  }
+  for (const key of abandonmentByAcceptedKey.keys()) {
+    if (acceptedLedgerKeys.includes(key) || recoveryByAcceptedKey.has(key)) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  }
+
+  if (state.activeForwardRevisionApply === null) {
+    return;
+  }
   const journal = snapshotKnowledgeForwardRevisionApplyJournal(state.activeForwardRevisionApply);
   const accepted = findAccepted(journal);
   const manifest = manifests.get(journal.bundleId);
   if (!accepted || !manifest) throw new KnowledgeRuntimeStoreCorruptError();
   const owners = pageOwners.get(journal.windowsPathKey) ?? [];
   const owner = owners[0];
-  const sourceBase = getSourceBase(journal.bundleId, journal.sourceId);
+  const sourceBase = recomputeForwardRevisionSourceBase(state, manifest, journal.sourceId);
+  const effectivePage = projectKnowledgeEffectiveManifestPages(manifest).find(
+    (page) => page.windowsPathKey === journal.windowsPathKey
+  );
+  const journalAcceptedKey = createForwardRevisionAcceptedLifecycleKey(journal);
   const requiredRemainingRevisions =
     journal.phase === "prepared"
       ? 3
@@ -2649,11 +3578,8 @@ function assertForwardRevisionApplySemantics(
     state.forwardRevisionApplyCommits.some(
       (ledger) => ledger.transactionId === journal.transactionId
     ) ||
-    [...manifests.values()].some((candidateManifest) =>
-      listManifestForwardRevisionOverlays(candidateManifest).some(
-        (overlay) => overlay.windowsPathKey === journal.windowsPathKey
-      )
-    ) ||
+    abandonmentByAcceptedKey.has(journalAcceptedKey) ||
+    recoveryByAcceptedKey.has(journalAcceptedKey) ||
     manifest.revision !== journal.manifestBeforeRevision ||
     createSourceManifestDigest(manifest) !== journal.manifestBeforeDigest ||
     owners.length !== 1 ||
@@ -2661,15 +3587,46 @@ function assertForwardRevisionApplySemantics(
     owner?.source.sourceId !== journal.sourceId ||
     owner.page.path !== journal.pagePath ||
     owner.page.ownership !== "generated" ||
-    owner.page.contentHash !== journal.beforeHash ||
+    owner.page.contentHash !== journal.sourceAppliedContentHash ||
+    !effectivePage ||
+    effectivePage.path !== journal.pagePath ||
+    effectivePage.ownership !== "generated" ||
+    effectivePage.sourceIds.length !== 1 ||
+    effectivePage.sourceIds[0] !== journal.sourceId ||
+    effectivePage.sourceAppliedContentHash !== journal.sourceAppliedContentHash ||
+    effectivePage.effectiveContentHash !== journal.previousEffectiveContentHash ||
     journal.acceptedDecisionDigest !== accepted.decision.acceptedDecisionDigest ||
     !exactJsonValuesEqual(journal.acceptedDecision, accepted.decision) ||
     journal.revalidationReceipt.runtimeRevision < accepted.decidedRuntimeRevision ||
     journal.revalidationReceipt.runtimeRevision > state.revision - journal.revision - 1 ||
     journal.afterHash !== accepted.decision.acceptedAfterHash ||
     !sourceBase ||
-    createKnowledgeForwardRevisionSourceBaseDigest(sourceBase) !== journal.sourceBaseDigest
+    createKnowledgeForwardRevisionSourceBaseDigest(sourceBase) !== journal.sourceBaseDigest ||
+    journal.sourceAppliedContentHash !== accepted.decision.acceptanceAuthority.manifestBaseHash ||
+    journal.previousEffectiveContentHash !==
+      accepted.decision.acceptanceAuthority.vaultObservedBeforeHash
   ) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+
+  const predecessorOverlay = listManifestForwardRevisionOverlays(manifest).find(
+    (overlay) => overlay.windowsPathKey === journal.windowsPathKey
+  );
+  if (predecessorOverlay) {
+    const predecessor = state.forwardRevisionApplyCommits.find((ledger) =>
+      forwardRevisionOverlayMatchesLedger(predecessorOverlay, ledger)
+    );
+    if (
+      !predecessor ||
+      journal.createdAt < predecessor.appliedAt ||
+      outgoingByLedgerIdentity.has(predecessor.forwardLedgerIdentityDigest) ||
+      recoveryByAcceptedKey.has(
+        ledgerAcceptedKeys.get(predecessor.forwardLedgerIdentityDigest) ?? ""
+      )
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  } else if (journal.previousEffectiveContentHash !== journal.sourceAppliedContentHash) {
     throw new KnowledgeRuntimeStoreCorruptError();
   }
 }
@@ -3646,6 +4603,12 @@ interface CapturedForwardRevisionPublicationEvidence {
   vaultObservedBeforeHash: string;
 }
 
+/** Monotonic timestamp floors re-proved while publishing one Forward proposal. */
+interface ForwardRevisionPublicationTimeFloors {
+  readonly sourceFreshnessCompletedAt: number;
+  readonly lineageAppliedAtFloor: number;
+}
+
 /** Reads one exact plain record entirely through own enumerable data descriptors. */
 function snapshotExactDataRecord(
   value: unknown,
@@ -4015,19 +4978,22 @@ function freezeAppliedProvenanceSnapshot(
 
 /** Creates one detached deeply frozen current generated-page projection. */
 function freezeRuntimeFreshnessGeneratedPages(
+  manifest: SourceManifest,
   entry: SourceManifestEntry
 ): readonly Readonly<KnowledgeRuntimeFreshnessGeneratedPage>[] {
-  const pages = (entry.lastSuccessful?.generatedPages ?? []).map((page) => {
-    if (page.contentHash === undefined) {
-      throw new KnowledgeRuntimeStoreCorruptError();
-    }
-    return Object.freeze({
-      path: page.path,
-      windowsPathKey: toWindowsPathKey(page.path),
-      ownership: page.ownership,
-      contentHash: page.contentHash,
-    });
-  });
+  const pages = projectKnowledgeEffectiveManifestPages(manifest)
+    .filter((page) => page.sourceIds.includes(entry.sourceId))
+    .map((page) =>
+      Object.freeze({
+        path: page.path,
+        windowsPathKey: page.windowsPathKey,
+        ownership: page.ownership,
+        sourceAppliedContentHash: page.sourceAppliedContentHash,
+        effectiveContentHash: page.effectiveContentHash,
+        contentHash: page.effectiveContentHash,
+        origin: page.origin,
+      })
+    );
   pages.sort(
     (left, right) =>
       compareIdentifiers(left.windowsPathKey, right.windowsPathKey) ||
@@ -4102,7 +5068,7 @@ function projectRuntimeSourceFreshnessAuthority(
 
   const runtimeDigest = sha256(canonicalizeJson(state as unknown as JsonValue));
   const manifestDigest = createSourceManifestDigest(manifest);
-  const generatedPages = freezeRuntimeFreshnessGeneratedPages(entry);
+  const generatedPages = freezeRuntimeFreshnessGeneratedPages(manifest, entry);
   const common = {
     version: KNOWLEDGE_RUNTIME_SOURCE_FRESHNESS_AUTHORITY_VERSION,
     runtimeId: state.runtimeId,
@@ -4160,39 +5126,60 @@ function projectRuntimeSourceFreshnessAuthority(
   return freezeRuntimeSourceFreshnessAuthority(authority);
 }
 
+/** Exact historical writer candidate selected before cloning its citations. */
+interface AppliedSourceCommitCandidate {
+  ledger: KnowledgeApplyCommitLedgerRecord;
+  record: AcceptedChangeSetReviewRecord;
+  entry: SourceManifestEntry;
+}
+
+/** Exact accepted commit retained internally while projecting current pages. */
+interface AppliedSourceCommitEvidence {
+  provenance: Readonly<KnowledgeRuntimeAppliedSourceProvenance>;
+}
+
 /**
- * Resolves one current source to exactly one latest ledger and accepted Review.
+ * Rejoins one historical source ledger to one direct accepted Review lookup.
  *
- * @param state - Complete strict Runtime snapshot
+ * @param ledger - Historical source Apply ledger under proof
  * @param manifest - Current strict Bundle Manifest
- * @param review - Current strict Review snapshot, or undefined when absent
+ * @param record - Direct accepted Review lookup, or undefined when absent
  * @param entry - Current Manifest source entry
- * @returns Accepted source commit evidence, or undefined when proof is incomplete
+ * @returns Exact historical writer candidate, or undefined when the join fails
  */
-function projectAppliedSourceCommitEvidence(
-  state: KnowledgeRuntimeStoreSnapshot,
+function projectAppliedSourceCommitCandidate(
+  ledger: KnowledgeApplyCommitLedgerRecord,
   manifest: SourceManifest,
-  review: ChangeSetReviewSnapshot | undefined,
+  record: AcceptedChangeSetReviewRecord | undefined,
   entry: SourceManifestEntry
-): AppliedSourceCommitEvidence | undefined {
-  if (!entry.lastSuccessful || !review) return undefined;
-  const ledger = findLatestSourceApplyLedger(state.applyCommits, manifest.bundleId, entry.sourceId);
-  if (!ledger || !ledgerMatchesCurrentManifestEntry(ledger, manifest.bundleId, entry)) {
+): AppliedSourceCommitCandidate | undefined {
+  if (
+    !entry.lastSuccessful ||
+    !record ||
+    ledger.bundleId !== manifest.bundleId ||
+    ledger.sourceId !== entry.sourceId ||
+    !ledgerMatchesAcceptedRecord(ledger, manifest.bundleId, record)
+  ) {
     return undefined;
   }
-  const accepted = review.records.filter(
-    (record): record is AcceptedChangeSetReviewRecord =>
-      record.outcome === "accepted" &&
-      ledgerMatchesAcceptedRecord(ledger, manifest.bundleId, record)
-  );
-  if (accepted.length !== 1) return undefined;
-  const record = accepted[0];
+  return { ledger, record, entry };
+}
+
+/**
+ * Clones exact source citations only after a historical writer wins a current page key.
+ *
+ * @param candidate - Exact ledger, Review, and current source join
+ * @returns Detached accepted source evidence, or undefined without source citations
+ */
+function createAppliedSourceCommitEvidence(
+  candidate: AppliedSourceCommitCandidate
+): AppliedSourceCommitEvidence | undefined {
+  const { ledger, record, entry } = candidate;
   const citations = record.acceptedChangeSet.citations
     .filter((citation) => citation.locator.sourceId === entry.sourceId)
     .map((citation) => cloneJson(citation));
   if (citations.length === 0) return undefined;
   return {
-    record,
     provenance: freezeAppliedSourceProvenance({
       sourceId: entry.sourceId,
       sourcePath: entry.sourcePath,
@@ -4208,53 +5195,156 @@ function projectAppliedSourceCommitEvidence(
   };
 }
 
-/** Exact accepted commit retained internally while projecting current pages. */
-interface AppliedSourceCommitEvidence {
-  record: AcceptedChangeSetReviewRecord;
-  provenance: Readonly<KnowledgeRuntimeAppliedSourceProvenance>;
-}
-
 /**
- * Proves that an accepted commit wrote this exact current page version.
+ * Creates one collision-free lookup key for exact source/page-base evidence.
  *
- * Retained Manifest pages that were not changed by the latest source commit are
- * intentionally excluded because that Review's citations cannot ground them.
- *
- * @param evidence - Exact latest ledger-backed accepted Review
- * @param sourceId - Manifest source claiming the current page
- * @param page - Current content-addressed Manifest page
- * @returns Whether one exact accepted create/update produced this page version
+ * @param sourceId - Manifest source claiming the page
+ * @param windowsPathKey - Windows-normalized page identity
+ * @param sourceAppliedContentHash - Current source-applied page base hash
+ * @returns Canonical evidence lookup key
  */
-function acceptedCommitWroteCurrentPage(
-  evidence: AppliedSourceCommitEvidence,
+function createAppliedSourcePageEvidenceKey(
   sourceId: string,
-  page: Pick<KnowledgeRuntimeAppliedPageProvenance, "path" | "contentHash">
-): boolean {
-  const windowsPathKey = toWindowsPathKey(page.path);
-  const matches = evidence.record.acceptedChangeSet.changes.filter(
-    (change) =>
-      (change.operation === "create" || change.operation === "update") &&
-      toWindowsPathKey(change.path) === windowsPathKey &&
-      change.afterHash === page.contentHash &&
-      change.sourceRefs.includes(sourceId)
-  );
-  return matches.length === 1;
-}
-
-/** Mutable grouping used only while de-duplicating current Manifest pages. */
-interface AppliedPageAccumulator {
-  path: string;
-  windowsPathKey: string;
-  ownership: GeneratedPageOwnership;
-  contentHash: string;
-  sourceIds: Set<string>;
+  windowsPathKey: string,
+  sourceAppliedContentHash: string
+): string {
+  return canonicalizeJson([sourceId, windowsPathKey, sourceAppliedContentHash]);
 }
 
 /**
- * Projects current pages with at least one exact accepted current-version writer.
+ * Indexes each source's latest retained Apply ledger in one complete pass.
  *
- * Shared pages conservatively retain only writers whose own committed change
- * proves the current after-hash; historical co-owners are not projected.
+ * @param records - Complete append-only Apply ledger
+ * @param bundleId - Bundle whose current source anchors are required
+ * @returns Latest Manifest-revision ledger keyed by source id
+ */
+function indexLatestSourceApplyLedgers(
+  records: readonly KnowledgeApplyCommitLedgerRecord[],
+  bundleId: string
+): ReadonlyMap<string, KnowledgeApplyCommitLedgerRecord> {
+  const latestBySourceId = new Map<string, KnowledgeApplyCommitLedgerRecord>();
+  for (const record of records) {
+    if (record.bundleId !== bundleId) continue;
+    const current = latestBySourceId.get(record.sourceId);
+    if (!current || record.manifestAfterRevision > current.manifestAfterRevision) {
+      latestBySourceId.set(record.sourceId, record);
+    }
+  }
+  return latestBySourceId;
+}
+
+/**
+ * Indexes the newest historical exact writer for every current active source page base.
+ *
+ * Each active source is first anchored to its exact latest Manifest success. Historical
+ * ledgers can then ground retained pages only through one exact accepted create/update,
+ * matching source id, Windows path, after hash, and non-empty source citations.
+ *
+ * @param state - Complete strict Runtime snapshot
+ * @param manifest - Current strict Bundle Manifest
+ * @param review - Current strict Review snapshot, or undefined when absent
+ * @param pages - Current effective Manifest pages whose source bases need evidence
+ * @returns Exact historical evidence keyed by source, page, and source-applied hash
+ */
+function projectAppliedSourcePageEvidenceIndex(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest,
+  review: ChangeSetReviewSnapshot | undefined,
+  pages: readonly Readonly<KnowledgeEffectiveManifestPage>[]
+): ReadonlyMap<string, AppliedSourceCommitEvidence> {
+  const evidenceByPage = new Map<string, AppliedSourceCommitEvidence>();
+  if (!review) return evidenceByPage;
+
+  const wantedPageKeys = new Set<string>();
+  for (const page of pages) {
+    for (const sourceId of page.sourceIds) {
+      wantedPageKeys.add(
+        createAppliedSourcePageEvidenceKey(
+          sourceId,
+          page.windowsPathKey,
+          page.sourceAppliedContentHash
+        )
+      );
+    }
+  }
+  if (wantedPageKeys.size === 0) return evidenceByPage;
+
+  const latestBySourceId = indexLatestSourceApplyLedgers(state.applyCommits, manifest.bundleId);
+  const activeSources = new Map<string, SourceManifestEntry>();
+  for (const entry of manifest.entries) {
+    if (!entry.lastSuccessful) continue;
+    const latest = latestBySourceId.get(entry.sourceId);
+    if (latest && ledgerMatchesCurrentManifestEntry(latest, manifest.bundleId, entry)) {
+      activeSources.set(entry.sourceId, entry);
+    }
+  }
+
+  const acceptedByChangeSetId = new Map<string, AcceptedChangeSetReviewRecord>();
+  for (const record of review.records) {
+    if (record.outcome !== "accepted") continue;
+    if (acceptedByChangeSetId.has(record.changeSetId)) return evidenceByPage;
+    acceptedByChangeSetId.set(record.changeSetId, record);
+  }
+
+  const winningCandidateByPage = new Map<string, AppliedSourceCommitCandidate>();
+  for (const ledger of state.applyCommits) {
+    if (ledger.bundleId !== manifest.bundleId) continue;
+    const entry = activeSources.get(ledger.sourceId);
+    if (!entry) continue;
+    const candidate = projectAppliedSourceCommitCandidate(
+      ledger,
+      manifest,
+      acceptedByChangeSetId.get(ledger.changeSetId),
+      entry
+    );
+    if (!candidate) continue;
+
+    const matchingChangeCounts = new Map<string, number>();
+    for (const change of candidate.record.acceptedChangeSet.changes) {
+      if (
+        (change.operation !== "create" && change.operation !== "update") ||
+        !change.sourceRefs.includes(ledger.sourceId)
+      ) {
+        continue;
+      }
+      const key = createAppliedSourcePageEvidenceKey(
+        ledger.sourceId,
+        toWindowsPathKey(change.path),
+        change.afterHash
+      );
+      if (!wantedPageKeys.has(key)) continue;
+      matchingChangeCounts.set(key, (matchingChangeCounts.get(key) ?? 0) + 1);
+    }
+    for (const [key, count] of matchingChangeCounts) {
+      if (count !== 1) continue;
+      const current = winningCandidateByPage.get(key);
+      if (
+        !current ||
+        candidate.ledger.manifestAfterRevision > current.ledger.manifestAfterRevision
+      ) {
+        winningCandidateByPage.set(key, candidate);
+      }
+    }
+  }
+
+  const evidenceByTransactionId = new Map<string, AppliedSourceCommitEvidence | null>();
+  for (const [key, candidate] of winningCandidateByPage) {
+    let evidence = evidenceByTransactionId.get(candidate.ledger.transactionId);
+    if (evidence === undefined) {
+      evidence = createAppliedSourceCommitEvidence(candidate) ?? null;
+      evidenceByTransactionId.set(candidate.ledger.transactionId, evidence);
+    }
+    if (evidence) evidenceByPage.set(key, evidence);
+  }
+  return evidenceByPage;
+}
+
+/**
+ * Projects current effective pages with exact accepted source-base evidence.
+ *
+ * A forward revision changes the current page bytes but does not manufacture
+ * new source evidence. Its contributing citations therefore remain explicitly
+ * bound to the last genuine source-applied base hash.
  *
  * @param state - Complete strict Runtime snapshot
  * @param manifest - Current strict Bundle Manifest
@@ -4266,45 +5356,25 @@ function projectAppliedManifestPages(
   manifest: SourceManifest,
   review: ChangeSetReviewSnapshot | undefined
 ): readonly Readonly<KnowledgeRuntimeAppliedPageProvenance>[] {
-  const sourceEvidence = new Map<string, AppliedSourceCommitEvidence>();
-  const pages = new Map<string, AppliedPageAccumulator>();
-  for (const entry of manifest.entries) {
-    const evidence = projectAppliedSourceCommitEvidence(state, manifest, review, entry);
-    if (evidence) sourceEvidence.set(entry.sourceId, evidence);
-    for (const page of entry.lastSuccessful?.generatedPages ?? []) {
-      if (page.contentHash === undefined) throw new KnowledgeRuntimeStoreCorruptError();
-      const windowsPathKey = toWindowsPathKey(page.path);
-      const existing = pages.get(windowsPathKey);
-      if (!existing) {
-        pages.set(windowsPathKey, {
-          path: page.path,
-          windowsPathKey,
-          ownership: page.ownership,
-          contentHash: page.contentHash,
-          sourceIds: new Set([entry.sourceId]),
-        });
-        continue;
-      }
-      if (
-        existing.path !== page.path ||
-        existing.ownership !== page.ownership ||
-        existing.contentHash !== page.contentHash ||
-        existing.sourceIds.has(entry.sourceId)
-      ) {
-        throw new KnowledgeRuntimeStoreCorruptError();
-      }
-      existing.sourceIds.add(entry.sourceId);
-    }
-  }
+  const effectivePages = projectKnowledgeEffectiveManifestPages(manifest);
+  const sourceEvidence = projectAppliedSourcePageEvidenceIndex(
+    state,
+    manifest,
+    review,
+    effectivePages
+  );
 
   const projectedPages: Readonly<KnowledgeRuntimeAppliedPageProvenance>[] = [];
-  for (const page of pages.values()) {
-    const sourceIds = [...page.sourceIds].sort(compareIdentifiers);
-    const sources = sourceIds.flatMap((sourceId) => {
-      const evidence = sourceEvidence.get(sourceId);
-      return evidence && acceptedCommitWroteCurrentPage(evidence, sourceId, page)
-        ? [evidence.provenance]
-        : [];
+  for (const page of effectivePages) {
+    const sources = page.sourceIds.flatMap((sourceId) => {
+      const evidence = sourceEvidence.get(
+        createAppliedSourcePageEvidenceKey(
+          sourceId,
+          page.windowsPathKey,
+          page.sourceAppliedContentHash
+        )
+      );
+      return evidence ? [evidence.provenance] : [];
     });
     if (sources.length === 0) continue;
     projectedPages.push(
@@ -4312,7 +5382,10 @@ function projectAppliedManifestPages(
         path: page.path,
         windowsPathKey: page.windowsPathKey,
         ownership: page.ownership,
-        contentHash: page.contentHash,
+        sourceAppliedContentHash: page.sourceAppliedContentHash,
+        effectiveContentHash: page.effectiveContentHash,
+        contentHash: page.effectiveContentHash,
+        origin: page.origin,
         sources,
       })
     );
@@ -4342,49 +5415,31 @@ function projectKnownAppliedWikiCurrentManifestPage(
   if (manifest.entries.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxManifestEntries) {
     throw new KnowledgeKnownAppliedWikiOutputLimitError("page_outputs");
   }
-  let pageCount = 0;
-  let matched: KnowledgeKnownAppliedWikiCurrentPage | undefined;
-  for (const entry of manifest.entries) {
-    const sourcePageKeys = new Set<string>();
-    for (const page of entry.lastSuccessful?.generatedPages ?? []) {
-      pageCount += 1;
-      if (pageCount > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPageOutputs) {
-        throw new KnowledgeKnownAppliedWikiOutputLimitError("page_outputs");
-      }
-      if (page.contentHash === undefined) throw new KnowledgeRuntimeStoreCorruptError();
-      if (
-        typeof page.path !== "string" ||
-        page.path.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPagePathCharacters
-      ) {
-        throw new KnowledgeKnownAppliedWikiOutputProjectionError();
-      }
-      const windowsPathKey = toWindowsPathKey(page.path);
-      if (sourcePageKeys.has(windowsPathKey)) throw new KnowledgeRuntimeStoreCorruptError();
-      sourcePageKeys.add(windowsPathKey);
-      if (windowsPathKey !== requestedKey) continue;
-      if (page.path !== pagePath) {
-        throw new KnowledgeRuntimeStoreCorruptError();
-      }
-      const candidate: KnowledgeKnownAppliedWikiCurrentPage = {
-        path: page.path,
-        windowsPathKey,
-        ownership: page.ownership,
-        contentHash: page.contentHash,
-      };
-      if (!matched) {
-        matched = candidate;
-        continue;
-      }
-      if (
-        matched.path !== candidate.path ||
-        matched.ownership !== candidate.ownership ||
-        matched.contentHash !== candidate.contentHash
-      ) {
-        throw new KnowledgeRuntimeStoreCorruptError();
-      }
-    }
+  const pageCount = manifest.entries.reduce(
+    (count, entry) => count + (entry.lastSuccessful?.generatedPages.length ?? 0),
+    0
+  );
+  if (pageCount > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPageOutputs) {
+    throw new KnowledgeKnownAppliedWikiOutputLimitError("page_outputs");
   }
-  return matched;
+  const matches = projectKnowledgeEffectiveManifestPages(manifest).filter(
+    (page) => page.windowsPathKey === requestedKey
+  );
+  if (matches.length === 0) return undefined;
+  const page = matches[0];
+  if (
+    matches.length !== 1 ||
+    page.path !== pagePath ||
+    page.path.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPagePathCharacters
+  ) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  return {
+    path: page.path,
+    windowsPathKey: page.windowsPathKey,
+    ownership: page.ownership,
+    contentHash: page.effectiveContentHash,
+  };
 }
 
 /**
@@ -5577,18 +6632,144 @@ function parseRuntimeV7StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnaps
 }
 
 /** Adds empty dedicated forward-Apply state through one atomic outer migration. */
-function migrateRuntimeV7ToV8Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+function migrateRuntimeV7ToV8Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV8 {
   const previous = parseRuntimeV7StoreSnapshot(value);
   if (previous.revision === Number.MAX_SAFE_INTEGER) {
     throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
   }
-  return parseKnowledgeRuntimeStoreSnapshot({
+  const migrated = {
     ...previous,
-    version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+    version: RUNTIME_V8_STORE_VERSION,
     revision: previous.revision + 1,
     activeForwardRevisionApply: null,
     forwardRevisionApplyCommits: [],
+  };
+  const parsed = runtimeV8StoreSnapshotSchema.safeParse(migrated);
+  if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
+  return cloneJson(parsed.data);
+}
+
+/** Strictly parses one Runtime-v8 envelope before lifecycle-lineage migration. */
+function parseRuntimeV8StoreSnapshot(value: unknown): KnowledgeRuntimeStoreSnapshotV8 {
+  const parsed = runtimeV8StoreSnapshotSchema.safeParse(value);
+  if (!parsed.success) throw new KnowledgeRuntimeStoreCorruptError();
+  const snapshot = parsed.data;
+  assertUniqueBundleSlots(snapshot.queues);
+  assertUniqueBundleSlots(snapshot.reviews);
+  assertUniqueBundleSlots(snapshot.forwardRevisionReviews);
+  assertUniqueBundleSlots(snapshot.manifests);
+  assertUniqueInputRevisionRecords(snapshot.inputRevisions);
+  assertUniqueApplyCommits(snapshot.applyCommits);
+  if (snapshot.activeTransaction !== null) {
+    const transaction = parseChangeSetTransactionJournal(snapshot.activeTransaction);
+    if (!transaction.ok || !validateChangeSetTransactionJournal(transaction.value).valid) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  }
+  if (snapshot.activeTransaction !== null && snapshot.activeForwardRevisionApply !== null) {
+    throw new KnowledgeRuntimeStoreCorruptError();
+  }
+  if (snapshot.activeForwardRevisionApply !== null) {
+    snapshotKnowledgeForwardRevisionApplyJournal(snapshot.activeForwardRevisionApply);
+  }
+  const legacyLedgers = snapshot.forwardRevisionApplyCommits.map((record) =>
+    snapshotKnowledgeForwardRevisionApplyLedgerRecordV1(record)
+  );
+  const ledgerIds = new Set<string>();
+  const transactionIds = new Set(snapshot.applyCommits.map((record) => record.transactionId));
+  const pageKeys = new Set<string>();
+  for (const ledger of legacyLedgers) {
+    if (
+      ledgerIds.has(ledger.ledgerId) ||
+      transactionIds.has(ledger.transactionId) ||
+      pageKeys.has(ledger.windowsPathKey)
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    ledgerIds.add(ledger.ledgerId);
+    transactionIds.add(ledger.transactionId);
+    pageKeys.add(ledger.windowsPathKey);
+  }
+  for (const slot of snapshot.forwardRevisionReviews) {
+    const review = parseKnowledgeForwardRevisionReviewSnapshotV2(slot.value);
+    if (!review.ok || review.value.bundleId !== slot.bundleId) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  }
+  for (const slot of snapshot.manifests) {
+    const manifest = parseSourceManifest(slot.value);
+    if (
+      !manifest.ok ||
+      !validateSourceManifest(manifest.value).valid ||
+      manifest.value.bundleId !== slot.bundleId
+    ) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    const overlays = manifest.value.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY];
+    if (overlays !== undefined && !parseKnowledgeForwardRevisionOverlayExtension(overlays).ok) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+  }
+  return cloneJson(snapshot);
+}
+
+/** Migrates v8 active heads into v9 retained source bases and empty terminal ledgers. */
+function migrateRuntimeV8ToV9Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+  const previous = parseRuntimeV8StoreSnapshot(value);
+  if (previous.revision === Number.MAX_SAFE_INTEGER) {
+    throw new KnowledgeRuntimeMigrationUnsafeError("revision_overflow");
+  }
+  const activeForwardRevisionApply =
+    previous.activeForwardRevisionApply === null
+      ? null
+      : snapshotKnowledgeForwardRevisionApplyJournal(previous.activeForwardRevisionApply);
+  const provisional: KnowledgeRuntimeStoreSnapshot = {
+    ...previous,
+    version: KNOWLEDGE_RUNTIME_STORE_VERSION,
+    revision: previous.revision + 1,
+    activeForwardRevisionApply,
+    forwardRevisionApplyCommits: [],
+    forwardRevisionSupersessions: [],
+    forwardRevisionAbandonments: [],
+    forwardRevisionRecoveryTerminals: [],
+  };
+  const manifests = new Map<string, SourceManifest>();
+  for (const slot of provisional.manifests) {
+    const parsed = parseSourceManifest(slot.value);
+    if (!parsed.ok || !validateSourceManifest(parsed.value).valid) {
+      throw new KnowledgeRuntimeStoreCorruptError();
+    }
+    manifests.set(slot.bundleId, parsed.value);
+  }
+  const migratedLedgers = previous.forwardRevisionApplyCommits.map((record) => {
+    const legacy = snapshotKnowledgeForwardRevisionApplyLedgerRecordV1(record);
+    const manifest = manifests.get(legacy.bundleId);
+    const sourceBase = manifest
+      ? recomputeForwardRevisionSourceBase(provisional, manifest, legacy.sourceId)
+      : undefined;
+    if (
+      !sourceBase ||
+      createKnowledgeForwardRevisionSourceBaseDigest(sourceBase) !== legacy.sourceBaseDigest
+    ) {
+      throw new KnowledgeRuntimeMigrationUnsafeError(
+        "forward_revision_source_base_unavailable",
+        legacy.bundleId
+      );
+    }
+    return migrateKnowledgeForwardRevisionApplyLedgerRecordV1(legacy, {
+      sourceBase,
+      manifestAfterDigest: legacy.manifestAfterDigest,
+    });
   });
+  return parseKnowledgeRuntimeStoreSnapshot({
+    ...provisional,
+    forwardRevisionApplyCommits: migratedLedgers,
+  });
+}
+
+/** Migrates one Runtime-v7 envelope through both supported forward lifecycle upgrades. */
+function migrateRuntimeV7ToV9Snapshot(value: unknown): KnowledgeRuntimeStoreSnapshot {
+  return migrateRuntimeV8ToV9Snapshot(migrateRuntimeV7ToV8Snapshot(value));
 }
 
 /**
@@ -6667,6 +7848,11 @@ function projectForwardRevisionProposalAuthority(
   }
   const manifest = manifestResult.value;
   const review = reviewResult.value;
+  const forwardReviewRaw = findForwardRevisionReviewSlot(state, query.bundleId);
+  const forwardRevisionReview =
+    forwardReviewRaw === null
+      ? undefined
+      : snapshotKnowledgeForwardRevisionReviewSnapshotV2(forwardReviewRaw);
   const currentManifestPage = projectKnownAppliedWikiCurrentManifestPage(manifest, query.pagePath);
   if (
     !currentManifestPage ||
@@ -6684,15 +7870,20 @@ function projectForwardRevisionProposalAuthority(
     pagePath: query.pagePath,
     applyCommits: state.applyCommits,
     review,
+    forwardRevisionApplyCommits: state.forwardRevisionApplyCommits,
+    forwardRevisionReview,
     manifestRevision: manifest.revision,
     currentManifestPage,
   });
-  const selectedItems = index.outputs.filter(
-    (item) =>
+  const selectedItems = index.outputs.filter((item) => {
+    const sourceOrigin = item.origins.find((origin) => origin.kind === "source_apply");
+    return (
       item.contentHash === query.selectedContentHash &&
-      item.newestAppliedAt === query.selectedAppliedAt &&
-      item.verifiedApplyCount === query.selectedVerifiedApplyCount
-  );
+      item.authority.origin === "source_apply" &&
+      sourceOrigin?.newestAppliedAt === query.selectedAppliedAt &&
+      sourceOrigin.verifiedApplyCount === query.selectedVerifiedApplyCount
+    );
+  });
   const currentItems = index.outputs.filter(
     (item) => item.contentHash === query.vaultObservedBeforeHash
   );
@@ -6700,6 +7891,7 @@ function projectForwardRevisionProposalAuthority(
   const selected = selectedItems[0];
   const historicalIdentity = selected.authority;
   if (
+    historicalIdentity.origin !== "source_apply" ||
     historicalIdentity.outputPath !== query.pagePath ||
     historicalIdentity.contentHash !== query.selectedContentHash ||
     historicalIdentity.appliedAt !== query.selectedAppliedAt
@@ -6708,6 +7900,9 @@ function projectForwardRevisionProposalAuthority(
   }
 
   const requestedKey = toWindowsPathKey(query.pagePath);
+  const effectivePage = projectKnowledgeEffectiveManifestPages(manifest).find(
+    (page) => page.windowsPathKey === requestedKey
+  );
   const owners = manifest.entries.flatMap((entry) =>
     (entry.lastSuccessful?.generatedPages ?? [])
       .filter((page) => toWindowsPathKey(page.path) === requestedKey)
@@ -6716,9 +7911,14 @@ function projectForwardRevisionProposalAuthority(
   if (owners.length !== 1) return null;
   const { entry: source, page: sourcePage } = owners[0];
   if (
+    !effectivePage ||
+    effectivePage.path !== query.pagePath ||
+    effectivePage.sourceIds.length !== 1 ||
+    effectivePage.sourceIds[0] !== source.sourceId ||
     sourcePage.path !== query.pagePath ||
     sourcePage.ownership !== "generated" ||
-    sourcePage.contentHash !== query.vaultObservedBeforeHash ||
+    sourcePage.contentHash !== effectivePage.sourceAppliedContentHash ||
+    effectivePage.effectiveContentHash !== query.vaultObservedBeforeHash ||
     findKnowledgeSourceRetirement(manifest, source.sourceId)
   ) {
     return null;
@@ -6825,7 +8025,7 @@ function projectForwardRevisionProposalAuthority(
       inputRevision: freshness.inputRevision,
       manifestRevision: manifest.revision,
       manifestDigest,
-      manifestBaseHash: query.vaultObservedBeforeHash,
+      manifestBaseHash: sourcePage.contentHash,
       vaultObservedBeforeHash: query.vaultObservedBeforeHash,
     },
   });
@@ -6864,6 +8064,7 @@ function projectForwardRevisionAcceptanceAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   manifest: SourceManifest,
   source: SourceManifestEntry,
+  manifestBaseHash: string,
   vaultObservedBeforeHash: string
 ): Readonly<KnowledgeForwardRevisionAcceptanceAuthority> | null {
   const freshness = projectRuntimeSourceFreshnessAuthority(state, manifest, source);
@@ -6888,7 +8089,7 @@ function projectForwardRevisionAcceptanceAuthority(
     runtimeDigest: freshness.runtimeDigest,
     manifestRevision: freshness.manifestRevision,
     manifestDigest: freshness.manifestDigest,
-    manifestBaseHash: vaultObservedBeforeHash,
+    manifestBaseHash,
     vaultObservedBeforeHash,
     currentSourceFreshness:
       freshness.kind === "applied"
@@ -6980,8 +8181,7 @@ function projectForwardRevisionValidationAuthority(
   const current = intent.current;
   if (
     manifest.revision !== current.manifestRevision ||
-    createSourceManifestDigest(manifest) !== current.manifestDigest ||
-    current.manifestBaseHash !== current.vaultObservedBeforeHash
+    createSourceManifestDigest(manifest) !== current.manifestDigest
   ) {
     return null;
   }
@@ -6993,7 +8193,16 @@ function projectForwardRevisionValidationAuthority(
   );
   if (owners.length !== 1) return null;
   const { source, page } = owners[0];
+  const effectivePage = projectKnowledgeEffectiveManifestPages(manifest).find(
+    (candidate) => candidate.windowsPathKey === requestedKey
+  );
   if (
+    !effectivePage ||
+    effectivePage.path !== query.pagePath ||
+    effectivePage.sourceIds.length !== 1 ||
+    effectivePage.sourceIds[0] !== source.sourceId ||
+    effectivePage.sourceAppliedContentHash !== current.manifestBaseHash ||
+    effectivePage.effectiveContentHash !== current.vaultObservedBeforeHash ||
     source.sourceId !== current.primarySourceId ||
     current.sourceIds.length !== 1 ||
     current.sourceIds[0] !== source.sourceId ||
@@ -7015,6 +8224,7 @@ function projectForwardRevisionValidationAuthority(
     state,
     manifest,
     source,
+    current.manifestBaseHash,
     current.vaultObservedBeforeHash
   );
   if (
@@ -7222,7 +8432,7 @@ function thisOrNullReview(value: unknown): ChangeSetReviewSnapshot | null {
 function assertForwardRevisionPublicationAuthority(
   state: KnowledgeRuntimeStoreSnapshot,
   evidence: Readonly<CapturedForwardRevisionPublicationEvidence>
-): number {
+): Readonly<ForwardRevisionPublicationTimeFloors> {
   const { intent } = evidence;
   function conflict(reason: KnowledgeForwardRevisionPublicationConflictReason): never {
     throw new KnowledgeForwardRevisionPublicationConflictError(intent.bundleId, reason);
@@ -7246,8 +8456,7 @@ function assertForwardRevisionPublicationAuthority(
   if (
     manifest.revision !== intent.current.manifestRevision ||
     createSourceManifestDigest(manifest) !== intent.current.manifestDigest ||
-    evidence.vaultObservedBeforeHash !== intent.current.manifestBaseHash ||
-    intent.current.vaultObservedBeforeHash !== intent.current.manifestBaseHash
+    evidence.vaultObservedBeforeHash !== intent.current.vaultObservedBeforeHash
   ) {
     conflict("current_authority_changed");
   }
@@ -7286,7 +8495,16 @@ function assertForwardRevisionPublicationAuthority(
       .filter((page) => toWindowsPathKey(page.path) === toWindowsPathKey(intent.pagePath))
       .map((page) => ({ sourceId: entry.sourceId, page }))
   );
+  const effectivePage = projectKnowledgeEffectiveManifestPages(manifest).find(
+    (page) => toWindowsPathKey(page.path) === toWindowsPathKey(intent.pagePath)
+  );
   if (
+    !effectivePage ||
+    effectivePage.path !== intent.pagePath ||
+    effectivePage.sourceAppliedContentHash !== intent.current.manifestBaseHash ||
+    effectivePage.effectiveContentHash !== intent.current.vaultObservedBeforeHash ||
+    effectivePage.sourceIds.length !== 1 ||
+    effectivePage.sourceIds[0] !== source.sourceId ||
     !source.lastSuccessful ||
     sourcePages?.length !== 1 ||
     sourcePages[0].path !== intent.pagePath ||
@@ -7420,14 +8638,18 @@ function assertForwardRevisionPublicationAuthority(
   ) {
     conflict("historical_authority_changed");
   }
-  return freshness.completedAt;
+  return Object.freeze({
+    sourceFreshnessCompletedAt: freshness.completedAt,
+    lineageAppliedAtFloor:
+      effectivePage.origin.kind === "forward_revision" ? effectivePage.origin.overlay.appliedAt : 0,
+  });
 }
 
 /** Groups forward-Apply ledgers by Bundle without exposing their values to hint listeners. */
 function groupForwardRevisionApplyCommitsByBundle(
-  records: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[]
-): ReadonlyMap<string, readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[]> {
-  const grouped = new Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[]>();
+  records: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]
+): ReadonlyMap<string, readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]> {
+  const grouped = new Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]>();
   for (const record of records) {
     const existing = grouped.get(record.bundleId);
     if (existing) existing.push(record);
@@ -7471,6 +8693,18 @@ function findStudioChangedBundleIds(
   }
   for (const bundleId of currentForwardCommits.keys()) bundleIds.add(bundleId);
   for (const bundleId of nextForwardCommits.keys()) bundleIds.add(bundleId);
+  for (const record of current.forwardRevisionAbandonments) {
+    bundleIds.add(record.acceptedIdentity.resource.bundleId);
+  }
+  for (const record of next.forwardRevisionAbandonments) {
+    bundleIds.add(record.acceptedIdentity.resource.bundleId);
+  }
+  for (const record of current.forwardRevisionRecoveryTerminals) {
+    bundleIds.add(record.acceptedIdentity.resource.bundleId);
+  }
+  for (const record of next.forwardRevisionRecoveryTerminals) {
+    bundleIds.add(record.acceptedIdentity.resource.bundleId);
+  }
   return [...bundleIds]
     .filter((bundleId) => {
       const currentActiveForwardApply =
@@ -7502,6 +8736,22 @@ function findStudioChangedBundleIds(
         !exactJsonValuesEqual(
           currentForwardCommits.get(bundleId) ?? [],
           nextForwardCommits.get(bundleId) ?? []
+        ) ||
+        !exactJsonValuesEqual(
+          current.forwardRevisionAbandonments.filter(
+            (record) => record.acceptedIdentity.resource.bundleId === bundleId
+          ),
+          next.forwardRevisionAbandonments.filter(
+            (record) => record.acceptedIdentity.resource.bundleId === bundleId
+          )
+        ) ||
+        !exactJsonValuesEqual(
+          current.forwardRevisionRecoveryTerminals.filter(
+            (record) => record.acceptedIdentity.resource.bundleId === bundleId
+          ),
+          next.forwardRevisionRecoveryTerminals.filter(
+            (record) => record.acceptedIdentity.resource.bundleId === bundleId
+          )
         )
       );
     })
@@ -7681,7 +8931,7 @@ function collectSourceRetirementBlockers(
 /** Reads all strict active forward overlays from one current Manifest. */
 function listManifestForwardRevisionOverlays(
   manifest: SourceManifest
-): readonly Readonly<KnowledgeForwardRevisionOverlayEntryV1>[] {
+): readonly Readonly<KnowledgeForwardRevisionOverlayEntry>[] {
   const raw = manifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY];
   if (raw === undefined) return Object.freeze([]);
   const parsed = parseKnowledgeForwardRevisionOverlayExtension(raw);
@@ -7696,31 +8946,53 @@ function sourceOwnsForwardRevisionOverlay(manifest: SourceManifest, sourceId: st
   );
 }
 
-/** Rejects an old Apply that overlaps any current dedicated forward overlay. */
-function assertLegacyApplyDoesNotOverlapForwardRevisionOverlay(
+/**
+ * Resolves the exact active forward overlays superseded by one ordinary Source Apply.
+ *
+ * Untouched overlays remain valid. A touched overlay is authorized only when the
+ * accepted file mutation names the same canonical page and primary source and
+ * compares against the exact effective forward head.
+ */
+function listSourceApplySupersededForwardRevisionOverlays(
   state: KnowledgeRuntimeStoreSnapshot,
   transaction: Pick<ChangeSetTransactionJournal, "bundleId" | "jobClaim" | "changeSet">
-): void {
-  const targetKeys = new Set(
-    transaction.changeSet.changes.map((change) => toWindowsPathKey(change.path))
+): readonly Readonly<KnowledgeForwardRevisionOverlayEntry>[] {
+  const changesByWindowsKey = new Map(
+    transaction.changeSet.changes.map((change) => [toWindowsPathKey(change.path), change] as const)
   );
+  const superseded: Readonly<KnowledgeForwardRevisionOverlayEntry>[] = [];
   for (const slot of state.manifests) {
     const parsed = parseSourceManifest(slot.value);
     if (!parsed.ok || !validateSourceManifest(parsed.value).valid) {
       throw new KnowledgeRuntimeStoreCorruptError();
     }
     for (const overlay of listManifestForwardRevisionOverlays(parsed.value)) {
+      const change = changesByWindowsKey.get(overlay.windowsPathKey);
+      if (change === undefined) continue;
       if (
-        (overlay.bundleId === transaction.bundleId &&
-          overlay.sourceId === transaction.jobClaim.sourceId) ||
-        targetKeys.has(overlay.windowsPathKey)
+        slot.bundleId !== transaction.bundleId ||
+        overlay.bundleId !== transaction.bundleId ||
+        overlay.sourceId !== transaction.jobClaim.sourceId ||
+        overlay.pagePath !== change.path ||
+        !change.sourceRefs.includes(transaction.jobClaim.sourceId) ||
+        (change.operation !== "update" && change.operation !== "delete") ||
+        change.beforeHash !== overlay.effectiveContentHash
       ) {
         throw new TransactionStorageAuthorityError(
-          "The legacy Apply overlaps protected forward revision state"
+          "The Source Apply does not exactly supersede the protected forward revision head"
         );
       }
+      superseded.push(overlay);
     }
   }
+  return Object.freeze(superseded);
+}
+
+/** Returns the logical timestamp floor owned by exact touched Forward heads. */
+function getSourceApplyForwardLineageTimestampFloor(
+  overlays: readonly Readonly<KnowledgeForwardRevisionOverlayEntry>[]
+): number {
+  return overlays.reduce((floor, overlay) => Math.max(floor, overlay.appliedAt), 0);
 }
 
 /** Projects every Queue field owned by one retired source for exact history comparison. */
@@ -8007,17 +9279,6 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
             "transaction_active"
           );
         }
-        const currentManifestRaw = findBundleSlot(state, "manifests", bundleId);
-        if (currentManifestRaw !== null) {
-          const currentManifest = this.requireManifest(bundleId, currentManifestRaw);
-          if (sourceOwnsForwardRevisionOverlay(currentManifest, noChangesAuthority.plan.sourceId)) {
-            throw new KnowledgeRuntimeNoChangesCommitConflictError(
-              bundleId,
-              noChangesAuthority.plan.sourceId,
-              "source_mismatch"
-            );
-          }
-        }
       }
       const protectedNoChangesCompletion = hasProtectedNoChangesCompletion(current, candidate);
       if (protectedNoChangesCompletion && noChangesAuthority === undefined) {
@@ -8138,6 +9399,120 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       applyCommits: state.forwardRevisionApplyCommits.filter(
         (record) => record.bundleId === bundleId
       ),
+      abandonments: state.forwardRevisionAbandonments.filter(
+        (record) => record.acceptedIdentity.resource.bundleId === bundleId
+      ),
+      recoveryTerminals: state.forwardRevisionRecoveryTerminals.filter(
+        (record) => record.acceptedIdentity.resource.bundleId === bundleId
+      ),
+    });
+  }
+
+  /**
+   * Atomically terminalizes one exact accepted-ready forward decision before any write.
+   *
+   * The outer Runtime revision is the optimistic claim. The durable accepted
+   * identity is rejoined inside the same transform, and any matching journal,
+   * ledger, overlay, recovery terminal, or prior abandonment prevents a second
+   * terminal outcome.
+   *
+   * @param acceptedIdentityValue - Canonical accepted decision and Apply-claim identity
+   * @param expectedRuntimeRevision - Exact Runtime revision observed by Studio
+   * @returns Newly committed no-write abandonment proof
+   */
+  async abandonForwardRevisionAcceptedReady(
+    acceptedIdentityValue: unknown,
+    expectedRuntimeRevision: number
+  ): Promise<Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>> {
+    const acceptedIdentity =
+      snapshotKnowledgeForwardRevisionAcceptedClaimIdentity(acceptedIdentityValue);
+    if (!Number.isSafeInteger(expectedRuntimeRevision) || expectedRuntimeRevision < 0) {
+      throw new TypeError("The expected Runtime revision is invalid");
+    }
+    return this.updateState((state) => {
+      if (
+        state.revision !== expectedRuntimeRevision ||
+        acceptedIdentity.resource.runtimeId !== state.runtimeId
+      ) {
+        throw new TypeError("The accepted forward revision is stale");
+      }
+      const reviewRaw = findForwardRevisionReviewSlot(state, acceptedIdentity.resource.bundleId);
+      if (reviewRaw === null) throw new TypeError("The accepted forward revision is unavailable");
+      const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2(reviewRaw);
+      const accepted = review.records.filter(
+        (
+          entry
+        ): entry is Extract<KnowledgeForwardRevisionTerminalReviewEntryV2, { state: "accepted" }> =>
+          entry.state === "accepted" &&
+          exactJsonValuesEqual(
+            createForwardRevisionAcceptedClaimIdentityForDecision(state.runtimeId, entry.decision),
+            acceptedIdentity
+          )
+      );
+      if (accepted.length !== 1) {
+        throw new TypeError("The accepted forward revision is unavailable");
+      }
+      const acceptedKey = createForwardRevisionAcceptedLifecycleKey({
+        bundleId: acceptedIdentity.resource.bundleId,
+        proposalId: acceptedIdentity.proposalId,
+        proposalDigest: acceptedIdentity.proposalDigest,
+        acceptedDecisionDigest: acceptedIdentity.acceptedDecisionDigest,
+        applyClaimId: acceptedIdentity.applyClaimId,
+        applyClaimDigest: acceptedIdentity.applyClaimDigest,
+      });
+      const activeKey =
+        state.activeForwardRevisionApply === null
+          ? undefined
+          : createForwardRevisionAcceptedLifecycleKey(state.activeForwardRevisionApply);
+      const hasLedger = state.forwardRevisionApplyCommits.some(
+        (record) => createForwardRevisionAcceptedLifecycleKey(record) === acceptedKey
+      );
+      const hasOverlay = state.manifests.some((slot) => {
+        const manifest = this.requireManifest(slot.bundleId, slot.value);
+        return listManifestForwardRevisionOverlays(manifest).some(
+          (overlay) => overlay.acceptedDecisionDigest === acceptedIdentity.acceptedDecisionDigest
+        );
+      });
+      const hasTerminal =
+        state.forwardRevisionAbandonments.some(
+          (record) =>
+            createForwardRevisionAcceptedLifecycleKey({
+              bundleId: record.acceptedIdentity.resource.bundleId,
+              proposalId: record.acceptedIdentity.proposalId,
+              proposalDigest: record.acceptedIdentity.proposalDigest,
+              acceptedDecisionDigest: record.acceptedIdentity.acceptedDecisionDigest,
+              applyClaimId: record.acceptedIdentity.applyClaimId,
+              applyClaimDigest: record.acceptedIdentity.applyClaimDigest,
+            }) === acceptedKey
+        ) ||
+        state.forwardRevisionRecoveryTerminals.some(
+          (record) =>
+            createForwardRevisionAcceptedLifecycleKey({
+              bundleId: record.acceptedIdentity.resource.bundleId,
+              proposalId: record.acceptedIdentity.proposalId,
+              proposalDigest: record.acceptedIdentity.proposalDigest,
+              acceptedDecisionDigest: record.acceptedIdentity.acceptedDecisionDigest,
+              applyClaimId: record.acceptedIdentity.applyClaimId,
+              applyClaimDigest: record.acceptedIdentity.applyClaimDigest,
+            }) === acceptedKey
+        );
+      if (activeKey === acceptedKey || hasLedger || hasOverlay || hasTerminal) {
+        throw new TypeError("The accepted forward revision already has an Apply outcome");
+      }
+      const abandonment = createKnowledgeForwardRevisionAbandonmentRecord({
+        acceptedIdentity,
+        abandonedAt: Math.max(this.now(), accepted[0].decision.acceptedAt),
+      });
+      return {
+        next: {
+          ...state,
+          revision: nextStoreRevision(state),
+          forwardRevisionAbandonments: [...state.forwardRevisionAbandonments, abandonment].sort(
+            (left, right) => compareIdentifiers(left.abandonmentId, right.abandonmentId)
+          ),
+        },
+        value: abandonment,
+      };
     });
   }
 
@@ -8335,9 +9710,9 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   /**
    * Reads current applied Wiki provenance from exactly one Runtime envelope.
    *
-   * Only current Manifest page versions written by an exact latest-ledger-backed
-   * accepted Review are projected. The frozen detached result is retrieval
-   * evidence only and grants no durable or file-mutation authority.
+   * Only current Manifest page bases written by an exact historical ledger-backed
+   * accepted Review are projected. The frozen detached result is retrieval evidence
+   * only and grants no durable or file-mutation authority.
    *
    * @param bundleId - Stable Bundle identifier
    * @returns Immutable current applied provenance and Runtime revision
@@ -8397,6 +9772,11 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     const state = await this.readState();
     const reviewRaw = findBundleSlot(state, "reviews", bundleId);
     const review = reviewRaw === null ? undefined : this.requireReviewSnapshot(bundleId, reviewRaw);
+    const forwardReviewRaw = findForwardRevisionReviewSlot(state, bundleId);
+    const forwardRevisionReview =
+      forwardReviewRaw === null
+        ? undefined
+        : snapshotKnowledgeForwardRevisionReviewSnapshotV2(forwardReviewRaw);
     const manifestRaw = findBundleSlot(state, "manifests", bundleId);
     const manifest = manifestRaw === null ? undefined : this.requireManifest(bundleId, manifestRaw);
     const current = manifest
@@ -8409,6 +9789,8 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       pagePath,
       applyCommits: state.applyCommits,
       review,
+      forwardRevisionApplyCommits: state.forwardRevisionApplyCommits,
+      forwardRevisionReview,
       manifestRevision: manifest?.revision ?? 0,
       ...(current
         ? {
@@ -8455,6 +9837,11 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     const state = await this.readState();
     const reviewRaw = findBundleSlot(state, "reviews", bundleId);
     const review = reviewRaw === null ? undefined : this.requireReviewSnapshot(bundleId, reviewRaw);
+    const forwardReviewRaw = findForwardRevisionReviewSlot(state, bundleId);
+    const forwardRevisionReview =
+      forwardReviewRaw === null
+        ? undefined
+        : snapshotKnowledgeForwardRevisionReviewSnapshotV2(forwardReviewRaw);
     return projectKnowledgeKnownAppliedWikiOutputDetail({
       runtimeId: state.runtimeId,
       runtimeRevision: state.revision,
@@ -8462,6 +9849,8 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       pagePath,
       applyCommits: state.applyCommits,
       review,
+      forwardRevisionApplyCommits: state.forwardRevisionApplyCommits,
+      forwardRevisionReview,
       authority,
     });
   }
@@ -8575,6 +9964,10 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         ) {
           throw createForwardRevisionApplyPortError("authority_unavailable");
         }
+        if (prepared.createdAt < currentAuthority.lineageAppliedAtFloor) {
+          throw createForwardRevisionApplyPortError("authority_unavailable");
+        }
+        assertForwardRevisionApplyLineageTimestampFloor(state, prepared);
         assertForwardRevisionApplyBeginResources(state, prepared, this.maxTextCharacters);
         mutationAttempted = true;
         return {
@@ -8632,7 +10025,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       "advance"
     );
     const projection = snapshotForwardRevisionApplyTransitionProjection(authorization.projection);
-    if (projection.transition === "finalize") {
+    if (projection.transition === "finalize" || projection.transition === "terminalize") {
       throw createForwardRevisionApplyPortError("dependency_invalid");
     }
     let mutationAttempted = false;
@@ -8655,8 +10048,16 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         if (!exactJsonValuesEqual(active, projection.previousJournal)) {
           throw createForwardRevisionApplyPortError("conflict");
         }
+        if (projection.transition === "applying") {
+          assertForwardRevisionApplyLineageTimestampFloor(state, active);
+        }
         const requiredRemainingRevisions =
-          projection.transition === "applying" ? 3 : projection.transition === "committed" ? 2 : 1;
+          projection.transition === "applying"
+            ? 3
+            : projection.transition === "committed" ||
+                projection.transition === "recovery_committed"
+              ? 2
+              : 1;
         if (state.revision > Number.MAX_SAFE_INTEGER - requiredRemainingRevisions) {
           throw createForwardRevisionApplyPortError("resource_limit");
         }
@@ -8694,7 +10095,9 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   ): Promise<Readonly<KnowledgeForwardRevisionApplyJournalV1> | undefined> {
     try {
       const projection = snapshotForwardRevisionApplyTransitionProjection(projectionValue);
-      if (projection.transition === "finalize") return undefined;
+      if (projection.transition === "finalize" || projection.transition === "terminalize") {
+        return undefined;
+      }
       const state = await this.readState();
       if (state.activeForwardRevisionApply === null) return undefined;
       const active = snapshotKnowledgeForwardRevisionApplyJournal(state.activeForwardRevisionApply);
@@ -8707,7 +10110,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   /** Atomically installs the Manifest overlay and ledger, then clears one committed journal. */
   async finalizeForwardRevisionApply(
     authorizationValue: unknown
-  ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>> {
+  ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord>> {
     const authorization = requireForwardRevisionApplyTransitionAuthorization(
       authorizationValue,
       "finalize"
@@ -8754,7 +10157,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   /** Rejoins one exact finalized ledger after an ambiguous atomic-file result. */
   async confirmForwardRevisionApplyFinalization(
     projectionValue: unknown
-  ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1> | undefined> {
+  ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord> | undefined> {
     try {
       const projection = snapshotForwardRevisionApplyTransitionProjection(projectionValue);
       if (projection.transition !== "finalize") return undefined;
@@ -8762,6 +10165,71 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         await this.readState(),
         projection.previousJournal
       );
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Atomically clears one sticky journal into a no-write terminal proof. */
+  async terminalizeForwardRevisionRecovery(
+    authorizationValue: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>> {
+    const authorization = requireForwardRevisionApplyTransitionAuthorization(
+      authorizationValue,
+      "terminalize"
+    );
+    const projection = snapshotForwardRevisionApplyTransitionProjection(authorization.projection);
+    if (projection.transition !== "terminalize") {
+      throw createForwardRevisionApplyPortError("dependency_invalid");
+    }
+    let mutationAttempted = false;
+    try {
+      return await this.updateState((state) => {
+        assertForwardRevisionApplyTransitionAuthorizationCurrent(
+          authorization,
+          projection,
+          "terminalize"
+        );
+        if (state.activeForwardRevisionApply === null) {
+          const replay = confirmForwardRevisionRecoveryTerminalization(state, projection);
+          if (replay) return { value: replay };
+          throw createForwardRevisionApplyPortError("conflict");
+        }
+        const active = snapshotKnowledgeForwardRevisionApplyJournal(
+          state.activeForwardRevisionApply
+        );
+        if (!exactJsonValuesEqual(active, projection.previousJournal)) {
+          throw createForwardRevisionApplyPortError("conflict");
+        }
+        const terminalizedAt = Math.max(this.now(), projection.observedAt);
+        const projected = projectForwardRevisionRecoveryTerminalization(
+          state,
+          projection,
+          terminalizedAt
+        );
+        mutationAttempted = true;
+        return { next: projected.next, value: projected.terminal };
+      });
+    } catch (error) {
+      if (mutationAttempted) {
+        const confirmed = await this.confirmForwardRevisionRecoveryTerminalization(projection);
+        if (confirmed) {
+          this.emitStudioHints([projection.previousJournal.bundleId]);
+          return confirmed;
+        }
+      }
+      throw error;
+    }
+  }
+
+  /** Rejoins one recovery terminal after an ambiguous atomic Runtime write. */
+  async confirmForwardRevisionRecoveryTerminalization(
+    projectionValue: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> | undefined> {
+    try {
+      const projection = snapshotForwardRevisionApplyTransitionProjection(projectionValue);
+      if (projection.transition !== "terminalize") return undefined;
+      return confirmForwardRevisionRecoveryTerminalization(await this.readState(), projection);
     } catch {
       return undefined;
     }
@@ -8876,6 +10344,8 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
           current.records.some(
             (record) =>
               record.state !== "rejected" &&
+              (record.state !== "accepted" ||
+                !acceptedForwardRevisionReviewIsTerminal(state, record.decision)) &&
               toWindowsPathKey(
                 projectKnowledgeForwardRevisionReviewEntryProposalV2(record).proposal.request
                   .pagePath
@@ -8887,10 +10357,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
             "page_conflict"
           );
         }
-        const currentFreshnessCompletedAt = assertForwardRevisionPublicationAuthority(
-          state,
-          evidence
-        );
+        const publicationTimeFloors = assertForwardRevisionPublicationAuthority(state, evidence);
         const selectedContentCharacters = current.records.reduce(
           (total, record) =>
             total +
@@ -8925,7 +10392,8 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         const requestedAt = Math.max(
           this.now(),
           evidence.intent.historical.appliedAt,
-          currentFreshnessCompletedAt
+          publicationTimeFloors.sourceFreshnessCompletedAt,
+          publicationTimeFloors.lineageAppliedAtFloor
         );
         const request = createKnowledgeForwardRevisionRequest({
           requestRevision: current.lastRequestRevision + 1,
@@ -9373,11 +10841,15 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
    * concurrent Queue or Review update cannot turn preflight into authority.
    *
    * @param request - Strict apply identity produced without Vault file access
+   * @returns Frozen logical-time floor owned by exact touched Forward heads
    */
-  async verifyApplyAuthority(request: ChangeSetTransactionAuthorityRequest): Promise<void> {
+  async verifyApplyAuthority(
+    request: ChangeSetTransactionAuthorityRequest
+  ): Promise<Readonly<ChangeSetTransactionAuthorityProof>> {
     const proof = parseApplyAuthorityRequest(request);
     const state = await this.readState();
-    this.assertTransactionFileAccessAuthority(state, proof);
+    const minimumTimestamp = this.assertTransactionFileAccessAuthority(state, proof);
+    return Object.freeze({ minimumTimestamp });
   }
 
   /**
@@ -10020,7 +11492,14 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         );
       }
 
-      assertLegacyApplyDoesNotOverlapForwardRevisionOverlay(state, active);
+      const supersededOverlays = listSourceApplySupersededForwardRevisionOverlays(state, active);
+      const lineageTimestampFloor = getSourceApplyForwardLineageTimestampFloor(supersededOverlays);
+      if (active.createdAt < lineageTimestampFloor || active.committedAt < lineageTimestampFloor) {
+        throw new KnowledgeApplyCommitAuthorityError(
+          active.transactionId,
+          "forward_lineage_time_mismatch"
+        );
+      }
 
       assertApplyCommitRuntimeAuthority(state, active);
 
@@ -10065,23 +11544,54 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         actualManifest,
         state.applyCommits
       );
-      const nextManifest = this.requireManifest(
+      let nextManifest = this.requireManifest(
         committed.bundleId,
         createCommittedSourceManifest(actualManifest, source, committed, receipt, intent)
       );
+      for (const overlay of supersededOverlays) {
+        nextManifest = this.requireManifest(
+          committed.bundleId,
+          projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(nextManifest, overlay)
+        );
+      }
       const ledgerRecord: KnowledgeApplyCommitLedgerRecord = {
         ...identity,
         manifestAfterRevision: nextManifest.revision,
         manifestAfterDigest: createSourceManifestDigest(nextManifest),
       };
+      const applyCommits = [...state.applyCommits, ledgerRecord].sort((left, right) =>
+        compareIdentifiers(left.transactionId, right.transactionId)
+      );
+      const stateWithLedger: KnowledgeRuntimeStoreSnapshot = {
+        ...state,
+        manifests: replaceBundleSlot(state.manifests, committed.bundleId, nextManifest),
+        applyCommits,
+      };
+      const supersessions = supersededOverlays.map((overlay) => {
+        const predecessor = state.forwardRevisionApplyCommits.find((candidate) =>
+          forwardRevisionOverlayMatchesLedger(overlay, candidate)
+        );
+        if (predecessor === undefined) throw new KnowledgeRuntimeStoreCorruptError();
+        return createKnowledgeForwardRevisionSupersessionRecord({
+          predecessor: createForwardRevisionLedgerLineageRefForLedger(predecessor),
+          successor: projectSourceApplyPageLedgerLineageRef(
+            stateWithLedger,
+            ledgerRecord,
+            overlay.pagePath
+          ),
+          supersededAt: ledgerRecord.recordedAt,
+        });
+      });
       return {
         next: {
           ...state,
           revision: nextStoreRevision(state),
           manifests: replaceBundleSlot(state.manifests, committed.bundleId, nextManifest),
-          applyCommits: [...state.applyCommits, ledgerRecord].sort((left, right) =>
-            compareIdentifiers(left.transactionId, right.transactionId)
-          ),
+          applyCommits,
+          forwardRevisionSupersessions: [
+            ...state.forwardRevisionSupersessions,
+            ...supersessions,
+          ].sort((left, right) => compareIdentifiers(left.supersessionId, right.supersessionId)),
         },
         value: undefined,
       };
@@ -10674,23 +12184,30 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         expectedText = currentText;
         return currentText;
       }
+      if (value.version === RUNTIME_V8_STORE_VERSION) {
+        expectedText = stringifyBoundedRuntimeValue(
+          migrateRuntimeV8ToV9Snapshot(value),
+          this.maxTextCharacters
+        );
+        return expectedText;
+      }
       if (value.version === RUNTIME_V7_STORE_VERSION) {
         expectedText = stringifyBoundedRuntimeValue(
-          migrateRuntimeV7ToV8Snapshot(value),
+          migrateRuntimeV7ToV9Snapshot(value),
           this.maxTextCharacters
         );
         return expectedText;
       }
       if (value.version === RUNTIME_V6_STORE_VERSION) {
         expectedText = stringifyBoundedRuntimeValue(
-          migrateRuntimeV7ToV8Snapshot(migrateRuntimeV6ToV7Snapshot(value)),
+          migrateRuntimeV7ToV9Snapshot(migrateRuntimeV6ToV7Snapshot(value)),
           this.maxTextCharacters
         );
         return expectedText;
       }
       if (value.version === RUNTIME_V5_STORE_VERSION) {
         expectedText = stringifyBoundedRuntimeValue(
-          migrateRuntimeV7ToV8Snapshot(
+          migrateRuntimeV7ToV9Snapshot(
             migrateRuntimeV6ToV7Snapshot(migrateRuntimeV5ToV6Snapshot(value))
           ),
           this.maxTextCharacters
@@ -10699,7 +12216,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       }
       if (value.version === RUNTIME_V4_STORE_VERSION) {
         expectedText = stringifyBoundedRuntimeValue(
-          migrateRuntimeV7ToV8Snapshot(
+          migrateRuntimeV7ToV9Snapshot(
             migrateRuntimeV6ToV7Snapshot(
               migrateRuntimeV5ToV6Snapshot(migrateRuntimeV4ToV5Snapshot(value))
             )
@@ -10710,7 +12227,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       }
       if (value.version === PREVIOUS_KNOWLEDGE_RUNTIME_STORE_VERSION) {
         expectedText = stringifyBoundedRuntimeValue(
-          migrateRuntimeV7ToV8Snapshot(
+          migrateRuntimeV7ToV9Snapshot(
             migrateRuntimeV6ToV7Snapshot(
               migrateRuntimeV5ToV6Snapshot(
                 migrateRuntimeV4ToV5Snapshot(migrateRuntimeV3ToV4Snapshot(value))
@@ -10724,7 +12241,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       if (value.version === RUNTIME_V2_STORE_VERSION) {
         const runtimeId = this.nextOpaqueId("runtimeId");
         expectedText = stringifyBoundedRuntimeValue(
-          migrateRuntimeV7ToV8Snapshot(
+          migrateRuntimeV7ToV9Snapshot(
             migrateRuntimeV6ToV7Snapshot(
               migrateRuntimeV5ToV6Snapshot(
                 migrateRuntimeV4ToV5Snapshot(
@@ -10742,7 +12259,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       }
       const runtimeId = this.nextOpaqueId("runtimeId");
       expectedText = stringifyBoundedRuntimeValue(
-        migrateRuntimeV7ToV8Snapshot(
+        migrateRuntimeV7ToV9Snapshot(
           migrateRuntimeV6ToV7Snapshot(
             migrateRuntimeV5ToV6Snapshot(
               migrateRuntimeV4ToV5Snapshot(
@@ -11316,13 +12833,25 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
   private assertTransactionFileAccessAuthority(
     state: KnowledgeRuntimeStoreSnapshot,
     transaction: KnowledgeApplyAuthorityProof
-  ): void {
+  ): number {
     if (state.activeForwardRevisionApply !== null) {
       throw new TransactionStorageAuthorityError(
         "A forward revision Apply owns the Vault-global transaction reservation"
       );
     }
-    assertLegacyApplyDoesNotOverlapForwardRevisionOverlay(state, transaction);
+    const supersededOverlays = listSourceApplySupersededForwardRevisionOverlays(state, transaction);
+    const lineageTimestampFloor = getSourceApplyForwardLineageTimestampFloor(supersededOverlays);
+    if (
+      "createdAt" in transaction &&
+      (typeof transaction.createdAt !== "number" ||
+        !Number.isSafeInteger(transaction.createdAt) ||
+        transaction.createdAt < lineageTimestampFloor)
+    ) {
+      throw new KnowledgeApplyCommitAuthorityError(
+        transaction.transactionId,
+        "forward_lineage_time_mismatch"
+      );
+    }
     if (
       state.applyCommits.some((record) => record.transactionId === transaction.transactionId) ||
       state.forwardRevisionApplyCommits.some(
@@ -11373,6 +12902,7 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       actualManifest,
       state.applyCommits
     );
+    return lineageTimestampFloor;
   }
 
   /**
@@ -11784,6 +13314,10 @@ interface RuntimeForwardRevisionProposalPortState {
 interface RuntimeForwardRevisionStudioPortState {
   readonly executionOwner?: KnowledgeExecutionOwner;
   readonly read: (bundleId: string) => Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>;
+  readonly abandon: (
+    acceptedIdentity: unknown,
+    expectedRuntimeRevision: number
+  ) => Promise<Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>>;
 }
 
 /** Hidden canonical read retained by one validation-only facade. */
@@ -11822,10 +13356,16 @@ interface RuntimeForwardRevisionApplyRecoveryPortState {
   ) => Promise<Readonly<KnowledgeForwardRevisionApplyJournalV1> | undefined>;
   readonly finalize: (
     authorization: ForwardRevisionApplyTransitionAuthorization
-  ) => Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>>;
+  ) => Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord>>;
   readonly confirmFinalize: (
     projection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>
-  ) => Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1> | undefined>;
+  ) => Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord> | undefined>;
+  readonly terminalize: (
+    authorization: ForwardRevisionApplyTransitionAuthorization
+  ) => Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>>;
+  readonly confirmTerminalize: (
+    projection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>
+  ) => Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> | undefined>;
 }
 
 /** Empty nominal carrier whose begin authority exists only in module-private state. */
@@ -11867,7 +13407,7 @@ class ForwardRevisionApplyTransitionAuthorization {
 }
 
 interface ForwardRevisionApplyTransitionAuthorizationState {
-  readonly operation: "advance" | "finalize";
+  readonly operation: "advance" | "finalize" | "terminalize";
   readonly executionOwner: KnowledgeExecutionOwner;
   readonly capability: KnowledgeForwardRevisionApplyTransitionCapability;
   readonly projection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>;
@@ -11928,7 +13468,7 @@ function requireForwardRevisionApplyBeginAuthorization(
 /** Consumes and re-proves one owner-bound post-journal authorization exactly once. */
 function requireForwardRevisionApplyTransitionAuthorization(
   value: unknown,
-  expectedOperation: "advance" | "finalize"
+  expectedOperation: "advance" | "finalize" | "terminalize"
 ): Readonly<ForwardRevisionApplyTransitionAuthorizationState> {
   let state: Readonly<ForwardRevisionApplyTransitionAuthorizationState> | undefined;
   try {
@@ -11964,7 +13504,7 @@ function requireForwardRevisionApplyTransitionAuthorization(
 function assertForwardRevisionApplyTransitionAuthorizationCurrent(
   state: Readonly<ForwardRevisionApplyTransitionAuthorizationState>,
   expectedProjection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>,
-  expectedOperation: "advance" | "finalize"
+  expectedOperation: "advance" | "finalize" | "terminalize"
 ): void {
   try {
     if (state.operation !== expectedOperation) throw new TypeError();
@@ -12223,7 +13763,10 @@ const FORWARD_REVISION_PINNED_RUNTIME_METHOD_NAMES = [
   "confirmForwardRevisionApplyAdvance",
   "finalizeForwardRevisionApply",
   "confirmForwardRevisionApplyFinalization",
+  "terminalizeForwardRevisionRecovery",
+  "confirmForwardRevisionRecoveryTerminalization",
   "readForwardRevisionStudioBundle",
+  "abandonForwardRevisionAcceptedReady",
   "readForwardRevisionReview",
   "publishForwardRevisionProposalAtomically",
   "readForwardRevisionPendingForDecision",
@@ -12272,6 +13815,9 @@ const runtimeForwardRevisionAuthorityReadMethod = runtimeForwardRevisionPublicat
 const runtimeForwardRevisionStudioReadMethod = runtimeForwardRevisionPublicationMethods.get(
   "readForwardRevisionStudioBundle"
 ) as KnowledgeRuntimeStore["readForwardRevisionStudioBundle"];
+const runtimeForwardRevisionStudioAbandonMethod = runtimeForwardRevisionPublicationMethods.get(
+  "abandonForwardRevisionAcceptedReady"
+) as KnowledgeRuntimeStore["abandonForwardRevisionAcceptedReady"];
 const runtimeForwardRevisionReviewReadMethod = runtimeForwardRevisionPublicationMethods.get(
   "readForwardRevisionReview"
 ) as KnowledgeRuntimeStore["readForwardRevisionReview"];
@@ -12305,6 +13851,14 @@ const runtimeForwardRevisionApplyFinalizeConfirmMethod =
   runtimeForwardRevisionPublicationMethods.get(
     "confirmForwardRevisionApplyFinalization"
   ) as KnowledgeRuntimeStore["confirmForwardRevisionApplyFinalization"];
+const runtimeForwardRevisionRecoveryTerminalizeMethod =
+  runtimeForwardRevisionPublicationMethods.get(
+    "terminalizeForwardRevisionRecovery"
+  ) as KnowledgeRuntimeStore["terminalizeForwardRevisionRecovery"];
+const runtimeForwardRevisionRecoveryTerminalizeConfirmMethod =
+  runtimeForwardRevisionPublicationMethods.get(
+    "confirmForwardRevisionRecoveryTerminalization"
+  ) as KnowledgeRuntimeStore["confirmForwardRevisionRecoveryTerminalization"];
 const runtimeForwardRevisionPendingDecisionReadMethod =
   runtimeForwardRevisionPublicationMethods.get(
     "readForwardRevisionPendingForDecision"
@@ -12429,6 +13983,11 @@ export class KnowledgeRuntimeForwardRevisionStudioPort {
           ...(executionOwner === undefined ? {} : { executionOwner }),
           read: (bundleId: string) =>
             Reflect.apply(runtimeForwardRevisionStudioReadMethod, runtime, [bundleId]),
+          abandon: (acceptedIdentity: unknown, expectedRuntimeRevision: number) =>
+            Reflect.apply(runtimeForwardRevisionStudioAbandonMethod, runtime, [
+              acceptedIdentity,
+              expectedRuntimeRevision,
+            ]),
         })
       );
       Object.freeze(this);
@@ -12458,6 +14017,17 @@ export class KnowledgeRuntimeForwardRevisionStudioPort {
     bundleId: string
   ): Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>> {
     return requireRuntimeForwardRevisionStudioPortState(this).read(bundleId);
+  }
+
+  /** Atomically terminalizes one exact accepted-ready record without starting Apply. */
+  abandonForwardRevisionAcceptedReady(
+    acceptedIdentity: unknown,
+    expectedRuntimeRevision: number
+  ): Promise<Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>> {
+    return requireRuntimeForwardRevisionStudioPortState(this).abandon(
+      acceptedIdentity,
+      expectedRuntimeRevision
+    );
   }
 }
 
@@ -12922,6 +14492,16 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
             projection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>
           ) =>
             Reflect.apply(runtimeForwardRevisionApplyFinalizeConfirmMethod, runtime, [projection]),
+          terminalize: (authorization: ForwardRevisionApplyTransitionAuthorization) =>
+            Reflect.apply(runtimeForwardRevisionRecoveryTerminalizeMethod, runtime, [
+              authorization,
+            ]),
+          confirmTerminalize: (
+            projection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>
+          ) =>
+            Reflect.apply(runtimeForwardRevisionRecoveryTerminalizeConfirmMethod, runtime, [
+              projection,
+            ]),
         })
       );
       Object.freeze(this);
@@ -13014,7 +14594,7 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
   /** Atomically writes overlay plus ledger and clears one exactly committed journal. */
   async finalize(
     capabilityValue: unknown
-  ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>> {
+  ): Promise<Readonly<KnowledgeForwardRevisionApplyLedgerRecord>> {
     const state = requireRuntimeForwardRevisionApplyRecoveryPortState(this);
     let capability: KnowledgeForwardRevisionApplyTransitionCapability;
     let projection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>;
@@ -13046,6 +14626,50 @@ export class KnowledgeRuntimeForwardRevisionApplyRecoveryPort {
     } catch (error) {
       try {
         const confirmed = await state.confirmFinalize(projection);
+        if (confirmed) return confirmed;
+      } catch {
+        // The original sanitized result remains authoritative when confirmation cannot read.
+      }
+      if (KnowledgeForwardRevisionApplyPortError.inspect(error)) throw error;
+      throw createForwardRevisionApplyPortError("commit_uncertain");
+    }
+  }
+
+  /** Atomically closes one sticky journal without mutating Wiki bytes. */
+  async terminalize(
+    capabilityValue: unknown
+  ): Promise<Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>> {
+    const state = requireRuntimeForwardRevisionApplyRecoveryPortState(this);
+    let capability: KnowledgeForwardRevisionApplyTransitionCapability;
+    let projection: Readonly<KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1>;
+    try {
+      KnowledgeForwardRevisionApplyTransitionCapability.assertExecutionOwner(
+        capabilityValue,
+        state.executionOwner
+      );
+      capability = capabilityValue as KnowledgeForwardRevisionApplyTransitionCapability;
+      projection = snapshotForwardRevisionApplyTransitionProjection(
+        KnowledgeForwardRevisionApplyTransitionCapability.project(capability)
+      );
+      if (projection.transition !== "terminalize") throw new TypeError();
+    } catch {
+      throw createForwardRevisionApplyPortError("dependency_invalid");
+    }
+    const authorization = ForwardRevisionApplyTransitionAuthorization.create();
+    forwardRevisionApplyTransitionAuthorizationStates.set(
+      authorization,
+      Object.freeze({
+        operation: "terminalize" as const,
+        executionOwner: state.executionOwner,
+        capability,
+        projection,
+      })
+    );
+    try {
+      return await state.terminalize(authorization);
+    } catch (error) {
+      try {
+        const confirmed = await state.confirmTerminalize(projection);
         if (confirmed) return confirmed;
       } catch {
         // The original sanitized result remains authoritative when confirmation cannot read.
@@ -13306,8 +14930,15 @@ export class KnowledgeRuntimeApplyAuthorityPort implements ChangeSetTransactionA
   /** Creates the authority facade over the shared runtime store. */
   constructor(private readonly runtime: KnowledgeRuntimeStore) {}
 
-  /** Re-proves one exact apply identity without accessing Wiki files. */
-  verify(request: ChangeSetTransactionAuthorityRequest): Promise<void> {
+  /**
+   * Re-proves one exact apply identity without accessing Wiki files.
+   *
+   * @param request - Detached ordinary Source Apply identity
+   * @returns Frozen logical-time floor owned by exact touched Forward heads
+   */
+  verify(
+    request: ChangeSetTransactionAuthorityRequest
+  ): Promise<Readonly<ChangeSetTransactionAuthorityProof>> {
     return this.runtime.verifyApplyAuthority(request);
   }
 }

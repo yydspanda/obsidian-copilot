@@ -50,6 +50,10 @@ import {
   type ManifestCommitMutation,
 } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
+  projectKnowledgeEffectiveManifestPages,
+  type KnowledgeEffectiveManifestPage,
+} from "@/knowledge/manifest/KnowledgeEffectivePageProjection";
+import {
   createNoChangesManifestCommitPlan,
   createNoChangesManifestCommitPlanDigest,
   type NoChangesManifestCommitReason,
@@ -944,6 +948,18 @@ function validateCompileInput(
   diagnostics.push(
     ...prefixDiagnostics(validateSourceManifest(input.manifest).diagnostics, "manifest")
   );
+  let effectiveManifestPages: readonly Readonly<KnowledgeEffectiveManifestPage>[] = [];
+  try {
+    effectiveManifestPages = projectKnowledgeEffectiveManifestPages(input.manifest);
+  } catch {
+    addDiagnostic(
+      diagnostics,
+      "error",
+      "compiler_manifest_effective_pages_invalid",
+      "manifest.extensions",
+      "Manifest page authority or active forward-revision lineage is invalid"
+    );
+  }
   if (input.operation === "lint_fix") {
     addDiagnostic(
       diagnostics,
@@ -1340,8 +1356,8 @@ function validateCompileInput(
     }
     authorizationKeys.add(key);
 
-    const primaryPage = primaryManifestEntry?.lastSuccessful?.generatedPages.find(
-      (page) => toWindowsPathKey(page.path) === key
+    const primaryPage = effectiveManifestPages.find(
+      (page) => page.windowsPathKey === key && page.sourceIds.includes(input.source.sourceId)
     );
     if (!primaryPage) {
       addDiagnostic(
@@ -1365,10 +1381,7 @@ function validateCompileInput(
         "Target path spelling and ownership must match the primary source Manifest"
       );
     }
-    if (
-      primaryPage.contentHash === undefined ||
-      authorization.expectedContentHash !== primaryPage.contentHash
-    ) {
+    if (authorization.expectedContentHash !== primaryPage.effectiveContentHash) {
       addDiagnostic(
         diagnostics,
         "error",
@@ -1377,12 +1390,7 @@ function validateCompileInput(
         "Target authorization must retain the exact last committed Manifest content hash"
       );
     }
-    const trackedManifestPages = input.manifest.entries.flatMap((entry) =>
-      (entry.lastSuccessful?.generatedPages ?? [])
-        .filter((page) => toWindowsPathKey(page.path) === key)
-        .map((page) => ({ sourceId: entry.sourceId, page }))
-    );
-    const manifestOwners = trackedManifestPages.map(({ sourceId }) => sourceId).sort(compareText);
+    const manifestOwners = [...primaryPage.sourceIds].sort(compareText);
     const authorizationOwners = [...authorization.sourceRefs].sort(compareText);
     if (canonicalizeJson(manifestOwners) !== canonicalizeJson(authorizationOwners)) {
       addDiagnostic(
@@ -1393,7 +1401,7 @@ function validateCompileInput(
         "Target source ownership must match every Manifest source tracking the page"
       );
     }
-    if (trackedManifestPages.length > 1 && primaryPage.ownership !== "shared") {
+    if (primaryPage.sourceIds.length > 1 && primaryPage.ownership !== "shared") {
       addDiagnostic(
         diagnostics,
         "error",
@@ -1402,21 +1410,6 @@ function validateCompileInput(
         "A page tracked by multiple Manifest sources must use shared ownership"
       );
     }
-    trackedManifestPages.forEach(({ page }, trackedIndex) => {
-      if (
-        page.path !== primaryPage.path ||
-        page.ownership !== primaryPage.ownership ||
-        page.contentHash !== primaryPage.contentHash
-      ) {
-        addDiagnostic(
-          diagnostics,
-          "error",
-          "compiler_authorization_manifest_coowner_mismatch",
-          `targetAuthorizations[${index}].manifestOwners[${trackedIndex}]`,
-          "All Manifest sources tracking a page must agree on path, ownership, and content hash"
-        );
-      }
-    });
   });
 
   return diagnostics;
@@ -1794,9 +1787,7 @@ function normalizeAnalysis(
     ])
   );
   const manifestTrackedPathKeys = new Set(
-    input.manifest.entries.flatMap((entry) =>
-      (entry.lastSuccessful?.generatedPages ?? []).map((page) => toWindowsPathKey(page.path))
-    )
+    projectKnowledgeEffectiveManifestPages(input.manifest).map((page) => page.windowsPathKey)
   );
   output.targets.forEach((target, index) => {
     const field = `targets[${index}].path`;
@@ -2932,9 +2923,9 @@ export class KnowledgeCompiler {
       binding.targets.map((target) => [toWindowsPathKey(target.path), target])
     );
     const trackedPageKeys = new Set(
-      input.manifest.entries
-        .find((entry) => entry.sourceId === input.source.sourceId)
-        ?.lastSuccessful?.generatedPages.map((page) => toWindowsPathKey(page.path)) ?? []
+      projectKnowledgeEffectiveManifestPages(input.manifest)
+        .filter((page) => page.sourceIds.includes(input.source.sourceId))
+        .map((page) => page.windowsPathKey)
     );
     const mutations: ManifestCommitMutation[] = [];
     for (const change of changeSet.changes) {

@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS as RUNTIME_OUTPUT_LIMITS,
   type KnowledgeKnownAppliedWikiOutputAuthorityIdentity,
   type KnowledgeKnownAppliedWikiOutputIndexItem,
+  type KnowledgeKnownAppliedWikiOutputOriginSummary as KnowledgeRuntimeKnownAppliedWikiOutputOriginSummary,
   type KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot,
   type KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot,
 } from "@/knowledge/runtime/KnowledgeKnownAppliedWikiOutputProjector";
@@ -124,6 +125,7 @@ interface RuntimeRevisionVector {
   readonly runtimeRevision: number;
   readonly manifestRevision: number;
   readonly reviewRevision: number | null;
+  readonly forwardReviewRevision: number | null;
 }
 
 interface SessionBinding {
@@ -490,7 +492,8 @@ function snapshotAuthority(
   value: unknown,
   budget: { characters: number }
 ): Readonly<KnowledgeKnownAppliedWikiOutputAuthorityIdentity> | undefined {
-  const keys = [
+  const commonKeys = [
+    "origin",
     "runtimeId",
     "bundleId",
     "pagePath",
@@ -503,31 +506,58 @@ function snapshotAuthority(
     "sourceContentHash",
     "pipelineFingerprint",
     "inputRevision",
-    "changeSetId",
-    "changeSetDigest",
-    "manifestIntentDigest",
     "manifestAfterRevision",
     "manifestAfterDigest",
     "appliedAt",
   ];
-  const record = snapshotRecord(value, keys);
+  const origin = readDataProperty(value, "origin");
+  const record =
+    origin === "source_apply"
+      ? snapshotRecord(value, [
+          ...commonKeys,
+          "changeSetId",
+          "changeSetDigest",
+          "manifestIntentDigest",
+        ])
+      : origin === "forward_revision"
+        ? snapshotRecord(value, [
+            ...commonKeys,
+            "ledgerId",
+            "ledgerDigest",
+            "forwardLedgerIdentityDigest",
+            "acceptedDecisionDigest",
+            "applyClaimId",
+            "applyClaimDigest",
+            "proposalId",
+            "proposalDigest",
+            "manualOverride",
+          ])
+        : undefined;
   if (!record) return undefined;
-  const identifierFields = [
-    "runtimeId",
-    "bundleId",
-    "transactionId",
-    "sourceId",
-    "changeSetId",
-  ] as const;
-  const digestFields = [
+  const commonIdentifierFields = ["runtimeId", "bundleId", "transactionId", "sourceId"] as const;
+  const commonDigestFields = [
     "contentHash",
     "sourceContentHash",
     "pipelineFingerprint",
-    "changeSetDigest",
-    "manifestIntentDigest",
     "manifestAfterDigest",
   ] as const;
   const pathFields = ["pagePath", "windowsPathKey", "outputPath"] as const;
+  const branchIdentifierFields =
+    origin === "source_apply"
+      ? (["changeSetId"] as const)
+      : (["ledgerId", "applyClaimId", "proposalId"] as const);
+  const branchDigestFields =
+    origin === "source_apply"
+      ? (["changeSetDigest", "manifestIntentDigest"] as const)
+      : ([
+          "ledgerDigest",
+          "forwardLedgerIdentityDigest",
+          "acceptedDecisionDigest",
+          "applyClaimDigest",
+          "proposalDigest",
+        ] as const);
+  const identifierFields = [...commonIdentifierFields, ...branchIdentifierFields];
+  const digestFields = [...commonDigestFields, ...branchDigestFields];
   const stringValues = [...identifierFields, ...digestFields, ...pathFields].map(
     (field) => record[field]
   );
@@ -569,7 +599,7 @@ function snapshotAuthority(
   ) {
     return undefined;
   }
-  return Object.freeze({
+  const common = {
     runtimeId: record.runtimeId as string,
     bundleId: record.bundleId as string,
     pagePath,
@@ -582,13 +612,96 @@ function snapshotAuthority(
     sourceContentHash: record.sourceContentHash as string,
     pipelineFingerprint: record.pipelineFingerprint as string,
     inputRevision: Number(record.inputRevision),
-    changeSetId: record.changeSetId as string,
-    changeSetDigest: record.changeSetDigest as string,
-    manifestIntentDigest: record.manifestIntentDigest as string,
     manifestAfterRevision: Number(record.manifestAfterRevision),
     manifestAfterDigest: record.manifestAfterDigest as string,
     appliedAt: Number(record.appliedAt),
+  };
+  if (origin === "source_apply") {
+    return Object.freeze({
+      ...common,
+      origin: "source_apply" as const,
+      changeSetId: record.changeSetId as string,
+      changeSetDigest: record.changeSetDigest as string,
+      manifestIntentDigest: record.manifestIntentDigest as string,
+    });
+  }
+  if (
+    !/^forward-revision-apply-ledger-[a-f0-9]{64}$/.test(record.ledgerId as string) ||
+    typeof record.manualOverride !== "boolean"
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    ...common,
+    origin: "forward_revision" as const,
+    ledgerId: record.ledgerId as string,
+    ledgerDigest: record.ledgerDigest as string,
+    forwardLedgerIdentityDigest: record.forwardLedgerIdentityDigest as string,
+    acceptedDecisionDigest: record.acceptedDecisionDigest as string,
+    applyClaimId: record.applyClaimId as string,
+    applyClaimDigest: record.applyClaimDigest as string,
+    proposalId: record.proposalId as string,
+    proposalDigest: record.proposalDigest as string,
+    manualOverride: record.manualOverride,
   });
+}
+
+/** Captures canonical per-origin proof aggregates from one Runtime index item. */
+function snapshotOrigins(
+  value: unknown,
+  verifiedApplyCount: number,
+  newestAppliedAt: number,
+  budget: { characters: number }
+): readonly Readonly<KnowledgeRuntimeKnownAppliedWikiOutputOriginSummary>[] | undefined {
+  const values = snapshotArray(value, 2);
+  if (!values || values.length === 0) return undefined;
+  const origins: Readonly<KnowledgeRuntimeKnownAppliedWikiOutputOriginSummary>[] = [];
+  for (const candidate of values) {
+    const record = snapshotRecord(candidate, [
+      "kind",
+      "verifiedApplyCount",
+      "newestAppliedAt",
+      "newestManifestRevision",
+    ]);
+    if (
+      !record ||
+      (record.kind !== "source_apply" && record.kind !== "forward_revision") ||
+      !Number.isSafeInteger(record.verifiedApplyCount) ||
+      Number(record.verifiedApplyCount) < 1 ||
+      Number(record.verifiedApplyCount) >
+        (record.kind === "source_apply"
+          ? RUNTIME_OUTPUT_LIMITS.maxApplyCommits
+          : RUNTIME_OUTPUT_LIMITS.maxForwardApplyCommits) ||
+      !Number.isSafeInteger(record.newestAppliedAt) ||
+      Number(record.newestAppliedAt) < 0 ||
+      !Number.isSafeInteger(record.newestManifestRevision) ||
+      Number(record.newestManifestRevision) < 1
+    ) {
+      return undefined;
+    }
+    budget.characters += record.kind.length;
+    if (budget.characters > MAX_INDEX_SNAPSHOT_CHARACTERS) return undefined;
+    origins.push(
+      Object.freeze({
+        kind: record.kind,
+        verifiedApplyCount: Number(record.verifiedApplyCount),
+        newestAppliedAt: Number(record.newestAppliedAt),
+        newestManifestRevision: Number(record.newestManifestRevision),
+      })
+    );
+  }
+  const kinds = origins.map((origin) => origin.kind).join(",");
+  if (
+    (kinds !== "source_apply" &&
+      kinds !== "forward_revision" &&
+      kinds !== "source_apply,forward_revision") ||
+    origins.reduce((total, origin) => total + origin.verifiedApplyCount, 0) !==
+      verifiedApplyCount ||
+    Math.max(...origins.map((origin) => origin.newestAppliedAt)) !== newestAppliedAt
+  ) {
+    return undefined;
+  }
+  return Object.freeze(origins);
 }
 
 /** Captures a deep-frozen metadata index returned by the Runtime boundary. */
@@ -604,6 +717,7 @@ function snapshotIndex(
     "pagePath",
     "windowsPathKey",
     "reviewRevision",
+    "forwardReviewRevision",
     "manifestRevision",
     "currentManifestPage",
     "outputs",
@@ -624,6 +738,9 @@ function snapshotIndex(
     Number(record.runtimeRevision) < 0 ||
     (record.reviewRevision !== null &&
       (!Number.isSafeInteger(record.reviewRevision) || Number(record.reviewRevision) < 0)) ||
+    (record.forwardReviewRevision !== null &&
+      (!Number.isSafeInteger(record.forwardReviewRevision) ||
+        Number(record.forwardReviewRevision) < 0)) ||
     !Number.isSafeInteger(record.manifestRevision) ||
     Number(record.manifestRevision) < 0
   ) {
@@ -679,12 +796,25 @@ function snapshotIndex(
       "newestAppliedAt",
       "newestManifestRevision",
       "verifiedApplyCount",
+      "origins",
       "authority",
     ]);
     const authority = item ? snapshotAuthority(item.authority, budget) : undefined;
+    const origins =
+      item &&
+      Number.isSafeInteger(item.verifiedApplyCount) &&
+      Number.isSafeInteger(item.newestAppliedAt)
+        ? snapshotOrigins(
+            item.origins,
+            Number(item.verifiedApplyCount),
+            Number(item.newestAppliedAt),
+            budget
+          )
+        : undefined;
     if (
       !item ||
       !authority ||
+      !origins ||
       typeof item.path !== "string" ||
       item.path.length > MAX_PATH_CHARACTERS ||
       item.path !== expectedPagePath ||
@@ -695,13 +825,16 @@ function snapshotIndex(
       !Number.isSafeInteger(item.characterCount) ||
       Number(item.characterCount) < 0 ||
       (item.detailAvailability !== "available" && item.detailAvailability !== "too_large") ||
+      Number(item.characterCount) <= RUNTIME_OUTPUT_LIMITS.maxContentCharacters !==
+        (item.detailAvailability === "available") ||
       !Number.isSafeInteger(item.newestAppliedAt) ||
       Number(item.newestAppliedAt) < 0 ||
       !Number.isSafeInteger(item.newestManifestRevision) ||
       Number(item.newestManifestRevision) < 1 ||
       !Number.isSafeInteger(item.verifiedApplyCount) ||
       Number(item.verifiedApplyCount) < 1 ||
-      Number(item.verifiedApplyCount) > RUNTIME_OUTPUT_LIMITS.maxApplyCommits ||
+      Number(item.verifiedApplyCount) >
+        RUNTIME_OUTPUT_LIMITS.maxApplyCommits + RUNTIME_OUTPUT_LIMITS.maxForwardApplyCommits ||
       authority.runtimeId !== record.runtimeId ||
       authority.bundleId !== expectedBundleId ||
       authority.pagePath !== expectedPagePath ||
@@ -710,7 +843,24 @@ function snapshotIndex(
       authority.contentHash !== item.contentHash ||
       authority.characterCount !== item.characterCount ||
       authority.appliedAt !== item.newestAppliedAt ||
-      authority.manifestAfterRevision !== item.newestManifestRevision
+      authority.manifestAfterRevision !== item.newestManifestRevision ||
+      origins.some(
+        (origin) =>
+          origin.newestManifestRevision > Number(record.manifestRevision) ||
+          origin.newestAppliedAt > authority.appliedAt ||
+          (origin.newestAppliedAt === authority.appliedAt &&
+            origin.newestManifestRevision > authority.manifestAfterRevision)
+      ) ||
+      (origins.some((origin) => origin.kind === "source_apply") &&
+        record.reviewRevision === null) ||
+      (origins.some((origin) => origin.kind === "forward_revision") &&
+        record.forwardReviewRevision === null) ||
+      !origins.some(
+        (origin) =>
+          origin.kind === authority.origin &&
+          origin.newestAppliedAt === authority.appliedAt &&
+          origin.newestManifestRevision === authority.manifestAfterRevision
+      )
     ) {
       throw new UnavailableRead();
     }
@@ -729,6 +879,7 @@ function snapshotIndex(
         newestAppliedAt: Number(item.newestAppliedAt),
         newestManifestRevision: Number(item.newestManifestRevision),
         verifiedApplyCount: Number(item.verifiedApplyCount),
+        origins,
         authority,
       })
     );
@@ -751,6 +902,8 @@ function snapshotIndex(
     pagePath: expectedPagePath,
     windowsPathKey: record.windowsPathKey,
     reviewRevision: record.reviewRevision === null ? null : Number(record.reviewRevision),
+    forwardReviewRevision:
+      record.forwardReviewRevision === null ? null : Number(record.forwardReviewRevision),
     manifestRevision: Number(record.manifestRevision),
     currentManifestPage,
     outputs: Object.freeze(outputs),
@@ -781,6 +934,7 @@ function createRevisionVector(
     runtimeRevision: value.runtimeRevision,
     manifestRevision: value.manifestRevision,
     reviewRevision: value.reviewRevision,
+    forwardReviewRevision: value.forwardReviewRevision,
   });
 }
 
@@ -797,7 +951,8 @@ function revisionsDoNotRegress(
   return (
     after.runtimeRevision >= before.runtimeRevision &&
     after.manifestRevision >= before.manifestRevision &&
-    reviewRevisionDoesNotRegress(before.reviewRevision, after.reviewRevision)
+    reviewRevisionDoesNotRegress(before.reviewRevision, after.reviewRevision) &&
+    reviewRevisionDoesNotRegress(before.forwardReviewRevision, after.forwardReviewRevision)
   );
 }
 
@@ -940,6 +1095,24 @@ function createPage(
   return Object.freeze({ items, nextCursor: cursor });
 }
 
+/** Derives only the narrow row-action capability proven by this browsing session. */
+function createProposalCapability(
+  currentState: "applied" | "drifted" | "missing",
+  relation: "current_applied" | "latest_known" | "earlier_known",
+  authorityOrigin: "source_apply" | "forward_revision",
+  detailAvailability: "available" | "too_large"
+):
+  | "available"
+  | "current_not_applied"
+  | "selected_is_current"
+  | "forward_origin_not_supported"
+  | "detail_too_large" {
+  if (currentState !== "applied") return "current_not_applied";
+  if (relation === "current_applied") return "selected_is_current";
+  if (detailAvailability === "too_large") return "detail_too_large";
+  return authorityOrigin === "source_apply" ? "available" : "forward_origin_not_supported";
+}
+
 /** Creates the initial authentic session and its private bindings. */
 function createSessionBinding(read: StableRead): SessionBinding {
   const classification = classifyCurrent(read);
@@ -963,7 +1136,23 @@ function createSessionBinding(read: StableRead): SessionBinding {
         outputRef,
         appliedAt: item.newestAppliedAt,
         verifiedApplyCount: item.verifiedApplyCount,
+        origins: Object.freeze(
+          item.origins.map((origin) =>
+            Object.freeze({
+              kind: origin.kind,
+              verifiedApplyCount: origin.verifiedApplyCount,
+              newestAppliedAt: origin.newestAppliedAt,
+              newestManifestRevision: origin.newestManifestRevision,
+            })
+          )
+        ),
         relation,
+        proposalCapability: createProposalCapability(
+          classification.state,
+          relation,
+          item.authority.origin,
+          item.detailAvailability
+        ),
       }),
     });
   });
@@ -1284,6 +1473,8 @@ export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator
           outputRef,
           appliedAt: output.item.newestAppliedAt,
           verifiedApplyCount: output.item.verifiedApplyCount,
+          origins: output.summary.origins,
+          proposalCapability: output.summary.proposalCapability,
           content: read.detail.content,
         }),
       });

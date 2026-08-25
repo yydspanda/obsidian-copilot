@@ -32,6 +32,34 @@ export interface KnowledgeForwardRevisionStudioAcceptedReadyReview {
   readonly manualOverride: boolean;
 }
 
+/** One accepted workflow durably ended before any Apply journal or Wiki write began. */
+export interface KnowledgeForwardRevisionStudioAbandonedReview {
+  readonly state: "abandoned";
+  readonly reviewRef: string;
+  readonly snapshotRef: string;
+  readonly pagePath: string;
+  readonly updatedAt: number;
+  readonly acceptedAt: number;
+  readonly abandonedAt: number;
+  readonly manualOverride: boolean;
+}
+
+/** One sticky Apply recovery ended without changing the externally observed Wiki value. */
+export interface KnowledgeForwardRevisionStudioKeptCurrentReview {
+  readonly state: "kept_current";
+  readonly reviewRef: string;
+  readonly snapshotRef: string;
+  readonly pagePath: string;
+  readonly updatedAt: number;
+  readonly acceptedAt: number;
+  readonly terminalizedAt: number;
+  readonly manualOverride: boolean;
+  readonly outcome:
+    | "abandoned_before_write"
+    | "write_outcome_uncertain_external_supersession"
+    | "committed_then_external_supersession";
+}
+
 /** One accepted decision already owned by a durable Apply journal. */
 export interface KnowledgeForwardRevisionStudioApplyingReview {
   readonly state: "applying";
@@ -58,10 +86,12 @@ export interface KnowledgeForwardRevisionStudioRecoveryRequiredReview {
   readonly detectedAt: number;
 }
 
-/** Closed active Forward Review work rendered by Knowledge Studio. */
+/** Closed visible Forward Review work rendered by Knowledge Studio. */
 export type KnowledgeForwardRevisionStudioReview =
   | KnowledgeForwardRevisionStudioPendingReview
   | KnowledgeForwardRevisionStudioAcceptedReadyReview
+  | KnowledgeForwardRevisionStudioAbandonedReview
+  | KnowledgeForwardRevisionStudioKeptCurrentReview
   | KnowledgeForwardRevisionStudioApplyingReview
   | KnowledgeForwardRevisionStudioRecoveryRequiredReview;
 
@@ -79,7 +109,13 @@ export interface KnowledgeForwardRevisionStudioSimpleCommand {
   readonly kind: "forward_revision_studio_command";
   readonly reviewRef: string;
   readonly snapshotRef: string;
-  readonly action: "accept_exact" | "reject" | "apply";
+  readonly action:
+    | "accept_exact"
+    | "reject"
+    | "apply"
+    | "abandon"
+    | "retry_recovery"
+    | "keep_current";
 }
 
 /** Manual whole-file action whose content is still rejoined and revalidated. */
@@ -111,7 +147,14 @@ export type KnowledgeForwardRevisionStudioCommand =
 /** Value-only result that never exposes decisions, claims, journals, or ledgers. */
 export type KnowledgeForwardRevisionStudioSubmissionResult =
   | Readonly<{
-      kind: "applied" | "rejected" | "accepted_ready" | "applying" | "no_change";
+      kind:
+        | "applied"
+        | "rejected"
+        | "accepted_ready"
+        | "abandoned"
+        | "kept_current"
+        | "applying"
+        | "no_change";
     }>
   | Readonly<{ kind: "recovery_required" | "stale" | "unavailable" }>;
 
@@ -233,7 +276,12 @@ export function snapshotKnowledgeForwardRevisionStudioCommand(
   const simpleBase = snapshotCommandBase(simple);
   if (
     simpleBase &&
-    (simple?.action === "accept_exact" || simple?.action === "reject" || simple?.action === "apply")
+    (simple?.action === "accept_exact" ||
+      simple?.action === "reject" ||
+      simple?.action === "apply" ||
+      simple?.action === "abandon" ||
+      simple?.action === "retry_recovery" ||
+      simple?.action === "keep_current")
   ) {
     return Object.freeze({
       version: KNOWLEDGE_FORWARD_REVISION_STUDIO_COMMAND_VERSION,
@@ -330,5 +378,44 @@ export function createKnowledgeForwardRevisionStudioApplyCommand(
     reviewRef: review.reviewRef,
     snapshotRef: review.snapshotRef,
     action: "apply",
+  }) as Readonly<KnowledgeForwardRevisionStudioSimpleCommand>;
+}
+
+/** Creates the one opaque no-write terminal command permitted for an accepted-ready row. */
+export function createKnowledgeForwardRevisionStudioAbandonCommand(
+  review: Readonly<KnowledgeForwardRevisionStudioAcceptedReadyReview>
+): Readonly<KnowledgeForwardRevisionStudioSimpleCommand> {
+  return snapshotKnowledgeForwardRevisionStudioCommand({
+    version: KNOWLEDGE_FORWARD_REVISION_STUDIO_COMMAND_VERSION,
+    kind: "forward_revision_studio_command",
+    reviewRef: review.reviewRef,
+    snapshotRef: review.snapshotRef,
+    action: "abandon",
+  }) as Readonly<KnowledgeForwardRevisionStudioSimpleCommand>;
+}
+
+/** Creates the opaque exact recheck/retry command for one sticky recovery row. */
+export function createKnowledgeForwardRevisionStudioRetryRecoveryCommand(
+  review: Readonly<KnowledgeForwardRevisionStudioRecoveryRequiredReview>
+): Readonly<KnowledgeForwardRevisionStudioSimpleCommand> {
+  return snapshotKnowledgeForwardRevisionStudioCommand({
+    version: KNOWLEDGE_FORWARD_REVISION_STUDIO_COMMAND_VERSION,
+    kind: "forward_revision_studio_command",
+    reviewRef: review.reviewRef,
+    snapshotRef: review.snapshotRef,
+    action: "retry_recovery",
+  }) as Readonly<KnowledgeForwardRevisionStudioSimpleCommand>;
+}
+
+/** Creates the opaque zero-write terminal command for one sticky recovery row. */
+export function createKnowledgeForwardRevisionStudioKeepCurrentCommand(
+  review: Readonly<KnowledgeForwardRevisionStudioRecoveryRequiredReview>
+): Readonly<KnowledgeForwardRevisionStudioSimpleCommand> {
+  return snapshotKnowledgeForwardRevisionStudioCommand({
+    version: KNOWLEDGE_FORWARD_REVISION_STUDIO_COMMAND_VERSION,
+    kind: "forward_revision_studio_command",
+    reviewRef: review.reviewRef,
+    snapshotRef: review.snapshotRef,
+    action: "keep_current",
   }) as Readonly<KnowledgeForwardRevisionStudioSimpleCommand>;
 }

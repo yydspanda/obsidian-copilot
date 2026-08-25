@@ -1,5 +1,14 @@
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
 import {
+  snapshotKnowledgeForwardRevisionApplyLedgerRecord,
+  type KnowledgeForwardRevisionApplyLedgerRecord,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyLedger";
+import {
+  snapshotKnowledgeForwardRevisionReviewSnapshotV2,
+  type KnowledgeForwardRevisionAcceptedReviewEntryV2,
+  type KnowledgeForwardRevisionReviewSnapshotV2,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
+import {
   createManifestCommitIntentDigest,
   projectManifestCommitIntent,
 } from "@/knowledge/manifest/ManifestCommitIntent";
@@ -18,7 +27,9 @@ import type { KnowledgeApplyCommitLedgerRecord } from "@/knowledge/runtime/Knowl
 /** Hard limits for one known-applied-output Runtime read. */
 export const KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS = Object.freeze({
   maxApplyCommits: 10_000,
+  maxForwardApplyCommits: 10_000,
   maxReviewRecords: 10_000,
+  maxForwardReviewRecords: 10_000,
   maxAcceptedChanges: 100_000,
   maxPageOutputs: 10_000,
   maxManifestEntries: 10_000,
@@ -33,7 +44,9 @@ export const KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS = Object.freeze({
 /** Stable bounded resource whose exhaustion aborted a projection. */
 export type KnowledgeKnownAppliedWikiOutputLimit =
   | "apply_commits"
+  | "forward_apply_commits"
   | "review_records"
+  | "forward_review_records"
   | "accepted_changes"
   | "page_outputs"
   | "snapshot_characters"
@@ -71,7 +84,7 @@ export interface KnowledgeKnownAppliedWikiCurrentPage {
  * This is read authority only. It never authorizes Restore, Review, Apply, or a
  * Vault write, and must be rejoined against a later atomic Runtime envelope.
  */
-export interface KnowledgeKnownAppliedWikiOutputAuthorityIdentity {
+interface KnowledgeKnownAppliedWikiOutputAuthorityBase {
   readonly runtimeId: string;
   readonly bundleId: string;
   readonly pagePath: string;
@@ -84,12 +97,46 @@ export interface KnowledgeKnownAppliedWikiOutputAuthorityIdentity {
   readonly sourceContentHash: string;
   readonly pipelineFingerprint: string;
   readonly inputRevision: number;
-  readonly changeSetId: string;
-  readonly changeSetDigest: string;
-  readonly manifestIntentDigest: string;
   readonly manifestAfterRevision: number;
   readonly manifestAfterDigest: string;
   readonly appliedAt: number;
+}
+
+/** Exact ordinary Source Apply authority retained behind an opaque detail ref. */
+export interface KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity
+  extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
+  readonly origin: "source_apply";
+  readonly changeSetId: string;
+  readonly changeSetDigest: string;
+  readonly manifestIntentDigest: string;
+}
+
+/** Exact forward revision authority retained behind an opaque detail ref. */
+export interface KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity
+  extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
+  readonly origin: "forward_revision";
+  readonly ledgerId: string;
+  readonly ledgerDigest: string;
+  readonly forwardLedgerIdentityDigest: string;
+  readonly acceptedDecisionDigest: string;
+  readonly applyClaimId: string;
+  readonly applyClaimDigest: string;
+  readonly proposalId: string;
+  readonly proposalDigest: string;
+  readonly manualOverride: boolean;
+}
+
+/** One exact provenance-discriminated private detail authority. */
+export type KnowledgeKnownAppliedWikiOutputAuthorityIdentity =
+  | KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity
+  | KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity;
+
+/** Aggregate metadata for one verified Apply provenance kind. */
+export interface KnowledgeKnownAppliedWikiOutputOriginSummary {
+  readonly kind: "source_apply" | "forward_revision";
+  readonly verifiedApplyCount: number;
+  readonly newestAppliedAt: number;
+  readonly newestManifestRevision: number;
 }
 
 /** Metadata-only content-addressed output returned by the index read. */
@@ -102,6 +149,7 @@ export interface KnowledgeKnownAppliedWikiOutputIndexItem {
   readonly newestAppliedAt: number;
   readonly newestManifestRevision: number;
   readonly verifiedApplyCount: number;
+  readonly origins: readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[];
   readonly authority: Readonly<KnowledgeKnownAppliedWikiOutputAuthorityIdentity>;
 }
 
@@ -113,6 +161,7 @@ export interface KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot {
   readonly pagePath: string;
   readonly windowsPathKey: string;
   readonly reviewRevision: number | null;
+  readonly forwardReviewRevision: number | null;
   readonly manifestRevision: number;
   readonly currentManifestPage: Readonly<KnowledgeKnownAppliedWikiCurrentPage> | null;
   readonly outputs: readonly Readonly<KnowledgeKnownAppliedWikiOutputIndexItem>[];
@@ -149,6 +198,8 @@ export interface KnowledgeKnownAppliedWikiOutputIndexProjectionInput {
   readonly pagePath: string;
   readonly applyCommits: readonly KnowledgeApplyCommitLedgerRecord[];
   readonly review?: ChangeSetReviewSnapshot;
+  readonly forwardRevisionApplyCommits?: readonly KnowledgeForwardRevisionApplyLedgerRecord[];
+  readonly forwardRevisionReview?: KnowledgeForwardRevisionReviewSnapshotV2;
   readonly manifestRevision: number;
   readonly currentManifestPage?: KnowledgeKnownAppliedWikiCurrentPage;
 }
@@ -161,6 +212,8 @@ export interface KnowledgeKnownAppliedWikiOutputDetailProjectionInput {
   readonly pagePath: string;
   readonly applyCommits: readonly KnowledgeApplyCommitLedgerRecord[];
   readonly review?: ChangeSetReviewSnapshot;
+  readonly forwardRevisionApplyCommits?: readonly KnowledgeForwardRevisionApplyLedgerRecord[];
+  readonly forwardRevisionReview?: KnowledgeForwardRevisionReviewSnapshotV2;
   readonly authority: KnowledgeKnownAppliedWikiOutputAuthorityIdentity;
 }
 
@@ -197,12 +250,37 @@ interface AcceptedRecordIndex {
   byJoinKey: ReadonlyMap<string, readonly AcceptedRecordMetadata[]>;
 }
 
+/** Strict accepted Forward Review records indexed by durable decision identity. */
+interface ForwardAcceptedRecordIndex {
+  revision: number;
+  byAcceptedDecisionDigest: ReadonlyMap<
+    string,
+    readonly Readonly<KnowledgeForwardRevisionAcceptedReviewEntryV2>[]
+  >;
+}
+
+/** Mutable metadata-only output accumulator. */
+interface SourceApplyProof {
+  origin: "source_apply";
+  ledger: KnowledgeApplyCommitLedgerRecord;
+}
+
+/** Exact canonical Forward ledger and accepted Review proof. */
+interface ForwardRevisionProof {
+  origin: "forward_revision";
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>;
+  accepted: Readonly<KnowledgeForwardRevisionAcceptedReviewEntryV2>;
+}
+
+/** Any exact Apply proof that can contribute one historical output. */
+type KnownAppliedOutputProof = SourceApplyProof | ForwardRevisionProof;
+
 /** Mutable metadata-only output accumulator. */
 interface OutputAccumulator {
   path: string;
   contentHash: string;
   characterCount: number;
-  ledgers: KnowledgeApplyCommitLedgerRecord[];
+  proofs: KnownAppliedOutputProof[];
 }
 
 /** Reports whether an object exposes exactly the expected own string keys. */
@@ -696,6 +774,78 @@ function indexAcceptedRecords(
   return { revision: Number(revision), byJoinKey };
 }
 
+/** Re-proves the exact canonical Forward ledger ↔ accepted Review join. */
+export function knowledgeForwardApplyLedgerMatchesAcceptedReview(
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>,
+  entry: Readonly<KnowledgeForwardRevisionAcceptedReviewEntryV2>
+): boolean {
+  const decision = entry.decision;
+  const request = decision.proposal.request;
+  return (
+    ledger.runtimeId === request.runtimeId &&
+    ledger.bundleId === request.bundleId &&
+    ledger.sourceId === request.intent.current.primarySourceId &&
+    ledger.pagePath === request.pagePath &&
+    ledger.windowsPathKey === toWindowsPathKey(request.pagePath) &&
+    ledger.acceptedDecisionDigest === decision.acceptedDecisionDigest &&
+    ledger.applyClaimId === decision.applyClaim.claimId &&
+    ledger.applyClaimDigest === decision.applyClaimDigest &&
+    ledger.proposalId === decision.proposal.proposalId &&
+    ledger.proposalDigest === decision.proposalDigest &&
+    ledger.originalValidationReceiptDigest === decision.validationReceiptDigest &&
+    ledger.effectiveContentHash === decision.acceptedAfterHash &&
+    createFileContentHash(decision.afterContent) === ledger.effectiveContentHash &&
+    decision.acceptedAt <= ledger.appliedAt
+  );
+}
+
+/** Builds a bounded strict accepted Forward Review index. */
+function indexForwardAcceptedRecords(
+  review: unknown,
+  bundleId: string,
+  budget: SnapshotBudget,
+  candidateDecisionDigests: ReadonlySet<string>
+): ForwardAcceptedRecordIndex | null {
+  if (review === undefined) return null;
+  if (!review || typeof review !== "object") return null;
+  if (
+    !hasExactOwnKeys(review, ["version", "bundleId", "revision", "lastRequestRevision", "records"])
+  ) {
+    return null;
+  }
+  const records = readDataProperty(review, "records");
+  const recordCount = readDenseArrayLength(records);
+  if (recordCount === undefined) return null;
+  if (recordCount > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxForwardReviewRecords) {
+    throw new KnowledgeKnownAppliedWikiOutputLimitError("forward_review_records");
+  }
+  const detached = snapshotJsonData(review, budget);
+  if (!detached) return null;
+  let snapshot: Readonly<KnowledgeForwardRevisionReviewSnapshotV2>;
+  try {
+    snapshot = snapshotKnowledgeForwardRevisionReviewSnapshotV2(detached);
+  } catch {
+    return null;
+  }
+  if (snapshot.bundleId !== bundleId) return null;
+  const byAcceptedDecisionDigest = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionAcceptedReviewEntryV2>[]
+  >();
+  for (const entry of snapshot.records) {
+    if (
+      entry.state !== "accepted" ||
+      !candidateDecisionDigests.has(entry.decision.acceptedDecisionDigest)
+    ) {
+      continue;
+    }
+    const matches = byAcceptedDecisionDigest.get(entry.decision.acceptedDecisionDigest) ?? [];
+    matches.push(entry);
+    byAcceptedDecisionDigest.set(entry.decision.acceptedDecisionDigest, matches);
+  }
+  return { revision: snapshot.revision, byAcceptedDecisionDigest };
+}
+
 /** Captures and validates common projection inputs without invoking accessors. */
 function captureCommonInput(input: object): {
   runtimeId: string;
@@ -706,6 +856,9 @@ function captureCommonInput(input: object): {
   applyCommits: readonly unknown[];
   applyCommitCount: number;
   review: unknown;
+  forwardRevisionApplyCommits: readonly unknown[];
+  forwardRevisionApplyCommitCount: number;
+  forwardRevisionReview: unknown;
 } {
   const runtimeId = readDataProperty(input, "runtimeId");
   const runtimeRevision = readDataProperty(input, "runtimeRevision");
@@ -713,7 +866,12 @@ function captureCommonInput(input: object): {
   const pagePath = readDataProperty(input, "pagePath");
   const applyCommits = readDataProperty(input, "applyCommits");
   const review = readDataProperty(input, "review");
+  const rawForwardRevisionApplyCommits = readDataProperty(input, "forwardRevisionApplyCommits");
+  const forwardRevisionApplyCommits =
+    rawForwardRevisionApplyCommits === undefined ? [] : rawForwardRevisionApplyCommits;
+  const forwardRevisionReview = readDataProperty(input, "forwardRevisionReview");
   const applyCommitCount = readDenseArrayLength(applyCommits);
+  const forwardRevisionApplyCommitCount = readDenseArrayLength(forwardRevisionApplyCommits);
   const bundleIdWithinLimit =
     typeof bundleId === "string" &&
     bundleId.length <= KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxIdentifierCharacters;
@@ -734,12 +892,19 @@ function captureCommonInput(input: object): {
     pagePath.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPagePathCharacters ||
     !parsedPath?.ok ||
     parsedPath.path !== pagePath ||
-    applyCommitCount === undefined
+    applyCommitCount === undefined ||
+    forwardRevisionApplyCommitCount === undefined
   ) {
     throw new KnowledgeKnownAppliedWikiOutputProjectionError();
   }
   if (applyCommitCount > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxApplyCommits) {
     throw new KnowledgeKnownAppliedWikiOutputLimitError("apply_commits");
+  }
+  if (
+    forwardRevisionApplyCommitCount >
+    KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxForwardApplyCommits
+  ) {
+    throw new KnowledgeKnownAppliedWikiOutputLimitError("forward_apply_commits");
   }
   return {
     runtimeId,
@@ -750,6 +915,9 @@ function captureCommonInput(input: object): {
     applyCommits: applyCommits as readonly unknown[],
     applyCommitCount,
     review,
+    forwardRevisionApplyCommits: forwardRevisionApplyCommits as readonly unknown[],
+    forwardRevisionApplyCommitCount,
+    forwardRevisionReview,
   };
 }
 
@@ -763,7 +931,14 @@ function assertIndexInputKeys(input: object): void {
     "applyCommits",
     "manifestRevision",
   ];
-  if (!hasExactOwnKeys(input, required, ["review", "currentManifestPage"])) {
+  if (
+    !hasExactOwnKeys(input, required, [
+      "review",
+      "forwardRevisionApplyCommits",
+      "forwardRevisionReview",
+      "currentManifestPage",
+    ])
+  ) {
     throw new KnowledgeKnownAppliedWikiOutputProjectionError();
   }
 }
@@ -778,24 +953,46 @@ function assertDetailInputKeys(input: object): void {
     "applyCommits",
     "authority",
   ];
-  if (!hasExactOwnKeys(input, required, ["review"])) {
+  if (
+    !hasExactOwnKeys(input, required, [
+      "review",
+      "forwardRevisionApplyCommits",
+      "forwardRevisionReview",
+    ])
+  ) {
     throw new KnowledgeKnownAppliedWikiOutputProjectionError();
   }
 }
 
-/** Orders Apply ledgers by true commit time, not accepted Review time. */
-function compareLedgers(
-  left: KnowledgeApplyCommitLedgerRecord,
-  right: KnowledgeApplyCommitLedgerRecord
-): number {
+/** Returns the true durable Apply time for one verified proof. */
+function getProofAppliedAt(proof: KnownAppliedOutputProof): number {
+  return proof.origin === "source_apply" ? proof.ledger.recordedAt : proof.ledger.appliedAt;
+}
+
+/** Returns the committed Manifest revision for one verified proof. */
+function getProofManifestRevision(proof: KnownAppliedOutputProof): number {
+  return proof.ledger.manifestAfterRevision;
+}
+
+/** Returns the exact transaction identity for one verified proof. */
+function getProofTransactionId(proof: KnownAppliedOutputProof): string {
+  return proof.ledger.transactionId;
+}
+
+/** Orders verified Apply proofs by commit time and stable identity. */
+function compareProofs(left: KnownAppliedOutputProof, right: KnownAppliedOutputProof): number {
   return (
-    right.recordedAt - left.recordedAt ||
-    right.manifestAfterRevision - left.manifestAfterRevision ||
-    (left.transactionId < right.transactionId
+    getProofAppliedAt(right) - getProofAppliedAt(left) ||
+    getProofManifestRevision(right) - getProofManifestRevision(left) ||
+    (getProofTransactionId(left) < getProofTransactionId(right)
       ? -1
-      : left.transactionId > right.transactionId
+      : getProofTransactionId(left) > getProofTransactionId(right)
         ? 1
-        : 0)
+        : left.origin < right.origin
+          ? -1
+          : left.origin > right.origin
+            ? 1
+            : 0)
   );
 }
 
@@ -803,9 +1000,9 @@ function compareLedgers(
 function freezeAuthority(
   common: ReturnType<typeof captureCommonInput>,
   output: OutputAccumulator,
-  newest: KnowledgeApplyCommitLedgerRecord
+  newest: KnownAppliedOutputProof
 ): Readonly<KnowledgeKnownAppliedWikiOutputAuthorityIdentity> {
-  return Object.freeze({
+  const commonAuthority = {
     runtimeId: common.runtimeId,
     bundleId: common.bundleId,
     pagePath: common.pagePath,
@@ -813,18 +1010,63 @@ function freezeAuthority(
     outputPath: output.path,
     contentHash: output.contentHash,
     characterCount: output.characterCount,
-    transactionId: newest.transactionId,
-    sourceId: newest.sourceId,
-    sourceContentHash: newest.sourceContentHash,
-    pipelineFingerprint: newest.pipelineFingerprint,
-    inputRevision: newest.inputRevision,
-    changeSetId: newest.changeSetId,
-    changeSetDigest: newest.changeSetDigest,
-    manifestIntentDigest: newest.manifestIntentDigest,
-    manifestAfterRevision: newest.manifestAfterRevision,
-    manifestAfterDigest: newest.manifestAfterDigest,
-    appliedAt: newest.recordedAt,
+    transactionId: newest.ledger.transactionId,
+    sourceId: newest.ledger.sourceId,
+    manifestAfterRevision: newest.ledger.manifestAfterRevision,
+    manifestAfterDigest: newest.ledger.manifestAfterDigest,
+    appliedAt: getProofAppliedAt(newest),
+  };
+  if (newest.origin === "source_apply") {
+    return Object.freeze({
+      ...commonAuthority,
+      origin: "source_apply" as const,
+      sourceContentHash: newest.ledger.sourceContentHash,
+      pipelineFingerprint: newest.ledger.pipelineFingerprint,
+      inputRevision: newest.ledger.inputRevision,
+      changeSetId: newest.ledger.changeSetId,
+      changeSetDigest: newest.ledger.changeSetDigest,
+      manifestIntentDigest: newest.ledger.manifestIntentDigest,
+    });
+  }
+  const freshness = newest.ledger.sourceBase.currentSourceFreshness;
+  return Object.freeze({
+    ...commonAuthority,
+    origin: "forward_revision" as const,
+    sourceContentHash: freshness.sourceContentHash,
+    pipelineFingerprint: freshness.pipelineFingerprint,
+    inputRevision: freshness.inputRevision,
+    ledgerId: newest.ledger.ledgerId,
+    ledgerDigest: newest.ledger.ledgerDigest,
+    forwardLedgerIdentityDigest: newest.ledger.forwardLedgerIdentityDigest,
+    acceptedDecisionDigest: newest.ledger.acceptedDecisionDigest,
+    applyClaimId: newest.ledger.applyClaimId,
+    applyClaimDigest: newest.ledger.applyClaimDigest,
+    proposalId: newest.ledger.proposalId,
+    proposalDigest: newest.ledger.proposalDigest,
+    manualOverride: newest.accepted.decision.manualOverride,
   });
+}
+
+/** Creates canonical per-origin summaries without discarding mixed provenance. */
+function freezeOriginSummaries(
+  proofs: readonly KnownAppliedOutputProof[]
+): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
+  const kinds = ["source_apply", "forward_revision"] as const;
+  const summaries = kinds.flatMap((kind) => {
+    const matching = proofs.filter((proof) => proof.origin === kind).sort(compareProofs);
+    const newest = matching[0];
+    return newest
+      ? [
+          Object.freeze({
+            kind,
+            verifiedApplyCount: matching.length,
+            newestAppliedAt: getProofAppliedAt(newest),
+            newestManifestRevision: getProofManifestRevision(newest),
+          }),
+        ]
+      : [];
+  });
+  return Object.freeze(summaries);
 }
 
 /** Creates one deeply frozen metadata-only index item. */
@@ -832,8 +1074,8 @@ function freezeIndexItem(
   common: ReturnType<typeof captureCommonInput>,
   output: OutputAccumulator
 ): Readonly<KnowledgeKnownAppliedWikiOutputIndexItem> {
-  const ledgers = output.ledgers.sort(compareLedgers);
-  const newest = ledgers[0];
+  const proofs = output.proofs.sort(compareProofs);
+  const newest = proofs[0];
   if (!newest) throw new KnowledgeKnownAppliedWikiOutputProjectionError();
   return Object.freeze({
     path: output.path,
@@ -844,9 +1086,10 @@ function freezeIndexItem(
       output.characterCount <= KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxContentCharacters
         ? "available"
         : "too_large",
-    newestAppliedAt: newest.recordedAt,
-    newestManifestRevision: newest.manifestAfterRevision,
-    verifiedApplyCount: ledgers.length,
+    newestAppliedAt: getProofAppliedAt(newest),
+    newestManifestRevision: getProofManifestRevision(newest),
+    verifiedApplyCount: proofs.length,
+    origins: freezeOriginSummaries(proofs),
     authority: freezeAuthority(common, output, newest),
   });
 }
@@ -899,13 +1142,51 @@ function captureCurrentManifestPage(
   return Object.freeze({ path, windowsPathKey, ownership, contentHash });
 }
 
+/** Adds one verified proof while preserving every distinct Apply provenance. */
+function addVerifiedOutputProof(
+  outputs: Map<string, OutputAccumulator>,
+  page: AcceptedPageMetadata,
+  proof: KnownAppliedOutputProof
+): void {
+  const existing = outputs.get(page.contentHash);
+  if (existing && existing.characterCount !== page.characterCount) {
+    throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+  }
+  if (existing) {
+    if (
+      !existing.proofs.some(
+        (candidate) =>
+          candidate.origin === proof.origin &&
+          getProofTransactionId(candidate) === getProofTransactionId(proof)
+      )
+    ) {
+      const currentNewest = [...existing.proofs].sort(compareProofs)[0];
+      if (currentNewest && compareProofs(proof, currentNewest) < 0) {
+        existing.path = page.path;
+      }
+      existing.proofs.push(proof);
+    }
+    return;
+  }
+  outputs.set(page.contentHash, {
+    path: page.path,
+    contentHash: page.contentHash,
+    characterCount: page.characterCount,
+    proofs: [proof],
+  });
+  if (outputs.size > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPageOutputs) {
+    throw new KnowledgeKnownAppliedWikiOutputLimitError("page_outputs");
+  }
+}
+
 /**
  * Projects a metadata-only index of exact known applied page outputs.
  *
- * Each candidate requires one unique Apply-ledger ↔ accepted-Review join. Its
- * after-content hash, accepted ChangeSet digest, and final Manifest intent are
- * recomputed before the body is discarded. Pending, rejected, no-change,
- * accepted-but-uncommitted, ambiguous, or tampered records contribute nothing.
+ * Ordinary candidates require one unique source Apply-ledger ↔ accepted-Review
+ * join. Forward candidates require one canonical forward ledger ↔ accepted
+ * Forward Review join. Both paths re-prove the selected body hash before the
+ * body is discarded. Pending, rejected, uncommitted, ambiguous, or tampered
+ * records contribute nothing.
  */
 export function projectKnowledgeKnownAppliedWikiOutputIndex(
   input: KnowledgeKnownAppliedWikiOutputIndexProjectionInput
@@ -946,31 +1227,62 @@ export function projectKnowledgeKnownAppliedWikiOutputIndex(
       }
       if (records.length !== 1 || !records[0].page) continue;
       const page = records[0].page;
-      const existing = outputs.get(page.contentHash);
-      if (existing && existing.characterCount !== page.characterCount) {
-        throw new KnowledgeKnownAppliedWikiOutputProjectionError();
-      }
-      if (existing) {
-        if (
-          !existing.ledgers.some((candidate) => candidate.transactionId === ledger.transactionId)
-        ) {
-          const currentNewest = [...existing.ledgers].sort(compareLedgers)[0];
-          if (currentNewest && compareLedgers(ledger, currentNewest) < 0) {
-            existing.path = page.path;
-          }
-          existing.ledgers.push(ledger);
-        }
+      addVerifiedOutputProof(outputs, page, { origin: "source_apply", ledger });
+    }
+  }
+
+  const forwardLedgers: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[] = [];
+  const forwardLedgerDecisionCounts = new Map<string, number>();
+  for (let index = 0; index < common.forwardRevisionApplyCommitCount; index += 1) {
+    let ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>;
+    try {
+      ledger = snapshotKnowledgeForwardRevisionApplyLedgerRecord(
+        readDenseArrayItem(common.forwardRevisionApplyCommits, index)
+      );
+    } catch {
+      continue;
+    }
+    if (
+      ledger.runtimeId !== common.runtimeId ||
+      ledger.bundleId !== common.bundleId ||
+      ledger.pagePath !== common.pagePath ||
+      ledger.windowsPathKey !== common.windowsPathKey
+    ) {
+      continue;
+    }
+    forwardLedgers.push(ledger);
+    forwardLedgerDecisionCounts.set(
+      ledger.acceptedDecisionDigest,
+      (forwardLedgerDecisionCounts.get(ledger.acceptedDecisionDigest) ?? 0) + 1
+    );
+  }
+  const forwardAccepted = indexForwardAcceptedRecords(
+    common.forwardRevisionReview,
+    common.bundleId,
+    budget,
+    new Set(forwardLedgerDecisionCounts.keys())
+  );
+  if (forwardAccepted) {
+    for (const ledger of forwardLedgers) {
+      const records =
+        forwardAccepted.byAcceptedDecisionDigest.get(ledger.acceptedDecisionDigest) ?? [];
+      if (forwardLedgerDecisionCounts.get(ledger.acceptedDecisionDigest) !== 1) {
+        if (records.length > 0) throw new KnowledgeKnownAppliedWikiOutputProjectionError();
         continue;
       }
-      outputs.set(page.contentHash, {
-        path: page.path,
-        contentHash: page.contentHash,
-        characterCount: page.characterCount,
-        ledgers: [ledger],
+      if (records.length > 1) throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+      const record = records[0];
+      if (!record || !knowledgeForwardApplyLedgerMatchesAcceptedReview(ledger, record)) continue;
+      const page: AcceptedPageMetadata = {
+        path: ledger.pagePath,
+        contentHash: ledger.effectiveContentHash,
+        characterCount: record.decision.afterContent.length,
+      };
+      addVerifiedOutputProof(outputs, page, {
+        origin: "forward_revision",
+        ledger,
+        accepted: record,
       });
-      if (outputs.size > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPageOutputs) {
-        throw new KnowledgeKnownAppliedWikiOutputLimitError("page_outputs");
-      }
     }
   }
 
@@ -992,6 +1304,7 @@ export function projectKnowledgeKnownAppliedWikiOutputIndex(
     pagePath: common.pagePath,
     windowsPathKey: common.windowsPathKey,
     reviewRevision: accepted?.revision ?? null,
+    forwardReviewRevision: forwardAccepted?.revision ?? null,
     manifestRevision: Number(manifestRevision),
     currentManifestPage,
     outputs: Object.freeze(projected),
@@ -1005,7 +1318,8 @@ function captureAuthority(
   const snapshot = snapshotJsonData(value, { nodes: 0, characters: 0 });
   if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object") return undefined;
   const candidate = snapshot as unknown as KnowledgeKnownAppliedWikiOutputAuthorityIdentity;
-  const authorityKeys = [
+  const commonAuthorityKeys = [
+    "origin",
     "runtimeId",
     "bundleId",
     "pagePath",
@@ -1018,14 +1332,35 @@ function captureAuthority(
     "sourceContentHash",
     "pipelineFingerprint",
     "inputRevision",
-    "changeSetId",
-    "changeSetDigest",
-    "manifestIntentDigest",
     "manifestAfterRevision",
     "manifestAfterDigest",
     "appliedAt",
   ];
-  if (!hasExactOwnKeys(snapshot, authorityKeys)) return undefined;
+  const sourceAuthorityKeys = [
+    ...commonAuthorityKeys,
+    "changeSetId",
+    "changeSetDigest",
+    "manifestIntentDigest",
+  ];
+  const forwardAuthorityKeys = [
+    ...commonAuthorityKeys,
+    "ledgerId",
+    "ledgerDigest",
+    "forwardLedgerIdentityDigest",
+    "acceptedDecisionDigest",
+    "applyClaimId",
+    "applyClaimDigest",
+    "proposalId",
+    "proposalDigest",
+    "manualOverride",
+  ];
+  if (
+    (candidate.origin === "source_apply" && !hasExactOwnKeys(snapshot, sourceAuthorityKeys)) ||
+    (candidate.origin === "forward_revision" && !hasExactOwnKeys(snapshot, forwardAuthorityKeys)) ||
+    (candidate.origin !== "source_apply" && candidate.origin !== "forward_revision")
+  ) {
+    return undefined;
+  }
   const parsedPagePath =
     typeof candidate.pagePath === "string" &&
     candidate.pagePath.length <= KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxPagePathCharacters
@@ -1058,9 +1393,49 @@ function captureAuthority(
     toWindowsPathKey(candidate.outputPath) !== candidate.windowsPathKey ||
     !isDigest(candidate.contentHash) ||
     !Number.isSafeInteger(candidate.characterCount) ||
-    candidate.characterCount < 0
+    candidate.characterCount < 0 ||
+    typeof candidate.transactionId !== "string" ||
+    candidate.transactionId.trim().length === 0 ||
+    candidate.transactionId.length >
+      KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxIdentifierCharacters ||
+    typeof candidate.sourceId !== "string" ||
+    candidate.sourceId.trim().length === 0 ||
+    candidate.sourceId.length >
+      KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxIdentifierCharacters ||
+    !isDigest(candidate.sourceContentHash) ||
+    !isDigest(candidate.pipelineFingerprint) ||
+    !Number.isSafeInteger(candidate.inputRevision) ||
+    candidate.inputRevision < 0 ||
+    !Number.isSafeInteger(candidate.manifestAfterRevision) ||
+    candidate.manifestAfterRevision <= 0 ||
+    !isDigest(candidate.manifestAfterDigest) ||
+    !Number.isSafeInteger(candidate.appliedAt) ||
+    candidate.appliedAt < 0
   ) {
     return undefined;
+  }
+  if (candidate.origin === "forward_revision") {
+    if (
+      typeof candidate.ledgerId !== "string" ||
+      !/^forward-revision-apply-ledger-[a-f0-9]{64}$/.test(candidate.ledgerId) ||
+      !isDigest(candidate.ledgerDigest) ||
+      !isDigest(candidate.forwardLedgerIdentityDigest) ||
+      !isDigest(candidate.acceptedDecisionDigest) ||
+      typeof candidate.applyClaimId !== "string" ||
+      candidate.applyClaimId.length === 0 ||
+      candidate.applyClaimId.length >
+        KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxIdentifierCharacters ||
+      !isDigest(candidate.applyClaimDigest) ||
+      typeof candidate.proposalId !== "string" ||
+      candidate.proposalId.length === 0 ||
+      candidate.proposalId.length >
+        KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxIdentifierCharacters ||
+      !isDigest(candidate.proposalDigest) ||
+      typeof candidate.manualOverride !== "boolean"
+    ) {
+      return undefined;
+    }
+    return Object.freeze({ ...candidate });
   }
   const ledger = snapshotLedgerRecord({
     transactionId: candidate.transactionId,
@@ -1084,10 +1459,10 @@ function captureAuthority(
   return ledger ? Object.freeze({ ...candidate }) : undefined;
 }
 
-/** Reports whether one ledger is the exact private authority selected by the index. */
-function ledgerMatchesAuthority(
+/** Reports whether one source ledger is the exact private authority selected by the index. */
+function sourceLedgerMatchesAuthority(
   ledger: KnowledgeApplyCommitLedgerRecord,
-  authority: KnowledgeKnownAppliedWikiOutputAuthorityIdentity
+  authority: KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity
 ): boolean {
   return (
     ledger.transactionId === authority.transactionId &&
@@ -1105,12 +1480,118 @@ function ledgerMatchesAuthority(
   );
 }
 
+/** Reports whether one Forward ledger is the exact private authority selected by the index. */
+function forwardLedgerMatchesAuthority(
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>,
+  authority: KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity
+): boolean {
+  const freshness = ledger.sourceBase.currentSourceFreshness;
+  return (
+    ledger.runtimeId === authority.runtimeId &&
+    ledger.transactionId === authority.transactionId &&
+    ledger.bundleId === authority.bundleId &&
+    ledger.sourceId === authority.sourceId &&
+    ledger.pagePath === authority.outputPath &&
+    ledger.windowsPathKey === authority.windowsPathKey &&
+    ledger.effectiveContentHash === authority.contentHash &&
+    freshness.sourceContentHash === authority.sourceContentHash &&
+    freshness.pipelineFingerprint === authority.pipelineFingerprint &&
+    freshness.inputRevision === authority.inputRevision &&
+    ledger.manifestAfterRevision === authority.manifestAfterRevision &&
+    ledger.manifestAfterDigest === authority.manifestAfterDigest &&
+    ledger.appliedAt === authority.appliedAt &&
+    ledger.ledgerId === authority.ledgerId &&
+    ledger.ledgerDigest === authority.ledgerDigest &&
+    ledger.forwardLedgerIdentityDigest === authority.forwardLedgerIdentityDigest &&
+    ledger.acceptedDecisionDigest === authority.acceptedDecisionDigest &&
+    ledger.applyClaimId === authority.applyClaimId &&
+    ledger.applyClaimDigest === authority.applyClaimDigest &&
+    ledger.proposalId === authority.proposalId &&
+    ledger.proposalDigest === authority.proposalDigest
+  );
+}
+
 /** Creates a deeply frozen stale detail response. */
 function freezeStaleDetail(
   runtimeId: string,
   runtimeRevision: number
 ): KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot {
   return Object.freeze({ kind: "stale" as const, runtimeId, runtimeRevision });
+}
+
+/** Rejoins one exact Forward authority to its canonical ledger and accepted body. */
+function projectForwardRevisionOutputDetail(
+  common: ReturnType<typeof captureCommonInput>,
+  authority: KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity
+): KnowledgeRuntimeKnownAppliedWikiOutputDetailSnapshot {
+  let selectedLedger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord> | undefined;
+  let selectedDecisionJoinCount = 0;
+  for (let index = 0; index < common.forwardRevisionApplyCommitCount; index += 1) {
+    let ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>;
+    try {
+      ledger = snapshotKnowledgeForwardRevisionApplyLedgerRecord(
+        readDenseArrayItem(common.forwardRevisionApplyCommits, index)
+      );
+    } catch {
+      continue;
+    }
+    if (
+      ledger.bundleId === common.bundleId &&
+      ledger.acceptedDecisionDigest === authority.acceptedDecisionDigest
+    ) {
+      selectedDecisionJoinCount += 1;
+    }
+    if (forwardLedgerMatchesAuthority(ledger, authority)) {
+      if (selectedLedger) throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+      selectedLedger = ledger;
+    }
+  }
+  if (!selectedLedger) return freezeStaleDetail(common.runtimeId, common.runtimeRevision);
+
+  const budget: SnapshotBudget = { nodes: 0, characters: 0 };
+  const accepted = indexForwardAcceptedRecords(
+    common.forwardRevisionReview,
+    common.bundleId,
+    budget,
+    new Set([selectedLedger.acceptedDecisionDigest])
+  );
+  const matches =
+    accepted?.byAcceptedDecisionDigest.get(selectedLedger.acceptedDecisionDigest) ?? [];
+  if ((selectedDecisionJoinCount !== 1 || matches.length > 1) && matches.length > 0) {
+    throw new KnowledgeKnownAppliedWikiOutputProjectionError();
+  }
+  const entry = matches[0];
+  if (
+    matches.length !== 1 ||
+    !entry ||
+    !knowledgeForwardApplyLedgerMatchesAcceptedReview(selectedLedger, entry) ||
+    entry.decision.manualOverride !== authority.manualOverride ||
+    entry.decision.afterContent.length !== authority.characterCount ||
+    entry.decision.acceptedAfterHash !== authority.contentHash ||
+    selectedLedger.pagePath !== authority.outputPath
+  ) {
+    return freezeStaleDetail(common.runtimeId, common.runtimeRevision);
+  }
+  if (
+    entry.decision.afterContent.length >
+    KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxContentCharacters
+  ) {
+    return Object.freeze({
+      kind: "too_large" as const,
+      runtimeId: common.runtimeId,
+      runtimeRevision: common.runtimeRevision,
+      contentHash: entry.decision.acceptedAfterHash,
+      characterCount: entry.decision.afterContent.length,
+    });
+  }
+  return Object.freeze({
+    kind: "available" as const,
+    runtimeId: common.runtimeId,
+    runtimeRevision: common.runtimeRevision,
+    contentHash: entry.decision.acceptedAfterHash,
+    content: entry.decision.afterContent,
+    characterCount: entry.decision.afterContent.length,
+  });
 }
 
 /**
@@ -1139,6 +1620,9 @@ export function projectKnowledgeKnownAppliedWikiOutputDetail(
   ) {
     return freezeStaleDetail(common.runtimeId, common.runtimeRevision);
   }
+  if (authority.origin === "forward_revision") {
+    return projectForwardRevisionOutputDetail(common, authority);
+  }
 
   let selectedLedger: KnowledgeApplyCommitLedgerRecord | undefined;
   let selectedJoinCount = 0;
@@ -1146,7 +1630,7 @@ export function projectKnowledgeKnownAppliedWikiOutputDetail(
     const ledger = snapshotLedgerRecord(readDenseArrayItem(common.applyCommits, index));
     if (!ledger || ledger.bundleId !== common.bundleId) continue;
     if (createJoinKey(ledger) === createJoinKey(authority)) selectedJoinCount += 1;
-    if (ledgerMatchesAuthority(ledger, authority)) {
+    if (sourceLedgerMatchesAuthority(ledger, authority)) {
       if (selectedLedger) throw new KnowledgeKnownAppliedWikiOutputProjectionError();
       selectedLedger = ledger;
     }

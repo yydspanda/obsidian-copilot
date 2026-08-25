@@ -15,6 +15,8 @@ import {
   type KnowledgeKnownAppliedWikiCurrentState,
   type KnowledgeKnownAppliedWikiOutputComparison,
   type KnowledgeKnownAppliedWikiOutputDetail,
+  type KnowledgeKnownAppliedWikiOutputOriginSummary,
+  type KnowledgeKnownAppliedWikiOutputProposalCapability,
   type KnowledgeKnownAppliedWikiOutputRelation,
   type KnowledgeKnownAppliedWikiOutputSummary,
   type KnowledgeKnownAppliedWikiOutputsPage,
@@ -162,6 +164,27 @@ function formatOutputRelation(relation: KnowledgeKnownAppliedWikiOutputRelation)
   }
 }
 
+/** Formats one verified Apply provenance without exposing private ledger identity. */
+function formatOriginKind(kind: KnowledgeKnownAppliedWikiOutputOriginSummary["kind"]): string {
+  return kind === "source_apply" ? "Source Apply" : "Forward revision Apply";
+}
+
+/** Formats why a present proposal action is unavailable for one exact row. */
+function formatProposalCapability(
+  capability: Exclude<KnowledgeKnownAppliedWikiOutputProposalCapability, "available">
+): string {
+  switch (capability) {
+    case "selected_is_current":
+      return "This output already matches the current applied file.";
+    case "current_not_applied":
+      return "A historical output can be proposed only while the current file is verified as applied.";
+    case "forward_origin_not_supported":
+      return "This output is proven by a Forward revision Apply. The current proposal protocol accepts only Source Apply history.";
+    case "detail_too_large":
+      return "This exact output is too large for the bounded proposal protocol.";
+  }
+}
+
 /** Maps a closed read result to a stable UI message. */
 function formatReadFailure(kind: "stale" | "unavailable" | "too_large"): string {
   switch (kind) {
@@ -186,9 +209,14 @@ function formatProposalFailure(
     case "unavailable":
       return "A proposal could not be published. Reopen this current applied page and try again.";
     case "not_eligible":
-      return result.reason === "current_not_applied"
-        ? "The current page is no longer proposal-eligible. Reopen known applied outputs."
-        : "This output already matches the current applied file.";
+      switch (result.reason) {
+        case "current_not_applied":
+          return "The current page is no longer proposal-eligible. Reopen known applied outputs.";
+        case "selected_is_current":
+          return "This output already matches the current applied file.";
+        case "forward_origin_not_supported":
+          return "This Forward revision output is not supported by the current Source-history proposal protocol.";
+      }
   }
 }
 
@@ -213,6 +241,52 @@ const isAbortError = isKnowledgeAbortError;
 /** Checks the runtime container shape without widening its declared element type. */
 function isArrayContainer(value: unknown): boolean {
   return Array.isArray(value);
+}
+
+/** Validates one bounded canonical provenance aggregate before rendering it. */
+function hasSafeOrigins(summary: Readonly<KnowledgeKnownAppliedWikiOutputSummary>): boolean {
+  const origins = summary.origins;
+  if (!isArrayContainer(origins) || origins.length < 1 || origins.length > 2) return false;
+  const kinds = origins.map((origin) => origin.kind).join(",");
+  return (
+    (kinds === "source_apply" ||
+      kinds === "forward_revision" ||
+      kinds === "source_apply,forward_revision") &&
+    origins.every(
+      (origin) =>
+        Number.isSafeInteger(origin.verifiedApplyCount) &&
+        origin.verifiedApplyCount > 0 &&
+        origin.verifiedApplyCount <=
+          KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxVerifiedApplyRecordsPerOrigin &&
+        Number.isSafeInteger(origin.newestAppliedAt) &&
+        origin.newestAppliedAt >= 0 &&
+        Number.isSafeInteger(origin.newestManifestRevision) &&
+        origin.newestManifestRevision > 0
+    ) &&
+    origins.reduce((total, origin) => total + origin.verifiedApplyCount, 0) ===
+      summary.verifiedApplyCount &&
+    Math.max(...origins.map((origin) => origin.newestAppliedAt)) === summary.appliedAt
+  );
+}
+
+/** Reports exact equality for provenance already accepted by the bounded UI checks. */
+function originsEqual(
+  left: readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[],
+  right: readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[]
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((origin, index) => {
+      const candidate = right[index];
+      return (
+        candidate !== undefined &&
+        origin.kind === candidate.kind &&
+        origin.verifiedApplyCount === candidate.verifiedApplyCount &&
+        origin.newestAppliedAt === candidate.newestAppliedAt &&
+        origin.newestManifestRevision === candidate.newestManifestRevision
+      );
+    })
+  );
 }
 
 /** Validates the bounded first page before it becomes renderable state. */
@@ -247,6 +321,20 @@ function isSafeInitialSession(session: Readonly<KnowledgeKnownAppliedWikiOutputs
   return (
     stateMatchIsValid &&
     relationsAreValid &&
+    items.every((item) => {
+      if (!hasSafeOrigins(item)) return false;
+      if (session.currentState !== "applied") {
+        return item.proposalCapability === "current_not_applied";
+      }
+      if (item.relation === "current_applied") {
+        return item.proposalCapability === "selected_is_current";
+      }
+      return (
+        item.proposalCapability === "available" ||
+        item.proposalCapability === "forward_origin_not_supported" ||
+        item.proposalCapability === "detail_too_large"
+      );
+    }) &&
     refs.size === items.length &&
     (session.knownOutputCount === 0) === (items.length === 0) &&
     (session.currentState !== "applied" || session.knownOutputCount > 0) &&
@@ -279,6 +367,15 @@ function isSafeNextPage(
     items.length !== expectedCount ||
     pages.some((frame) => frame.cursor === requestedCursor) ||
     page.nextCursor === requestedCursor ||
+    items.some(
+      (item) =>
+        !hasSafeOrigins(item) ||
+        (session.currentState === "applied"
+          ? item.proposalCapability !== "available" &&
+            item.proposalCapability !== "forward_origin_not_supported" &&
+            item.proposalCapability !== "detail_too_large"
+          : item.proposalCapability !== "current_not_applied")
+    ) ||
     pages.some((frame) => frame.cursor !== undefined && frame.cursor === page.nextCursor)
   ) {
     return false;
@@ -499,7 +596,9 @@ export function KnowledgeKnownAppliedWikiOutputsView({
           if (
             result.value.outputRef !== outputRef ||
             result.value.appliedAt !== summary.appliedAt ||
-            result.value.verifiedApplyCount !== summary.verifiedApplyCount
+            result.value.verifiedApplyCount !== summary.verifiedApplyCount ||
+            result.value.proposalCapability !== summary.proposalCapability ||
+            !originsEqual(result.value.origins, summary.origins)
           ) {
             setChildState({
               kind: "read_error",
@@ -635,7 +734,7 @@ export function KnowledgeKnownAppliedWikiOutputsView({
       !session ||
       !proposalAction ||
       session.currentState !== "applied" ||
-      selection.summary.relation !== "earlier_known" ||
+      selection.summary.proposalCapability !== "available" ||
       selection.summary.outputRef !== selection.detail.outputRef ||
       isPendingProposal(proposalState, proposalAction, session, selection.detail.outputRef)
     ) {
@@ -748,9 +847,7 @@ export function KnowledgeKnownAppliedWikiOutputsView({
         : ({ kind: "idle" } as const);
     const proposalPending = visibleProposalState.kind === "pending";
     const proposalEligible =
-      proposalAction !== undefined &&
-      session?.currentState === "applied" &&
-      selection?.summary.relation === "earlier_known";
+      proposalAction !== undefined && selection?.summary.proposalCapability === "available";
     return (
       <section
         aria-busy={visibleChildState.kind.startsWith("loading_") || proposalPending || undefined}
@@ -791,6 +888,13 @@ export function KnowledgeKnownAppliedWikiOutputsView({
               Apply
               {detail.verifiedApplyCount === 1 ? " record" : " records"}
             </p>
+            <div className="tw-flex tw-flex-wrap tw-gap-1" aria-label="Verified Apply provenance">
+              {detail.origins.map((origin) => (
+                <Badge key={origin.kind} variant="outline">
+                  {formatOriginKind(origin.kind)} · {origin.verifiedApplyCount}
+                </Badge>
+              ))}
+            </div>
             <ExactPlainText>{detail.content}</ExactPlainText>
             {session?.currentState === "missing" ? (
               <p className="tw-m-0 tw-text-xs tw-text-muted" role="note">
@@ -836,6 +940,11 @@ export function KnowledgeKnownAppliedWikiOutputsView({
                   </p>
                 ) : null}
               </div>
+            ) : null}
+            {proposalAction && detail.proposalCapability !== "available" ? (
+              <p className="tw-m-0 tw-text-xs tw-text-muted" role="note">
+                {formatProposalCapability(detail.proposalCapability)}
+              </p>
             ) : null}
           </div>
         ) : null}
@@ -940,6 +1049,16 @@ export function KnowledgeKnownAppliedWikiOutputsView({
                           {item.verifiedApplyCount} verified Apply
                           {item.verifiedApplyCount === 1 ? " record" : " records"}
                         </p>
+                        <div
+                          className="tw-mt-1 tw-flex tw-flex-wrap tw-gap-1"
+                          aria-label="Verified Apply provenance"
+                        >
+                          {item.origins.map((origin) => (
+                            <Badge key={origin.kind} variant="outline">
+                              {formatOriginKind(origin.kind)} · {origin.verifiedApplyCount}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
                       <Button
                         disabled={pageLoading}

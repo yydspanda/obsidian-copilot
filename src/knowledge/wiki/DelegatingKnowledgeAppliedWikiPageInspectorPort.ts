@@ -1,6 +1,11 @@
-import { parseVaultPath } from "@/knowledge/paths/vaultPath";
+import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import {
+  snapshotKnowledgeAppliedWikiEffectivePageHead,
+  type KnowledgeAppliedWikiEffectivePageHead,
+} from "@/knowledge/query/KnowledgeAppliedWikiEffectivePageHead";
 import { KNOWLEDGE_REVIEW_EVIDENCE_LIMITS } from "@/knowledge/review/KnowledgeReviewEvidence";
 import {
+  KNOWLEDGE_APPLIED_WIKI_EVIDENCE_SCOPE,
   KNOWLEDGE_APPLIED_WIKI_INSPECTION_LIMITS,
   getKnowledgeAppliedWikiPageInspectorErrorCode,
   KnowledgeAppliedWikiPageInspectorError,
@@ -298,6 +303,10 @@ function snapshotDelegateSession(
     "pageRef",
     "displayPagePath",
     "ownership",
+    "sourceAppliedContentHash",
+    "effectiveContentHash",
+    "origin",
+    "evidenceScope",
     "sources",
     "omittedSourceCount",
   ]);
@@ -311,6 +320,7 @@ function snapshotDelegateSession(
     (record.ownership !== "generated" &&
       record.ownership !== "shared" &&
       record.ownership !== "user") ||
+    record.evidenceScope !== KNOWLEDGE_APPLIED_WIKI_EVIDENCE_SCOPE ||
     !isNonNegativeInteger(record.omittedSourceCount)
   ) {
     return undefined;
@@ -337,10 +347,32 @@ function snapshotDelegateSession(
     }
     sources.push(source);
   }
+  let head: Readonly<KnowledgeAppliedWikiEffectivePageHead>;
+  try {
+    head = snapshotKnowledgeAppliedWikiEffectivePageHead(
+      {
+        sourceAppliedContentHash: record.sourceAppliedContentHash,
+        effectiveContentHash: record.effectiveContentHash,
+        contentHash: record.effectiveContentHash,
+        origin: record.origin,
+      },
+      {
+        pagePath: record.displayPagePath,
+        windowsPathKey: toWindowsPathKey(record.displayPagePath),
+        ownership: record.ownership,
+      }
+    );
+  } catch {
+    return undefined;
+  }
   return Object.freeze({
     pageRef: record.pageRef,
     displayPagePath: record.displayPagePath,
     ownership: record.ownership,
+    sourceAppliedContentHash: head.sourceAppliedContentHash,
+    effectiveContentHash: head.effectiveContentHash,
+    origin: head.origin,
+    evidenceScope: KNOWLEDGE_APPLIED_WIKI_EVIDENCE_SCOPE,
     sources: Object.freeze(sources),
     omittedSourceCount: record.omittedSourceCount,
   });

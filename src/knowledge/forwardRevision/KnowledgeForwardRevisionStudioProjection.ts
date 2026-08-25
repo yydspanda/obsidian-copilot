@@ -4,14 +4,28 @@ import {
   type KnowledgeForwardRevisionApplyJournalV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyJournal";
 import {
+  createKnowledgeForwardRevisionApplyRecoveryExpectation,
+  snapshotKnowledgeForwardRevisionApplyRecoveryExpectation,
+  type KnowledgeForwardRevisionApplyRecoveryExpectationV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyRecoveryExpectation";
+import {
   snapshotKnowledgeForwardRevisionApplyLedgerRecord,
-  type KnowledgeForwardRevisionApplyLedgerRecordV1,
+  type KnowledgeForwardRevisionApplyLedgerRecord,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyLedger";
 import {
   createKnowledgeForwardRevisionTerminalDecisionRecordDigest,
   snapshotKnowledgeForwardRevisionAcceptedDecisionRecord,
   type KnowledgeForwardRevisionAcceptedDecisionRecordV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
+import {
+  createKnowledgeForwardRevisionAcceptedClaimIdentity,
+  createKnowledgeForwardRevisionLifecycleResourceIdentity,
+  snapshotKnowledgeForwardRevisionAbandonmentRecord,
+  snapshotKnowledgeForwardRevisionRecoveryTerminalRecord,
+  type KnowledgeForwardRevisionAbandonmentRecordV1,
+  type KnowledgeForwardRevisionAcceptedClaimIdentityV1,
+  type KnowledgeForwardRevisionRecoveryTerminalRecordV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal";
 import {
   createKnowledgeForwardRevisionPendingProposalRecordDigest,
   snapshotKnowledgeForwardRevisionPendingProposalRecord,
@@ -66,6 +80,37 @@ export interface KnowledgeForwardRevisionStudioAcceptedReadyRecord {
   readonly decisionDigest: string;
 }
 
+/** One accepted decision durably terminalized before any Apply journal or Wiki mutation. */
+export interface KnowledgeForwardRevisionStudioAbandonedRecord {
+  readonly state: "abandoned";
+  readonly reviewRef: string;
+  readonly snapshotRef: string;
+  readonly pagePath: string;
+  readonly updatedAt: number;
+  readonly acceptedAt: number;
+  readonly abandonedAt: number;
+  readonly manualOverride: boolean;
+  readonly acceptedDecision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>;
+  readonly decisionDigest: string;
+  readonly abandonment: Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>;
+  readonly abandonmentDigest: string;
+}
+
+/** One sticky recovery durably ended while retaining the freshly observed external Wiki value. */
+export interface KnowledgeForwardRevisionStudioKeptCurrentRecord {
+  readonly state: "kept_current";
+  readonly reviewRef: string;
+  readonly snapshotRef: string;
+  readonly pagePath: string;
+  readonly updatedAt: number;
+  readonly acceptedAt: number;
+  readonly terminalizedAt: number;
+  readonly manualOverride: boolean;
+  readonly outcome: KnowledgeForwardRevisionRecoveryTerminalRecordV1["outcome"];
+  readonly acceptedDecision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>;
+  readonly decisionDigest: string;
+}
+
 /** One accepted decision currently owned by a durable non-conflict Apply journal. */
 export interface KnowledgeForwardRevisionStudioApplyingRecord {
   readonly state: "applying";
@@ -94,12 +139,15 @@ export interface KnowledgeForwardRevisionStudioRecoveryRequiredRecord {
   readonly detectedAt: number;
   readonly acceptedDecision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>;
   readonly decisionDigest: string;
+  readonly recoveryExpectation: Readonly<KnowledgeForwardRevisionApplyRecoveryExpectationV1>;
 }
 
-/** Active forward work retained behind an internal production coordinator boundary. */
+/** Visible forward work retained behind an internal production coordinator boundary. */
 export type KnowledgeForwardRevisionStudioActiveRecord =
   | KnowledgeForwardRevisionStudioPendingRecord
   | KnowledgeForwardRevisionStudioAcceptedReadyRecord
+  | KnowledgeForwardRevisionStudioAbandonedRecord
+  | KnowledgeForwardRevisionStudioKeptCurrentRecord
   | KnowledgeForwardRevisionStudioApplyingRecord
   | KnowledgeForwardRevisionStudioRecoveryRequiredRecord;
 
@@ -124,6 +172,8 @@ export interface KnowledgeForwardRevisionStudioProjectionInput {
   readonly review?: unknown;
   readonly activeApply: unknown;
   readonly applyCommits: readonly unknown[];
+  readonly abandonments: readonly unknown[];
+  readonly recoveryTerminals: readonly unknown[];
 }
 
 /** Stable bounded resource exhausted by a product projection. */
@@ -167,6 +217,7 @@ interface AcceptedProjection {
   readonly decision: Readonly<KnowledgeForwardRevisionAcceptedDecisionRecordV1>;
   readonly identityKey: string;
   readonly reviewRef: string;
+  readonly acceptedIdentity: Readonly<KnowledgeForwardRevisionAcceptedClaimIdentityV1>;
 }
 
 interface CapturedProjectionInput {
@@ -175,7 +226,9 @@ interface CapturedProjectionInput {
   readonly bundleId: string;
   readonly review: Readonly<KnowledgeForwardRevisionReviewSnapshotV2>;
   readonly activeApply: Readonly<KnowledgeForwardRevisionApplyJournalV1> | null;
-  readonly applyCommits: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[];
+  readonly applyCommits: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[];
+  readonly abandonments: readonly Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>[];
+  readonly recoveryTerminals: readonly Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>[];
 }
 
 const INPUT_REQUIRED_KEYS = [
@@ -184,6 +237,8 @@ const INPUT_REQUIRED_KEYS = [
   "bundleId",
   "activeApply",
   "applyCommits",
+  "abandonments",
+  "recoveryTerminals",
 ] as const;
 const INPUT_OPTIONAL_KEYS = ["review"] as const;
 const SNAPSHOT_KEYS = [
@@ -219,6 +274,33 @@ const ACCEPTED_READY_KEYS = [
   "acceptedDecision",
   "decisionDigest",
 ] as const;
+const ABANDONED_KEYS = [
+  "state",
+  "reviewRef",
+  "snapshotRef",
+  "pagePath",
+  "updatedAt",
+  "acceptedAt",
+  "abandonedAt",
+  "manualOverride",
+  "acceptedDecision",
+  "decisionDigest",
+  "abandonment",
+  "abandonmentDigest",
+] as const;
+const KEPT_CURRENT_KEYS = [
+  "state",
+  "reviewRef",
+  "snapshotRef",
+  "pagePath",
+  "updatedAt",
+  "acceptedAt",
+  "terminalizedAt",
+  "manualOverride",
+  "outcome",
+  "acceptedDecision",
+  "decisionDigest",
+] as const;
 const APPLYING_KEYS = [
   "state",
   "reviewRef",
@@ -244,6 +326,7 @@ const RECOVERY_KEYS = [
   "detectedAt",
   "acceptedDecision",
   "decisionDigest",
+  "recoveryExpectation",
 ] as const;
 const REVIEW_REF_PATTERN = /^forward-studio-review-[a-f0-9]{64}$/;
 const SNAPSHOT_REF_PATTERN = /^forward-studio-snapshot-[a-f0-9]{64}$/;
@@ -480,7 +563,9 @@ function captureProjectionInput(value: unknown): Readonly<CapturedProjectionInpu
   const bundleId = record.bundleId;
   let review: Readonly<KnowledgeForwardRevisionReviewSnapshotV2>;
   let activeApply: Readonly<KnowledgeForwardRevisionApplyJournalV1> | null;
-  let applyCommits: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>[];
+  let applyCommits: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[];
+  let abandonments: readonly Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>[];
+  let recoveryTerminals: readonly Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>[];
   try {
     review =
       record.review === undefined
@@ -497,6 +582,26 @@ function captureProjectionInput(value: unknown): Readonly<CapturedProjectionInpu
     if (!rawCommits) invalid();
     applyCommits = Object.freeze(
       rawCommits.map((commit) => snapshotKnowledgeForwardRevisionApplyLedgerRecord(commit))
+    );
+    const rawAbandonments = snapshotArray(
+      record.abandonments,
+      KNOWLEDGE_FORWARD_REVISION_STUDIO_LIMITS.maxCommittedRecords
+    );
+    if (!rawAbandonments) invalid();
+    abandonments = Object.freeze(
+      rawAbandonments.map((abandonment) =>
+        snapshotKnowledgeForwardRevisionAbandonmentRecord(abandonment)
+      )
+    );
+    const rawRecoveryTerminals = snapshotArray(
+      record.recoveryTerminals,
+      KNOWLEDGE_FORWARD_REVISION_STUDIO_LIMITS.maxCommittedRecords
+    );
+    if (!rawRecoveryTerminals) invalid();
+    recoveryTerminals = Object.freeze(
+      rawRecoveryTerminals.map((terminal) =>
+        snapshotKnowledgeForwardRevisionRecoveryTerminalRecord(terminal)
+      )
     );
   } catch {
     invalid();
@@ -526,7 +631,36 @@ function captureProjectionInput(value: unknown): Readonly<CapturedProjectionInpu
     review,
     activeApply,
     applyCommits,
+    abandonments,
+    recoveryTerminals,
   });
+}
+
+/** Creates the canonical lifecycle identity carried by one exact accepted decision. */
+export function createKnowledgeForwardRevisionStudioAcceptedIdentity(
+  decisionValue: unknown
+): Readonly<KnowledgeForwardRevisionAcceptedClaimIdentityV1> {
+  try {
+    const decision = snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(decisionValue);
+    const request = decision.proposal.request;
+    return createKnowledgeForwardRevisionAcceptedClaimIdentity({
+      resource: createKnowledgeForwardRevisionLifecycleResourceIdentity({
+        runtimeId: request.runtimeId,
+        bundleId: request.bundleId,
+        sourceId: request.intent.current.primarySourceId,
+        pagePath: request.pagePath,
+      }),
+      acceptedDecisionDigest: decision.acceptedDecisionDigest,
+      applyClaimId: decision.applyClaim.claimId,
+      applyClaimDigest: decision.applyClaimDigest,
+      proposalId: decision.proposal.proposalId,
+      proposalDigest: decision.proposalDigest,
+      acceptedAfterHash: decision.acceptedAfterHash,
+      acceptedAt: decision.acceptedAt,
+    });
+  } catch {
+    invalid();
+  }
 }
 
 /** Projects one accepted entry into its private exact durable join identity. */
@@ -557,6 +691,7 @@ function projectAcceptedEntry(
       proposal.proposalId,
       decision.proposalDigest
     ),
+    acceptedIdentity: createKnowledgeForwardRevisionStudioAcceptedIdentity(decision),
   });
 }
 
@@ -578,7 +713,7 @@ function createJournalIdentityKey(
 
 /** Returns the private exact identity key carried by one finalized ledger. */
 function createLedgerIdentityKey(
-  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
 ): string {
   return createAcceptedIdentityKey(
     ledger.runtimeId,
@@ -592,14 +727,148 @@ function createLedgerIdentityKey(
   );
 }
 
+/** Reports whether one rev3 terminal is the exact no-overlay head of a committed ledger. */
+function recoveryTerminalMatchesCommittedLedger(
+  terminal: Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>,
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
+): boolean {
+  return (
+    terminal.outcome === "committed_then_external_supersession" &&
+    terminal.journal.journalRevision === 3 &&
+    terminal.acceptedIdentity.resource.runtimeId === ledger.runtimeId &&
+    terminal.acceptedIdentity.resource.bundleId === ledger.bundleId &&
+    terminal.acceptedIdentity.resource.sourceId === ledger.sourceId &&
+    terminal.acceptedIdentity.resource.pagePath === ledger.pagePath &&
+    terminal.acceptedIdentity.resource.windowsPathKey === ledger.windowsPathKey &&
+    terminal.journal.transactionId === ledger.transactionId &&
+    terminal.journal.acceptedDecisionDigest === ledger.acceptedDecisionDigest &&
+    terminal.journal.applyClaimId === ledger.applyClaimId &&
+    terminal.journal.applyClaimDigest === ledger.applyClaimDigest &&
+    terminal.journal.beforeHash === ledger.previousEffectiveContentHash &&
+    terminal.journal.afterHash === ledger.effectiveContentHash &&
+    terminal.journal.committedAt === ledger.appliedAt
+  );
+}
+
+/** Requires each immutable source-base epoch to be a chain with an exact earlier handoff. */
+function assertCommittedSuccessorChains(
+  ledgers: readonly Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]
+): void {
+  const epochs = new Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]>();
+  const lineages = new Map<string, Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[]>();
+  for (const ledger of ledgers) {
+    const lineageKey = canonicalizeJson([
+      ledger.bundleId,
+      ledger.windowsPathKey,
+      ledger.sourceId,
+      ledger.sourceAppliedContentHash,
+    ]);
+    const epochKey = canonicalizeJson([lineageKey, ledger.sourceBaseDigest]);
+    epochs.set(epochKey, [...(epochs.get(epochKey) ?? []), ledger]);
+    lineages.set(lineageKey, [...(lineages.get(lineageKey) ?? []), ledger]);
+  }
+  for (const epoch of epochs.values()) {
+    const ordered = [...epoch].sort((left, right) => {
+      const revisionOrder = left.manifestAfterRevision - right.manifestAfterRevision;
+      if (revisionOrder !== 0) return revisionOrder;
+      const timeOrder = left.appliedAt - right.appliedAt;
+      if (timeOrder !== 0) return timeOrder;
+      return left.forwardLedgerIdentityDigest < right.forwardLedgerIdentityDigest ? -1 : 1;
+    });
+    const previousHeads = new Set<string>();
+    const effectiveHeads = new Set<string>();
+    for (const ledger of ordered) {
+      if (
+        previousHeads.has(ledger.previousEffectiveContentHash) ||
+        effectiveHeads.has(ledger.effectiveContentHash)
+      ) {
+        invalid();
+      }
+      previousHeads.add(ledger.previousEffectiveContentHash);
+      effectiveHeads.add(ledger.effectiveContentHash);
+    }
+    const first = ordered[0];
+    if (first.previousEffectiveContentHash !== first.sourceAppliedContentHash) {
+      const lineageKey = canonicalizeJson([
+        first.bundleId,
+        first.windowsPathKey,
+        first.sourceId,
+        first.sourceAppliedContentHash,
+      ]);
+      const hasEarlierPredecessor = (lineages.get(lineageKey) ?? []).some(
+        (candidate) =>
+          candidate.sourceBaseDigest !== first.sourceBaseDigest &&
+          candidate.effectiveContentHash === first.previousEffectiveContentHash &&
+          candidate.manifestAfterRevision < first.manifestAfterRevision &&
+          candidate.appliedAt <= first.appliedAt
+      );
+      if (!hasEarlierPredecessor) invalid();
+    }
+    for (let index = 1; index < ordered.length; index += 1) {
+      const previous = ordered[index - 1];
+      const current = ordered[index];
+      if (
+        current.previousEffectiveContentHash !== previous.effectiveContentHash ||
+        current.manifestAfterRevision <= previous.manifestAfterRevision ||
+        current.appliedAt < previous.appliedAt
+      ) {
+        invalid();
+      }
+    }
+  }
+}
+
 /** Projects one accepted entry into its current product state. */
 function projectAcceptedActiveRecord(
   input: Readonly<CapturedProjectionInput>,
   accepted: Readonly<AcceptedProjection>,
-  journal: Readonly<KnowledgeForwardRevisionApplyJournalV1> | undefined
+  journal: Readonly<KnowledgeForwardRevisionApplyJournalV1> | undefined,
+  abandonment: Readonly<KnowledgeForwardRevisionAbandonmentRecordV1> | undefined,
+  recoveryTerminal: Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1> | undefined
 ): Readonly<KnowledgeForwardRevisionStudioActiveRecord> {
   const { entry, decision, reviewRef } = accepted;
   const pagePath = decision.proposal.request.pagePath;
+  if (abandonment) {
+    if (journal || recoveryTerminal) invalid();
+    const state = "abandoned" as const;
+    return Object.freeze({
+      state,
+      reviewRef,
+      snapshotRef: createSnapshotRef(input, reviewRef, state, {
+        decisionDigest: entry.decisionDigest,
+        abandonmentDigest: abandonment.abandonmentDigest,
+      }),
+      pagePath,
+      updatedAt: abandonment.abandonedAt,
+      acceptedAt: decision.acceptedAt,
+      abandonedAt: abandonment.abandonedAt,
+      manualOverride: decision.manualOverride,
+      acceptedDecision: decision,
+      decisionDigest: entry.decisionDigest,
+      abandonment,
+      abandonmentDigest: abandonment.abandonmentDigest,
+    });
+  }
+  if (recoveryTerminal) {
+    if (journal) invalid();
+    const state = "kept_current" as const;
+    return Object.freeze({
+      state,
+      reviewRef,
+      snapshotRef: createSnapshotRef(input, reviewRef, state, {
+        decisionDigest: entry.decisionDigest,
+        terminalizationDigest: recoveryTerminal.terminalizationDigest,
+      }),
+      pagePath,
+      updatedAt: recoveryTerminal.terminalizedAt,
+      acceptedAt: decision.acceptedAt,
+      terminalizedAt: recoveryTerminal.terminalizedAt,
+      manualOverride: decision.manualOverride,
+      outcome: recoveryTerminal.outcome,
+      acceptedDecision: decision,
+      decisionDigest: entry.decisionDigest,
+    });
+  }
   if (!journal) {
     const state = "accepted_ready" as const;
     return Object.freeze({
@@ -621,6 +890,7 @@ function projectAcceptedActiveRecord(
   const journalDigest = createKnowledgeForwardRevisionApplyJournalDigest(journal);
   if (journal.phase === "recovery_required") {
     const state = "recovery_required" as const;
+    const recoveryExpectation = createKnowledgeForwardRevisionApplyRecoveryExpectation(journal);
     return Object.freeze({
       state,
       reviewRef,
@@ -637,6 +907,7 @@ function projectAcceptedActiveRecord(
       detectedAt: journal.conflict.detectedAt,
       acceptedDecision: decision,
       decisionDigest: entry.decisionDigest,
+      recoveryExpectation,
     });
   }
   const state = "applying" as const;
@@ -707,7 +978,14 @@ function snapshotActiveRecord(
     value,
     ["state"],
     [
-      ...new Set([...PENDING_KEYS, ...ACCEPTED_READY_KEYS, ...APPLYING_KEYS, ...RECOVERY_KEYS])
+      ...new Set([
+        ...PENDING_KEYS,
+        ...ACCEPTED_READY_KEYS,
+        ...ABANDONED_KEYS,
+        ...KEPT_CURRENT_KEYS,
+        ...APPLYING_KEYS,
+        ...RECOVERY_KEYS,
+      ])
         .values()
         .filter((key) => key !== "state"),
     ]
@@ -718,11 +996,15 @@ function snapshotActiveRecord(
       ? PENDING_KEYS
       : state === "accepted_ready"
         ? ACCEPTED_READY_KEYS
-        : state === "applying"
-          ? APPLYING_KEYS
-          : state === "recovery_required"
-            ? RECOVERY_KEYS
-            : undefined;
+        : state === "abandoned"
+          ? ABANDONED_KEYS
+          : state === "kept_current"
+            ? KEPT_CURRENT_KEYS
+            : state === "applying"
+              ? APPLYING_KEYS
+              : state === "recovery_required"
+                ? RECOVERY_KEYS
+                : undefined;
   const record =
     stateRecord &&
     keys &&
@@ -815,6 +1097,55 @@ function snapshotActiveRecord(
       decisionDigest: record.decisionDigest,
     });
   }
+  if (state === "abandoned") {
+    let abandonment: Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>;
+    try {
+      abandonment = snapshotKnowledgeForwardRevisionAbandonmentRecord(record.abandonment);
+    } catch {
+      invalid();
+    }
+    if (
+      !isNonNegativeInteger(record.abandonedAt) ||
+      record.abandonedAt !== record.updatedAt ||
+      abandonment.abandonedAt !== record.abandonedAt ||
+      typeof record.abandonmentDigest !== "string" ||
+      record.abandonmentDigest !== abandonment.abandonmentDigest ||
+      !exactJsonValuesEqual(
+        abandonment.acceptedIdentity,
+        createKnowledgeForwardRevisionStudioAcceptedIdentity(acceptedDecision)
+      )
+    ) {
+      invalid();
+    }
+    return Object.freeze({
+      state,
+      ...acceptedCommon,
+      abandonedAt: record.abandonedAt,
+      acceptedDecision,
+      decisionDigest: record.decisionDigest,
+      abandonment,
+      abandonmentDigest: record.abandonmentDigest,
+    });
+  }
+  if (state === "kept_current") {
+    if (
+      !isNonNegativeInteger(record.terminalizedAt) ||
+      record.terminalizedAt !== record.updatedAt ||
+      (record.outcome !== "abandoned_before_write" &&
+        record.outcome !== "write_outcome_uncertain_external_supersession" &&
+        record.outcome !== "committed_then_external_supersession")
+    ) {
+      invalid();
+    }
+    return Object.freeze({
+      state,
+      ...acceptedCommon,
+      terminalizedAt: record.terminalizedAt,
+      outcome: record.outcome,
+      acceptedDecision,
+      decisionDigest: record.decisionDigest,
+    });
+  }
   if (state === "applying") {
     if (
       record.applyPhase !== "prepared" &&
@@ -844,6 +1175,22 @@ function snapshotActiveRecord(
   ) {
     invalid();
   }
+  let recoveryExpectation: Readonly<KnowledgeForwardRevisionApplyRecoveryExpectationV1>;
+  try {
+    recoveryExpectation = snapshotKnowledgeForwardRevisionApplyRecoveryExpectation(
+      record.recoveryExpectation
+    );
+  } catch {
+    invalid();
+  }
+  if (
+    !exactJsonValuesEqual(
+      recoveryExpectation.acceptedIdentity,
+      createKnowledgeForwardRevisionStudioAcceptedIdentity(acceptedDecision)
+    )
+  ) {
+    invalid();
+  }
   return Object.freeze({
     state,
     ...acceptedCommon,
@@ -852,6 +1199,7 @@ function snapshotActiveRecord(
     detectedAt: record.detectedAt,
     acceptedDecision,
     decisionDigest: record.decisionDigest,
+    recoveryExpectation,
   });
 }
 
@@ -896,11 +1244,14 @@ export function snapshotKnowledgeForwardRevisionStudioSnapshot(
       })
     );
     let totalContentCharacters = 0;
-    const refs = new Set<string>();
+    const activeByReviewRef = new Map<
+      string,
+      Readonly<KnowledgeForwardRevisionStudioActiveRecord>
+    >();
     for (let index = 0; index < activeRecords.length; index += 1) {
       const item = activeRecords[index];
-      if (refs.has(item.reviewRef)) invalid();
-      refs.add(item.reviewRef);
+      if (activeByReviewRef.has(item.reviewRef)) invalid();
+      activeByReviewRef.set(item.reviewRef, item);
       totalContentCharacters +=
         item.state === "pending"
           ? item.proposal.request.selectedContent.length
@@ -914,12 +1265,22 @@ export function snapshotKnowledgeForwardRevisionStudioSnapshot(
       }
       if (index > 0 && compareActiveRecords(activeRecords[index - 1], item) > 0) invalid();
     }
+    const committedRefs = new Set<string>();
     for (let index = 0; index < committedReviewRefs.length; index += 1) {
       const reviewRef = committedReviewRefs[index];
-      if (refs.has(reviewRef) || (index > 0 && committedReviewRefs[index - 1] >= reviewRef)) {
+      const active = activeByReviewRef.get(reviewRef);
+      if (
+        committedRefs.has(reviewRef) ||
+        (active !== undefined &&
+          !(
+            active.state === "kept_current" &&
+            active.outcome === "committed_then_external_supersession"
+          )) ||
+        (index > 0 && committedReviewRefs[index - 1] >= reviewRef)
+      ) {
         invalid();
       }
-      refs.add(reviewRef);
+      committedRefs.add(reviewRef);
     }
     return Object.freeze({
       version: KNOWLEDGE_FORWARD_REVISION_STUDIO_SNAPSHOT_VERSION,
@@ -956,36 +1317,96 @@ export function projectKnowledgeForwardRevisionStudioSnapshot(
   const input = captureProjectionInput(value);
   const acceptedByIdentity = new Map<string, Readonly<AcceptedProjection>>();
   const acceptedByProposalId = new Map<string, Readonly<AcceptedProjection>>();
+  const acceptedByLifecycleIdentity = new Map<string, Readonly<AcceptedProjection>>();
   for (const entry of input.review.records) {
     if (entry.state !== "accepted") continue;
     const accepted = projectAcceptedEntry(input.runtimeId, input.bundleId, entry);
+    const lifecycleIdentityKey = canonicalizeJson(accepted.acceptedIdentity);
     if (
       acceptedByIdentity.has(accepted.identityKey) ||
-      acceptedByProposalId.has(accepted.decision.proposal.proposalId)
+      acceptedByProposalId.has(accepted.decision.proposal.proposalId) ||
+      acceptedByLifecycleIdentity.has(lifecycleIdentityKey)
     ) {
       invalid();
     }
     acceptedByIdentity.set(accepted.identityKey, accepted);
     acceptedByProposalId.set(accepted.decision.proposal.proposalId, accepted);
+    acceptedByLifecycleIdentity.set(lifecycleIdentityKey, accepted);
   }
 
+  const abandonmentByAcceptedIdentity = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>
+  >();
+  const abandonmentIds = new Set<string>();
+  const abandonmentDigests = new Set<string>();
+  for (const abandonment of input.abandonments) {
+    const accepted = acceptedByLifecycleIdentity.get(
+      canonicalizeJson(abandonment.acceptedIdentity)
+    );
+    if (
+      !accepted ||
+      abandonmentByAcceptedIdentity.has(accepted.identityKey) ||
+      abandonmentIds.has(abandonment.abandonmentId) ||
+      abandonmentDigests.has(abandonment.abandonmentDigest)
+    ) {
+      invalid();
+    }
+    abandonmentByAcceptedIdentity.set(accepted.identityKey, abandonment);
+    abandonmentIds.add(abandonment.abandonmentId);
+    abandonmentDigests.add(abandonment.abandonmentDigest);
+  }
+
+  const recoveryTerminalByAcceptedIdentity = new Map<
+    string,
+    Readonly<KnowledgeForwardRevisionRecoveryTerminalRecordV1>
+  >();
+  const recoveryTerminalIds = new Set<string>();
+  const recoveryTerminalDigests = new Set<string>();
+  for (const terminal of input.recoveryTerminals) {
+    const accepted = acceptedByLifecycleIdentity.get(canonicalizeJson(terminal.acceptedIdentity));
+    if (
+      !accepted ||
+      abandonmentByAcceptedIdentity.has(accepted.identityKey) ||
+      recoveryTerminalByAcceptedIdentity.has(accepted.identityKey) ||
+      recoveryTerminalIds.has(terminal.terminalizationId) ||
+      recoveryTerminalDigests.has(terminal.terminalizationDigest)
+    ) {
+      invalid();
+    }
+    recoveryTerminalByAcceptedIdentity.set(accepted.identityKey, terminal);
+    recoveryTerminalIds.add(terminal.terminalizationId);
+    recoveryTerminalDigests.add(terminal.terminalizationDigest);
+  }
+
+  const seenLedgerIdentities = new Set<string>();
   const committedIdentities = new Set<string>();
   for (const ledger of input.applyCommits) {
     const key = createLedgerIdentityKey(ledger);
     const accepted = acceptedByIdentity.get(key);
+    const recoveryTerminal = recoveryTerminalByAcceptedIdentity.get(key);
+    const committedRecovery =
+      recoveryTerminal !== undefined &&
+      recoveryTerminalMatchesCommittedLedger(recoveryTerminal, ledger);
     if (
       !accepted ||
-      committedIdentities.has(key) ||
+      seenLedgerIdentities.has(key) ||
+      abandonmentByAcceptedIdentity.has(key) ||
+      (recoveryTerminal !== undefined && !committedRecovery) ||
       ledger.pagePath !== accepted.decision.proposal.request.pagePath ||
       ledger.windowsPathKey !== toWindowsPathKey(accepted.decision.proposal.request.pagePath) ||
-      ledger.baseContentHash !== accepted.decision.acceptanceAuthority.manifestBaseHash ||
+      ledger.sourceAppliedContentHash !== accepted.decision.acceptanceAuthority.manifestBaseHash ||
+      ledger.previousEffectiveContentHash !==
+        accepted.decision.acceptanceAuthority.vaultObservedBeforeHash ||
       ledger.effectiveContentHash !== accepted.decision.acceptedAfterHash ||
       ledger.appliedAt < accepted.decision.acceptedAt
     ) {
       invalid();
     }
+    seenLedgerIdentities.add(key);
     committedIdentities.add(key);
   }
+  assertCommittedSuccessorChains(input.applyCommits);
 
   let activeJournalIdentity: string | undefined;
   if (input.activeApply) {
@@ -994,11 +1415,16 @@ export function projectKnowledgeForwardRevisionStudioSnapshot(
     if (
       !accepted ||
       committedIdentities.has(activeJournalIdentity) ||
+      abandonmentByAcceptedIdentity.has(activeJournalIdentity) ||
+      recoveryTerminalByAcceptedIdentity.has(activeJournalIdentity) ||
       input.activeApply.pagePath !== accepted.decision.proposal.request.pagePath ||
       input.activeApply.windowsPathKey !==
         toWindowsPathKey(accepted.decision.proposal.request.pagePath) ||
       !exactJsonValuesEqual(input.activeApply.acceptedDecision, accepted.decision) ||
-      input.activeApply.beforeHash !== accepted.decision.acceptanceAuthority.manifestBaseHash ||
+      input.activeApply.sourceAppliedContentHash !==
+        accepted.decision.acceptanceAuthority.manifestBaseHash ||
+      input.activeApply.previousEffectiveContentHash !==
+        accepted.decision.acceptanceAuthority.vaultObservedBeforeHash ||
       input.activeApply.afterHash !== accepted.decision.acceptedAfterHash ||
       input.activeApply.updatedAt < accepted.decision.acceptedAt ||
       input.activeApply.revalidationReceipt.runtimeRevision > input.runtimeRevision
@@ -1015,14 +1441,21 @@ export function projectKnowledgeForwardRevisionStudioSnapshot(
     } else {
       const accepted = acceptedByProposalId.get(entry.decision.proposal.proposalId);
       if (!accepted) invalid();
-      if (committedIdentities.has(accepted.identityKey)) continue;
+      if (
+        committedIdentities.has(accepted.identityKey) &&
+        !recoveryTerminalByAcceptedIdentity.has(accepted.identityKey)
+      ) {
+        continue;
+      }
       activeRecords.push(
         projectAcceptedActiveRecord(
           input,
           accepted,
           activeJournalIdentity === accepted.identityKey
             ? (input.activeApply ?? undefined)
-            : undefined
+            : undefined,
+          abandonmentByAcceptedIdentity.get(accepted.identityKey),
+          recoveryTerminalByAcceptedIdentity.get(accepted.identityKey)
         )
       );
     }

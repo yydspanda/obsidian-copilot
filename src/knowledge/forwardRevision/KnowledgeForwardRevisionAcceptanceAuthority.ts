@@ -364,7 +364,6 @@ export function snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue(
       record.runtimeDigest !== freshness.runtimeDigest ||
       Number(record.manifestRevision) !== freshness.manifestRevision ||
       record.manifestDigest !== freshness.manifestDigest ||
-      record.manifestBaseHash !== record.vaultObservedBeforeHash ||
       record.runtimeId !== freshness.runtimeId
     ) {
       invalid();

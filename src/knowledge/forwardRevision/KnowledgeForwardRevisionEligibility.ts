@@ -296,8 +296,7 @@ export function classifyKnowledgeForwardRevisionProtocolAdmission(
     (input.currentState !== "missing" &&
       (!isDigest(input.currentContentHash) || !isDigest(input.vaultObservedBeforeHash))) ||
     (input.currentState === "drifted" &&
-      (input.currentContentHash !== input.vaultObservedBeforeHash ||
-        input.currentContentHash === input.manifestBaseHash)) ||
+      input.currentContentHash !== input.vaultObservedBeforeHash) ||
     (input.ownership !== "generated" &&
       input.ownership !== "shared" &&
       input.ownership !== "user") ||
@@ -342,8 +341,7 @@ export function classifyKnowledgeForwardRevisionProtocolAdmission(
   if (
     input.currentContentHash === null ||
     input.vaultObservedBeforeHash === null ||
-    input.currentContentHash !== input.manifestBaseHash ||
-    input.vaultObservedBeforeHash !== input.manifestBaseHash
+    input.currentContentHash !== input.vaultObservedBeforeHash
   ) {
     return ineligible("current_hash_unverified");
   }
@@ -392,7 +390,6 @@ export function classifyKnowledgeForwardRevisionProtocolAdmission(
     intent.current.inputRevision !== input.currentInputRevision ||
     intent.current.sourceOrigin !== input.sourceOrigin ||
     intent.current.sourceRetired !== input.sourceRetired ||
-    intent.current.manifestBaseHash !== input.currentContentHash ||
     intent.current.vaultObservedBeforeHash !== input.vaultObservedBeforeHash
   ) {
     return ineligible("intent_mismatch");

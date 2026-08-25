@@ -5,6 +5,7 @@ import type {
 } from "@/knowledge/ingest/queue/IngestQueue";
 import type { KnowledgeOutputObservationReaderPort } from "@/knowledge/ingest/ObsidianKnowledgeOutputObservationReader";
 import { decideProvenSourceFreshness } from "@/knowledge/manifest/freshness";
+import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import type { SourceFreshnessDecision, SourceStaleReason } from "@/knowledge/model/types";
 import {
   parseKnowledgeRuntimeSourceFreshnessAuthority,
@@ -221,12 +222,7 @@ function sameSourceAuthority(
   if (
     before.generatedPages.some((page, index) => {
       const other = after.generatedPages[index];
-      return (
-        page.path !== other.path ||
-        page.windowsPathKey !== other.windowsPathKey ||
-        page.ownership !== other.ownership ||
-        page.contentHash !== other.contentHash
-      );
+      return other === undefined || canonicalizeJson(page) !== canonicalizeJson(other);
     })
   ) {
     return false;

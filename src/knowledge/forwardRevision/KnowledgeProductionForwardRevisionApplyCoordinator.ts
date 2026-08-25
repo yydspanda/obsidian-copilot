@@ -3,10 +3,19 @@ import {
   projectKnowledgeForwardRevisionApplyJournalApplying,
   projectKnowledgeForwardRevisionApplyJournalCommitted,
   projectKnowledgeForwardRevisionApplyJournalRecoveryRequired,
+  projectKnowledgeForwardRevisionRecoveryJournalCommitted,
   snapshotKnowledgeForwardRevisionApplyJournal,
   type KnowledgeForwardRevisionApplyJournalV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyJournal";
-import type { KnowledgeForwardRevisionApplyLedgerRecordV1 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyLedger";
+import {
+  knowledgeForwardRevisionApplyRecoveryExpectationMatchesJournal,
+  snapshotKnowledgeForwardRevisionApplyRecoveryExpectation,
+  type KnowledgeForwardRevisionApplyRecoveryExpectationV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyRecoveryExpectation";
+import {
+  snapshotKnowledgeForwardRevisionApplyLedgerRecord,
+  type KnowledgeForwardRevisionApplyLedgerRecord,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyLedger";
 import {
   validateProductionCandidateCitations,
   validateProductionGeneratedDocuments,
@@ -139,10 +148,30 @@ export type KnowledgeForwardRevisionApplyTransitionCapabilityProjectionV1 =
   | Readonly<{
       version: 1;
       kind: "forward_revision_apply_transition_capability_projection";
+      transition: "recovery_committed";
+      previousJournal: Readonly<KnowledgeForwardRevisionApplyJournalV1>;
+      previousJournalDigest: string;
+      nextJournal: Readonly<KnowledgeForwardRevisionApplyJournalV1>;
+      nextJournalDigest: string;
+      observation: Readonly<{ kind: "file"; contentHash: string }>;
+      observedAt: number;
+    }>
+  | Readonly<{
+      version: 1;
+      kind: "forward_revision_apply_transition_capability_projection";
       transition: "finalize";
       previousJournal: Readonly<KnowledgeForwardRevisionApplyJournalV1>;
       previousJournalDigest: string;
       observation: Readonly<{ kind: "file"; contentHash: string }>;
+    }>
+  | Readonly<{
+      version: 1;
+      kind: "forward_revision_apply_transition_capability_projection";
+      transition: "terminalize";
+      previousJournal: Readonly<KnowledgeForwardRevisionApplyJournalV1>;
+      previousJournalDigest: string;
+      observation: KnowledgeForwardRevisionApplyTransitionObservationV1;
+      observedAt: number;
     }>;
 
 /** Scalar-only outcome of converging one already-durable forward Apply journal. */
@@ -162,6 +191,16 @@ export type KnowledgeProductionForwardRevisionApplyRecoveryResult =
       transactionId: string;
       journalRevision: number;
       conflictCode: "file_state_conflict" | "post_write_verification_failed";
+    }>
+  | Readonly<{
+      kind: "kept_current";
+      bundleId: string;
+      transactionId: string;
+      outcome:
+        | "abandoned_before_write"
+        | "write_outcome_uncertain_external_supersession"
+        | "committed_then_external_supersession";
+      terminalizedAt: number;
     }>
   | Readonly<{
       kind: "in_progress";
@@ -467,7 +506,7 @@ function createForwardApplyChange(
     path: authority.query.pagePath,
     sourceRefs,
     reason: "Apply the reviewed forward revision",
-    beforeHash: accepted.acceptanceAuthority.manifestBaseHash,
+    beforeHash: accepted.acceptanceAuthority.vaultObservedBeforeHash,
     afterContent: accepted.afterContent,
     afterHash,
   });
@@ -753,6 +792,53 @@ function mintJournalAdvanceCapability(
   return capability;
 }
 
+/** Mints the dedicated recovery-to-committed proof after a fresh exact-after observation. */
+function mintRecoveryCommittedCapability(
+  state: Readonly<TransactionRunnerState>,
+  previousValue: unknown,
+  nextValue: unknown,
+  observedAt: number
+): KnowledgeForwardRevisionApplyTransitionCapability {
+  const previousJournal = snapshotKnowledgeForwardRevisionApplyJournal(previousValue);
+  const nextJournal = snapshotKnowledgeForwardRevisionApplyJournal(nextValue);
+  if (
+    previousJournal.phase !== "recovery_required" ||
+    nextJournal.phase !== "committed" ||
+    !Number.isSafeInteger(observedAt) ||
+    observedAt < previousJournal.updatedAt
+  ) {
+    fail("dependency_invalid");
+  }
+  const observation = Object.freeze({
+    kind: "file" as const,
+    contentHash: previousJournal.afterHash,
+  });
+  const projection = Object.freeze({
+    version: 1 as const,
+    kind: "forward_revision_apply_transition_capability_projection" as const,
+    transition: "recovery_committed" as const,
+    previousJournal,
+    previousJournalDigest: createKnowledgeForwardRevisionApplyJournalDigest(previousJournal),
+    nextJournal,
+    nextJournalDigest: createKnowledgeForwardRevisionApplyJournalDigest(nextJournal),
+    observation,
+    observedAt,
+  });
+  const capability = mintTransitionCapability?.(
+    Object.freeze({
+      projection,
+      executionOwner: state.executionOwner,
+      assertCurrent: () => assertTransactionRunnerCurrent(state),
+    })
+  );
+  if (!capability) fail("dependency_invalid");
+  KnowledgeForwardRevisionApplyTransitionCapability.assertExecutionOwner(
+    capability,
+    state.executionOwner
+  );
+  return capability;
+}
+
 /** Mints one exact committed-journal finalization proof. */
 function mintJournalFinalizeCapability(
   state: Readonly<TransactionRunnerState>,
@@ -771,6 +857,46 @@ function mintJournalFinalizeCapability(
     previousJournal,
     previousJournalDigest: createKnowledgeForwardRevisionApplyJournalDigest(previousJournal),
     observation,
+  });
+  const capability = mintTransitionCapability?.(
+    Object.freeze({
+      projection,
+      executionOwner: state.executionOwner,
+      assertCurrent: () => assertTransactionRunnerCurrent(state),
+    })
+  );
+  if (!capability) fail("dependency_invalid");
+  KnowledgeForwardRevisionApplyTransitionCapability.assertExecutionOwner(
+    capability,
+    state.executionOwner
+  );
+  return capability;
+}
+
+/** Mints one exact no-write terminalization proof from a fresh physical observation. */
+function mintJournalTerminalizationCapability(
+  state: Readonly<TransactionRunnerState>,
+  journalValue: unknown,
+  observationValue: KnowledgeForwardRevisionApplyTransitionObservationV1,
+  observedAt: number
+): KnowledgeForwardRevisionApplyTransitionCapability {
+  const previousJournal = snapshotKnowledgeForwardRevisionApplyJournal(journalValue);
+  if (
+    previousJournal.phase !== "recovery_required" ||
+    !Number.isSafeInteger(observedAt) ||
+    observedAt < previousJournal.updatedAt
+  ) {
+    fail("dependency_invalid");
+  }
+  const observation = snapshotTransitionObservation(observationValue);
+  const projection = Object.freeze({
+    version: 1 as const,
+    kind: "forward_revision_apply_transition_capability_projection" as const,
+    transition: "terminalize" as const,
+    previousJournal,
+    previousJournalDigest: createKnowledgeForwardRevisionApplyJournalDigest(previousJournal),
+    observation,
+    observedAt,
   });
   const capability = mintTransitionCapability?.(
     Object.freeze({
@@ -847,7 +973,7 @@ async function persistRecoveryRequired(
 
 /** Projects one content-free committed result from a strict durable ledger. */
 function projectCommittedResult(
-  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecordV1>
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>
 ): Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult> {
   return Object.freeze({
     kind: "committed" as const,
@@ -935,6 +1061,106 @@ export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
   }
 
   /**
+   * Rechecks one sticky conflict and performs only the explicitly selected safe action.
+   *
+   * Exact-after bytes converge to ledger finalization without another Wiki write.
+   * Exact-before bytes may retry the original exact CAS only for recovery revisions
+   * one and two. `keep_current` never mutates the Wiki and terminalizes only an
+   * externally superseded state.
+   */
+  async resolveRecovery(
+    expectationValue: unknown,
+    action: "retry_exact" | "keep_current",
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult>> {
+    const state = requireTransactionRunnerState(this);
+    let expectation: Readonly<KnowledgeForwardRevisionApplyRecoveryExpectationV1>;
+    try {
+      expectation = snapshotKnowledgeForwardRevisionApplyRecoveryExpectation(expectationValue);
+    } catch {
+      fail("request_invalid");
+    }
+    if ((action !== "retry_exact" && action !== "keep_current") || signal.aborted) {
+      fail(signal.aborted ? "aborted" : "request_invalid");
+    }
+    const initial = await state.recovery.readActive(signal);
+    if (
+      initial === null ||
+      !knowledgeForwardRevisionApplyRecoveryExpectationMatchesJournal(expectation, initial)
+    ) {
+      fail("authority_changed");
+    }
+    let journal = snapshotKnowledgeForwardRevisionApplyJournal(initial);
+    if (journal.phase !== "recovery_required") fail("authority_changed");
+
+    let observed = await observeJournalTarget(state, journal);
+    let observedAt = readTransitionTime(state, journal);
+    if (observed.matchesAfter) {
+      const committed = projectKnowledgeForwardRevisionRecoveryJournalCommitted(
+        journal,
+        observedAt
+      );
+      journal = await state.recovery.advance(
+        mintRecoveryCommittedCapability(state, journal, committed, observedAt)
+      );
+      return this.recoverActive(new AbortController().signal);
+    }
+
+    if (action === "retry_exact") {
+      if (!observed.matchesBefore || journal.revision === 3) {
+        return projectRecoveryResult(journal);
+      }
+      let resultKind: "applied" | "already_after" | "conflict" | "threw" = "threw";
+      try {
+        const result = await state.fileStore.compareAndSwap(
+          journal.pagePath,
+          { kind: "file", content: journal.beforeContent, contentHash: journal.beforeHash },
+          { kind: "file", content: journal.afterContent, contentHash: journal.afterHash }
+        );
+        assertTransactionRunnerCurrent(state);
+        resultKind = result.kind;
+      } catch {
+        assertTransactionRunnerCurrent(state);
+      }
+      observed =
+        resultKind === "applied" || resultKind === "already_after"
+          ? Object.freeze({
+              observation: Object.freeze({
+                kind: "file" as const,
+                contentHash: journal.afterHash,
+              }),
+              matchesBefore: false,
+              matchesAfter: true,
+            })
+          : await observeJournalTarget(state, journal);
+      if (!observed.matchesAfter) return projectRecoveryResult(journal);
+      observedAt = readTransitionTime(state, journal);
+      const committed = projectKnowledgeForwardRevisionRecoveryJournalCommitted(
+        journal,
+        observedAt
+      );
+      await state.recovery.advance(
+        mintRecoveryCommittedCapability(state, journal, committed, observedAt)
+      );
+      return this.recoverActive(new AbortController().signal);
+    }
+
+    if (observed.matchesBefore && journal.revision !== 3) {
+      return projectRecoveryResult(journal);
+    }
+    const terminal = await state.recovery.terminalize(
+      mintJournalTerminalizationCapability(state, journal, observed.observation, observedAt)
+    );
+    return Object.freeze({
+      kind: "kept_current" as const,
+      bundleId: terminal.acceptedIdentity.resource.bundleId,
+      transactionId: terminal.journal.transactionId,
+      outcome: terminal.outcome,
+      terminalizedAt: terminal.terminalizedAt,
+    });
+  }
+
+  /**
    * Converges the active journal without parser, model, source, or network work.
    *
    * Cancellation is honored only while discovering whether a durable journal
@@ -981,7 +1207,9 @@ export class KnowledgeProductionForwardRevisionApplyTransactionRunner {
           );
           return projectRecoveryResult(journal);
         }
-        const ledger = await state.recovery.finalize(mintJournalFinalizeCapability(state, journal));
+        const ledger = snapshotKnowledgeForwardRevisionApplyLedgerRecord(
+          await state.recovery.finalize(mintJournalFinalizeCapability(state, journal))
+        );
         return projectCommittedResult(ledger);
       }
 
@@ -1177,6 +1405,37 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
     return operation;
   }
 
+  /** Serializes one explicit sticky-recovery recheck with every Apply operation. */
+  async resolveRecovery(
+    expectationValue: unknown,
+    action: "retry_exact" | "keep_current",
+    signal: AbortSignal
+  ): Promise<Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult>> {
+    const state = requireCoordinatorState(this);
+    let expectation: Readonly<KnowledgeForwardRevisionApplyRecoveryExpectationV1>;
+    try {
+      expectation = snapshotKnowledgeForwardRevisionApplyRecoveryExpectation(expectationValue);
+    } catch {
+      fail("request_invalid");
+    }
+    const previous = coordinatorOperationTails.get(this) ?? Promise.resolve();
+    const operation = previous
+      .catch(() => undefined)
+      .then(async () => {
+        assertCoordinatorCurrent(state);
+        assertNotAborted(signal);
+        return state.transactionRunner.resolveRecovery(expectation, action, signal);
+      });
+    coordinatorOperationTails.set(
+      this,
+      operation.then(
+        () => undefined,
+        () => undefined
+      )
+    );
+    return operation;
+  }
+
   /**
    * Performs Runtime→Vault/source validation→Vault/source→Runtime reproof.
    *
@@ -1211,7 +1470,7 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
       stage = "page";
       const beforeContent = await readCurrentPage(state, request.pagePath, signal);
       const beforeHash = createFileContentHash(beforeContent);
-      if (beforeHash !== accepted.acceptanceAuthority.manifestBaseHash) {
+      if (beforeHash !== accepted.acceptanceAuthority.vaultObservedBeforeHash) {
         fail("page_stale");
       }
 
@@ -1315,7 +1574,7 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
           runtimeDigest: after.runtimeDigest,
           manifestRevision: after.manifestRevision,
           manifestDigest: after.manifestDigest,
-          manifestBaseHash: beforeHash,
+          manifestBaseHash: accepted.acceptanceAuthority.manifestBaseHash,
           vaultObservedBeforeHash: beforeHash,
           currentSourceFreshness: after.sourceBase.currentSourceFreshness,
         },
@@ -1331,7 +1590,8 @@ export class KnowledgeProductionForwardRevisionApplyCoordinator {
         accepted.acceptedAt,
         accepted.proposal.recordedAt,
         accepted.proposal.request.historicalReviewAuthority.acceptedAt,
-        applyAuthority.currentSourceFreshness.completedAt
+        applyAuthority.currentSourceFreshness.completedAt,
+        after.lineageAppliedAtFloor
       );
       const freshValidationReceipt = createKnowledgeForwardRevisionValidationReceipt({
         proposal: accepted.proposal,

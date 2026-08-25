@@ -121,7 +121,10 @@ function createAppliedProjection(
         path: pagePath,
         windowsPathKey: pagePath.toLocaleLowerCase("en-US"),
         ownership: "generated",
+        sourceAppliedContentHash: sha256(PAGE_CONTENT),
+        effectiveContentHash: sha256(PAGE_CONTENT),
         contentHash: sha256(PAGE_CONTENT),
+        origin: { kind: "source_apply" },
         sources: [
           {
             sourceId,

@@ -54,14 +54,19 @@ function createSource(index = 1): KnowledgeRuntimeAppliedSourceProvenance {
 
 /** Creates one valid stable page authority accepted by the projector. */
 function createAuthority(
-  sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[] = [createSource()]
+  sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[] = [createSource()],
+  overrides: Partial<KnowledgeRuntimeAppliedPageProvenance> = {}
 ): KnowledgeAppliedWikiPageProjectionAuthority {
   const page: KnowledgeRuntimeAppliedPageProvenance = {
     path: "Wiki/Applied.md",
     windowsPathKey: "wiki/applied.md",
     ownership: "generated",
+    sourceAppliedContentHash: PAGE_HASH,
+    effectiveContentHash: PAGE_HASH,
     contentHash: PAGE_HASH,
+    origin: { kind: "source_apply" },
     sources,
+    ...overrides,
   };
   return { bundleId: "personal", runtimeRevision: 8, manifestRevision: 5, page };
 }
@@ -75,6 +80,12 @@ describe("KnowledgeAppliedWikiPageInspectionProjector", () => {
 
     expect(session.displayPagePath).toBe("Wiki/Applied.md");
     expect(session.ownership).toBe("generated");
+    expect(session).toMatchObject({
+      sourceAppliedContentHash: PAGE_HASH,
+      effectiveContentHash: PAGE_HASH,
+      origin: { kind: "source_apply" },
+      evidenceScope: "source_applied_content",
+    });
     expect(session.sources[0]).toMatchObject({
       displaySourcePath: source.sourcePath,
       custody: "user_managed",
@@ -88,7 +99,7 @@ describe("KnowledgeAppliedWikiPageInspectionProjector", () => {
     });
     const serialized = JSON.stringify(session);
     expect(serialized).not.toContain("personal");
-    expect(serialized).not.toContain(PAGE_HASH);
+    expect(serialized).toContain(PAGE_HASH);
     expect(serialized).not.toContain(source.sourceContentHash);
     expect(serialized).not.toContain(source.sourceId);
     expect(serialized).not.toContain("artifact-source-1");
@@ -112,6 +123,59 @@ describe("KnowledgeAppliedWikiPageInspectionProjector", () => {
         evidence.evidenceRef
       )
     ).toBeUndefined();
+  });
+
+  it("discloses a forward effective head without recasting Source citations as manual proof", () => {
+    const source = createSource();
+    const effectiveContentHash = "f".repeat(64);
+    const projector = new KnowledgeAppliedWikiPageInspectionProjector();
+
+    const session = projector.project(
+      createAuthority([source], {
+        effectiveContentHash,
+        contentHash: effectiveContentHash,
+        origin: {
+          kind: "forward_revision",
+          overlay: {
+            version: 2,
+            kind: "forward_revision_overlay_entry",
+            bundleId: "personal",
+            pagePath: "Wiki/Applied.md",
+            windowsPathKey: "wiki/applied.md",
+            sourceId: source.sourceId,
+            sourceBaseDigest: "1".repeat(64),
+            sourceAppliedContentHash: PAGE_HASH,
+            previousEffectiveContentHash: PAGE_HASH,
+            effectiveContentHash,
+            forwardTransactionId: "forward-1",
+            acceptedDecisionDigest: "2".repeat(64),
+            forwardLedgerIdentityDigest: "3".repeat(64),
+            appliedAt: 20,
+          },
+        },
+      })
+    );
+
+    expect(session).toMatchObject({
+      sourceAppliedContentHash: PAGE_HASH,
+      effectiveContentHash,
+      origin: {
+        kind: "forward_revision",
+        overlay: {
+          sourceAppliedContentHash: PAGE_HASH,
+          previousEffectiveContentHash: PAGE_HASH,
+          effectiveContentHash,
+        },
+      },
+      evidenceScope: "source_applied_content",
+      sources: [{ evidence: [{ excerpt: "Evidence 1" }] }],
+    });
+    const evidence = session.sources[0].evidence[0];
+    expect(projector.resolveEvidence(session, evidence.evidenceRef)).toMatchObject({
+      pageContentHash: effectiveContentHash,
+      sourceContentHash: source.sourceContentHash,
+      citation: source.citations[0],
+    });
   });
 
   it("validates every hidden Source and citation before applying display caps", () => {

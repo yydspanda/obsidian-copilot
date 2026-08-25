@@ -1,12 +1,52 @@
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
 import {
+  createKnowledgeForwardRevisionPreparedApplyJournal,
+  projectKnowledgeForwardRevisionApplyJournalApplying,
+  projectKnowledgeForwardRevisionApplyJournalCommitted,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyJournal";
+import {
+  createKnowledgeForwardRevisionApplyLedgerRecord,
+  type KnowledgeForwardRevisionApplyLedgerRecord,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyLedger";
+import {
+  createKnowledgeForwardRevisionApplyRevalidationReceipt,
+  createKnowledgeForwardRevisionSourceBase,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionApplyRevalidation";
+import {
+  createKnowledgeForwardRevisionAcceptedDecisionRecord,
+  type KnowledgeForwardRevisionAcceptanceAuthority,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionDecision";
+import {
+  createKnowledgeForwardRevisionIntent,
+  createKnowledgeForwardRevisionIntentDigest,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionIntent";
+import {
+  createKnowledgeForwardRevisionPendingProposalRecord,
+  createKnowledgeForwardRevisionPendingProposalRecordDigest,
+  createKnowledgeForwardRevisionRequest,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposal";
+import { createKnowledgeForwardRevisionReviewCommand } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
+import {
+  createKnowledgeForwardRevisionTerminalReviewEntryV2,
+  snapshotKnowledgeForwardRevisionReviewSnapshotV2,
+  type KnowledgeForwardRevisionReviewSnapshotV2,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewSnapshotV2";
+import {
+  createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest,
+  createKnowledgeForwardRevisionValidationReceipt,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionValidationReceipt";
+import {
   createManifestCommitIntentDigest,
   createManifestCommitPlanDigest,
   projectManifestCommitIntent,
   type ManifestCommitPlan,
 } from "@/knowledge/manifest/ManifestCommitIntent";
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
-import type { KnowledgeChangeSet, KnowledgeFileChange } from "@/knowledge/model/types";
+import type {
+  KnowledgeChangeSet,
+  KnowledgeFileChange,
+  SourceManifestEntry,
+} from "@/knowledge/model/types";
 import type {
   AcceptedChangeSetReviewRecord,
   ChangeSetReviewRecord,
@@ -24,13 +64,25 @@ import type { KnowledgeApplyCommitLedgerRecord } from "@/knowledge/runtime/Knowl
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
+const HASH_D = "d".repeat(64);
+const HASH_E = "e".repeat(64);
+const HASH_F = "f".repeat(64);
 const RUNTIME_ID = "1".repeat(32);
 const PAGE_PATH = "Wiki/Topic.md";
+const FORWARD_SELECTED_CONTENT = "# Forward selected historical output\n";
+const FORWARD_CURRENT_CONTENT = "# Forward current source output\n";
 
 /** One exact accepted Review and matching Apply ledger fixture. */
 interface AppliedFixture {
   record: AcceptedChangeSetReviewRecord;
   ledger: KnowledgeApplyCommitLedgerRecord;
+}
+
+/** One exact accepted Forward Review and matching canonical Forward ledger. */
+interface ForwardAppliedFixture {
+  review: Readonly<KnowledgeForwardRevisionReviewSnapshotV2>;
+  ledger: Readonly<KnowledgeForwardRevisionApplyLedgerRecord>;
+  afterContent: string;
 }
 
 /** Creates one valid proposed create or update. */
@@ -177,6 +229,292 @@ function createAppliedFixture(options: {
   };
 }
 
+/** Creates the exact applied source authority retained by a Forward ledger source base. */
+function createForwardAppliedAuthority(
+  runtimeRevision: number,
+  completedAt: number
+): KnowledgeForwardRevisionAcceptanceAuthority {
+  return {
+    runtimeId: RUNTIME_ID,
+    runtimeRevision,
+    runtimeDigest: runtimeRevision === 20 ? HASH_E : HASH_D,
+    manifestRevision: 9,
+    manifestDigest: HASH_F,
+    manifestBaseHash: createFileContentHash(FORWARD_CURRENT_CONTENT),
+    vaultObservedBeforeHash: createFileContentHash(FORWARD_CURRENT_CONTENT),
+    currentSourceFreshness: {
+      kind: "applied",
+      runtimeId: RUNTIME_ID,
+      runtimeRevision,
+      runtimeDigest: runtimeRevision === 20 ? HASH_E : HASH_D,
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 7,
+      manifestRevision: 9,
+      manifestDigest: HASH_F,
+      committedManifestRevision: 8,
+      completedAt,
+      transactionId: "transaction-current",
+      changeSetId: "changeset-current",
+      changeSetDigest: HASH_D,
+      manifestIntentDigest: HASH_C,
+      committedManifestDigest: HASH_B,
+    },
+  };
+}
+
+/** Creates one strict Forward proposal bound to the current generated page. */
+function createForwardProposal(requestedAt: number) {
+  const selectedContentHash = createFileContentHash(FORWARD_SELECTED_CONTENT);
+  const intent = createKnowledgeForwardRevisionIntent({
+    bundleId: "personal",
+    pagePath: PAGE_PATH,
+    historical: {
+      bundleId: "personal",
+      pagePath: PAGE_PATH,
+      transactionId: "transaction-historical",
+      sourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 3,
+      changeSetId: "changeset-historical",
+      changeSetDigest: HASH_C,
+      manifestIntentDigest: HASH_D,
+      manifestAfterRevision: 4,
+      manifestAfterDigest: HASH_E,
+      appliedAt: requestedAt - 50,
+      selectedContentHash,
+    },
+    current: {
+      currentState: "applied",
+      ownership: "generated",
+      sourceOrigin: "ingest",
+      sourceRetired: false,
+      sourceIds: ["source-1"],
+      primarySourceId: "source-1",
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      inputRevision: 7,
+      manifestRevision: 9,
+      manifestDigest: HASH_F,
+      manifestBaseHash: createFileContentHash(FORWARD_CURRENT_CONTENT),
+      vaultObservedBeforeHash: createFileContentHash(FORWARD_CURRENT_CONTENT),
+    },
+  });
+  const request = createKnowledgeForwardRevisionRequest({
+    requestRevision: 1,
+    runtimeId: RUNTIME_ID,
+    bundleId: "personal",
+    pagePath: PAGE_PATH,
+    intent,
+    intentDigest: createKnowledgeForwardRevisionIntentDigest(intent),
+    historicalReviewAuthority: {
+      proposalDigest: HASH_B,
+      acceptedDigest: HASH_C,
+      acceptedRecordRevision: 1,
+      manifestCommitIntentDigest: HASH_D,
+      acceptedAt: requestedAt - 60,
+      targetChange: {
+        changeId: "change-historical",
+        path: PAGE_PATH,
+        operation: "update",
+        afterHash: selectedContentHash,
+        sourceRefs: ["source-1"],
+      },
+      manifestPage: {
+        path: PAGE_PATH,
+        ownership: "generated",
+        contentHash: selectedContentHash,
+      },
+    },
+    selectedContent: FORWARD_SELECTED_CONTENT,
+    selectedContentHash,
+    requestedAt,
+  });
+  return createKnowledgeForwardRevisionPendingProposalRecord({ request, recordedAt: requestedAt });
+}
+
+/** Creates one exact deterministic validation receipt for a Forward body. */
+function createForwardValidationReceipt(
+  proposal: ReturnType<typeof createForwardProposal>,
+  authority: KnowledgeForwardRevisionAcceptanceAuthority,
+  afterContent: string,
+  validatedAt: number
+) {
+  const proposalDigest = createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal);
+  const action =
+    afterContent === proposal.request.selectedContent ? "accept_exact" : "accept_edited";
+  const command = createKnowledgeForwardRevisionReviewCommand(
+    action === "accept_exact"
+      ? { action, proposal, proposalDigest }
+      : { action, proposal, proposalDigest, afterContent }
+  );
+  const validationReadSet = [
+    {
+      version: 1,
+      kind: "forward_revision_validation_artifact_identity",
+      artifactKind: "markdown",
+      sourceId: "source-1",
+      artifactId: "artifact-1",
+      artifactContentHash: HASH_A,
+    },
+  ];
+  return {
+    command,
+    receipt: createKnowledgeForwardRevisionValidationReceipt({
+      proposal,
+      proposalDigest,
+      command,
+      afterContent,
+      validation: { okfValid: true, citationsValid: true, linksValid: true },
+      validationProfile: {
+        version: 1,
+        kind: "forward_revision_validation_profile",
+        profileId: "profile-1",
+        profileVersion: 1,
+        profileConfigurationDigest: HASH_A,
+        bundleConfigurationDigest: HASH_B,
+        validatorImplementationId: "deterministic-validator",
+        validatorImplementationVersion: 1,
+        validatorImplementationDigest: HASH_C,
+      },
+      acceptanceAuthority: authority,
+      historicalCitations: [],
+      validationReadSet,
+      sourceArtifactObservationBindingDigest:
+        createKnowledgeForwardRevisionSourceArtifactObservationBindingDigest(
+          authority,
+          validationReadSet
+        ),
+      warningSummary: null,
+      validatedAt,
+    }),
+  };
+}
+
+/** Creates one exact current source entry for a Forward ledger source base. */
+function createForwardSourceEntry(completedAt: number): SourceManifestEntry {
+  return {
+    sourceId: "source-1",
+    sourceKey: "sources/note.md",
+    sourcePath: "Sources/Note.md",
+    custody: "user_managed",
+    lastSuccessful: {
+      sourceContentHash: HASH_A,
+      pipelineFingerprint: HASH_B,
+      generatedPages: [
+        {
+          path: PAGE_PATH,
+          ownership: "generated",
+          contentHash: createFileContentHash(FORWARD_CURRENT_CONTENT),
+        },
+      ],
+      changeSetId: "changeset-current",
+      completedAt,
+    },
+    extensions: {
+      obsidianCopilotKnowledgeRuntimeCommit: {
+        version: 1,
+        inputRevision: 7,
+        transactionId: "transaction-current",
+        manifestIntentDigest: HASH_C,
+      },
+    },
+  };
+}
+
+/** Creates one canonical accepted Forward Review and finalized ledger. */
+function createForwardAppliedFixture(options: {
+  afterContent: string;
+  appliedAt: number;
+  transactionId?: string;
+}): ForwardAppliedFixture {
+  const completedAt = options.appliedAt - 30;
+  const requestedAt = options.appliedAt - 18;
+  const proposal = createForwardProposal(requestedAt);
+  const proposalDigest = createKnowledgeForwardRevisionPendingProposalRecordDigest(proposal);
+  const decisionAuthority = createForwardAppliedAuthority(20, completedAt);
+  const original = createForwardValidationReceipt(
+    proposal,
+    decisionAuthority,
+    options.afterContent,
+    options.appliedAt - 14
+  );
+  const accepted = createKnowledgeForwardRevisionAcceptedDecisionRecord({
+    proposal,
+    proposalDigest,
+    command: original.command,
+    afterContent: options.afterContent,
+    acceptanceAuthority: decisionAuthority,
+    validationReceipt: original.receipt,
+    validationReceiptDigest: original.receipt.receiptDigest,
+    acceptedAt: options.appliedAt - 12,
+  });
+  const applyAuthority = createForwardAppliedAuthority(21, completedAt);
+  const fresh = createForwardValidationReceipt(
+    proposal,
+    applyAuthority,
+    options.afterContent,
+    options.appliedAt - 5
+  );
+  const sourceBase = createKnowledgeForwardRevisionSourceBase({
+    bundleId: "personal",
+    sourceEntry: createForwardSourceEntry(completedAt),
+    currentSourceFreshness: applyAuthority.currentSourceFreshness,
+  });
+  const revalidation = createKnowledgeForwardRevisionApplyRevalidationReceipt({
+    acceptedDecision: accepted,
+    freshValidationReceipt: fresh.receipt,
+    applyAuthority,
+    sourceBase,
+    vaultObservedBeforeHash: createFileContentHash(FORWARD_CURRENT_CONTENT),
+    vaultObservedAfterHash: createFileContentHash(FORWARD_CURRENT_CONTENT),
+    revalidatedAt: options.appliedAt - 5,
+  });
+  const prepared = createKnowledgeForwardRevisionPreparedApplyJournal({
+    transactionId: options.transactionId ?? "forward-transaction-1",
+    acceptedDecision: accepted,
+    revalidationReceipt: revalidation,
+    manifestBeforeRevision: 9,
+    manifestBeforeDigest: HASH_F,
+    beforeContent: FORWARD_CURRENT_CONTENT,
+    afterContent: options.afterContent,
+    createdAt: options.appliedAt - 3,
+  });
+  const applying = projectKnowledgeForwardRevisionApplyJournalApplying(
+    prepared,
+    options.appliedAt - 2
+  );
+  const committed = projectKnowledgeForwardRevisionApplyJournalCommitted(
+    applying,
+    options.appliedAt
+  );
+  const ledger = createKnowledgeForwardRevisionApplyLedgerRecord({
+    committedJournal: committed,
+    sourceBase,
+    manifestAfterRevision: 10,
+    manifestAfterDigest: HASH_A,
+    appliedAt: options.appliedAt,
+  });
+  const reviewEntry = createKnowledgeForwardRevisionTerminalReviewEntryV2({
+    decision: accepted,
+    publishedRuntimeRevision: 10,
+    proposalStoreRevision: 1,
+    decidedRuntimeRevision: 21,
+    decisionStoreRevision: 2,
+  });
+  const review = snapshotKnowledgeForwardRevisionReviewSnapshotV2({
+    version: 2,
+    bundleId: "personal",
+    revision: 2,
+    lastRequestRevision: 1,
+    records: [reviewEntry],
+  });
+  return { review, ledger, afterContent: options.afterContent };
+}
+
 /** Creates one strict Review snapshot. */
 function createReview(records: ChangeSetReviewRecord[]): ChangeSetReviewSnapshot {
   return { version: 2, bundleId: "personal", revision: records.length, records };
@@ -194,6 +532,10 @@ function createIndexInput(fixtures: AppliedFixture[]) {
     pagePath: PAGE_PATH,
     applyCommits: fixtures.map(({ ledger }) => ledger),
     review: createReview(fixtures.map(({ record }) => record)),
+    forwardRevisionApplyCommits: [] as Readonly<KnowledgeForwardRevisionApplyLedgerRecord>[],
+    forwardRevisionReview: undefined as
+      | Readonly<KnowledgeForwardRevisionReviewSnapshotV2>
+      | undefined,
     manifestRevision: 9,
     currentManifestPage: {
       path: PAGE_PATH,
@@ -218,6 +560,8 @@ function createDetailInput(
     pagePath: input.pagePath,
     applyCommits: input.applyCommits,
     review: input.review,
+    forwardRevisionApplyCommits: input.forwardRevisionApplyCommits,
+    forwardRevisionReview: input.forwardRevisionReview,
     authority,
   };
 }
@@ -260,15 +604,192 @@ describe("KnowledgeKnownAppliedWikiOutputProjector", () => {
       newestAppliedAt: 3_000,
       newestManifestRevision: 3,
       verifiedApplyCount: 2,
+      origins: [
+        {
+          kind: "source_apply",
+          verifiedApplyCount: 2,
+          newestAppliedAt: 3_000,
+          newestManifestRevision: 3,
+        },
+      ],
       detailAvailability: "available",
     });
     expect(snapshot.outputs[0]).not.toHaveProperty("content");
     expect(snapshot.outputs[0]?.authority.transactionId).toBe("transaction-repeated");
+    expect(snapshot.outputs[0]?.authority.origin).toBe("source_apply");
     expect(snapshot.outputs[1]?.newestAppliedAt).toBe(2_000);
     expect(snapshot.currentManifestPage?.path).toBe(PAGE_PATH);
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.outputs)).toBe(true);
     expect(Object.isFrozen(snapshot.outputs[0]?.authority)).toBe(true);
+    expect(Object.isFrozen(snapshot.outputs[0]?.origins)).toBe(true);
+    expect(Object.isFrozen(snapshot.outputs[0]?.origins[0])).toBe(true);
+  });
+
+  it("joins one canonical Forward ledger to its exact accepted Review body", () => {
+    const forward = createForwardAppliedFixture({
+      afterContent: "# Forward revised output\n",
+      appliedAt: 3_000,
+    });
+    const input = createIndexInput([]);
+    input.forwardRevisionApplyCommits = [forward.ledger];
+    input.forwardRevisionReview = forward.review;
+    const snapshot = projectKnowledgeKnownAppliedWikiOutputIndex(input);
+    const item = snapshot.outputs[0];
+    if (!item || item.authority.origin !== "forward_revision") {
+      throw new Error("Expected one Forward output authority");
+    }
+
+    expect(snapshot.forwardReviewRevision).toBe(2);
+    expect(item).toMatchObject({
+      contentHash: createFileContentHash(forward.afterContent),
+      characterCount: forward.afterContent.length,
+      newestAppliedAt: 3_000,
+      newestManifestRevision: 10,
+      verifiedApplyCount: 1,
+      origins: [
+        {
+          kind: "forward_revision",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 3_000,
+          newestManifestRevision: 10,
+        },
+      ],
+      authority: {
+        origin: "forward_revision",
+        sourceContentHash: HASH_A,
+        pipelineFingerprint: HASH_B,
+        inputRevision: 7,
+        manualOverride: true,
+        acceptedDecisionDigest: forward.ledger.acceptedDecisionDigest,
+        proposalId: forward.ledger.proposalId,
+        proposalDigest: forward.ledger.proposalDigest,
+        ledgerId: forward.ledger.ledgerId,
+        ledgerDigest: forward.ledger.ledgerDigest,
+        forwardLedgerIdentityDigest: forward.ledger.forwardLedgerIdentityDigest,
+      },
+    });
+    expect(item).not.toHaveProperty("content");
+    expect(
+      projectKnowledgeKnownAppliedWikiOutputDetail(createDetailInput(input, item.authority))
+    ).toEqual({
+      kind: "available",
+      runtimeId: RUNTIME_ID,
+      runtimeRevision: 40,
+      contentHash: createFileContentHash(forward.afterContent),
+      content: forward.afterContent,
+      characterCount: forward.afterContent.length,
+    });
+  });
+
+  it("aggregates mixed Source and Forward Apply provenance without inventing one origin", () => {
+    const content = "# Shared historical bytes\n";
+    const source = createAppliedFixture({
+      suffix: "mixed-source",
+      content,
+      inputRevision: 1,
+      manifestAfterRevision: 1,
+      appliedAt: 2_000,
+    });
+    const forward = createForwardAppliedFixture({ afterContent: content, appliedAt: 3_000 });
+    const input = createIndexInput([source]);
+    input.forwardRevisionApplyCommits = [forward.ledger];
+    input.forwardRevisionReview = forward.review;
+
+    const item = projectKnowledgeKnownAppliedWikiOutputIndex(input).outputs[0];
+    if (!item) throw new Error("Expected one mixed-provenance output");
+    expect(item.verifiedApplyCount).toBe(2);
+    expect(item.origins).toEqual([
+      {
+        kind: "source_apply",
+        verifiedApplyCount: 1,
+        newestAppliedAt: 2_000,
+        newestManifestRevision: 1,
+      },
+      {
+        kind: "forward_revision",
+        verifiedApplyCount: 1,
+        newestAppliedAt: 3_000,
+        newestManifestRevision: 10,
+      },
+    ]);
+    expect(item.authority.origin).toBe("forward_revision");
+    expect(
+      projectKnowledgeKnownAppliedWikiOutputDetail(createDetailInput(input, item.authority))
+    ).toMatchObject({ kind: "available", content });
+  });
+
+  it("requires exact Forward ledger and Review replay for detail", () => {
+    const forward = createForwardAppliedFixture({
+      afterContent: "# Exact Forward detail\n",
+      appliedAt: 3_000,
+    });
+    const input = createIndexInput([]);
+    input.forwardRevisionApplyCommits = [forward.ledger];
+    input.forwardRevisionReview = forward.review;
+    const authority = projectKnowledgeKnownAppliedWikiOutputIndex(input).outputs[0]?.authority;
+    if (!authority || authority.origin !== "forward_revision") {
+      throw new Error("Expected one Forward authority");
+    }
+
+    expect(
+      projectKnowledgeKnownAppliedWikiOutputDetail({
+        ...createDetailInput(input, authority),
+        authority: { ...authority, ledgerDigest: HASH_F },
+      }).kind
+    ).toBe("stale");
+    expect(
+      projectKnowledgeKnownAppliedWikiOutputDetail({
+        ...createDetailInput(input, authority),
+        forwardRevisionReview: undefined,
+      }).kind
+    ).toBe("stale");
+    expect(
+      projectKnowledgeKnownAppliedWikiOutputDetail({
+        ...createDetailInput(input, authority),
+        forwardRevisionApplyCommits: [],
+      }).kind
+    ).toBe("stale");
+    expect(
+      projectKnowledgeKnownAppliedWikiOutputDetail({
+        ...createDetailInput(input, authority),
+        authority: { ...authority, manualOverride: false },
+      }).kind
+    ).toBe("stale");
+  });
+
+  it("fails closed for uncommitted, tampered, or ambiguous Forward evidence", () => {
+    const first = createForwardAppliedFixture({
+      afterContent: "# Forward evidence\n",
+      appliedAt: 3_000,
+    });
+    const input = createIndexInput([]);
+    input.forwardRevisionReview = first.review;
+    expect(projectKnowledgeKnownAppliedWikiOutputIndex(input).outputs).toEqual([]);
+
+    input.forwardRevisionApplyCommits = [{ ...first.ledger, ledgerDigest: HASH_F }];
+    expect(projectKnowledgeKnownAppliedWikiOutputIndex(input).outputs).toEqual([]);
+
+    const tamperedReview = JSON.parse(
+      JSON.stringify(first.review)
+    ) as KnowledgeForwardRevisionReviewSnapshotV2;
+    const acceptedEntry = tamperedReview.records[0];
+    if (acceptedEntry?.state !== "accepted") throw new Error("Expected accepted fixture Review");
+    (acceptedEntry.decision as { afterContent: string }).afterContent = "# Tampered body\n";
+    input.forwardRevisionApplyCommits = [first.ledger];
+    input.forwardRevisionReview = tamperedReview;
+    expect(projectKnowledgeKnownAppliedWikiOutputIndex(input).outputs).toEqual([]);
+
+    const second = createForwardAppliedFixture({
+      afterContent: first.afterContent,
+      appliedAt: 3_000,
+      transactionId: "forward-transaction-2",
+    });
+    input.forwardRevisionApplyCommits = [first.ledger, second.ledger];
+    input.forwardRevisionReview = first.review;
+    expect(() => projectKnowledgeKnownAppliedWikiOutputIndex(input)).toThrow(
+      KnowledgeKnownAppliedWikiOutputProjectionError
+    );
   });
 
   it("rejoins exactly one selected body and fails stale on authority drift", () => {
@@ -412,11 +933,26 @@ describe("KnowledgeKnownAppliedWikiOutputProjector", () => {
       enumerable: true,
       get: getter,
     });
+    const hostileForwardReview = {
+      version: 2,
+      bundleId: "personal",
+      revision: 0,
+      lastRequestRevision: 0,
+    };
+    Object.defineProperty(hostileForwardReview, "records", {
+      enumerable: true,
+      get: getter,
+    });
 
     const snapshot = projectKnowledgeKnownAppliedWikiOutputIndex({
       ...createIndexInput([]),
       applyCommits: [hostileLedgerRow as KnowledgeApplyCommitLedgerRecord],
+      forwardRevisionApplyCommits: [
+        hostileLedgerRow as unknown as KnowledgeForwardRevisionApplyLedgerRecord,
+      ],
       review: createReview([hostileReviewRow as ChangeSetReviewRecord]),
+      forwardRevisionReview:
+        hostileForwardReview as unknown as KnowledgeForwardRevisionReviewSnapshotV2,
     });
 
     expect(snapshot.outputs).toEqual([]);
@@ -466,6 +1002,30 @@ describe("KnowledgeKnownAppliedWikiOutputProjector", () => {
         applyCommits: new Array(
           KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxApplyCommits + 1
         ) as KnowledgeApplyCommitLedgerRecord[],
+      })
+    ).toThrow(KnowledgeKnownAppliedWikiOutputLimitError);
+
+    expect(() =>
+      projectKnowledgeKnownAppliedWikiOutputIndex({
+        ...createIndexInput([]),
+        forwardRevisionApplyCommits: new Array(
+          KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxForwardApplyCommits + 1
+        ) as KnowledgeForwardRevisionApplyLedgerRecord[],
+      })
+    ).toThrow(KnowledgeKnownAppliedWikiOutputLimitError);
+
+    expect(() =>
+      projectKnowledgeKnownAppliedWikiOutputIndex({
+        ...createIndexInput([]),
+        forwardRevisionReview: {
+          version: 2,
+          bundleId: "personal",
+          revision: 0,
+          lastRequestRevision: 0,
+          records: new Array(
+            KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxForwardReviewRecords + 1
+          ),
+        } as unknown as KnowledgeForwardRevisionReviewSnapshotV2,
       })
     ).toThrow(KnowledgeKnownAppliedWikiOutputLimitError);
 

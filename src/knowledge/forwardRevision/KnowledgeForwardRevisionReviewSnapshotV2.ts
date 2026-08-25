@@ -687,7 +687,7 @@ export function snapshotKnowledgeForwardRevisionReviewSnapshotV2(
       const previousPageEntry = lastEntryByPagePathKey.get(pagePathKey);
       if (
         previousPageEntry &&
-        (previousPageEntry.state !== "rejected" ||
+        (previousPageEntry.state === "pending" ||
           previousPageEntry.decisionStoreRevision >= entry.proposalStoreRevision)
       ) {
         invalid();

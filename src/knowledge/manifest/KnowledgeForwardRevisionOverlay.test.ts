@@ -4,6 +4,7 @@ import {
   createKnowledgeForwardRevisionOverlayEntry,
   parseKnowledgeForwardRevisionOverlayExtension,
   projectKnowledgeForwardRevisionOverlayAddition,
+  projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit,
   snapshotKnowledgeForwardRevisionOverlayExtension,
 } from "@/knowledge/manifest/KnowledgeForwardRevisionOverlay";
 import {
@@ -81,7 +82,8 @@ function createFixture() {
     pagePath: "Wiki/Topic.md",
     sourceId: "source-1",
     sourceBaseDigest: createKnowledgeForwardRevisionSourceBaseDigest(sourceBase),
-    baseContentHash: HASH_C,
+    sourceAppliedContentHash: HASH_C,
+    previousEffectiveContentHash: HASH_C,
     effectiveContentHash: HASH_E,
     forwardTransactionId: "forward-transaction-1",
     acceptedDecisionDigest: HASH_A,
@@ -100,14 +102,189 @@ describe("KnowledgeForwardRevisionOverlay", () => {
     expect(next.revision).toBe(10);
     expect(JSON.stringify(next.entries)).toBe(beforeEntries);
     expect(next.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]).toEqual({
-      version: 1,
+      version: 2,
       kind: "forward_revision_overlay_extension",
       entries: [entry],
     });
     expect(Object.isFrozen(next.entries[0].lastSuccessful)).toBe(true);
   });
 
-  it("rejects Windows-equivalent replacement and replayed durable identities", () => {
+  it("strictly replaces one head only through its exact effective predecessor", () => {
+    const { manifest, sourceBase, entry } = createFixture();
+    const first = projectKnowledgeForwardRevisionOverlayAddition(manifest, entry, sourceBase);
+    const currentSourceEntry = first.entries[0];
+    const advancedSourceEntry = {
+      ...currentSourceEntry,
+      lastSuccessful: {
+        ...currentSourceEntry.lastSuccessful!,
+        generatedPages: [
+          ...currentSourceEntry.lastSuccessful!.generatedPages,
+          {
+            path: "Wiki/Other.md",
+            ownership: "generated" as const,
+            contentHash: HASH_D,
+          },
+        ],
+      },
+    };
+    const advancedSourceBase = createKnowledgeForwardRevisionSourceBase({
+      bundleId: first.bundleId,
+      sourceEntry: advancedSourceEntry,
+      currentSourceFreshness: sourceBase.currentSourceFreshness,
+    });
+    const afterUnrelatedSourceApply: SourceManifest = {
+      ...first,
+      revision: first.revision + 1,
+      entries: [advancedSourceEntry],
+    };
+    const successor = createKnowledgeForwardRevisionOverlayEntry({
+      bundleId: entry.bundleId,
+      pagePath: entry.pagePath,
+      sourceId: entry.sourceId,
+      sourceBaseDigest: createKnowledgeForwardRevisionSourceBaseDigest(advancedSourceBase),
+      sourceAppliedContentHash: entry.sourceAppliedContentHash,
+      previousEffectiveContentHash: entry.effectiveContentHash,
+      effectiveContentHash: HASH_A,
+      forwardTransactionId: "forward-tx-2",
+      acceptedDecisionDigest: HASH_B,
+      forwardLedgerIdentityDigest: HASH_D,
+      appliedAt: entry.appliedAt + 1,
+    });
+    const next = projectKnowledgeForwardRevisionOverlayAddition(
+      afterUnrelatedSourceApply,
+      successor,
+      advancedSourceBase
+    );
+    const extension = snapshotKnowledgeForwardRevisionOverlayExtension(
+      next.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    );
+
+    expect(extension.entries).toEqual([successor]);
+    expect(successor.sourceBaseDigest).not.toBe(entry.sourceBaseDigest);
+    expect(() =>
+      projectKnowledgeForwardRevisionOverlayAddition(
+        afterUnrelatedSourceApply,
+        {
+          ...successor,
+          previousEffectiveContentHash: HASH_F,
+        },
+        advancedSourceBase
+      )
+    ).toThrow(KnowledgeForwardRevisionOverlayValidationError);
+  });
+
+  it("migrates a v1 overlay base into source and predecessor identities", () => {
+    const { entry } = createFixture();
+    const {
+      sourceAppliedContentHash: _sourceAppliedContentHash,
+      previousEffectiveContentHash: _previousEffectiveContentHash,
+      ...legacyEntry
+    } = entry;
+    void _sourceAppliedContentHash;
+    void _previousEffectiveContentHash;
+
+    const extension = snapshotKnowledgeForwardRevisionOverlayExtension({
+      version: 1,
+      kind: "forward_revision_overlay_extension",
+      entries: [{ ...legacyEntry, version: 1, baseContentHash: HASH_C }],
+    });
+
+    expect(extension.version).toBe(2);
+    expect(extension.entries[0]).toMatchObject({
+      sourceAppliedContentHash: HASH_C,
+      previousEffectiveContentHash: HASH_C,
+    });
+  });
+
+  it("removes exact heads after a source commit without incrementing its revision", () => {
+    const fixture = createFixture();
+    const sourceEntry = fixture.manifest.entries[0];
+    const sourceWithTwoPages = {
+      ...sourceEntry,
+      lastSuccessful: {
+        ...sourceEntry.lastSuccessful!,
+        generatedPages: [
+          ...sourceEntry.lastSuccessful!.generatedPages,
+          {
+            path: "Wiki/Other.md",
+            ownership: "generated" as const,
+            contentHash: HASH_D,
+          },
+        ],
+      },
+    };
+    const manifest: SourceManifest = {
+      ...fixture.manifest,
+      entries: [sourceWithTwoPages],
+      extensions: { unrelated: { retained: true } },
+    };
+    const sourceBase = createKnowledgeForwardRevisionSourceBase({
+      bundleId: manifest.bundleId,
+      sourceEntry: sourceWithTwoPages,
+      currentSourceFreshness: fixture.sourceBase.currentSourceFreshness,
+    });
+    const sourceBaseDigest = createKnowledgeForwardRevisionSourceBaseDigest(sourceBase);
+    const first = createKnowledgeForwardRevisionOverlayEntry({
+      bundleId: fixture.entry.bundleId,
+      pagePath: fixture.entry.pagePath,
+      sourceId: fixture.entry.sourceId,
+      sourceBaseDigest,
+      sourceAppliedContentHash: fixture.entry.sourceAppliedContentHash,
+      previousEffectiveContentHash: fixture.entry.previousEffectiveContentHash,
+      effectiveContentHash: fixture.entry.effectiveContentHash,
+      forwardTransactionId: fixture.entry.forwardTransactionId,
+      acceptedDecisionDigest: fixture.entry.acceptedDecisionDigest,
+      forwardLedgerIdentityDigest: fixture.entry.forwardLedgerIdentityDigest,
+      appliedAt: fixture.entry.appliedAt,
+    });
+    const second = createKnowledgeForwardRevisionOverlayEntry({
+      bundleId: manifest.bundleId,
+      pagePath: "Wiki/Other.md",
+      sourceId: sourceBase.sourceId,
+      sourceBaseDigest,
+      sourceAppliedContentHash: HASH_D,
+      previousEffectiveContentHash: HASH_D,
+      effectiveContentHash: HASH_A,
+      forwardTransactionId: "forward-tx-other",
+      acceptedDecisionDigest: HASH_B,
+      forwardLedgerIdentityDigest: HASH_D,
+      appliedAt: 131,
+    });
+    const withBoth = projectKnowledgeForwardRevisionOverlayAddition(
+      projectKnowledgeForwardRevisionOverlayAddition(manifest, first, sourceBase),
+      second,
+      sourceBase
+    );
+    const revision = withBoth.revision;
+    const withoutFirst = projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(
+      withBoth,
+      first
+    );
+    const remaining = snapshotKnowledgeForwardRevisionOverlayExtension(
+      withoutFirst.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]
+    );
+
+    expect(withoutFirst.revision).toBe(revision);
+    expect(withoutFirst.extensions?.unrelated).toEqual({ retained: true });
+    expect(remaining.entries).toEqual([second]);
+    const withoutBoth = projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(
+      withoutFirst,
+      second
+    );
+    expect(withoutBoth.revision).toBe(revision);
+    expect(withoutBoth.extensions).toEqual({ unrelated: { retained: true } });
+    expect(() =>
+      projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(withoutFirst, first)
+    ).toThrow(KnowledgeForwardRevisionOverlayValidationError);
+    expect(() =>
+      projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(withBoth, {
+        ...first,
+        appliedAt: first.appliedAt + 1,
+      })
+    ).toThrow(KnowledgeForwardRevisionOverlayValidationError);
+  });
+
+  it("rejects replayed durable identities across distinct page heads", () => {
     const { entry } = createFixture();
     const variants = [
       {
@@ -135,7 +312,7 @@ describe("KnowledgeForwardRevisionOverlay", () => {
     for (const second of variants) {
       expect(() =>
         snapshotKnowledgeForwardRevisionOverlayExtension({
-          version: 1,
+          version: 2,
           kind: "forward_revision_overlay_extension",
           entries: [entry, second],
         })

@@ -56,7 +56,7 @@ type StorageFailure = { revision: number; timing: "before" | "after" };
 const ALLOWING_AUTHORITY: ChangeSetTransactionAuthorityPort = {
   /** Accepts the synthetic apply identity without external persistence. */
   async verify() {
-    return;
+    return Object.freeze({ minimumTimestamp: 0 });
   },
 };
 
@@ -420,6 +420,35 @@ describe("ChangeSetTransaction", () => {
     expect(files.observeCount).toBe(0);
     expect(files.mutations).toEqual([]);
     expect(storage.active).toBeNull();
+  });
+
+  it("raises every journal timestamp to the durable authority floor before file access", async () => {
+    const storage = new MemoryTransactionStorage();
+    const files = new MemoryKnowledgeFileStore();
+    const transaction = new ChangeSetTransaction({
+      storage,
+      fileStore: files,
+      validator: createValidator(files),
+      authority: {
+        /** Returns one predecessor-derived logical timestamp beyond the rolled-back clock. */
+        async verify() {
+          return Object.freeze({ minimumTimestamp: 2_000 });
+        },
+      },
+      now: () => 400,
+      createTransactionId: () => "transaction-authority-time-floor",
+    });
+
+    await expect(transaction.apply(createApplyInput())).resolves.toMatchObject({
+      transactionId: "transaction-authority-time-floor",
+      committedAt: 2_000,
+    });
+    expect(requireCommitted(storage)).toMatchObject({
+      createdAt: 2_000,
+      updatedAt: 2_000,
+      committedAt: 2_000,
+    });
+    expect(files.mutations).toHaveLength(2);
   });
 
   it("applies create/update/delete targets in Windows-key order and commits last", async () => {

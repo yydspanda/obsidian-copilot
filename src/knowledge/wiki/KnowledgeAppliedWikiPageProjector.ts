@@ -5,11 +5,16 @@ import {
   type KnowledgeReviewEvidenceSummary,
 } from "@/knowledge/review/KnowledgeReviewEvidence";
 import { validateClaimCitation } from "@/knowledge/model/validation";
+import {
+  snapshotKnowledgeAppliedWikiEffectivePageHead,
+  type KnowledgeAppliedWikiEffectivePageHead,
+} from "@/knowledge/query/KnowledgeAppliedWikiEffectivePageHead";
 import type {
   KnowledgeRuntimeAppliedPageProvenance,
   KnowledgeRuntimeAppliedSourceProvenance,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import {
+  KNOWLEDGE_APPLIED_WIKI_EVIDENCE_SCOPE,
   KNOWLEDGE_APPLIED_WIKI_INSPECTION_LIMITS,
   getKnowledgeAppliedWikiPageInspectorErrorCode,
   KnowledgeAppliedWikiPageInspectorError,
@@ -417,7 +422,10 @@ export function snapshotKnowledgeAppliedWikiPageProjectionAuthority(
         "path",
         "windowsPathKey",
         "ownership",
+        "sourceAppliedContentHash",
+        "effectiveContentHash",
         "contentHash",
+        "origin",
         "sources",
       ])
     : undefined;
@@ -440,8 +448,6 @@ export function snapshotKnowledgeAppliedWikiPageProjectionAuthority(
     typeof page.windowsPathKey !== "string" ||
     page.windowsPathKey.length > KNOWLEDGE_APPLIED_WIKI_INSPECTION_LIMITS.maxDisplayPathLength ||
     page.windowsPathKey !== toWindowsPathKey(parsedPagePath.path) ||
-    typeof page.contentHash !== "string" ||
-    !SHA256_PATTERN.test(page.contentHash) ||
     (page.ownership !== "generated" && page.ownership !== "shared" && page.ownership !== "user") ||
     !sourceValues ||
     sourceValues.length === 0
@@ -472,6 +478,26 @@ export function snapshotKnowledgeAppliedWikiPageProjectionAuthority(
     }
     sources.push(source);
   }
+  let head: Readonly<KnowledgeAppliedWikiEffectivePageHead>;
+  try {
+    head = snapshotKnowledgeAppliedWikiEffectivePageHead(
+      {
+        sourceAppliedContentHash: page.sourceAppliedContentHash,
+        effectiveContentHash: page.effectiveContentHash,
+        contentHash: page.contentHash,
+        origin: page.origin,
+      },
+      {
+        bundleId: authority.bundleId,
+        pagePath: parsedPagePath.path,
+        windowsPathKey: page.windowsPathKey,
+        ownership: page.ownership,
+        sourceIds: sources.map((source) => source.sourceId),
+      }
+    );
+  } catch {
+    throw createProjectionError();
+  }
   return Object.freeze({
     bundleId: authority.bundleId,
     runtimeRevision: authority.runtimeRevision,
@@ -480,7 +506,7 @@ export function snapshotKnowledgeAppliedWikiPageProjectionAuthority(
       path: parsedPagePath.path,
       windowsPathKey: page.windowsPathKey,
       ownership: page.ownership,
-      contentHash: page.contentHash,
+      ...head,
       sources: Object.freeze(sources),
     }),
   });
@@ -493,7 +519,7 @@ function createPageRef(authority: KnowledgeAppliedWikiPageProjectionAuthority): 
       PAGE_REF_NAMESPACE,
       authority.bundleId,
       authority.page.windowsPathKey,
-      authority.page.contentHash,
+      authority.page.effectiveContentHash,
       String(authority.runtimeRevision),
       String(authority.manifestRevision),
     ].join("\n")
@@ -534,7 +560,7 @@ function createEvidenceAuthority(
     manifestRevision: authority.manifestRevision,
     pagePath: authority.page.path,
     windowsPathKey: authority.page.windowsPathKey,
-    pageContentHash: authority.page.contentHash,
+    pageContentHash: authority.page.effectiveContentHash,
     sourceId: source.sourceId,
     sourcePath: source.sourcePath,
     custody: source.custody,
@@ -627,6 +653,10 @@ export class KnowledgeAppliedWikiPageInspectionProjector {
         pageRef,
         displayPagePath: authority.page.path,
         ownership: authority.page.ownership,
+        sourceAppliedContentHash: authority.page.sourceAppliedContentHash,
+        effectiveContentHash: authority.page.effectiveContentHash,
+        origin: authority.page.origin,
+        evidenceScope: KNOWLEDGE_APPLIED_WIKI_EVIDENCE_SCOPE,
         sources: Object.freeze(sources),
         omittedSourceCount: authority.page.sources.length - sources.length,
       });

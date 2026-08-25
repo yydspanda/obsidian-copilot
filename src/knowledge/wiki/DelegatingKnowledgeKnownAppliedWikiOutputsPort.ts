@@ -82,6 +82,26 @@ function sessionRefsHaveExactKinds(
   );
 }
 
+/** Reports exact equality for two already-snapshotted provenance arrays. */
+function originsEqual(
+  left: Readonly<KnowledgeKnownAppliedWikiOutputsSession["items"][number]>["origins"],
+  right: Readonly<KnowledgeKnownAppliedWikiOutputsSession["items"][number]>["origins"]
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((origin, index) => {
+      const candidate = right[index];
+      return (
+        candidate !== undefined &&
+        origin.kind === candidate.kind &&
+        origin.verifiedApplyCount === candidate.verifiedApplyCount &&
+        origin.newestAppliedAt === candidate.newestAppliedAt &&
+        origin.newestManifestRevision === candidate.newestManifestRevision
+      );
+    })
+  );
+}
+
 /** Explicit fail-closed capability used outside a released production generation. */
 class UnavailableKnowledgeKnownAppliedWikiOutputsPort
   implements KnowledgeKnownAppliedWikiOutputsPort
@@ -404,6 +424,13 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort
         nextRefs.size !== captured.value.items.length ||
         captured.value.items.some((item) => binding.summaries.has(item.outputRef)) ||
         remaining > 0 !== (captured.value.nextCursor !== undefined) ||
+        captured.value.items.some((item) =>
+          session.currentState === "applied"
+            ? item.proposalCapability !== "available" &&
+              item.proposalCapability !== "forward_origin_not_supported" &&
+              item.proposalCapability !== "detail_too_large"
+            : item.proposalCapability !== "current_not_applied"
+        ) ||
         (captured.value.nextCursor !== undefined &&
           binding.consumedCursors.has(captured.value.nextCursor))
       ) {
@@ -449,7 +476,9 @@ export class DelegatingKnowledgeKnownAppliedWikiOutputsPort
         captured.kind === "loaded" &&
         (captured.value.outputRef !== outputRef ||
           captured.value.appliedAt !== summary.appliedAt ||
-          captured.value.verifiedApplyCount !== summary.verifiedApplyCount)
+          captured.value.verifiedApplyCount !== summary.verifiedApplyCount ||
+          captured.value.proposalCapability !== summary.proposalCapability ||
+          !originsEqual(captured.value.origins, summary.origins))
       ) {
         return UNAVAILABLE_DETAIL;
       }

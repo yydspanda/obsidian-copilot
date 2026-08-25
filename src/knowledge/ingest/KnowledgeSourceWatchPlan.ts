@@ -1,5 +1,9 @@
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
+  projectKnowledgeEffectiveManifestPages,
+  type KnowledgeEffectivePageOrigin,
+} from "@/knowledge/manifest/KnowledgeEffectivePageProjection";
+import {
   deriveKnowledgeSourceCompileAuthority,
   type KnowledgeSourceCompileOperation,
 } from "@/knowledge/capture/KnowledgeSourceOrigin";
@@ -101,7 +105,10 @@ export interface WatchedKnowledgeGeneratedOutput {
   outputPath: string;
   outputKey: string;
   ownership: GeneratedPageOwnership;
+  sourceAppliedContentHash: string;
+  effectiveContentHash: string;
   contentHash: string;
+  origin: Readonly<KnowledgeEffectivePageOrigin>;
   sourceIds: readonly string[];
 }
 
@@ -209,6 +216,13 @@ interface ParsedBundleWatchInput {
   pipelineProfileDigest: string;
 }
 
+interface GeneratedOutputCollisionProbe {
+  readonly sourceIds: Set<string>;
+  readonly path: string;
+  readonly ownership: GeneratedPageOwnership;
+  readonly contentHash?: string;
+}
+
 interface KnowledgeSourceWatchPlanState {
   sources: readonly ImmutableWatchedKnowledgeSource[];
   sourcesByPathKey: ReadonlyMap<string, readonly ImmutableWatchedKnowledgeSource[]>;
@@ -226,7 +240,6 @@ interface KnowledgeSourceWatchPlanState {
 const PLAN_CONSTRUCTOR_TOKEN = Symbol("KnowledgeSourceWatchPlan.constructor");
 const planStates = new WeakMap<object, KnowledgeSourceWatchPlanState>();
 const EMPTY_SOURCES: readonly ImmutableWatchedKnowledgeSource[] = Object.freeze([]);
-const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 /**
  * Compares text by code unit so plan identity never depends on host locale.
@@ -840,21 +853,42 @@ function selectSourceParser(
   return matches[0];
 }
 
-interface MutableGeneratedOutputProjection {
-  bundleId: string;
-  outputPath: string;
-  outputKey: string;
-  ownership: GeneratedPageOwnership;
-  contentHash: string;
-  sourceIds: Set<string>;
+/** Reports whether legacy Manifest page references conflict on one Windows identity. */
+function hasGeneratedOutputCollision(manifest: SourceManifest): boolean {
+  const seen = new Map<string, GeneratedOutputCollisionProbe>();
+  for (const entry of manifest.entries) {
+    for (const page of entry.lastSuccessful?.generatedPages ?? []) {
+      const key = toWindowsPathKey(page.path);
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, {
+          sourceIds: new Set([entry.sourceId]),
+          path: page.path,
+          ownership: page.ownership,
+          contentHash: page.contentHash,
+        });
+        continue;
+      }
+      if (
+        existing.sourceIds.has(entry.sourceId) ||
+        existing.path !== page.path ||
+        existing.ownership !== page.ownership ||
+        existing.contentHash !== page.contentHash
+      ) {
+        return true;
+      }
+      existing.sourceIds.add(entry.sourceId);
+    }
+  }
+  return false;
 }
 
 /**
  * Compiles committed Manifest pages into one Windows-keyed read-only projection.
  *
- * The generic Source Manifest contract permits an absent historical page hash,
- * but live output drift is authoritative only for a current committed page with
- * exact bytes. Co-owners must agree on spelling, ownership, and content hash.
+ * The source-compile hash remains explicit while an active strict forward
+ * overlay supplies the current effective hash. Co-owners and overlay lineage
+ * are validated by the shared effective-page authority leaf.
  *
  * @param input - Strict validated Bundle and Manifest input
  * @param bundleIndex - Stable Bundle position used by sanitized errors
@@ -864,67 +898,30 @@ function projectGeneratedOutputs(
   input: ParsedBundleWatchInput,
   bundleIndex: number
 ): readonly ImmutableWatchedKnowledgeGeneratedOutput[] {
-  const outputsByKey = new Map<string, MutableGeneratedOutputProjection>();
-  const entries = [...input.manifest.entries].sort(
-    (left, right) =>
-      compareText(left.sourceKey, right.sourceKey) || compareText(left.sourceId, right.sourceId)
-  );
-
-  entries.forEach((entry, sourceIndex) => {
-    for (const page of entry.lastSuccessful?.generatedPages ?? []) {
-      if (page.contentHash === undefined || !SHA256_PATTERN.test(page.contentHash)) {
-        throw new KnowledgeSourceWatchPlanBuildError("generated_output_invalid", {
-          bundleIndex,
-          sourceIndex,
-        });
-      }
-      const outputKey = toWindowsPathKey(page.path);
-      const existing = outputsByKey.get(outputKey);
-      if (!existing) {
-        outputsByKey.set(outputKey, {
-          bundleId: input.bundle.id,
+  try {
+    return Object.freeze(
+      projectKnowledgeEffectiveManifestPages(input.manifest).map((page) =>
+        Object.freeze({
+          bundleId: page.bundleId,
           outputPath: page.path,
-          outputKey,
+          outputKey: page.windowsPathKey,
           ownership: page.ownership,
-          contentHash: page.contentHash,
-          sourceIds: new Set([entry.sourceId]),
-        });
-        continue;
-      }
-      if (
-        existing.sourceIds.has(entry.sourceId) ||
-        existing.outputPath !== page.path ||
-        existing.ownership !== page.ownership ||
-        existing.contentHash !== page.contentHash
-      ) {
-        throw new KnowledgeSourceWatchPlanBuildError("generated_output_collision", {
-          bundleIndex,
-          sourceIndex,
-        });
-      }
-      existing.sourceIds.add(entry.sourceId);
-    }
-  });
-
-  const outputs = [...outputsByKey.values()]
-    .sort((left, right) => compareText(left.outputKey, right.outputKey))
-    .map((output) => {
-      const sourceIds = [...output.sourceIds].sort(compareText);
-      if (sourceIds.length > 1 && output.ownership !== "shared") {
-        throw new KnowledgeSourceWatchPlanBuildError("generated_output_invalid", {
-          bundleIndex,
-        });
-      }
-      return Object.freeze({
-        bundleId: output.bundleId,
-        outputPath: output.outputPath,
-        outputKey: output.outputKey,
-        ownership: output.ownership,
-        contentHash: output.contentHash,
-        sourceIds: Object.freeze(sourceIds),
-      });
-    });
-  return Object.freeze(outputs);
+          sourceAppliedContentHash: page.sourceAppliedContentHash,
+          effectiveContentHash: page.effectiveContentHash,
+          contentHash: page.effectiveContentHash,
+          origin: page.origin,
+          sourceIds: page.sourceIds,
+        })
+      )
+    );
+  } catch {
+    throw new KnowledgeSourceWatchPlanBuildError(
+      hasGeneratedOutputCollision(input.manifest)
+        ? "generated_output_collision"
+        : "generated_output_invalid",
+      { bundleIndex }
+    );
+  }
 }
 
 /**
@@ -1066,6 +1063,14 @@ export function createKnowledgeSourceParserProfileDigest(
   );
 }
 
+/** Converts immutable effective-page provenance into an exact digestable JSON value. */
+function createGeneratedOutputOriginDigestValue(
+  origin: Readonly<KnowledgeEffectivePageOrigin>
+): JsonValue {
+  if (origin.kind === "source_apply") return { kind: origin.kind };
+  return { kind: origin.kind, overlay: { ...origin.overlay } };
+}
+
 /**
  * Computes one digest over the exact immutable watch projection.
  *
@@ -1087,6 +1092,7 @@ function createWatchPlanDigest(
     sources: sources.map((source) => ({ ...source })),
     generatedOutputs: generatedOutputs.map((output) => ({
       ...output,
+      origin: createGeneratedOutputOriginDigestValue(output.origin),
       sourceIds: [...output.sourceIds],
     })),
     parserAuthorities: parserAuthorities.map((authority) => ({ ...authority })),

@@ -633,7 +633,7 @@ async function readStablePage(
       );
       assertInvocation(state, signal);
       const observations = await binding.observeOne(
-        Object.freeze([{ path: before.page.path, contentHash: before.page.contentHash }]),
+        Object.freeze([{ path: before.page.path, contentHash: before.page.effectiveContentHash }]),
         signal
       );
       assertInvocation(state, signal);
@@ -662,7 +662,7 @@ async function readStablePage(
       }
       return Object.freeze({
         authority: after,
-        state: observation.contentHash === after.page.contentHash ? "applied" : "drifted",
+        state: observation.contentHash === after.page.effectiveContentHash ? "applied" : "drifted",
       });
     } catch (error) {
       if (signal.aborted || isKnowledgeAbortError(error)) throw createAbortError();
@@ -739,8 +739,10 @@ function sourceSupportsLocator(sourcePath: string, kind: string): boolean {
 /**
  * Read-only production inspector for one exact current applied Wiki page.
  *
- * Runtime, bounded Vault reads, and actionable citation material never cross
- * this port. The navigator is the coordinator's only side-effect capability.
+ * Runtime and bounded Vault authority never cross this port. Forward-revised
+ * bytes are disclosed through the session origin, while actionable citations
+ * remain bound to the retained Source apply. The navigator is the coordinator's
+ * only side-effect capability.
  */
 export class KnowledgeProductionAppliedWikiPageInspectorCoordinator
   implements KnowledgeAppliedWikiPageInspectorPort, KnowledgeAppliedWikiPathIndexRowListPort

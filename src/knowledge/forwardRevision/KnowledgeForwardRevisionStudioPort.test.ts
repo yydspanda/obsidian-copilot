@@ -1,4 +1,5 @@
 import {
+  createKnowledgeForwardRevisionStudioAbandonCommand,
   createKnowledgeForwardRevisionStudioApplyCommand,
   createKnowledgeForwardRevisionStudioCommandFromReview,
   snapshotKnowledgeForwardRevisionStudioCommand,
@@ -127,6 +128,11 @@ describe("KnowledgeForwardRevisionStudioPort", () => {
     });
     expect(createKnowledgeForwardRevisionStudioApplyCommand(accepted)).toMatchObject({
       action: "apply",
+      reviewRef: REVIEW_REF,
+      snapshotRef: SNAPSHOT_REF,
+    });
+    expect(createKnowledgeForwardRevisionStudioAbandonCommand(accepted)).toMatchObject({
+      action: "abandon",
       reviewRef: REVIEW_REF,
       snapshotRef: SNAPSHOT_REF,
     });

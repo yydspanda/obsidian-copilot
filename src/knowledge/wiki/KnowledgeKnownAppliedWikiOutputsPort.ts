@@ -8,6 +8,8 @@ import {
 export const KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS = Object.freeze({
   pageSize: 20,
   maxKnownOutputs: 10_000,
+  maxVerifiedApplyRecordsPerOrigin: 10_000,
+  maxVerifiedApplyRecords: 20_000,
   maxContentCharacters: 2_000_000,
 });
 
@@ -23,12 +25,30 @@ export type KnowledgeKnownAppliedWikiOutputRelation =
   | "latest_known"
   | "earlier_known";
 
+/** One canonical, metadata-only Apply provenance summary for a retained output. */
+export interface KnowledgeKnownAppliedWikiOutputOriginSummary {
+  readonly kind: "source_apply" | "forward_revision";
+  readonly verifiedApplyCount: number;
+  readonly newestAppliedAt: number;
+  readonly newestManifestRevision: number;
+}
+
+/** Honest per-row availability of the narrow forward-proposal UI action. */
+export type KnowledgeKnownAppliedWikiOutputProposalCapability =
+  | "available"
+  | "current_not_applied"
+  | "selected_is_current"
+  | "forward_origin_not_supported"
+  | "detail_too_large";
+
 /** Metadata-only row for one unique, strictly proven retained output. */
 export interface KnowledgeKnownAppliedWikiOutputSummary {
   readonly outputRef: string;
   readonly appliedAt: number;
   readonly verifiedApplyCount: number;
+  readonly origins: readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[];
   readonly relation: KnowledgeKnownAppliedWikiOutputRelation;
+  readonly proposalCapability: KnowledgeKnownAppliedWikiOutputProposalCapability;
 }
 
 /** One bounded page of retained output metadata. */
@@ -52,6 +72,8 @@ export interface KnowledgeKnownAppliedWikiOutputDetail {
   readonly outputRef: string;
   readonly appliedAt: number;
   readonly verifiedApplyCount: number;
+  readonly origins: readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[];
+  readonly proposalCapability: KnowledgeKnownAppliedWikiOutputProposalCapability;
   readonly content: string;
 }
 
@@ -214,13 +236,82 @@ function snapshotArray(value: unknown, maxLength: number): readonly unknown[] | 
   }
 }
 
+/** Strictly captures canonical per-origin Apply summaries and validates their aggregate. */
+function snapshotOrigins(
+  value: unknown,
+  verifiedApplyCount: number,
+  appliedAt: number
+): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
+  const values = snapshotArray(value, 2);
+  if (!values || values.length === 0) {
+    throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
+  }
+  const origins = values.map((candidate) => {
+    const record = snapshotRecord(candidate, [
+      "kind",
+      "verifiedApplyCount",
+      "newestAppliedAt",
+      "newestManifestRevision",
+    ]);
+    if (
+      !record ||
+      (record.kind !== "source_apply" && record.kind !== "forward_revision") ||
+      !Number.isSafeInteger(record.verifiedApplyCount) ||
+      Number(record.verifiedApplyCount) < 1 ||
+      Number(record.verifiedApplyCount) >
+        KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxVerifiedApplyRecordsPerOrigin ||
+      !Number.isSafeInteger(record.newestAppliedAt) ||
+      Number(record.newestAppliedAt) < 0 ||
+      !Number.isSafeInteger(record.newestManifestRevision) ||
+      Number(record.newestManifestRevision) < 1
+    ) {
+      throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
+    }
+    return Object.freeze({
+      kind: record.kind,
+      verifiedApplyCount: Number(record.verifiedApplyCount),
+      newestAppliedAt: Number(record.newestAppliedAt),
+      newestManifestRevision: Number(record.newestManifestRevision),
+    });
+  });
+  const canonicalKinds = origins.map((origin) => origin.kind).join(",");
+  if (
+    (canonicalKinds !== "source_apply" &&
+      canonicalKinds !== "forward_revision" &&
+      canonicalKinds !== "source_apply,forward_revision") ||
+    origins.reduce((total, origin) => total + origin.verifiedApplyCount, 0) !==
+      verifiedApplyCount ||
+    Math.max(...origins.map((origin) => origin.newestAppliedAt)) !== appliedAt
+  ) {
+    throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
+  }
+  return Object.freeze(origins);
+}
+
+/** Reports whether a capability is coherent with one row relation in isolation. */
+function proposalCapabilityMatchesRelation(
+  relation: KnowledgeKnownAppliedWikiOutputRelation,
+  capability: unknown
+): capability is KnowledgeKnownAppliedWikiOutputProposalCapability {
+  if (relation === "current_applied") return capability === "selected_is_current";
+  if (relation === "latest_known") return capability === "current_not_applied";
+  return (
+    capability === "available" ||
+    capability === "current_not_applied" ||
+    capability === "forward_origin_not_supported" ||
+    capability === "detail_too_large"
+  );
+}
+
 /** Strictly captures one metadata row returned by a production delegate. */
 function snapshotSummary(value: unknown): Readonly<KnowledgeKnownAppliedWikiOutputSummary> {
   const record = snapshotRecord(value, [
     "outputRef",
     "appliedAt",
     "verifiedApplyCount",
+    "origins",
     "relation",
+    "proposalCapability",
   ]);
   if (
     !record ||
@@ -231,18 +322,23 @@ function snapshotSummary(value: unknown): Readonly<KnowledgeKnownAppliedWikiOutp
     !Number.isSafeInteger(record.verifiedApplyCount) ||
     (record.verifiedApplyCount as number) < 1 ||
     (record.verifiedApplyCount as number) >
-      KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxKnownOutputs ||
+      KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxVerifiedApplyRecords ||
     (record.relation !== "current_applied" &&
       record.relation !== "latest_known" &&
-      record.relation !== "earlier_known")
+      record.relation !== "earlier_known") ||
+    !proposalCapabilityMatchesRelation(record.relation, record.proposalCapability)
   ) {
     throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
   }
+  const appliedAt = record.appliedAt as number;
+  const verifiedApplyCount = record.verifiedApplyCount as number;
   return Object.freeze({
     outputRef: record.outputRef,
-    appliedAt: record.appliedAt as number,
-    verifiedApplyCount: record.verifiedApplyCount as number,
+    appliedAt,
+    verifiedApplyCount,
+    origins: snapshotOrigins(record.origins, verifiedApplyCount, appliedAt),
     relation: record.relation,
+    proposalCapability: record.proposalCapability,
   });
 }
 
@@ -329,6 +425,19 @@ export function snapshotKnowledgeKnownAppliedWikiOutputsSession(
     (record.currentState !== "applied" &&
       page.items.length > 0 &&
       page.items[0]?.relation !== "latest_known") ||
+    page.items.some((item) => {
+      if (record.currentState !== "applied") {
+        return item.proposalCapability !== "current_not_applied";
+      }
+      if (item.relation === "current_applied") {
+        return item.proposalCapability !== "selected_is_current";
+      }
+      return (
+        item.proposalCapability !== "available" &&
+        item.proposalCapability !== "forward_origin_not_supported" &&
+        item.proposalCapability !== "detail_too_large"
+      );
+    }) ||
     ((record.knownOutputCount as number) === 0) !== (page.items.length === 0)
   ) {
     throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
@@ -348,7 +457,14 @@ export function snapshotKnowledgeKnownAppliedWikiOutputsSession(
 export function snapshotKnowledgeKnownAppliedWikiOutputDetail(
   value: unknown
 ): Readonly<KnowledgeKnownAppliedWikiOutputDetail> {
-  const record = snapshotRecord(value, ["outputRef", "appliedAt", "verifiedApplyCount", "content"]);
+  const record = snapshotRecord(value, [
+    "outputRef",
+    "appliedAt",
+    "verifiedApplyCount",
+    "origins",
+    "proposalCapability",
+    "content",
+  ]);
   if (
     !record ||
     typeof record.outputRef !== "string" ||
@@ -358,16 +474,25 @@ export function snapshotKnowledgeKnownAppliedWikiOutputDetail(
     !Number.isSafeInteger(record.verifiedApplyCount) ||
     (record.verifiedApplyCount as number) < 1 ||
     (record.verifiedApplyCount as number) >
-      KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxKnownOutputs ||
+      KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxVerifiedApplyRecords ||
+    (record.proposalCapability !== "available" &&
+      record.proposalCapability !== "current_not_applied" &&
+      record.proposalCapability !== "selected_is_current" &&
+      record.proposalCapability !== "forward_origin_not_supported" &&
+      record.proposalCapability !== "detail_too_large") ||
     typeof record.content !== "string" ||
     record.content.length > KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxContentCharacters
   ) {
     throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
   }
+  const appliedAt = record.appliedAt as number;
+  const verifiedApplyCount = record.verifiedApplyCount as number;
   return Object.freeze({
     outputRef: record.outputRef,
-    appliedAt: record.appliedAt as number,
-    verifiedApplyCount: record.verifiedApplyCount as number,
+    appliedAt,
+    verifiedApplyCount,
+    origins: snapshotOrigins(record.origins, verifiedApplyCount, appliedAt),
+    proposalCapability: record.proposalCapability,
     content: record.content,
   });
 }

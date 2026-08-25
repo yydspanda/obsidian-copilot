@@ -100,6 +100,26 @@ describe("classifyKnowledgeForwardRevisionProtocolAdmission", () => {
     expect(Object.isFrozen(result)).toBe(true);
   });
 
+  it("admits an exact effective head layered over the immutable source base", () => {
+    const input = createInput();
+    const original = input.intent as ReturnType<typeof createKnowledgeForwardRevisionIntent>;
+    const intent = createKnowledgeForwardRevisionIntent({
+      bundleId: original.bundleId,
+      pagePath: original.pagePath,
+      historical: original.historical,
+      current: { ...original.current, vaultObservedBeforeHash: HASH_D },
+    });
+
+    expect(
+      classifyKnowledgeForwardRevisionProtocolAdmission({
+        ...input,
+        intent,
+        currentContentHash: HASH_D,
+        vaultObservedBeforeHash: HASH_D,
+      })
+    ).toMatchObject({ eligible: true, intentId: intent.intentId });
+  });
+
   it.each<
     [
       string,
@@ -113,6 +133,11 @@ describe("classifyKnowledgeForwardRevisionProtocolAdmission", () => {
       "current_drifted",
     ],
     [
+      "drifted current restored to source base",
+      { currentState: "drifted", currentContentHash: HASH_A, vaultObservedBeforeHash: HASH_A },
+      "current_drifted",
+    ],
+    [
       "missing current",
       { currentState: "missing", currentContentHash: null, vaultObservedBeforeHash: null },
       "current_missing",
@@ -120,7 +145,7 @@ describe("classifyKnowledgeForwardRevisionProtocolAdmission", () => {
     ["stale history", { historicalDetail: "stale" }, "historical_stale"],
     ["large history", { historicalDetail: "too_large" }, "historical_too_large"],
     ["unavailable history", { historicalDetail: "unavailable" }, "historical_unavailable"],
-    ["Manifest hash drift", { manifestBaseHash: HASH_B }, "current_hash_unverified"],
+    ["Manifest authority mismatch", { manifestBaseHash: HASH_B }, "intent_mismatch"],
     ["Vault hash drift", { vaultObservedBeforeHash: HASH_B }, "current_hash_unverified"],
     ["same selected output", { selectedContentHash: HASH_A }, "selected_is_current"],
     ["shared ownership", { ownership: "shared" }, "ownership_shared"],
@@ -229,15 +254,6 @@ describe("classifyKnowledgeForwardRevisionProtocolAdmission", () => {
         currentState: "drifted",
         currentContentHash: HASH_B,
         vaultObservedBeforeHash: HASH_C,
-      },
-      "input_invalid"
-    );
-    expectReason(
-      {
-        ...input,
-        currentState: "drifted",
-        currentContentHash: HASH_A,
-        vaultObservedBeforeHash: HASH_A,
       },
       "input_invalid"
     );

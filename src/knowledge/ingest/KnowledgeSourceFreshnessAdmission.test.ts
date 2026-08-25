@@ -35,7 +35,7 @@ function createAppliedAuthority(
   overrides: Partial<KnowledgeRuntimeAppliedFreshnessAuthority> = {}
 ): KnowledgeRuntimeAppliedFreshnessAuthority {
   return {
-    version: 1,
+    version: 2,
     kind: "applied",
     runtimeId: "runtime-1",
     runtimeRevision: 10,
@@ -52,7 +52,10 @@ function createAppliedAuthority(
         path: "Wiki/Page.md",
         windowsPathKey: "wiki/page.md",
         ownership: "generated",
+        sourceAppliedContentHash: PAGE_HASH,
+        effectiveContentHash: PAGE_HASH,
         contentHash: PAGE_HASH,
+        origin: { kind: "source_apply" },
       },
     ],
     transactionId: "transaction-1",
@@ -71,7 +74,7 @@ function createNoChangesAuthority(
   overrides: Partial<KnowledgeRuntimeNoChangesFreshnessAuthority> = {}
 ): KnowledgeRuntimeNoChangesFreshnessAuthority {
   return {
-    version: 1,
+    version: 2,
     kind: "no_changes",
     runtimeId: "runtime-1",
     runtimeRevision: 10,

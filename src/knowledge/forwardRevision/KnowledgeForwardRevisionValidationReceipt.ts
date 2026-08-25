@@ -984,7 +984,7 @@ export function snapshotKnowledgeForwardRevisionValidationReceipt(
       record.runtimeId !== acceptanceAuthority.runtimeId ||
       record.bundleId !== acceptanceAuthority.currentSourceFreshness.bundleId ||
       Number(record.validatedAt) < acceptanceAuthority.currentSourceFreshness.completedAt ||
-      record.acceptedAfterHash === acceptanceAuthority.manifestBaseHash ||
+      record.acceptedAfterHash === acceptanceAuthority.vaultObservedBeforeHash ||
       record.validationProfileDigest !== createValidationProfileDigest(validationProfile) ||
       record.acceptanceAuthorityDigest !==
         createKnowledgeForwardRevisionAcceptanceAuthorityDigest(acceptanceAuthority) ||
@@ -1087,7 +1087,9 @@ export function createKnowledgeForwardRevisionValidationReceipt(
       record.acceptanceAuthority,
       proposal
     );
-    if (candidate.acceptedAfterHash === acceptanceAuthority.manifestBaseHash) invalidReceipt();
+    if (candidate.acceptedAfterHash === acceptanceAuthority.vaultObservedBeforeHash) {
+      invalidReceipt();
+    }
     const historicalCitations = snapshotHistoricalCitationSet(
       record.historicalCitations,
       acceptanceAuthority.currentSourceFreshness.sourceId

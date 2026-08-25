@@ -23,7 +23,11 @@ import { sha256 } from "@/utils/hash";
 
 const PAGE_CONTENT = "# Applied\n";
 const PAGE_HASH = sha256(PAGE_CONTENT);
+const FORWARD_CONTENT = "# Applied\n\nManual revision.\n";
+const FORWARD_HASH = sha256(FORWARD_CONTENT);
+const ADJACENT_HASH = sha256("# Adjacent applied page\n");
 const SOURCE_HASH = "b".repeat(64);
+const LATER_SOURCE_HASH = "e".repeat(64);
 const PIPELINE_HASH = "c".repeat(64);
 const CHANGESET_HASH = "d".repeat(64);
 
@@ -58,13 +62,17 @@ function createCitation(): ClaimCitation {
 
 /** Creates one exact current applied page provenance. */
 function createPage(
-  citation: ClaimCitation = createCitation()
+  citation: ClaimCitation = createCitation(),
+  overrides: Partial<KnowledgeRuntimeAppliedPageProvenance> = {}
 ): KnowledgeRuntimeAppliedPageProvenance {
   return {
     path: "Wiki/Applied.md",
     windowsPathKey: "wiki/applied.md",
     ownership: "generated",
+    sourceAppliedContentHash: PAGE_HASH,
+    effectiveContentHash: PAGE_HASH,
     contentHash: PAGE_HASH,
+    origin: { kind: "source_apply" },
     sources: [
       {
         sourceId: "source-1",
@@ -79,6 +87,7 @@ function createPage(
         citations: [citation],
       },
     ],
+    ...overrides,
   };
 }
 
@@ -193,6 +202,10 @@ describe("KnowledgeProductionAppliedWikiPageInspectorCoordinator", () => {
     expect(session).toMatchObject({
       displayPagePath: "Wiki/Applied.md",
       ownership: "generated",
+      sourceAppliedContentHash: PAGE_HASH,
+      effectiveContentHash: PAGE_HASH,
+      origin: { kind: "source_apply" },
+      evidenceScope: "source_applied_content",
       sources: [{ displaySourcePath: "Sources/Book.md", custody: "user_managed" }],
     });
     expect(harness.visitor.options).toEqual([{ maxFileBytes: 2_000_000 }]);
@@ -206,6 +219,90 @@ describe("KnowledgeProductionAppliedWikiPageInspectorCoordinator", () => {
         },
       ],
     ]);
+    expect(harness.runtimeReads).toHaveBeenCalledTimes(2);
+  });
+
+  it("inspects a retained Forward head after a later same-source Apply touches another page", async () => {
+    const historicalSource = {
+      ...createPage().sources[0],
+      inputRevision: 1,
+      changeSetId: "changeset-historical-base",
+      changeSetDigest: "a".repeat(64),
+      acceptedAt: 10,
+    };
+    const page = createPage(createCitation(), {
+      sources: [historicalSource],
+      effectiveContentHash: FORWARD_HASH,
+      contentHash: FORWARD_HASH,
+      origin: {
+        kind: "forward_revision",
+        overlay: {
+          version: 2,
+          kind: "forward_revision_overlay_entry",
+          bundleId: "personal",
+          pagePath: "Wiki/Applied.md",
+          windowsPathKey: "wiki/applied.md",
+          sourceId: "source-1",
+          sourceBaseDigest: "1".repeat(64),
+          sourceAppliedContentHash: PAGE_HASH,
+          previousEffectiveContentHash: PAGE_HASH,
+          effectiveContentHash: FORWARD_HASH,
+          forwardTransactionId: "forward-1",
+          acceptedDecisionDigest: "2".repeat(64),
+          forwardLedgerIdentityDigest: "3".repeat(64),
+          appliedAt: 20,
+        },
+      },
+    });
+    const adjacentCitation: ClaimCitation = {
+      citationId: "citation-adjacent",
+      claimId: "claim-adjacent",
+      relation: "supports",
+      locator: {
+        kind: "markdown_lines",
+        sourceId: "source-1",
+        artifactId: "artifact-adjacent",
+        artifactContentHash: LATER_SOURCE_HASH,
+        excerpt: "Later source evidence",
+        quoteHash: createQuoteHash("Later source evidence"),
+        startLine: 2,
+        endLine: 2,
+      },
+    };
+    const adjacent = createPage(adjacentCitation, {
+      path: "Wiki/Adjacent.md",
+      windowsPathKey: "wiki/adjacent.md",
+      sourceAppliedContentHash: ADJACENT_HASH,
+      effectiveContentHash: ADJACENT_HASH,
+      contentHash: ADJACENT_HASH,
+      sources: [
+        {
+          ...historicalSource,
+          sourceContentHash: LATER_SOURCE_HASH,
+          inputRevision: 3,
+          changeSetId: "changeset-adjacent",
+          changeSetDigest: "f".repeat(64),
+          acceptedAt: 40,
+          citations: [adjacentCitation],
+        },
+      ],
+    });
+    const harness = createHarness([createSnapshot(3, [adjacent, page])]);
+    harness.visitor.content = FORWARD_CONTENT;
+
+    const session = await harness.coordinator.inspectPage(
+      { pagePath: "Wiki/Applied.md" },
+      new AbortController().signal
+    );
+
+    expect(session).toMatchObject({
+      sourceAppliedContentHash: PAGE_HASH,
+      effectiveContentHash: FORWARD_HASH,
+      origin: { kind: "forward_revision" },
+      evidenceScope: "source_applied_content",
+      sources: [{ acceptedAt: 10, evidence: [{ excerpt: "Source evidence" }] }],
+    });
+    expect(harness.visitor.requests).toHaveLength(1);
     expect(harness.runtimeReads).toHaveBeenCalledTimes(2);
   });
 

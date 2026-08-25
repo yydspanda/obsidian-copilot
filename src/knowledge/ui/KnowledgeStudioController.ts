@@ -19,8 +19,11 @@ import type {
   KnowledgeSourceRetirementUiReceipt,
 } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
 import {
+  createKnowledgeForwardRevisionStudioAbandonCommand,
   createKnowledgeForwardRevisionStudioApplyCommand,
   createKnowledgeForwardRevisionStudioCommandFromReview,
+  createKnowledgeForwardRevisionStudioKeepCurrentCommand,
+  createKnowledgeForwardRevisionStudioRetryRecoveryCommand,
   snapshotKnowledgeForwardRevisionStudioCommand,
   type KnowledgeForwardRevisionStudioCommand,
   type KnowledgeForwardRevisionStudioPendingReview,
@@ -192,6 +195,8 @@ export interface KnowledgeStudioPendingAction {
     | "retry"
     | "submit_review"
     | "submit_forward_revision"
+    | "retry_forward_revision_recovery"
+    | "keep_current_forward_revision"
     | "check_source"
     | "retire_source"
     | "continue_recovery"
@@ -1766,10 +1771,66 @@ export class KnowledgeStudioController {
     );
   }
 
+  /** Ends one accepted-ready workflow only while no Apply journal or Wiki write has begun. */
+  async abandonForwardRevision(reviewRef: string): Promise<void> {
+    const review = this.state.snapshot?.forwardRevisionReviews?.find(
+      (candidate) => candidate.reviewRef === reviewRef && candidate.state === "accepted_ready"
+    );
+    if (!review || review.state !== "accepted_ready") {
+      await this.rejectUnavailableAction(
+        "That accepted forward revision can no longer be ended before writing begins."
+      );
+      return;
+    }
+    await this.submitForwardRevisionCommand(
+      createKnowledgeForwardRevisionStudioAbandonCommand(review)
+    );
+  }
+
+  /** Rechecks one sticky Forward journal and retries only from its exact safe before state. */
+  async retryForwardRevisionRecovery(reviewRef: string): Promise<void> {
+    const review = this.state.snapshot?.forwardRevisionReviews?.find(
+      (candidate) => candidate.reviewRef === reviewRef && candidate.state === "recovery_required"
+    );
+    if (!review || review.state !== "recovery_required") {
+      await this.rejectUnavailableAction(
+        "That forward recovery changed before its exact state could be rechecked."
+      );
+      return;
+    }
+    await this.submitForwardRevisionCommand(
+      createKnowledgeForwardRevisionStudioRetryRecoveryCommand(review),
+      undefined,
+      "retry_forward_revision_recovery"
+    );
+  }
+
+  /** Keeps the freshly observed Wiki value only when sticky recovery proves zero-write closure. */
+  async keepCurrentForwardRevision(reviewRef: string): Promise<void> {
+    const review = this.state.snapshot?.forwardRevisionReviews?.find(
+      (candidate) => candidate.reviewRef === reviewRef && candidate.state === "recovery_required"
+    );
+    if (!review || review.state !== "recovery_required") {
+      await this.rejectUnavailableAction(
+        "That forward recovery changed before the current Wiki value could be kept safely."
+      );
+      return;
+    }
+    await this.submitForwardRevisionCommand(
+      createKnowledgeForwardRevisionStudioKeepCurrentCommand(review),
+      undefined,
+      "keep_current_forward_revision"
+    );
+  }
+
   /** Serializes one current opaque Forward command and always reloads durable truth. */
   private async submitForwardRevisionCommand(
     commandValue: Readonly<KnowledgeForwardRevisionStudioCommand>,
-    draftIdentity?: ReturnType<typeof createKnowledgeReviewDraftIdentity>
+    draftIdentity?: ReturnType<typeof createKnowledgeReviewDraftIdentity>,
+    pendingActionKind:
+      | "submit_forward_revision"
+      | "retry_forward_revision_recovery"
+      | "keep_current_forward_revision" = "submit_forward_revision"
   ): Promise<void> {
     if (this.state.pendingAction) return;
     const snapshot = this.state.snapshot;
@@ -1801,7 +1862,7 @@ export class KnowledgeStudioController {
     }
 
     await this.executeAction<KnowledgeForwardRevisionStudioSubmissionResult>(
-      { kind: "submit_forward_revision", targetId: command.reviewRef },
+      { kind: pendingActionKind, targetId: command.reviewRef },
       (bundleId, signal) =>
         this.commandPort.submitForwardRevisionStudio!(bundleId, command, signal),
       (result) => {
@@ -1815,7 +1876,13 @@ export class KnowledgeStudioController {
         }
         switch (result.kind) {
           case "applied":
-            return { kind: "success", message: "The accepted revision was applied." };
+            return {
+              kind: "success",
+              message:
+                command.action === "retry_recovery"
+                  ? "Recovery rechecked the exact file state and converged the accepted revision."
+                  : "The accepted revision was applied.",
+            };
           case "rejected":
             return {
               kind: "success",
@@ -1826,6 +1893,18 @@ export class KnowledgeStudioController {
               kind: "blocked",
               message:
                 "The decision is durably accepted, but fresh Apply validation could not begin. It remains visible and retryable.",
+            };
+          case "abandoned":
+            return {
+              kind: "success",
+              message:
+                "The accepted revision ended before any Apply journal or Wiki write began. No file was changed.",
+            };
+          case "kept_current":
+            return {
+              kind: "success",
+              message:
+                "Recovery ended without another Wiki write. The freshly observed current file was kept.",
             };
           case "applying":
             return {
@@ -1843,7 +1922,11 @@ export class KnowledgeStudioController {
             return {
               kind: "blocked",
               message:
-                "The accepted revision is durable, but an exact file conflict requires recovery.",
+                command.action === "retry_recovery"
+                  ? "The exact state was rechecked, but the file is still not safe for another Apply. No conflicting value was overwritten."
+                  : command.action === "keep_current"
+                    ? "The exact state was rechecked, but keeping the current file is not yet a safe terminal action. No file was changed."
+                    : "The accepted revision is durable, but an exact file conflict requires recovery.",
             };
           case "stale":
             return {

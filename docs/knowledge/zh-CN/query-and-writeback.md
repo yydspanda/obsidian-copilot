@@ -1,6 +1,6 @@
 # Query、引用与 Save to Wiki
 
-> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-12。
+> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-25。
 
 ## 本页目标
 
@@ -16,6 +16,19 @@
 - 想使用 `Save to Wiki` 时，当前回答必须是带有至少一个 claim 的 `Supported` 或 `Partial`。
 
 如果刚完成导入但尚未 Apply，请先阅读 [Review 与 Apply](review-and-apply.md)。
+
+## 当前有效页：Source Apply 与 Forward revision
+
+一个已应用 Wiki 页可能有两个需要同时说清的版本：
+
+- **Source-applied 基线**：最后一次普通 Source Apply 为这个页面提交的精确正文；
+- **Effective 当前页头**：现在 Vault 中应被读取的精确正文。没有活跃 Forward revision 时，它与 Source-applied 基线相同；有活跃 Forward revision 时，它是已验证的 Forward 正文。
+
+Query 按 **effective 当前页头** 的精确字节检索，不会因为 Manifest 仍保留 Source-applied 基线而把过去的正文当成当前版本。一个合法 Forward 页头也不会为了让 Query 可用而重新调用模型“修复”、重写或重新编译；Query 直接使用已被精确证明的当前字节。这不改变正常查询规则：有合格来源证据时，综合回答仍可以发起一次模型请求；没有合格证据时仍是零模型请求的 `Insufficient evidence`。
+
+检查器会标明页面是 `Source Apply` 还是 `Forward revision`，并说明 Source evidence 的适用边界；Source-applied 与 effective 哈希由系统在内部独立保留和校验。Forward 正文可以作为当前 Wiki 检索内容，但它的 Source evidence 仍只来自原有 Source citations。这些引用证明原始来源片段，**不会因为你手工编辑了 Forward 正文，就变成对新表述的额外事实证明**。对重要结论，仍要打开原始引用核对。
+
+若任一 Forward 记录是孤立的、存在歧义、链路断裂，或它宣称的当前哈希与 Vault 字节不符，整次 Query 快照会在有界重试后 fail closed。Query 不会只过滤坏页后继续，也不会悄悄回退到 Source 基线或调用模型修复授权；需要先恢复一致的持久状态，再重新查询。
 
 ## Query、Chat 与 Copilot Plus 的区别
 
@@ -85,7 +98,7 @@ Inference 仍必须带引用，但它不是来源原话。做重要决定时，�
 - 匹配文本；
 - 可用的原始 Source 引用。
 
-命中内容来自 Wiki，但引用按钮指向原始 Source，而不是把生成的 Wiki 当成最终证据。当前可导航的非 PDF 来源必须使用 `.md` 扩展名；`.markdown` 和 `.txt` 可以摄入并生成 Wiki，但当前不能成为 grounded-answer 的可验证 Source 摘录，也没有可靠的精确引用导航。当前可能出现以下位置：
+命中内容来自当前有效 Wiki 正文（包括已验证的 Forward 页头），但引用按钮指向原始 Source，而不是把生成或手工修订的 Wiki 当成最终证据。当前可导航的非 PDF 来源必须使用 `.md` 扩展名；`.markdown` 和 `.txt` 可以摄入并生成 Wiki，但当前不能成为 grounded-answer 的可验证 Source 摘录，也没有可靠的精确引用导航。当前可能出现以下位置：
 
 | 引用位置    | 点击后的行为                      |
 | ----------- | --------------------------------- |
@@ -180,11 +193,14 @@ no_changes     Review
 ## 数据、网络与费用
 
 - Query 的本地快照验证和词法检索不调用模型。
+- 验证并读取当前 Forward 页头不会触发模型修复或重新编译。
 - 有合格证据时，综合回答会向 DeepSeek 发送你的问题、有限的已应用 Wiki 上下文和为本次查询重新验证的来源摘录，通常产生一个请求和相应费用。
 - 没有合格证据时，`Insufficient evidence` 不触发模型请求。
 - 点击引用是本地验证与导航，不会因此调用回答模型。
 - `Save to Wiki` 的捕获和注册发生在本机；它随后启动的后台编译通常还会产生分析、生成两个 DeepSeek 请求。
 - Query 不会搜索或上传整个 Vault，但进入本次有界上下文的内容会发送给 DeepSeek。详见 [隐私与安全](privacy-and-security.md)。
+
+> 当前 effective-head / Forward Query 新链路已有自动化与 Windows 路径边界检查，但尚未完成用户计划的真实 Windows Obsidian 实机验收。
 
 ## 相关页面
 

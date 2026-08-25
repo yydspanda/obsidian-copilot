@@ -23,6 +23,8 @@ import type { App } from "obsidian";
 import type { Root } from "react-dom/client";
 
 const REVIEW_REF = `forward-studio-review-${"9".repeat(64)}`;
+const SOURCE_APPLIED_HASH = "1".repeat(64);
+const FORWARD_EFFECTIVE_HASH = "2".repeat(64);
 
 jest.mock("@/utils/react/createPluginRoot", () => ({
   createPluginRoot: jest.fn(),
@@ -65,6 +67,10 @@ function createSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
     pageRef: "a".repeat(64),
     displayPagePath: "Wiki/Topic.md",
     ownership: "shared",
+    sourceAppliedContentHash: SOURCE_APPLIED_HASH,
+    effectiveContentHash: SOURCE_APPLIED_HASH,
+    origin: Object.freeze({ kind: "source_apply" as const }),
+    evidenceScope: "source_applied_content",
     sources: Object.freeze([
       Object.freeze({
         sourceRef: "b".repeat(64),
@@ -100,6 +106,34 @@ function createSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   });
 }
 
+/** Creates one forward-revised session retaining the same original Source evidence. */
+function createForwardSession(): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
+  return Object.freeze({
+    ...createSession(),
+    ownership: "generated" as const,
+    effectiveContentHash: FORWARD_EFFECTIVE_HASH,
+    origin: Object.freeze({
+      kind: "forward_revision" as const,
+      overlay: Object.freeze({
+        version: 2 as const,
+        kind: "forward_revision_overlay_entry" as const,
+        bundleId: "personal",
+        pagePath: "Wiki/Topic.md",
+        windowsPathKey: "wiki/topic.md",
+        sourceId: "source-1",
+        sourceBaseDigest: "3".repeat(64),
+        sourceAppliedContentHash: SOURCE_APPLIED_HASH,
+        previousEffectiveContentHash: SOURCE_APPLIED_HASH,
+        effectiveContentHash: FORWARD_EFFECTIVE_HASH,
+        forwardTransactionId: "forward-1",
+        acceptedDecisionDigest: "4".repeat(64),
+        forwardLedgerIdentityDigest: "5".repeat(64),
+        appliedAt: 1_765_000_000_001,
+      }),
+    }),
+  });
+}
+
 /** Creates a session projection for a different page without mutating the base fixture. */
 function createSessionAt(pagePath: string): Readonly<KnowledgeAppliedWikiPageInspectionSession> {
   return Object.freeze({ ...createSession(), displayPagePath: pagePath });
@@ -130,7 +164,16 @@ function createKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPort {
             outputRef: `known-wiki-output-${"f".repeat(64)}`,
             appliedAt: 1_765_000_000_000,
             verifiedApplyCount: 1,
+            origins: Object.freeze([
+              Object.freeze({
+                kind: "source_apply" as const,
+                verifiedApplyCount: 1,
+                newestAppliedAt: 1_765_000_000_000,
+                newestManifestRevision: 1,
+              }),
+            ]),
             relation: "latest_known" as const,
+            proposalCapability: "current_not_applied" as const,
           }),
         ]),
       })
@@ -152,13 +195,31 @@ function createProposalKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPo
       outputRef: currentRef,
       appliedAt: 1_765_000_000_000,
       verifiedApplyCount: 1,
+      origins: Object.freeze([
+        Object.freeze({
+          kind: "source_apply" as const,
+          verifiedApplyCount: 1,
+          newestAppliedAt: 1_765_000_000_000,
+          newestManifestRevision: 2,
+        }),
+      ]),
       relation: "current_applied" as const,
+      proposalCapability: "selected_is_current" as const,
     }),
     Object.freeze({
       outputRef: earlierRef,
       appliedAt: 1_764_000_000_000,
       verifiedApplyCount: 2,
+      origins: Object.freeze([
+        Object.freeze({
+          kind: "source_apply" as const,
+          verifiedApplyCount: 2,
+          newestAppliedAt: 1_764_000_000_000,
+          newestManifestRevision: 1,
+        }),
+      ]),
       relation: "earlier_known" as const,
+      proposalCapability: "available" as const,
     }),
   ]);
   return {
@@ -182,6 +243,8 @@ function createProposalKnownOutputsHistory(): KnowledgeKnownAppliedWikiOutputsPo
           outputRef,
           appliedAt: summary.appliedAt,
           verifiedApplyCount: summary.verifiedApplyCount,
+          origins: summary.origins,
+          proposalCapability: summary.proposalCapability,
           content: outputRef === earlierRef ? "earlier exact body" : "current exact body",
         }),
       });
@@ -216,6 +279,10 @@ describe("KnowledgeAppliedWikiInspectorContent", () => {
     expect(screen.getByRole("heading", { name: "Applied Knowledge page" })).toBeTruthy();
     expect(screen.getByText("Wiki/Topic.md")).toBeTruthy();
     expect(screen.getByText("Shared page")).toBeTruthy();
+    expect(screen.getByText("Source-applied version")).toBeTruthy();
+    expect(
+      screen.getByText(/last page version produced from its contributing Sources/)
+    ).toBeTruthy();
     expect(screen.getByText("Sources/Book.md")).toBeTruthy();
     expect(screen.getByText("User-managed source")).toBeTruthy();
     expect(screen.getByText(/does not write, restore, or revise/)).toBeTruthy();
@@ -227,6 +294,24 @@ describe("KnowledgeAppliedWikiInspectorContent", () => {
     expect(screen.getByText(/1 additional contributing Source omitted/)).toBeTruthy();
     expect(screen.getByText('<img src="x" onerror="stolen()">')).toBeTruthy();
     expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("discloses a forward origin and keeps manual wording outside Source evidence scope", async () => {
+    render(
+      <KnowledgeAppliedWikiInspectorContent
+        inspector={createInspector(async () => createForwardSession())}
+        request={Object.freeze({ pagePath: "Wiki/Topic.md" })}
+        onClose={jest.fn()}
+      />
+    );
+    await flushPromises();
+
+    expect(screen.getByText("Forward revision")).toBeTruthy();
+    expect(screen.getByText(/accepted forward revision layered over/)).toBeTruthy();
+    expect(screen.getByText(/Evidence scope: underlying Source-applied version/)).toBeTruthy();
+    expect(screen.getByText(/not new proof for manually revised wording/)).toBeTruthy();
+    expect(screen.getByText("Sources/Book.md")).toBeTruthy();
+    expect(screen.getByText('<img src="x" onerror="stolen()">')).toBeTruthy();
   });
 
   it("opens evidence with only an opaque ref and enforces aborting last-request-wins", async () => {

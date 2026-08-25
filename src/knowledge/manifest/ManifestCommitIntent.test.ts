@@ -1,5 +1,9 @@
 import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
+  KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY,
+  createKnowledgeForwardRevisionOverlayEntry,
+} from "@/knowledge/manifest/KnowledgeForwardRevisionOverlay";
+import {
   MANIFEST_COMMIT_INTENT_VERSION,
   MANIFEST_COMMIT_PLAN_VERSION,
   ManifestCommitValidationError,
@@ -402,6 +406,87 @@ describe("createManifestCommitPlan", () => {
       "sourceId",
       "version",
     ]);
+  });
+
+  it("binds selected forward heads per mutation without adopting rejected overlay pages", () => {
+    const alphaEffectiveHash = createFileContentHash("# Forward Alpha\n");
+    const untouchedEffectiveHash = createFileContentHash("# Forward Untouched\n");
+    /** Creates one canonical forward overlay for a source-applied fixture page. */
+    const createOverlay = (
+      pagePath: string,
+      sourceAppliedContentHash: string,
+      effectiveContentHash: string,
+      suffix: string
+    ) =>
+      createKnowledgeForwardRevisionOverlayEntry({
+        bundleId: "personal",
+        pagePath,
+        sourceId: "source-1",
+        sourceBaseDigest: suffix.repeat(64),
+        sourceAppliedContentHash,
+        previousEffectiveContentHash: sourceAppliedContentHash,
+        effectiveContentHash,
+        forwardTransactionId: `forward-transaction-${suffix}`,
+        acceptedDecisionDigest: (suffix === "c" ? "d" : "e").repeat(64),
+        forwardLedgerIdentityDigest: (suffix === "c" ? "f" : "1").repeat(64),
+        appliedAt: 120,
+      });
+    const manifest = createManifest([
+      createSourceEntry("source-1", "Sources/Primary.md", [
+        createPage("Wiki/Alpha.md", ALPHA_HASH),
+        createPage("Wiki/Untouched.md", UNTOUCHED_HASH),
+      ]),
+    ]);
+    manifest.extensions = {
+      [KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY]: {
+        version: 2,
+        kind: "forward_revision_overlay_extension",
+        entries: [
+          createOverlay("Wiki/Alpha.md", ALPHA_HASH, alphaEffectiveHash, "c"),
+          createOverlay("Wiki/Untouched.md", UNTOUCHED_HASH, untouchedEffectiveHash, "2"),
+        ],
+      },
+    };
+    const alpha = createUpdateChange(
+      "change-alpha",
+      "Wiki/Alpha.md",
+      UPDATED_CONTENT,
+      alphaEffectiveHash
+    );
+    const untouched = createUpdateChange(
+      "change-untouched",
+      "Wiki/Untouched.md",
+      REVIEWED_CONTENT,
+      untouchedEffectiveHash
+    );
+    const proposal = createChangeSet([alpha, untouched]);
+    const plan = createPlan(
+      proposal,
+      [createMutation(alpha, "generated", true), createMutation(untouched, "generated", true)],
+      manifest
+    );
+
+    expect(plan.baseGeneratedPages).toEqual([
+      createPage("Wiki/Alpha.md", ALPHA_HASH),
+      createPage("Wiki/Untouched.md", UNTOUCHED_HASH),
+    ]);
+    expect(plan.mutations).toEqual([
+      { ...createMutation(alpha, "generated", true), expectedContentHash: alphaEffectiveHash },
+      {
+        ...createMutation(untouched, "generated", true),
+        expectedContentHash: untouchedEffectiveHash,
+      },
+    ]);
+
+    const accepted = createChangeSet([alpha], "accepted");
+    const intent = projectManifestCommitIntent(plan, accepted);
+    expect(intent.generatedPages).toEqual([
+      createPage("Wiki/Alpha.md", UPDATED_HASH),
+      createPage("Wiki/Untouched.md", UNTOUCHED_HASH),
+    ]);
+    expect(
+      validateManifestCommitIntentForCommit(intent, manifest, accepted, createBundle()).valid
+    ).toBe(true);
   });
 
   it("creates an additive query-writeback plan from an exact managed capture origin", () => {

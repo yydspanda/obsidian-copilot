@@ -14,7 +14,12 @@ import {
 
 const PAGE_CONTENT = "# Durable knowledge\n\nThe accepted fact is grounded.\n";
 const PAGE_HASH = sha256(PAGE_CONTENT);
+const FORWARD_CONTENT = "# Durable knowledge\n\nThe manually revised wording is current.\n";
+const FORWARD_HASH = sha256(FORWARD_CONTENT);
+const ADJACENT_CONTENT = "# Adjacent knowledge\n\nA later source fact.\n";
+const ADJACENT_HASH = sha256(ADJACENT_CONTENT);
 const SOURCE_HASH = sha256("raw source");
+const LATER_SOURCE_HASH = sha256("later raw source");
 const PIPELINE_HASH = sha256("pipeline");
 
 const BUNDLE: KnowledgeBundleConfig = {
@@ -40,7 +45,10 @@ function createProjection(
         path: "Wiki/Durable.md",
         windowsPathKey: "wiki/durable.md",
         ownership: "generated",
+        sourceAppliedContentHash: PAGE_HASH,
+        effectiveContentHash: PAGE_HASH,
         contentHash: PAGE_HASH,
+        origin: { kind: "source_apply" },
         sources: [
           {
             sourceId: "source-1",
@@ -140,7 +148,10 @@ describe("KnowledgeAppliedWikiSnapshotReader", () => {
       pages: [
         {
           path: "Wiki/Durable.md",
+          sourceAppliedContentHash: PAGE_HASH,
+          effectiveContentHash: PAGE_HASH,
           contentHash: PAGE_HASH,
+          origin: { kind: "source_apply" },
           content: PAGE_CONTENT,
         },
       ],
@@ -149,6 +160,160 @@ describe("KnowledgeAppliedWikiSnapshotReader", () => {
     expect(Object.isFrozen(result.pages)).toBe(true);
     expect(Object.isFrozen(result.pages[0].sources[0].citations[0].locator)).toBe(true);
     expect(assertCurrent).toHaveBeenCalledTimes(4);
+  });
+
+  it("retains a Forward effective page after a later same-source Apply touches another page", async () => {
+    const base = createProjection();
+    const baseSource = base.pages[0].sources[0];
+    const historicalSource = {
+      ...baseSource,
+      inputRevision: 1,
+      changeSetId: "changeset-historical-base",
+      changeSetDigest: sha256("historical changeset"),
+      acceptedAt: 100,
+    };
+    const laterSource = {
+      ...baseSource,
+      sourceContentHash: LATER_SOURCE_HASH,
+      inputRevision: 3,
+      changeSetId: "changeset-adjacent",
+      changeSetDigest: sha256("adjacent changeset"),
+      acceptedAt: 400,
+      citations: baseSource.citations.map((citation) => ({
+        ...citation,
+        citationId: "citation-adjacent",
+        claimId: "claim-adjacent",
+        locator: {
+          ...citation.locator,
+          artifactContentHash: LATER_SOURCE_HASH,
+          excerpt: "later raw source",
+          quoteHash: sha256("later raw source"),
+        },
+      })),
+    };
+    const forwardPage = {
+      ...base.pages[0],
+      sources: [historicalSource],
+      effectiveContentHash: FORWARD_HASH,
+      contentHash: FORWARD_HASH,
+      origin: {
+        kind: "forward_revision" as const,
+        overlay: {
+          version: 2 as const,
+          kind: "forward_revision_overlay_entry" as const,
+          bundleId: "personal",
+          pagePath: "Wiki/Durable.md",
+          windowsPathKey: "wiki/durable.md",
+          sourceId: "source-1",
+          sourceBaseDigest: sha256("source-base"),
+          sourceAppliedContentHash: PAGE_HASH,
+          previousEffectiveContentHash: PAGE_HASH,
+          effectiveContentHash: FORWARD_HASH,
+          forwardTransactionId: "forward-1",
+          acceptedDecisionDigest: sha256("decision"),
+          forwardLedgerIdentityDigest: sha256("ledger"),
+          appliedAt: 300,
+        },
+      },
+    };
+    const projection = createProjection(7, {
+      manifestRevision: 5,
+      pages: [
+        {
+          ...base.pages[0],
+          path: "Wiki/Adjacent.md",
+          windowsPathKey: "wiki/adjacent.md",
+          sourceAppliedContentHash: ADJACENT_HASH,
+          effectiveContentHash: ADJACENT_HASH,
+          contentHash: ADJACENT_HASH,
+          sources: [laterSource],
+        },
+        forwardPage,
+      ],
+    });
+    const runtime = createRuntime(async () => projection);
+    const resolver: CompilerTargetResolver & { resolve: jest.Mock } = {
+      resolve: jest.fn(async (requests: readonly CompilerTargetRequest[]) =>
+        requests.map((request) => ({
+          targetId: request.targetId,
+          kind: "file" as const,
+          path: request.path,
+          content: request.path === "Wiki/Durable.md" ? FORWARD_CONTENT : ADJACENT_CONTENT,
+        }))
+      ),
+    };
+    const reader = new KnowledgeAppliedWikiSnapshotReader({
+      runtime,
+      bundle: BUNDLE,
+      targetResolver: resolver,
+      assertCurrent: () => undefined,
+    });
+
+    const snapshot = await reader.read(new AbortController().signal);
+    const retained = snapshot.pages.find((page) => page.path === "Wiki/Durable.md");
+
+    expect(snapshot.pages.map((page) => page.path)).toEqual([
+      "Wiki/Adjacent.md",
+      "Wiki/Durable.md",
+    ]);
+    expect(retained).toMatchObject({
+      sourceAppliedContentHash: PAGE_HASH,
+      effectiveContentHash: FORWARD_HASH,
+      contentHash: FORWARD_HASH,
+      content: FORWARD_CONTENT,
+      origin: { kind: "forward_revision" },
+      sources: [
+        {
+          sourceContentHash: SOURCE_HASH,
+          inputRevision: 1,
+          changeSetId: "changeset-historical-base",
+        },
+      ],
+    });
+    expect(retained?.sources[0].citations[0].locator.excerpt).toBe("raw source");
+    expect(resolver.resolve).toHaveBeenCalledTimes(1);
+    expect(resolver.resolve.mock.calls[0]?.[0]).toHaveLength(2);
+  });
+
+  it("fails closed on a forward origin that cannot rejoin its retained Source", async () => {
+    const base = createProjection();
+    const forward = {
+      ...base.pages[0],
+      effectiveContentHash: FORWARD_HASH,
+      contentHash: FORWARD_HASH,
+      origin: {
+        kind: "forward_revision" as const,
+        overlay: {
+          version: 2 as const,
+          kind: "forward_revision_overlay_entry" as const,
+          bundleId: "personal",
+          pagePath: "Wiki/Durable.md",
+          windowsPathKey: "wiki/durable.md",
+          sourceId: "orphan-source",
+          sourceBaseDigest: sha256("source-base"),
+          sourceAppliedContentHash: PAGE_HASH,
+          previousEffectiveContentHash: PAGE_HASH,
+          effectiveContentHash: FORWARD_HASH,
+          forwardTransactionId: "forward-1",
+          acceptedDecisionDigest: sha256("decision"),
+          forwardLedgerIdentityDigest: sha256("ledger"),
+          appliedAt: 300,
+        },
+      },
+    };
+    const runtime = createRuntime(async () => createProjection(7, { pages: [forward] }));
+    const resolver = createResolver(FORWARD_CONTENT);
+    const reader = new KnowledgeAppliedWikiSnapshotReader({
+      runtime,
+      bundle: BUNDLE,
+      targetResolver: resolver,
+      assertCurrent: () => undefined,
+    });
+
+    await expect(reader.read(new AbortController().signal)).rejects.toBeInstanceOf(
+      KnowledgeAppliedWikiSnapshotReadError
+    );
+    expect(resolver.resolve).not.toHaveBeenCalled();
   });
 
   it("returns a stable empty corpus without inventing files for an empty Manifest", async () => {

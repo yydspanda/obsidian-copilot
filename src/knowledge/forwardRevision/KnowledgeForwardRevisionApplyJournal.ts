@@ -27,7 +27,7 @@ import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { sha256 } from "@/utils/hash";
 
 /** Current dedicated update-only forward-Apply journal version. */
-export const KNOWLEDGE_FORWARD_REVISION_APPLY_JOURNAL_VERSION = 1 as const;
+export const KNOWLEDGE_FORWARD_REVISION_APPLY_JOURNAL_VERSION = 2 as const;
 
 /** Safe observed Vault state retained after an irreconcilable recovery conflict. */
 export interface KnowledgeForwardRevisionApplyConflictV1 {
@@ -40,7 +40,7 @@ export interface KnowledgeForwardRevisionApplyConflictV1 {
 }
 
 /** Immutable payload shared by every phase of one dedicated forward update. */
-interface KnowledgeForwardRevisionApplyJournalBaseV1 {
+interface KnowledgeForwardRevisionApplyJournalBaseV2 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_APPLY_JOURNAL_VERSION;
   readonly kind: "forward_revision_apply_journal";
   readonly transactionId: string;
@@ -60,6 +60,10 @@ interface KnowledgeForwardRevisionApplyJournalBaseV1 {
   readonly revalidationReceipt: Readonly<KnowledgeForwardRevisionApplyRevalidationReceiptV1>;
   readonly revalidationReceiptDigest: string;
   readonly sourceBaseDigest: string;
+  /** Immutable hash last produced by the source compiler. */
+  readonly sourceAppliedContentHash: string;
+  /** Exact effective head consumed by this journal's Vault CAS. */
+  readonly previousEffectiveContentHash: string;
   readonly manifestBeforeRevision: number;
   readonly manifestBeforeDigest: string;
   readonly beforeContent: string;
@@ -72,23 +76,23 @@ interface KnowledgeForwardRevisionApplyJournalBaseV1 {
 }
 
 /** Prepared journal that must be durable before any file mutation. */
-export type KnowledgeForwardRevisionPreparedApplyJournalV1 =
-  KnowledgeForwardRevisionApplyJournalBaseV1 & { readonly phase: "prepared" };
+export type KnowledgeForwardRevisionPreparedApplyJournalV2 =
+  KnowledgeForwardRevisionApplyJournalBaseV2 & { readonly phase: "prepared" };
 
 /** Applying journal that authorizes one exact before-to-after CAS attempt. */
-export type KnowledgeForwardRevisionApplyingApplyJournalV1 =
-  KnowledgeForwardRevisionApplyJournalBaseV1 & { readonly phase: "applying" };
+export type KnowledgeForwardRevisionApplyingApplyJournalV2 =
+  KnowledgeForwardRevisionApplyJournalBaseV2 & { readonly phase: "applying" };
 
 /** Committed marker whose exact digest anchors ledger finalization. */
-export type KnowledgeForwardRevisionCommittedApplyJournalV1 =
-  KnowledgeForwardRevisionApplyJournalBaseV1 & {
+export type KnowledgeForwardRevisionCommittedApplyJournalV2 =
+  KnowledgeForwardRevisionApplyJournalBaseV2 & {
     readonly phase: "committed";
     readonly committedAt: number;
   };
 
 /** Sticky journal that records only safe observed conflict metadata. */
-export type KnowledgeForwardRevisionRecoveryRequiredApplyJournalV1 =
-  KnowledgeForwardRevisionApplyJournalBaseV1 & {
+export type KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2 =
+  KnowledgeForwardRevisionApplyJournalBaseV2 & {
     readonly phase: "recovery_required";
     readonly conflict: Readonly<KnowledgeForwardRevisionApplyConflictV1>;
     /** Present only when a durable committed marker later observes external drift. */
@@ -96,11 +100,29 @@ export type KnowledgeForwardRevisionRecoveryRequiredApplyJournalV1 =
   };
 
 /** Any legal phase of one dedicated forward-Apply journal. */
-export type KnowledgeForwardRevisionApplyJournalV1 =
-  | KnowledgeForwardRevisionPreparedApplyJournalV1
-  | KnowledgeForwardRevisionApplyingApplyJournalV1
-  | KnowledgeForwardRevisionCommittedApplyJournalV1
-  | KnowledgeForwardRevisionRecoveryRequiredApplyJournalV1;
+export type KnowledgeForwardRevisionApplyJournalV2 =
+  | KnowledgeForwardRevisionPreparedApplyJournalV2
+  | KnowledgeForwardRevisionApplyingApplyJournalV2
+  | KnowledgeForwardRevisionCommittedApplyJournalV2
+  | KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2;
+
+/** Version-neutral canonical journal returned by every strict reader. */
+export type KnowledgeForwardRevisionApplyJournal = KnowledgeForwardRevisionApplyJournalV2;
+
+/** @deprecated Use KnowledgeForwardRevisionPreparedApplyJournalV2. */
+export type KnowledgeForwardRevisionPreparedApplyJournalV1 =
+  KnowledgeForwardRevisionPreparedApplyJournalV2;
+/** @deprecated Use KnowledgeForwardRevisionApplyingApplyJournalV2. */
+export type KnowledgeForwardRevisionApplyingApplyJournalV1 =
+  KnowledgeForwardRevisionApplyingApplyJournalV2;
+/** @deprecated Use KnowledgeForwardRevisionCommittedApplyJournalV2. */
+export type KnowledgeForwardRevisionCommittedApplyJournalV1 =
+  KnowledgeForwardRevisionCommittedApplyJournalV2;
+/** @deprecated Use KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2. */
+export type KnowledgeForwardRevisionRecoveryRequiredApplyJournalV1 =
+  KnowledgeForwardRevisionRecoveryRequiredApplyJournalV2;
+/** @deprecated Use KnowledgeForwardRevisionApplyJournal. */
+export type KnowledgeForwardRevisionApplyJournalV1 = KnowledgeForwardRevisionApplyJournalV2;
 
 /** Input that prepares one exact update-only journal revision zero. */
 export interface CreateKnowledgeForwardRevisionPreparedApplyJournalInput {
@@ -122,7 +144,7 @@ export interface ProjectKnowledgeForwardRevisionRecoveryRequiredInput {
   readonly detectedAt: number;
 }
 
-const BASE_KEYS = [
+const BASE_V1_KEYS = [
   "version",
   "kind",
   "transactionId",
@@ -152,9 +174,18 @@ const BASE_KEYS = [
   "createdAt",
   "updatedAt",
 ] as const;
-const COMMITTED_KEYS = [...BASE_KEYS, "committedAt"] as const;
-const RECOVERY_KEYS = [...BASE_KEYS, "conflict"] as const;
-const COMMITTED_RECOVERY_KEYS = [...BASE_KEYS, "committedAt", "conflict"] as const;
+const BASE_V2_KEYS = [
+  ...BASE_V1_KEYS.slice(0, BASE_V1_KEYS.indexOf("manifestBeforeRevision")),
+  "sourceAppliedContentHash",
+  "previousEffectiveContentHash",
+  ...BASE_V1_KEYS.slice(BASE_V1_KEYS.indexOf("manifestBeforeRevision")),
+] as const;
+const COMMITTED_V1_KEYS = [...BASE_V1_KEYS, "committedAt"] as const;
+const RECOVERY_V1_KEYS = [...BASE_V1_KEYS, "conflict"] as const;
+const COMMITTED_RECOVERY_V1_KEYS = [...BASE_V1_KEYS, "committedAt", "conflict"] as const;
+const COMMITTED_V2_KEYS = [...BASE_V2_KEYS, "committedAt"] as const;
+const RECOVERY_V2_KEYS = [...BASE_V2_KEYS, "conflict"] as const;
+const COMMITTED_RECOVERY_V2_KEYS = [...BASE_V2_KEYS, "committedAt", "conflict"] as const;
 const CREATE_KEYS = [
   "transactionId",
   "acceptedDecision",
@@ -219,6 +250,17 @@ function readPhase(value: unknown): unknown {
   }
 }
 
+/** Reads a version discriminant without invoking candidate code. */
+function readVersion(value: unknown): unknown {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, "version");
+    return descriptor?.enumerable && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Captures one canonical Vault page path. */
 function snapshotPagePath(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 1_024) return undefined;
@@ -275,19 +317,35 @@ export function snapshotKnowledgeForwardRevisionApplyJournal(
 ): Readonly<KnowledgeForwardRevisionApplyJournalV1> {
   try {
     const phase = readPhase(value);
+    const version = readVersion(value);
+    const isLegacy = version === 1;
     const keys =
       phase === "committed"
-        ? COMMITTED_KEYS
+        ? isLegacy
+          ? COMMITTED_V1_KEYS
+          : COMMITTED_V2_KEYS
         : phase === "recovery_required"
           ? Object.getOwnPropertyDescriptor(value, "committedAt") === undefined
-            ? RECOVERY_KEYS
-            : COMMITTED_RECOVERY_KEYS
-          : BASE_KEYS;
+            ? isLegacy
+              ? RECOVERY_V1_KEYS
+              : RECOVERY_V2_KEYS
+            : isLegacy
+              ? COMMITTED_RECOVERY_V1_KEYS
+              : COMMITTED_RECOVERY_V2_KEYS
+          : isLegacy
+            ? BASE_V1_KEYS
+            : BASE_V2_KEYS;
     const record = captureForwardApplyRecord(value, keys);
     const pagePath = snapshotPagePath(record?.pagePath);
+    const sourceAppliedContentHash = isLegacy
+      ? record?.beforeHash
+      : record?.sourceAppliedContentHash;
+    const previousEffectiveContentHash = isLegacy
+      ? record?.beforeHash
+      : record?.previousEffectiveContentHash;
     if (
       !record ||
-      record.version !== KNOWLEDGE_FORWARD_REVISION_APPLY_JOURNAL_VERSION ||
+      (version !== 1 && version !== KNOWLEDGE_FORWARD_REVISION_APPLY_JOURNAL_VERSION) ||
       record.kind !== "forward_revision_apply_journal" ||
       (phase !== "prepared" &&
         phase !== "applying" &&
@@ -308,6 +366,8 @@ export function snapshotKnowledgeForwardRevisionApplyJournal(
       !isForwardApplyDigest(record.originalValidationReceiptDigest) ||
       !isForwardApplyDigest(record.revalidationReceiptDigest) ||
       !isForwardApplyDigest(record.sourceBaseDigest) ||
+      !isForwardApplyDigest(sourceAppliedContentHash) ||
+      !isForwardApplyDigest(previousEffectiveContentHash) ||
       !isForwardApplyNonNegativeInteger(record.manifestBeforeRevision) ||
       !isForwardApplyDigest(record.manifestBeforeDigest) ||
       !isForwardApplyBody(record.beforeContent) ||
@@ -316,6 +376,7 @@ export function snapshotKnowledgeForwardRevisionApplyJournal(
       !isForwardApplyDigest(record.afterHash) ||
       record.beforeContent === record.afterContent ||
       createFileContentHash(record.beforeContent) !== record.beforeHash ||
+      record.beforeHash !== previousEffectiveContentHash ||
       createFileContentHash(record.afterContent) !== record.afterHash ||
       !isForwardApplyNonNegativeInteger(record.createdAt) ||
       !isForwardApplyNonNegativeInteger(record.updatedAt) ||
@@ -347,11 +408,12 @@ export function snapshotKnowledgeForwardRevisionApplyJournal(
       record.revalidationReceiptDigest !==
         createKnowledgeForwardRevisionApplyRevalidationReceiptDigest(revalidationReceipt) ||
       record.sourceBaseDigest !== revalidationReceipt.sourceBaseDigest ||
+      sourceAppliedContentHash !== revalidationReceipt.applyAuthority.manifestBaseHash ||
+      previousEffectiveContentHash !== revalidationReceipt.vaultObservedBeforeHash ||
       Number(record.manifestBeforeRevision) !==
         revalidationReceipt.applyAuthority.manifestRevision ||
       record.manifestBeforeDigest !== revalidationReceipt.applyAuthority.manifestDigest ||
       record.beforeHash !== revalidationReceipt.vaultObservedBeforeHash ||
-      record.beforeHash !== revalidationReceipt.applyAuthority.manifestBaseHash ||
       record.afterContent !== acceptedDecision.afterContent ||
       record.afterHash !== acceptedDecision.acceptedAfterHash ||
       Number(record.createdAt) < revalidationReceipt.revalidatedAt
@@ -388,6 +450,8 @@ export function snapshotKnowledgeForwardRevisionApplyJournal(
       revalidationReceipt,
       revalidationReceiptDigest: record.revalidationReceiptDigest,
       sourceBaseDigest: record.sourceBaseDigest,
+      sourceAppliedContentHash,
+      previousEffectiveContentHash,
       manifestBeforeRevision: Number(record.manifestBeforeRevision),
       manifestBeforeDigest: record.manifestBeforeDigest,
       beforeContent: record.beforeContent,
@@ -424,6 +488,7 @@ export function snapshotKnowledgeForwardRevisionApplyJournal(
           (conflict.code !== "post_write_verification_failed" ||
             (conflict.actualKind === "file" && conflict.actualHash === record.afterHash) ||
             !isForwardApplyNonNegativeInteger(committedAt) ||
+            Number(committedAt) < Number(record.createdAt) ||
             Number(committedAt) > conflict.detectedAt)) ||
         (revision !== 3 && committedAt !== undefined)
       ) {
@@ -491,6 +556,8 @@ export function createKnowledgeForwardRevisionPreparedApplyJournal(
       revalidationReceipt: receipt,
       revalidationReceiptDigest: receipt.receiptDigest,
       sourceBaseDigest: receipt.sourceBaseDigest,
+      sourceAppliedContentHash: receipt.applyAuthority.manifestBaseHash,
+      previousEffectiveContentHash: receipt.vaultObservedBeforeHash,
       manifestBeforeRevision: record.manifestBeforeRevision,
       manifestBeforeDigest: record.manifestBeforeDigest,
       beforeContent: record.beforeContent,
@@ -574,6 +641,57 @@ export function projectKnowledgeForwardRevisionApplyJournalCommitted(
   return next;
 }
 
+/**
+ * Resolves a sticky journal to committed after a fresh exact-after observation.
+ *
+ * Recovery revision three retains its already-proven committed timestamp.
+ * Revisions one and two use the fresh observation time. This dedicated collapse
+ * is the only legal recovery escape into finalization and never authorizes a
+ * file mutation by itself.
+ */
+export function projectKnowledgeForwardRevisionRecoveryJournalCommitted(
+  value: unknown,
+  observedAt: number
+): Readonly<KnowledgeForwardRevisionCommittedApplyJournalV1> {
+  try {
+    const journal = snapshotKnowledgeForwardRevisionApplyJournal(value);
+    if (
+      journal.phase !== "recovery_required" ||
+      !isForwardApplyNonNegativeInteger(observedAt) ||
+      observedAt < journal.updatedAt
+    ) {
+      invalid();
+    }
+    const committedAt = journal.revision === 3 ? journal.committedAt : observedAt;
+    if (!isForwardApplyNonNegativeInteger(committedAt)) invalid();
+    const {
+      revision: _revision,
+      phase: _phase,
+      updatedAt: _updatedAt,
+      conflict: _conflict,
+      committedAt: _previousCommittedAt,
+      ...immutable
+    } = journal;
+    void _revision;
+    void _phase;
+    void _updatedAt;
+    void _conflict;
+    void _previousCommittedAt;
+    const next = snapshotKnowledgeForwardRevisionApplyJournal({
+      ...immutable,
+      revision: 2,
+      phase: "committed",
+      updatedAt: committedAt,
+      committedAt,
+    }) as Readonly<KnowledgeForwardRevisionCommittedApplyJournalV1>;
+    assertImmutablePayload(journal, next);
+    return next;
+  } catch (error) {
+    if (isAuthenticError(error)) throw error;
+    invalid();
+  }
+}
+
 /** Projects an unresolved prepared/applying/committed state to sticky recovery-required. */
 export function projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(
   value: unknown,
@@ -637,7 +755,7 @@ export function projectKnowledgeForwardRevisionApplyJournalRecoveryRequired(
 export function createKnowledgeForwardRevisionApplyJournalDigest(value: unknown): string {
   const journal = snapshotKnowledgeForwardRevisionApplyJournal(value);
   return sha256(
-    `knowledge-forward-revision-apply-journal-v1\n${canonicalizeJson(
+    `knowledge-forward-revision-apply-journal-v2\n${canonicalizeJson(
       journal as unknown as JsonValue
     )}`
   );

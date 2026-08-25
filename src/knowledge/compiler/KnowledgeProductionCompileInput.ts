@@ -5,10 +5,10 @@ import {
   KnowledgeCompileInput,
 } from "@/knowledge/compiler/CompilerModelPort";
 import type { KnowledgeAuthorizedCompilePreparation } from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
+import { projectKnowledgeEffectiveManifestPages } from "@/knowledge/manifest/KnowledgeEffectivePageProjection";
 import { createQuoteHash, normalizeCitationText } from "@/knowledge/model/fingerprint";
 import type { SourceArtifactObservation } from "@/knowledge/model/locatorMaterialValidation";
-import type { SourceLocator, SourceManifest } from "@/knowledge/model/types";
-import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import type { SourceLocator } from "@/knowledge/model/types";
 
 /** Stable failure emitted when authentic preparation cannot form bounded Compiler input. */
 export class KnowledgeProductionCompileInputError extends Error {
@@ -103,17 +103,6 @@ function createEvidence(artifacts: readonly SourceArtifactObservation[]): Compil
   }));
 }
 
-/** Finds every Manifest source that tracks one Windows-equivalent Wiki path. */
-function findManifestPageOwners(manifest: SourceManifest, windowsPathKey: string): string[] {
-  return manifest.entries
-    .flatMap((entry) =>
-      (entry.lastSuccessful?.generatedPages ?? [])
-        .filter((page) => toWindowsPathKey(page.path) === windowsPathKey)
-        .map(() => entry.sourceId)
-    )
-    .sort(compareText);
-}
-
 /** Derives write-only authority for pages already tracked by the primary source. */
 function createTargetAuthorizations(
   preparation: Readonly<KnowledgeAuthorizedCompilePreparation>
@@ -124,23 +113,20 @@ function createTargetAuthorizations(
   if (!primaryEntry) {
     throw new KnowledgeProductionCompileInputError();
   }
-  const pages = [...(primaryEntry.lastSuccessful?.generatedPages ?? [])].sort((left, right) =>
-    compareText(toWindowsPathKey(left.path), toWindowsPathKey(right.path))
+  const pages = projectKnowledgeEffectiveManifestPages(preparation.manifest).filter((page) =>
+    page.sourceIds.includes(primaryEntry.sourceId)
   );
   if (pages.length > DEFAULT_KNOWLEDGE_COMPILER_LIMITS.maxTargetAuthorizations) {
     throw new KnowledgeProductionCompileInputError();
   }
   return pages.map((page) => {
-    if (!page.contentHash) {
-      throw new KnowledgeProductionCompileInputError();
-    }
     return {
       path: page.path,
       allowedIntents: ["write"],
       contentPolicy: "grounded",
       ownership: page.ownership,
-      sourceRefs: findManifestPageOwners(preparation.manifest, toWindowsPathKey(page.path)),
-      expectedContentHash: page.contentHash,
+      sourceRefs: [...page.sourceIds],
+      expectedContentHash: page.effectiveContentHash,
     };
   });
 }

@@ -1,7 +1,11 @@
 jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => ({
   KnowledgeRuntimeForwardRevisionStudioPort: class MockRuntimeStudioPort {
     constructor(
-      private readonly read: (bundleId: string) => Promise<Readonly<Record<string, unknown>>>
+      private readonly read: (bundleId: string) => Promise<Readonly<Record<string, unknown>>>,
+      private readonly abandon: (
+        acceptedIdentity: unknown,
+        expectedRuntimeRevision: number
+      ) => Promise<unknown>
     ) {}
 
     static assert(value: unknown): void {
@@ -14,6 +18,14 @@ jest.mock("@/knowledge/runtime/KnowledgeRuntimeStore", () => ({
 
     readForwardRevisionStudioBundle(bundleId: string): Promise<Readonly<Record<string, unknown>>> {
       return this.read(bundleId);
+    }
+
+    /** Delegates one exact accepted-ready abandonment to the focused Runtime fake. */
+    abandonForwardRevisionAcceptedReady(
+      acceptedIdentity: unknown,
+      expectedRuntimeRevision: number
+    ): Promise<unknown> {
+      return this.abandon(acceptedIdentity, expectedRuntimeRevision);
     }
   },
 }));
@@ -50,7 +62,15 @@ jest.mock("@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCo
   }
   class MockApplyCoordinator {
     constructor(
-      readonly apply: (request: unknown, signal: AbortSignal) => Promise<Readonly<{ kind: string }>>
+      readonly apply: (
+        request: unknown,
+        signal: AbortSignal
+      ) => Promise<Readonly<{ kind: string }>>,
+      readonly resolveRecovery: (
+        expectation: unknown,
+        action: "retry_exact" | "keep_current",
+        signal: AbortSignal
+      ) => Promise<Readonly<{ kind: string }>>
     ) {}
 
     static assertExecutionOwner(value: unknown, owner: unknown): void {
@@ -94,9 +114,47 @@ jest.mock("@/knowledge/ingest/KnowledgeExecutionOwner", () => ({
   },
 }));
 
-jest.mock("@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection", () => ({
-  snapshotKnowledgeForwardRevisionStudioSnapshot: (value: unknown) => value,
-}));
+jest.mock("@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection", () => {
+  const lifecycle: typeof import("@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal") =
+    jest.requireActual("@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal");
+  return {
+    snapshotKnowledgeForwardRevisionStudioSnapshot: (value: unknown) => value,
+    createKnowledgeForwardRevisionStudioAcceptedIdentity: (value: unknown) => {
+      const decision = value as {
+        acceptedAfterHash: string;
+        acceptedAt: number;
+        acceptedDecisionDigest: string;
+        applyClaim: { claimId: string };
+        applyClaimDigest: string;
+        proposal: {
+          proposalId: string;
+          request: {
+            runtimeId: string;
+            bundleId: string;
+            pagePath: string;
+            intent: { current: { primarySourceId: string } };
+          };
+        };
+        proposalDigest: string;
+      };
+      return lifecycle.createKnowledgeForwardRevisionAcceptedClaimIdentity({
+        resource: lifecycle.createKnowledgeForwardRevisionLifecycleResourceIdentity({
+          runtimeId: decision.proposal.request.runtimeId,
+          bundleId: decision.proposal.request.bundleId,
+          sourceId: decision.proposal.request.intent.current.primarySourceId,
+          pagePath: decision.proposal.request.pagePath,
+        }),
+        acceptedDecisionDigest: decision.acceptedDecisionDigest,
+        applyClaimId: decision.applyClaim.claimId,
+        applyClaimDigest: decision.applyClaimDigest,
+        proposalId: decision.proposal.proposalId,
+        proposalDigest: decision.proposalDigest,
+        acceptedAfterHash: decision.acceptedAfterHash,
+        acceptedAt: decision.acceptedAt,
+      });
+    },
+  };
+});
 
 jest.mock("@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand", () => ({
   createKnowledgeForwardRevisionReviewCommand: (value: unknown) => Object.freeze(value),
@@ -106,6 +164,12 @@ import { ObsidianKnowledgeCompilerTargetResolver } from "@/knowledge/compiler/Ob
 import { KnowledgeProductionForwardRevisionApplyCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionApplyCoordinator";
 import { KnowledgeProductionForwardRevisionDecisionCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionDecisionCoordinator";
 import { KnowledgeProductionForwardRevisionStudioCoordinator } from "@/knowledge/forwardRevision/KnowledgeProductionForwardRevisionStudioCoordinator";
+import {
+  createKnowledgeForwardRevisionAbandonmentRecord,
+  createKnowledgeForwardRevisionAcceptedClaimIdentity,
+  createKnowledgeForwardRevisionLifecycleResourceIdentity,
+  type KnowledgeForwardRevisionAbandonmentRecordV1,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal";
 import type { KnowledgeForwardRevisionStudioSnapshot } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
 import type { KnowledgeForwardRevisionStudioCommand } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
 import { KnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
@@ -119,8 +183,17 @@ const CURRENT_CONTENT = "current\n";
 const SELECTED_CONTENT = "selected\n";
 
 type RuntimeRead = (bundleId: string) => Promise<Readonly<KnowledgeForwardRevisionStudioSnapshot>>;
+type AbandonCall = (
+  acceptedIdentity: unknown,
+  expectedRuntimeRevision: number
+) => Promise<Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>>;
 type DecisionCall = (command: unknown, signal: AbortSignal) => Promise<Readonly<{ kind: string }>>;
 type ApplyCall = (request: unknown, signal: AbortSignal) => Promise<Readonly<{ kind: string }>>;
+type RecoveryCall = (
+  expectation: unknown,
+  action: "retry_exact" | "keep_current",
+  signal: AbortSignal
+) => Promise<Readonly<{ kind: string }>>;
 type VisitCall = (
   requests: readonly Readonly<{ targetId: string; path: string }>[],
   signal: AbortSignal,
@@ -144,14 +217,16 @@ const visitCurrentTarget: VisitCall = async (requests, _signal, _options, visito
 };
 
 const RuntimePortConstructor = KnowledgeRuntimeForwardRevisionStudioPort as unknown as new (
-  read: RuntimeRead
+  read: RuntimeRead,
+  abandon: AbandonCall
 ) => KnowledgeRuntimeForwardRevisionStudioPort;
 const DecisionConstructor =
   KnowledgeProductionForwardRevisionDecisionCoordinator as unknown as new (
     decide: DecisionCall
   ) => KnowledgeProductionForwardRevisionDecisionCoordinator;
 const ApplyConstructor = KnowledgeProductionForwardRevisionApplyCoordinator as unknown as new (
-  apply: ApplyCall
+  apply: ApplyCall,
+  resolveRecovery: RecoveryCall
 ) => KnowledgeProductionForwardRevisionApplyCoordinator;
 const ResolverConstructor = ObsidianKnowledgeCompilerTargetResolver as unknown as new (
   visit: VisitCall
@@ -176,7 +251,7 @@ function createPendingRecord(
     selectedAppliedAt: 8,
     proposalDigest: PROPOSAL_DIGEST,
     proposal: Object.freeze({
-      proposalId: `proposal-${index}`,
+      proposalId: `forward-revision-proposal-${(index + 1).toString(16).padStart(64, "0")}`,
       recordedAt: 9,
       request: Object.freeze({
         runtimeId: "runtime-1",
@@ -187,6 +262,7 @@ function createPendingRecord(
         intent: Object.freeze({
           current: Object.freeze({
             vaultObservedBeforeHash: createFileContentHash(currentContent),
+            primarySourceId: "source-1",
           }),
         }),
         historicalReviewAuthority: Object.freeze({
@@ -212,9 +288,62 @@ function createAcceptedReadyRecord(pending = createPendingRecord()) {
       proposal: pending.proposal,
       proposalDigest: pending.proposalDigest,
       acceptedDecisionDigest: "c".repeat(64),
-      applyClaim: Object.freeze({ claimId: "claim-1" }),
+      applyClaim: Object.freeze({
+        claimId: `forward-revision-apply-claim-${"5".repeat(64)}`,
+      }),
       applyClaimDigest: "d".repeat(64),
+      acceptedAfterHash: "6".repeat(64),
+      acceptedAt: 11,
+      manualOverride: false,
     }),
+  });
+}
+
+/** Creates the canonical accepted lifecycle identity used by Runtime abandonment mocks. */
+function createAcceptedIdentity(accepted = createAcceptedReadyRecord()) {
+  const decision = accepted.acceptedDecision;
+  const request = decision.proposal.request;
+  return createKnowledgeForwardRevisionAcceptedClaimIdentity({
+    resource: createKnowledgeForwardRevisionLifecycleResourceIdentity({
+      runtimeId: request.runtimeId,
+      bundleId: request.bundleId,
+      sourceId: request.intent.current.primarySourceId,
+      pagePath: request.pagePath,
+    }),
+    acceptedDecisionDigest: decision.acceptedDecisionDigest,
+    applyClaimId: decision.applyClaim.claimId,
+    applyClaimDigest: decision.applyClaimDigest,
+    proposalId: decision.proposal.proposalId,
+    proposalDigest: decision.proposalDigest,
+    acceptedAfterHash: decision.acceptedAfterHash,
+    acceptedAt: decision.acceptedAt,
+  });
+}
+
+/** Creates one terminal Studio record backed by an exact no-write abandonment. */
+function createAbandonedRecord(accepted = createAcceptedReadyRecord(), abandonedAt = 14) {
+  const abandonment = createKnowledgeForwardRevisionAbandonmentRecord({
+    acceptedIdentity: createAcceptedIdentity(accepted),
+    abandonedAt,
+  });
+  return Object.freeze({
+    ...accepted,
+    state: "abandoned" as const,
+    updatedAt: abandonedAt,
+    abandonedAt,
+    abandonment,
+    abandonmentDigest: abandonment.abandonmentDigest,
+  });
+}
+
+/** Creates one value-only terminal row for a recovery that retained the observed Wiki value. */
+function createKeptCurrentRecord(accepted = createAcceptedReadyRecord(), terminalizedAt = 15) {
+  return Object.freeze({
+    ...accepted,
+    state: "kept_current" as const,
+    updatedAt: terminalizedAt,
+    terminalizedAt,
+    outcome: "write_outcome_uncertain_external_supersession" as const,
   });
 }
 
@@ -237,6 +366,13 @@ function createRecoveryRecord(accepted = createAcceptedReadyRecord()) {
     actualKind: "file" as const,
     detectedAt: accepted.updatedAt + 1,
     updatedAt: accepted.updatedAt + 1,
+    recoveryExpectation: Object.freeze({
+      version: 1 as const,
+      kind: "forward_revision_apply_recovery_expectation" as const,
+      acceptedIdentity: createAcceptedIdentity(accepted),
+      transactionId: `forward-revision-apply-transaction-${"7".repeat(64)}`,
+      recoveryJournalDigest: "8".repeat(64),
+    }),
   });
 }
 
@@ -245,6 +381,8 @@ function createRuntimeSnapshot(
   activeRecords: readonly Readonly<
     | ReturnType<typeof createPendingRecord>
     | ReturnType<typeof createAcceptedReadyRecord>
+    | ReturnType<typeof createAbandonedRecord>
+    | ReturnType<typeof createKeptCurrentRecord>
     | ReturnType<typeof createApplyingRecord>
     | ReturnType<typeof createRecoveryRecord>
   >[],
@@ -270,6 +408,8 @@ function createCoordinator(input: {
   read: RuntimeRead;
   decide?: DecisionCall;
   apply?: ApplyCall;
+  resolveRecovery?: RecoveryCall;
+  abandon?: AbandonCall;
   visit?: VisitCall;
   assertCurrent?: () => void;
 }) {
@@ -279,23 +419,41 @@ function createCoordinator(input: {
       (async () => Object.freeze({ kind: "accepted" as const, decisionDigest: "b".repeat(64) }))
   );
   const apply = jest.fn(input.apply ?? (async () => Object.freeze({ kind: "committed" as const })));
+  const resolveRecovery = jest.fn(
+    input.resolveRecovery ?? (async () => Object.freeze({ kind: "recovery_required" as const }))
+  );
+  const abandon = jest.fn(
+    input.abandon ??
+      (async (acceptedIdentity: unknown) =>
+        createKnowledgeForwardRevisionAbandonmentRecord({
+          acceptedIdentity,
+          abandonedAt: 14,
+        }))
+  );
   const visit = jest.fn(input.visit ?? visitCurrentTarget);
   const coordinator = new KnowledgeProductionForwardRevisionStudioCoordinator(
-    new RuntimePortConstructor(input.read),
+    new RuntimePortConstructor(input.read, abandon),
     new DecisionConstructor(decide),
-    new ApplyConstructor(apply),
+    new ApplyConstructor(apply, resolveRecovery),
     new ResolverConstructor(visit),
     owner,
     input.assertCurrent ?? (() => undefined)
   );
-  return { coordinator, decide, apply, visit };
+  return { coordinator, decide, apply, resolveRecovery, abandon, visit };
 }
 
 /** Creates one opaque command from the current UI row. */
 function createCommand(
   reviewRef: string,
   snapshotRef: string,
-  action: "accept_exact" | "reject" | "apply" | "accept_blocks"
+  action:
+    | "accept_exact"
+    | "reject"
+    | "apply"
+    | "abandon"
+    | "retry_recovery"
+    | "keep_current"
+    | "accept_blocks"
 ): KnowledgeForwardRevisionStudioCommand {
   return Object.freeze({
     version: 1,
@@ -312,6 +470,8 @@ describe("KnowledgeProductionForwardRevisionStudioCoordinator", () => {
     const records = [
       createPendingRecord(),
       createAcceptedReadyRecord(),
+      createAbandonedRecord(),
+      createKeptCurrentRecord(),
       createApplyingRecord(),
       createRecoveryRecord(),
     ] as const;
@@ -333,6 +493,27 @@ describe("KnowledgeProductionForwardRevisionStudioCoordinator", () => {
         "reviewRef",
         "snapshotRef",
         "state",
+        "updatedAt",
+      ],
+      [
+        "acceptedAt",
+        "abandonedAt",
+        "manualOverride",
+        "pagePath",
+        "reviewRef",
+        "snapshotRef",
+        "state",
+        "updatedAt",
+      ],
+      [
+        "acceptedAt",
+        "manualOverride",
+        "outcome",
+        "pagePath",
+        "reviewRef",
+        "snapshotRef",
+        "state",
+        "terminalizedAt",
         "updatedAt",
       ],
       [
@@ -375,11 +556,17 @@ describe("KnowledgeProductionForwardRevisionStudioCoordinator", () => {
       expect(Reflect.ownKeys(ui.reviews[0]).sort()).toEqual([...expectedKeys[index]].sort());
       for (const forbidden of [
         "acceptedDecision",
+        "abandonment",
+        "abandonmentDigest",
         "applyClaim",
         "decisionDigest",
         "journal",
         "ledger",
         "proposal",
+        "recoveryExpectation",
+        "recoveryTerminal",
+        "terminalizationDigest",
+        "terminalizationId",
         "transactionId",
       ]) {
         expect(Object.hasOwn(ui.reviews[0], forbidden)).toBe(false);
@@ -526,6 +713,268 @@ describe("KnowledgeProductionForwardRevisionStudioCoordinator", () => {
       )
     ).resolves.toEqual({ kind: "applying" });
     expect(fixture.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("projects a durable no-write recovery terminal as kept-current without terminal identity", async () => {
+    const accepted = createAcceptedReadyRecord();
+    const keptCurrent = createKeptCurrentRecord(accepted);
+    const reads = [
+      createRuntimeSnapshot([accepted]),
+      createRuntimeSnapshot([accepted]),
+      createRuntimeSnapshot([keptCurrent], 11),
+    ];
+    const fixture = createCoordinator({
+      read: async () => reads.shift() ?? createRuntimeSnapshot([keptCurrent], 11),
+      apply: async () =>
+        Object.freeze({
+          kind: "kept_current" as const,
+          bundleId: "bundle-a",
+          transactionId: "transaction-1",
+          outcome: keptCurrent.outcome,
+          terminalizedAt: keptCurrent.terminalizedAt,
+        }),
+    });
+    const ui = await fixture.coordinator.loadForwardRevisionStudio(
+      "bundle-a",
+      new AbortController().signal
+    );
+
+    await expect(
+      fixture.coordinator.submitForwardRevisionStudio(
+        "bundle-a",
+        createCommand(ui.reviews[0].reviewRef, ui.reviews[0].snapshotRef, "apply"),
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "kept_current" });
+    expect(fixture.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["retry_recovery", "retry_exact"],
+    ["keep_current", "keep_current"],
+  ] as const)(
+    "binds %s to the exact cached accepted identity, transaction, and recovery digest",
+    async (commandAction, recoveryAction) => {
+      const recovery = createRecoveryRecord();
+      const snapshot = createRuntimeSnapshot([recovery]);
+      const fixture = createCoordinator({
+        read: async () => snapshot,
+        resolveRecovery: async () => Object.freeze({ kind: "recovery_required" as const }),
+      });
+      const ui = await fixture.coordinator.loadForwardRevisionStudio(
+        "bundle-a",
+        new AbortController().signal
+      );
+
+      await expect(
+        fixture.coordinator.submitForwardRevisionStudio(
+          "bundle-a",
+          createCommand(ui.reviews[0].reviewRef, ui.reviews[0].snapshotRef, commandAction),
+          new AbortController().signal
+        )
+      ).resolves.toEqual({ kind: "recovery_required" });
+
+      expect(fixture.resolveRecovery).toHaveBeenCalledWith(
+        recovery.recoveryExpectation,
+        recoveryAction,
+        expect.any(AbortSignal)
+      );
+      expect(fixture.apply).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["retry_recovery", "keep_current"] as const)(
+    "never lets duplicate stale %s for journal A resolve a later global journal B",
+    async (commandAction) => {
+      const recoveryA = createRecoveryRecord();
+      const recoveryB = createRecoveryRecord(createAcceptedReadyRecord(createPendingRecord(1)));
+      const keptA = createKeptCurrentRecord(createAcceptedReadyRecord());
+      const reads = [
+        createRuntimeSnapshot([recoveryA]),
+        createRuntimeSnapshot([recoveryA]),
+        createRuntimeSnapshot([keptA, recoveryB], 12),
+        createRuntimeSnapshot([keptA, recoveryB], 12),
+      ];
+      let wrongJournalMutations = 0;
+      const fixture = createCoordinator({
+        read: async () => reads.shift() ?? createRuntimeSnapshot([keptA, recoveryB], 12),
+        resolveRecovery: async (expectation) => {
+          if (expectation !== recoveryB.recoveryExpectation) {
+            throw new Error("stale recovery expectation");
+          }
+          wrongJournalMutations += 1;
+          return Object.freeze({ kind: "kept_current" as const });
+        },
+      });
+      const ui = await fixture.coordinator.loadForwardRevisionStudio(
+        "bundle-a",
+        new AbortController().signal
+      );
+      const staleCommand = createCommand(
+        ui.reviews[0].reviewRef,
+        ui.reviews[0].snapshotRef,
+        commandAction
+      );
+
+      await expect(
+        fixture.coordinator.submitForwardRevisionStudio(
+          "bundle-a",
+          staleCommand,
+          new AbortController().signal
+        )
+      ).resolves.toEqual({ kind: "kept_current" });
+      await expect(
+        fixture.coordinator.submitForwardRevisionStudio(
+          "bundle-a",
+          staleCommand,
+          new AbortController().signal
+        )
+      ).resolves.toEqual({ kind: "kept_current" });
+
+      expect(fixture.resolveRecovery).toHaveBeenCalledTimes(2);
+      expect(fixture.resolveRecovery.mock.calls.map(([expectation]) => expectation)).toEqual([
+        recoveryA.recoveryExpectation,
+        recoveryA.recoveryExpectation,
+      ]);
+      expect(wrongJournalMutations).toBe(0);
+    }
+  );
+
+  it("abandons one exact accepted-ready identity without invoking Apply", async () => {
+    const accepted = createAcceptedReadyRecord();
+    const abandoned = createAbandonedRecord(accepted);
+    const reads = [
+      createRuntimeSnapshot([accepted], 10),
+      createRuntimeSnapshot([accepted], 10),
+      createRuntimeSnapshot([abandoned], 11),
+    ];
+    const fixture = createCoordinator({
+      read: async () => reads.shift() ?? createRuntimeSnapshot([abandoned], 11),
+      abandon: async (acceptedIdentity, expectedRuntimeRevision) => {
+        expect(acceptedIdentity).toEqual(createAcceptedIdentity(accepted));
+        expect(expectedRuntimeRevision).toBe(10);
+        return abandoned.abandonment;
+      },
+    });
+    const ui = await fixture.coordinator.loadForwardRevisionStudio(
+      "bundle-a",
+      new AbortController().signal
+    );
+
+    await expect(
+      fixture.coordinator.submitForwardRevisionStudio(
+        "bundle-a",
+        createCommand(ui.reviews[0].reviewRef, ui.reviews[0].snapshotRef, "abandon"),
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "abandoned" });
+    expect(fixture.abandon).toHaveBeenCalledTimes(1);
+    expect(fixture.apply).not.toHaveBeenCalled();
+  });
+
+  it("reports the durable Apply winner when Apply races accepted-ready abandonment", async () => {
+    const accepted = createAcceptedReadyRecord();
+    const applying = createApplyingRecord(accepted);
+    const reads = [
+      createRuntimeSnapshot([accepted]),
+      createRuntimeSnapshot([accepted]),
+      createRuntimeSnapshot([applying], 11),
+    ];
+    const fixture = createCoordinator({
+      read: async () => reads.shift() ?? createRuntimeSnapshot([applying], 11),
+      abandon: async () => {
+        throw new Error("Apply won the Runtime CAS");
+      },
+    });
+    const ui = await fixture.coordinator.loadForwardRevisionStudio(
+      "bundle-a",
+      new AbortController().signal
+    );
+
+    await expect(
+      fixture.coordinator.submitForwardRevisionStudio(
+        "bundle-a",
+        createCommand(ui.reviews[0].reviewRef, ui.reviews[0].snapshotRef, "abandon"),
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "applying" });
+    expect(fixture.abandon).toHaveBeenCalledTimes(1);
+    expect(fixture.apply).not.toHaveBeenCalled();
+  });
+
+  it("converges duplicate accepted-ready abandonment clicks on one durable winner", async () => {
+    const accepted = createAcceptedReadyRecord();
+    const abandoned = createAbandonedRecord(accepted);
+    const reads = [
+      createRuntimeSnapshot([accepted], 10),
+      createRuntimeSnapshot([accepted], 10),
+      createRuntimeSnapshot([abandoned], 11),
+      createRuntimeSnapshot([abandoned], 11),
+    ];
+    let attempts = 0;
+    const fixture = createCoordinator({
+      read: async () => reads.shift() ?? createRuntimeSnapshot([abandoned], 11),
+      abandon: async () => {
+        attempts += 1;
+        if (attempts === 1) return abandoned.abandonment;
+        throw new Error("stale Runtime revision");
+      },
+    });
+    const ui = await fixture.coordinator.loadForwardRevisionStudio(
+      "bundle-a",
+      new AbortController().signal
+    );
+    const command = createCommand(ui.reviews[0].reviewRef, ui.reviews[0].snapshotRef, "abandon");
+
+    await expect(
+      fixture.coordinator.submitForwardRevisionStudio(
+        "bundle-a",
+        command,
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "abandoned" });
+    await expect(
+      fixture.coordinator.submitForwardRevisionStudio(
+        "bundle-a",
+        command,
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "abandoned" });
+    expect(fixture.abandon).toHaveBeenCalledTimes(2);
+    expect(fixture.apply).not.toHaveBeenCalled();
+  });
+
+  it("rejects commands from an abandoned row and revoked generation before mutation", async () => {
+    const accepted = createAcceptedReadyRecord();
+    const abandoned = createAbandonedRecord(accepted);
+    let current = true;
+    const fixture = createCoordinator({
+      read: async () => createRuntimeSnapshot([abandoned], 11),
+      assertCurrent: () => {
+        if (!current) throw new Error("generation revoked");
+      },
+    });
+    const ui = await fixture.coordinator.loadForwardRevisionStudio(
+      "bundle-a",
+      new AbortController().signal
+    );
+    await expect(
+      fixture.coordinator.submitForwardRevisionStudio(
+        "bundle-a",
+        createCommand(ui.reviews[0].reviewRef, ui.reviews[0].snapshotRef, "apply"),
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "stale" });
+    current = false;
+    await expect(
+      fixture.coordinator.submitForwardRevisionStudio(
+        "bundle-a",
+        createCommand(ui.reviews[0].reviewRef, ui.reviews[0].snapshotRef, "abandon"),
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fixture.abandon).not.toHaveBeenCalled();
+    expect(fixture.apply).not.toHaveBeenCalled();
   });
 
   it("returns durable applying truth after begin even when the caller aborts and generation revokes", async () => {

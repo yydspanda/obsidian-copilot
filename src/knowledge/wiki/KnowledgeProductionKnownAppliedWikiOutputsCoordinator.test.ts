@@ -9,6 +9,7 @@ import type {
 import { createFileContentHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 import type {
+  KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity,
   KnowledgeKnownAppliedWikiOutputAuthorityIdentity,
   KnowledgeKnownAppliedWikiOutputIndexItem,
   KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot,
@@ -37,6 +38,7 @@ function createAuthority(
   appliedAt = 10
 ): KnowledgeKnownAppliedWikiOutputAuthorityIdentity {
   return {
+    origin: "source_apply",
     runtimeId: "runtime",
     bundleId: "bundle",
     pagePath: PAGE_PATH,
@@ -58,6 +60,40 @@ function createAuthority(
   };
 }
 
+/** Creates one exact private forward-ledger authority for coordinator boundary tests. */
+function createForwardAuthority(
+  contentHash: string,
+  appliedAt: number
+): KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity {
+  return {
+    origin: "forward_revision",
+    runtimeId: "runtime",
+    bundleId: "bundle",
+    pagePath: PAGE_PATH,
+    windowsPathKey: "wiki/page.md",
+    outputPath: PAGE_PATH,
+    contentHash,
+    characterCount: contentHash === HASH ? "current".length : "earlier".length,
+    transactionId: `forward-transaction-${contentHash[0]}`,
+    sourceId: "source",
+    sourceContentHash: "c".repeat(64),
+    pipelineFingerprint: "d".repeat(64),
+    inputRevision: 1,
+    manifestAfterRevision: appliedAt,
+    manifestAfterDigest: "1".repeat(64),
+    appliedAt,
+    ledgerId: `forward-revision-apply-ledger-${"2".repeat(64)}`,
+    ledgerDigest: "3".repeat(64),
+    forwardLedgerIdentityDigest: "4".repeat(64),
+    acceptedDecisionDigest: "5".repeat(64),
+    applyClaimId: "forward-claim",
+    applyClaimDigest: "6".repeat(64),
+    proposalId: "forward-proposal",
+    proposalDigest: "7".repeat(64),
+    manualOverride: true,
+  };
+}
+
 function createItem(
   content: "current" | "earlier",
   appliedAt = content === "current" ? 10 : 5
@@ -72,6 +108,14 @@ function createItem(
     newestAppliedAt: appliedAt,
     newestManifestRevision: appliedAt,
     verifiedApplyCount: 1,
+    origins: [
+      {
+        kind: "source_apply",
+        verifiedApplyCount: 1,
+        newestAppliedAt: appliedAt,
+        newestManifestRevision: appliedAt,
+      },
+    ],
     authority: createAuthority(contentHash, appliedAt),
   };
 }
@@ -81,7 +125,8 @@ function createIndex(
   currentHash = outputs[0]?.contentHash,
   runtimeRevision = 1,
   manifestRevision = 10,
-  reviewRevision: number | null = 1
+  reviewRevision: number | null = 1,
+  forwardReviewRevision: number | null = 1
 ): KnowledgeRuntimeKnownAppliedWikiOutputIndexSnapshot {
   return {
     runtimeId: "runtime",
@@ -90,6 +135,7 @@ function createIndex(
     pagePath: PAGE_PATH,
     windowsPathKey: "wiki/page.md",
     reviewRevision,
+    forwardReviewRevision,
     manifestRevision,
     currentManifestPage: currentHash
       ? {
@@ -211,6 +257,233 @@ describe("KnowledgeProductionKnownAppliedWikiOutputsCoordinator", () => {
       kind: "loaded",
       value: { knownContent: "current", currentContent: "current" },
     });
+  });
+
+  it("preserves mixed canonical Apply provenance while keeping forward identity private", async () => {
+    const base = createItem("current", 12);
+    const item: KnowledgeKnownAppliedWikiOutputIndexItem = {
+      ...base,
+      verifiedApplyCount: 2,
+      origins: [
+        {
+          kind: "source_apply",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 10,
+          newestManifestRevision: 10,
+        },
+        {
+          kind: "forward_revision",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 12,
+          newestManifestRevision: 12,
+        },
+      ],
+      authority: createForwardAuthority(base.contentHash, 12),
+    };
+    const coordinator = createCoordinator(
+      createRuntime(() => createIndex([item], item.contentHash, 1, 12)),
+      () => "current"
+    );
+
+    const session = await coordinator.inspectKnownOutputs(
+      { pagePath: PAGE_PATH },
+      new AbortController().signal
+    );
+    expect(session.items[0]).toMatchObject({
+      verifiedApplyCount: 2,
+      proposalCapability: "selected_is_current",
+      origins: [
+        { kind: "source_apply", verifiedApplyCount: 1 },
+        { kind: "forward_revision", verifiedApplyCount: 1 },
+      ],
+    });
+    expect(JSON.stringify(session)).not.toContain("forward-proposal");
+
+    await expect(
+      coordinator.readOutput(session, session.items[0].outputRef, new AbortController().signal)
+    ).resolves.toMatchObject({
+      kind: "loaded",
+      value: {
+        verifiedApplyCount: 2,
+        proposalCapability: "selected_is_current",
+        origins: [
+          { kind: "source_apply", verifiedApplyCount: 1 },
+          { kind: "forward_revision", verifiedApplyCount: 1 },
+        ],
+      },
+    });
+  });
+
+  it("marks historical Forward authority unsupported while mixed Source authority stays available", async () => {
+    const current = createItem("current", 20);
+    const forwardBase = createItem("earlier", 12);
+    const forward: KnowledgeKnownAppliedWikiOutputIndexItem = {
+      ...forwardBase,
+      origins: [
+        {
+          kind: "forward_revision",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 12,
+          newestManifestRevision: 12,
+        },
+      ],
+      authority: createForwardAuthority(forwardBase.contentHash, 12),
+    };
+    const mixedSource: KnowledgeKnownAppliedWikiOutputIndexItem = {
+      ...forwardBase,
+      newestAppliedAt: 11,
+      newestManifestRevision: 11,
+      verifiedApplyCount: 2,
+      origins: [
+        {
+          kind: "source_apply",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 11,
+          newestManifestRevision: 11,
+        },
+        {
+          kind: "forward_revision",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 10,
+          newestManifestRevision: 10,
+        },
+      ],
+      authority: createAuthority(forwardBase.contentHash, 11),
+    };
+    for (const [historical, expected] of [
+      [forward, "forward_origin_not_supported"],
+      [mixedSource, "available"],
+    ] as const) {
+      const coordinator = createCoordinator(
+        createRuntime(() => createIndex([current, historical], current.contentHash, 1, 20)),
+        () => "current"
+      );
+      const session = await coordinator.inspectKnownOutputs(
+        { pagePath: PAGE_PATH },
+        new AbortController().signal
+      );
+      expect(session.items[1].proposalCapability).toBe(expected);
+      await expect(
+        coordinator.readOutput(session, session.items[1].outputRef, new AbortController().signal)
+      ).resolves.toMatchObject({
+        kind: "loaded",
+        value: { proposalCapability: expected },
+      });
+    }
+  });
+
+  it("marks oversized historical output detail as non-proposable metadata", async () => {
+    const current = createItem("current", 20);
+    const historical = {
+      ...createItem("earlier", 10),
+      characterCount: 2_000_001,
+      detailAvailability: "too_large" as const,
+      authority: {
+        ...createAuthority(createFileContentHash("earlier"), 10),
+        characterCount: 2_000_001,
+      },
+    };
+    const coordinator = createCoordinator(
+      createRuntime(() => createIndex([current, historical], current.contentHash, 1, 20)),
+      () => "current"
+    );
+    const session = await coordinator.inspectKnownOutputs(
+      { pagePath: PAGE_PATH },
+      new AbortController().signal
+    );
+
+    expect(session.items[1].proposalCapability).toBe("detail_too_large");
+  });
+
+  it("rejects non-canonical or dishonest Runtime provenance aggregates", async () => {
+    const base = createItem("current");
+    const forwardAuthority = createForwardAuthority(base.contentHash, base.newestAppliedAt);
+    const candidates: KnowledgeKnownAppliedWikiOutputIndexItem[] = [
+      { ...base, origins: [...base.origins, ...base.origins] },
+      {
+        ...base,
+        verifiedApplyCount: 2,
+        origins: [{ ...base.origins[0], verifiedApplyCount: 1 }],
+      },
+      {
+        ...base,
+        origins: [
+          {
+            kind: "forward_revision",
+            verifiedApplyCount: 1,
+            newestAppliedAt: base.newestAppliedAt,
+            newestManifestRevision: base.newestManifestRevision,
+          },
+        ],
+        authority: {
+          ...forwardAuthority,
+          manualOverride: "true" as unknown as boolean,
+        },
+      },
+    ];
+    for (const item of candidates) {
+      const coordinator = createCoordinator(
+        createRuntime(() => createIndex([item], item.contentHash)),
+        () => "current"
+      );
+      await expect(
+        coordinator.inspectKnownOutputs({ pagePath: PAGE_PATH }, new AbortController().signal)
+      ).rejects.toMatchObject({ name: "KnowledgeKnownAppliedWikiOutputsError" });
+    }
+  });
+
+  it("rejects impossible availability, Review, Manifest, and newest-origin claims", async () => {
+    const source = createItem("current", 10);
+    const forward: KnowledgeKnownAppliedWikiOutputIndexItem = {
+      ...source,
+      origins: [
+        {
+          kind: "forward_revision",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 10,
+          newestManifestRevision: 10,
+        },
+      ],
+      authority: createForwardAuthority(source.contentHash, 10),
+    };
+    const newerOtherOrigin: KnowledgeKnownAppliedWikiOutputIndexItem = {
+      ...source,
+      verifiedApplyCount: 2,
+      origins: [
+        ...source.origins,
+        {
+          kind: "forward_revision",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 10,
+          newestManifestRevision: 11,
+        },
+      ],
+    };
+    const indexes = [
+      createIndex([{ ...source, detailAvailability: "too_large" }], source.contentHash),
+      createIndex([source], source.contentHash, 1, 10, null, 1),
+      createIndex([forward], forward.contentHash, 1, 10, 1, null),
+      createIndex(
+        [
+          {
+            ...source,
+            origins: [{ ...source.origins[0], newestManifestRevision: 11 }],
+          },
+        ],
+        source.contentHash,
+        1,
+        10
+      ),
+      createIndex([newerOtherOrigin], source.contentHash, 1, 20),
+    ];
+    for (const index of indexes) {
+      await expect(
+        createCoordinator(
+          createRuntime(() => index),
+          () => "current"
+        ).inspectKnownOutputs({ pagePath: PAGE_PATH }, new AbortController().signal)
+      ).rejects.toMatchObject({ name: "KnowledgeKnownAppliedWikiOutputsError" });
+    }
   });
 
   it("classifies an exact earlier retained output as external drift", async () => {
@@ -374,6 +647,44 @@ describe("KnowledgeProductionKnownAppliedWikiOutputsCoordinator", () => {
 
     await expect(
       coordinator.inspectKnownOutputs({ pagePath: PAGE_PATH }, new AbortController().signal)
+    ).resolves.toMatchObject({ currentState: "applied" });
+    expect(readIndex).toHaveBeenCalledTimes(4);
+  });
+
+  it("retries when only the Forward Review revision regresses", async () => {
+    const item = createItem("current");
+    const revisions = [
+      { runtime: 5, manifest: 12, review: 3, forward: 4 },
+      { runtime: 6, manifest: 13, review: 4, forward: 3 },
+      { runtime: 7, manifest: 14, review: 4, forward: 4 },
+      { runtime: 8, manifest: 15, review: 5, forward: 5 },
+    ];
+    const readIndex = jest.fn(async () => {
+      const revision = revisions.shift() ?? {
+        runtime: 8,
+        manifest: 15,
+        review: 5,
+        forward: 5,
+      };
+      return createIndex(
+        [item],
+        item.contentHash,
+        revision.runtime,
+        revision.manifest,
+        revision.review,
+        revision.forward
+      );
+    });
+    const runtime = createRuntime(() => {
+      throw new Error("detail was not expected");
+    });
+    runtime.readKnownAppliedWikiOutputIndex = readIndex;
+
+    await expect(
+      createCoordinator(runtime, () => "current").inspectKnownOutputs(
+        { pagePath: PAGE_PATH },
+        new AbortController().signal
+      )
     ).resolves.toMatchObject({ currentState: "applied" });
     expect(readIndex).toHaveBeenCalledTimes(4);
   });

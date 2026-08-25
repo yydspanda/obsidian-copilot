@@ -464,7 +464,7 @@ function assertExactHit(
 ): void {
   if (
     hit.path !== page.path ||
-    hit.contentHash !== page.contentHash ||
+    hit.contentHash !== page.effectiveContentHash ||
     !Number.isSafeInteger(hit.startOffset) ||
     !Number.isSafeInteger(hit.endOffset) ||
     hit.startOffset < 0 ||
@@ -548,7 +548,11 @@ function isSameVerifiedWikiSnapshot(
       page.path === current.path &&
       page.windowsPathKey === current.windowsPathKey &&
       page.ownership === current.ownership &&
-      page.contentHash === current.contentHash &&
+      page.sourceAppliedContentHash === current.sourceAppliedContentHash &&
+      page.effectiveContentHash === current.effectiveContentHash &&
+      page.contentHash === page.effectiveContentHash &&
+      current.contentHash === current.effectiveContentHash &&
+      JSON.stringify(page.origin) === JSON.stringify(current.origin) &&
       page.content === current.content &&
       page.sources.length === current.sources.length &&
       page.sources.every(
@@ -860,7 +864,7 @@ export class KnowledgeScopedQueryCoordinator
         Object.freeze({
           evidenceId: page.evidenceId,
           path: page.path,
-          contentHash: page.contentHash,
+          contentHash: page.effectiveContentHash,
           content: page.content,
         })
       );

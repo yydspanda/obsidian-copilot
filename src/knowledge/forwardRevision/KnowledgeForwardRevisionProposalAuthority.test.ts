@@ -82,7 +82,7 @@ function createAuthority(query = createQuery()): Readonly<Record<string, unknown
       acceptedDigest: HASH_C,
       acceptedRecordRevision: 1,
       manifestCommitIntentDigest: HASH_D,
-      acceptedAt: 90,
+      acceptedAt: Math.min(90, query.selectedAppliedAt),
       targetChange: Object.freeze({
         changeId: "change-old",
         path: query.pagePath,
@@ -118,6 +118,27 @@ describe("KnowledgeForwardRevisionProposalAuthority", () => {
     expect(authority.historicalReviewAuthority.targetChange.sourceRefs).toEqual(["source-a"]);
     expect(Object.isFrozen(authority)).toBe(true);
     expect(Object.isFrozen(authority.intent)).toBe(true);
+  });
+
+  it("accepts an exact epoch-zero Apply timestamp used by canonical ledger contracts", () => {
+    const base = createQuery();
+    const query = createKnowledgeForwardRevisionProposalAuthorityQuery({
+      bundleId: base.bundleId,
+      pagePath: base.pagePath,
+      selectedContentHash: base.selectedContentHash,
+      selectedAppliedAt: 0,
+      selectedVerifiedApplyCount: base.selectedVerifiedApplyCount,
+      vaultObservedBeforeHash: base.vaultObservedBeforeHash,
+    });
+
+    expect(query.selectedAppliedAt).toBe(0);
+    expect(
+      snapshotKnowledgeForwardRevisionProposalAuthority(
+        createAuthority(query),
+        query,
+        SELECTED_CONTENT
+      ).intent.historical.appliedAt
+    ).toBe(0);
   });
 
   it("rejects query replay against a different exact-case path or observation", () => {

@@ -11,12 +11,15 @@ import type {
   KnowledgeRuntimeAppliedProvenanceSnapshot,
   KnowledgeRuntimeAppliedSourceProvenance,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import {
+  snapshotKnowledgeAppliedWikiEffectivePageHead,
+  type KnowledgeAppliedWikiEffectivePageHead,
+} from "@/knowledge/query/KnowledgeAppliedWikiEffectivePageHead";
 import { sha256 } from "@/utils/hash";
 
 const DEFAULT_MAX_CONSISTENCY_ATTEMPTS = 3;
 const MAX_APPLIED_WIKI_PAGES = 10_000;
 const MAX_APPLIED_WIKI_CHARACTERS = 32_000_000;
-const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 /** Narrow atomic Runtime projection required by the applied Wiki reader. */
 export interface KnowledgeAppliedProvenanceReadPort {
@@ -30,7 +33,10 @@ export interface KnowledgeVerifiedWikiPage {
   path: string;
   windowsPathKey: string;
   ownership: KnowledgeRuntimeAppliedPageProvenance["ownership"];
+  sourceAppliedContentHash: string;
+  effectiveContentHash: string;
   contentHash: string;
+  origin: KnowledgeAppliedWikiEffectivePageHead["origin"];
   content: string;
   sources: readonly Readonly<KnowledgeRuntimeAppliedSourceProvenance>[];
 }
@@ -110,26 +116,95 @@ function freezeSourceProvenance(
   });
 }
 
+/** Reads one exact own enumerable data record without invoking accessors. */
+function readExactRecord(
+  value: unknown,
+  expectedKeys: readonly string[]
+): Readonly<Record<string, unknown>> | undefined {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== expectedKeys.length ||
+      keys.some((key) => typeof key !== "string") ||
+      !expectedKeys.every((key) => keys.includes(key))
+    ) {
+      return undefined;
+    }
+    const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of expectedKeys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) return undefined;
+      snapshot[key] = descriptor.value;
+    }
+    return Object.freeze(snapshot);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Validates and snapshots one Runtime page authority for this Bundle. */
 function snapshotPageAuthority(
   bundle: KnowledgeBundleConfig,
   page: KnowledgeRuntimeAppliedPageProvenance
 ): Readonly<KnowledgeRuntimeAppliedPageProvenance> {
-  const parsed = parseVaultPath(page.path);
+  const record = readExactRecord(page, [
+    "path",
+    "windowsPathKey",
+    "ownership",
+    "sourceAppliedContentHash",
+    "effectiveContentHash",
+    "contentHash",
+    "origin",
+    "sources",
+  ]);
+  const parsed = typeof record?.path === "string" ? parseVaultPath(record.path) : undefined;
   if (
-    !parsed.ok ||
-    parsed.path !== page.path ||
-    !isPathWithinRoot(page.path, bundle.wikiRoot) ||
-    page.windowsPathKey !== toWindowsPathKey(page.path) ||
-    !SHA256_PATTERN.test(page.contentHash) ||
-    (page.ownership !== "generated" && page.ownership !== "shared" && page.ownership !== "user") ||
-    !Array.isArray(page.sources) ||
-    page.sources.length === 0
+    !record ||
+    !parsed?.ok ||
+    parsed.path !== record.path ||
+    !isPathWithinRoot(parsed.path, bundle.wikiRoot) ||
+    record.windowsPathKey !== toWindowsPathKey(parsed.path) ||
+    (record.ownership !== "generated" &&
+      record.ownership !== "shared" &&
+      record.ownership !== "user") ||
+    !Array.isArray(record.sources) ||
+    record.sources.length === 0
   ) {
     throw new KnowledgeAppliedWikiSnapshotReadError();
   }
-  const sources = page.sources.map(freezeSourceProvenance);
-  return Object.freeze({ ...page, sources: Object.freeze(sources) });
+  const sources = (record.sources as KnowledgeRuntimeAppliedSourceProvenance[]).map(
+    freezeSourceProvenance
+  );
+  let head: Readonly<KnowledgeAppliedWikiEffectivePageHead>;
+  try {
+    head = snapshotKnowledgeAppliedWikiEffectivePageHead(
+      {
+        sourceAppliedContentHash: record.sourceAppliedContentHash,
+        effectiveContentHash: record.effectiveContentHash,
+        contentHash: record.contentHash,
+        origin: record.origin,
+      },
+      {
+        bundleId: bundle.id,
+        pagePath: parsed.path,
+        windowsPathKey: record.windowsPathKey,
+        ownership: record.ownership,
+        sourceIds: sources.map((source) => source.sourceId),
+      }
+    );
+  } catch {
+    throw new KnowledgeAppliedWikiSnapshotReadError();
+  }
+  return Object.freeze({
+    path: parsed.path,
+    windowsPathKey: record.windowsPathKey,
+    ownership: record.ownership,
+    ...head,
+    sources: Object.freeze(sources),
+  });
 }
 
 /** Validates one bounded atomic Runtime projection before any Vault read. */
@@ -170,7 +245,7 @@ function createPageRequests(
   return Object.freeze(
     pages.map((page) =>
       Object.freeze({
-        targetId: createWikiEvidenceId(bundleId, page.windowsPathKey, page.contentHash),
+        targetId: createWikiEvidenceId(bundleId, page.windowsPathKey, page.effectiveContentHash),
         path: page.path,
         intent: "write" as const,
         access: "authorized" as const,
@@ -237,7 +312,7 @@ function createVerifiedPages(
       if (
         characters > MAX_APPLIED_WIKI_CHARACTERS ||
         request.path !== page.path ||
-        sha256(observation.content) !== page.contentHash
+        sha256(observation.content) !== page.effectiveContentHash
       ) {
         throw new KnowledgeAppliedWikiConsistencyRetry();
       }
@@ -246,7 +321,10 @@ function createVerifiedPages(
         path: page.path,
         windowsPathKey: page.windowsPathKey,
         ownership: page.ownership,
-        contentHash: page.contentHash,
+        sourceAppliedContentHash: page.sourceAppliedContentHash,
+        effectiveContentHash: page.effectiveContentHash,
+        contentHash: page.effectiveContentHash,
+        origin: page.origin,
         content: observation.content,
         sources: page.sources,
       });
@@ -254,7 +332,7 @@ function createVerifiedPages(
   );
 }
 
-/** Reads only current, applied, content-addressed Wiki pages for one Bundle. */
+/** Reads only current effective, applied, content-addressed Wiki pages for one Bundle. */
 export class KnowledgeAppliedWikiSnapshotReader {
   private readonly bundle: KnowledgeBundleConfig;
   private readonly maxConsistencyAttempts: number;

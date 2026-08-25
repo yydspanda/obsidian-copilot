@@ -1,11 +1,26 @@
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import type {
+  KnowledgeKnownAppliedWikiOutputOriginSummary,
   KnowledgeKnownAppliedWikiOutputsPort,
   KnowledgeKnownAppliedWikiOutputsSession,
 } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 
 const ref = (kind: "page" | "output" | "cursor", value: string): string =>
   `known-wiki-${kind}-${value.padStart(64, "0")}`;
+
+/** Creates one deeply frozen source-Apply provenance summary. */
+function origins(
+  appliedAt: number
+): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
+  return Object.freeze([
+    Object.freeze({
+      kind: "source_apply" as const,
+      verifiedApplyCount: 1,
+      newestAppliedAt: appliedAt,
+      newestManifestRevision: Math.max(1, appliedAt),
+    }),
+  ]);
+}
 
 function createSession(): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
   return Object.freeze({
@@ -20,7 +35,10 @@ function createSession(): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
           outputRef: ref("output", (index + 1).toString(16)),
           appliedAt: 100 - index,
           verifiedApplyCount: 1,
+          origins: origins(100 - index),
           relation: index === 0 ? ("current_applied" as const) : ("earlier_known" as const),
+          proposalCapability:
+            index === 0 ? ("selected_is_current" as const) : ("available" as const),
         })
       )
     ),
@@ -41,7 +59,9 @@ function createDelegate(): KnowledgeKnownAppliedWikiOutputsPort {
               outputRef: ref("output", "15"),
               appliedAt: 1,
               verifiedApplyCount: 1,
+              origins: origins(1),
               relation: "earlier_known" as const,
+              proposalCapability: "available" as const,
             }),
           ]),
         }),
@@ -56,6 +76,8 @@ function createDelegate(): KnowledgeKnownAppliedWikiOutputsPort {
           outputRef,
           appliedAt: 100,
           verifiedApplyCount: 1,
+          origins: origins(100),
+          proposalCapability: "selected_is_current" as const,
           content: "known",
         }),
       }),
@@ -127,6 +149,8 @@ describe("DelegatingKnowledgeKnownAppliedWikiOutputsPort", () => {
             outputRef: first.items[0].outputRef,
             appliedAt: 999,
             verifiedApplyCount: 1,
+            origins: origins(999),
+            proposalCapability: "selected_is_current" as const,
             content: "known",
           }),
         }),

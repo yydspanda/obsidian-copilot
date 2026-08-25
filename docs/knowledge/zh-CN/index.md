@@ -1,6 +1,6 @@
 # Personal Knowledge Studio 中文使用手册
 
-> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`、DeepSeek V4。最近核对：2026-08-12。
+> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`、DeepSeek V4。最近核对：2026-08-25。
 
 ## 先说人话：这个插件能帮你做什么
 
@@ -120,6 +120,9 @@ Vault 外部文件夹 ─────── Import folder（复制 + 登记）�
 - 从一条已经完成的 AI 回答创建可编辑、需显式确认的 Knowledge Draft Source；创建动作本身不调用模型或写 Wiki。
 - 持久 Activity、两阶段 DeepSeek 编译、`no_changes`、Review、显式 Apply 和有限 Recovery。
 - 只查询已接受并已应用的 Wiki；当前 `.md` 来源引用和 PDF 页引用会在打开前重新验证来源。
+- 区分 Source-applied 页面基线与 effective 当前页头；已验证的 Forward revision 可被检查器和 Query 诚实读取，不需要模型 repair。
+- 在同一页形成有精确前后哈希的重复 Forward revision 链；普通 Source Apply 只在真正提交同一精确页面时取代它，`no_changes` 保留它。
+- 已接受但写入尚未开始的 Forward 可以 `End without writing`；sticky `recovery_required` 卡片提供 `Recheck / retry exact Apply` 与 `Keep current (no write)`。它们只允许新鲜复查后的有界精确重试或零写入终结；零写终局会按 journal 所处的写入前、写入结果不确定或已提交阶段如实记录，不会一律冒充外部取代，也永远不强制覆盖。
 - 将受支持的 Query 回答通过 `Save to Wiki` 重新送入 Sources → Activity →（`no_changes`，或 Review → Apply）流程。
 - `Sources` 页隔离缺失来源、复查精确原路径并二次确认安全退役；删除、单一 Notice、零覆盖复查、精确恢复和一次性来源退役已通过 Windows 有界实测，只有物理右键提示仍仅由自动化覆盖。
 
@@ -131,6 +134,7 @@ Vault 外部文件夹 ─────── Import folder（复制 + 登记）�
 - 自动接受、自动 Apply、模型直接写 Wiki 或静默覆盖冲突文件。
 - 从任意新路径替换来源、自动删除来源文件、自动删除 Wiki 页、撤销退役或完整历史归档。
 - 多 Bundle 选择、多用户协作、双 Obsidian 实例或跨平台支持。
+- 把只有 Forward 来源的历史输出直接当成另一条提案的候选正文；打开该行的 `View exact output` 详情后会明确显示不支持原因。
 
 这些限制不会阻止当前约定范围内的个人日常使用，但它们决定了你应该怎样组织 Vault 和备份。
 
@@ -173,5 +177,7 @@ Vault 外部文件夹 ─────── Import folder（复制 + 登记）�
 三卡 `Setup & status` 已有自动化覆盖，并通过 Windows Obsidian 主窗口的已配置路径有界验收：Workspace / Knowledge 本地就绪、可选 Chat 缺 Key、刷新展示和返回 Studio 均符合预期，且三卡交互没有模型请求，也没有修改 Sources、Wiki、Knowledge、Projects 或 `data.json`。插件启动本身按既有设计推进了私有 Runtime observation bookkeeping；启动收敛后三卡刷新与返回保持 Runtime 精确不变。为避免破坏真实配置，本轮没有现场制造 no Project / invalid Bundle、Recovery、Sources-only、自然 generation `Refreshing` 或 popout Setup；这些边界仍以自动化为证据，不能写成已全部实机验证。
 
 这不等于所有能力已在一次完整 Golden Flow 中验收：物理系统文件夹对话框的人工点击、同一文件夹批次产生非空 Review、不同字节冲突、物理右键提示或完整 Golden Flow 仍未写成已完成验收。它是 Windows 个人版，不是多用户、多 Bundle、跨平台或无人值守自动写入系统。手册会说明这些边界，但不会把它们冒充故障或已经支持的扩展能力。
+
+本轮新增的 Source / Forward effective 页权威、混合来源历史、重复 Forward 链和 sticky recovery 终结动作已有自动化、格式检查与 Windows 路径/大小写边界证据，但尚未完成用户计划的真实 Windows Obsidian 实机验收。它们当前是“已实现、待 Windows 实测”，不是已获平台认证。
 
 工程架构、事务证明和验收历史不在用户手册中展开；需要时参阅仓库的 `designdocs/` 和 `TODO.md`。

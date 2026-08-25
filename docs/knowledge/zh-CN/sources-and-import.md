@@ -227,7 +227,7 @@ JavaScript `string.length` 按 UTF-16 code unit 计数，一个 emoji 通常计�
 - 来源文件和已经生成的 Wiki 文件都不会被删除。
 - 只移除来源在 active Manifest 中的成员资格并撤销当前 provenance；该来源不再进入未来 Ingest、Review 或 Query citation。
 - 既有 Queue、Review 和 Apply ledger 历史会保留，不会为了移除来源而抹掉审计记录。
-- 来源身份和 Windows 路径保留在 Runtime v5 的受保护退役记录中，不能通过再次 `Add to Knowledge` 静默注册成一个“新”来源。
+- 来源身份和 Windows 路径保留在受保护的退役记录中；该记录自 Runtime v5 引入，并继续由当前 Runtime v9 保留，因此不能通过再次 `Add to Knowledge` 静默注册成一个“新”来源。
 
 这是有意的持久退役，不是临时隐藏，也没有一键撤销。操作前应该备份。当前退役已有严格自动化覆盖，并已用一次性来源通过 Windows 二次确认 `Remove` 有界实测；现有真实来源没有被拿来做破坏性验收。
 

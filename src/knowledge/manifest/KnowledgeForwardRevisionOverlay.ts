@@ -28,11 +28,11 @@ export const KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY =
   "obsidianCopilotKnowledgeForwardRevisionOverlays" as const;
 
 /** Current strict forward-revision overlay format. */
-export const KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION = 1 as const;
+export const KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION = 2 as const;
 
-/** One active content overlay for a previously generated Wiki page. */
+/** Legacy one-head overlay accepted only as migration input. */
 export interface KnowledgeForwardRevisionOverlayEntryV1 {
-  readonly version: typeof KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION;
+  readonly version: 1;
   readonly kind: "forward_revision_overlay_entry";
   readonly bundleId: string;
   readonly pagePath: string;
@@ -47,20 +47,53 @@ export interface KnowledgeForwardRevisionOverlayEntryV1 {
   readonly appliedAt: number;
 }
 
-/** Strict reserved extension containing canonical Windows-unique overlay entries. */
-export interface KnowledgeForwardRevisionOverlayExtensionV1 {
+/** One active content overlay for a previously generated Wiki page. */
+export interface KnowledgeForwardRevisionOverlayEntryV2 {
   readonly version: typeof KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION;
+  readonly kind: "forward_revision_overlay_entry";
+  readonly bundleId: string;
+  readonly pagePath: string;
+  readonly windowsPathKey: string;
+  readonly sourceId: string;
+  readonly sourceBaseDigest: string;
+  /** Immutable content hash last produced by the source compiler. */
+  readonly sourceAppliedContentHash: string;
+  /** Exact effective head consumed by this forward revision's Vault CAS. */
+  readonly previousEffectiveContentHash: string;
+  readonly effectiveContentHash: string;
+  readonly forwardTransactionId: string;
+  readonly acceptedDecisionDigest: string;
+  readonly forwardLedgerIdentityDigest: string;
+  readonly appliedAt: number;
+}
+
+/** Canonical active overlay returned by every strict reader. */
+export type KnowledgeForwardRevisionOverlayEntry = KnowledgeForwardRevisionOverlayEntryV2;
+
+/** Legacy overlay extension accepted only as migration input. */
+export interface KnowledgeForwardRevisionOverlayExtensionV1 {
+  readonly version: 1;
   readonly kind: "forward_revision_overlay_extension";
   readonly entries: readonly Readonly<KnowledgeForwardRevisionOverlayEntryV1>[];
 }
 
+/** Strict reserved extension containing canonical Windows-unique overlay entries. */
+export interface KnowledgeForwardRevisionOverlayExtensionV2 {
+  readonly version: typeof KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION;
+  readonly kind: "forward_revision_overlay_extension";
+  readonly entries: readonly Readonly<KnowledgeForwardRevisionOverlayEntryV2>[];
+}
+
+/** Canonical extension returned by every strict reader. */
+export type KnowledgeForwardRevisionOverlayExtension = KnowledgeForwardRevisionOverlayExtensionV2;
+
 /** Input for one exact ledger-bound overlay entry. */
 export type CreateKnowledgeForwardRevisionOverlayEntryInput = Omit<
-  KnowledgeForwardRevisionOverlayEntryV1,
+  KnowledgeForwardRevisionOverlayEntryV2,
   "version" | "kind" | "windowsPathKey"
 >;
 
-const ENTRY_KEYS = [
+const ENTRY_V1_KEYS = [
   "version",
   "kind",
   "bundleId",
@@ -75,12 +108,29 @@ const ENTRY_KEYS = [
   "forwardLedgerIdentityDigest",
   "appliedAt",
 ] as const;
+const ENTRY_V2_KEYS = [
+  "version",
+  "kind",
+  "bundleId",
+  "pagePath",
+  "windowsPathKey",
+  "sourceId",
+  "sourceBaseDigest",
+  "sourceAppliedContentHash",
+  "previousEffectiveContentHash",
+  "effectiveContentHash",
+  "forwardTransactionId",
+  "acceptedDecisionDigest",
+  "forwardLedgerIdentityDigest",
+  "appliedAt",
+] as const;
 const CREATE_ENTRY_KEYS = [
   "bundleId",
   "pagePath",
   "sourceId",
   "sourceBaseDigest",
-  "baseContentHash",
+  "sourceAppliedContentHash",
+  "previousEffectiveContentHash",
   "effectiveContentHash",
   "forwardTransactionId",
   "acceptedDecisionDigest",
@@ -134,6 +184,17 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+/** Reads one own enumerable scalar discriminant without invoking candidate code. */
+function readDataField(value: unknown, key: string): unknown {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor?.enumerable && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Captures a dense bounded array without invoking candidate accessors. */
 function snapshotEntryArray(value: unknown): readonly unknown[] | undefined {
   try {
@@ -160,22 +221,28 @@ function snapshotEntryArray(value: unknown): readonly unknown[] | undefined {
 /** Strictly snapshots one active overlay entry. */
 export function snapshotKnowledgeForwardRevisionOverlayEntry(
   value: unknown
-): Readonly<KnowledgeForwardRevisionOverlayEntryV1> {
+): Readonly<KnowledgeForwardRevisionOverlayEntryV2> {
   try {
-    const record = captureForwardApplyRecord(value, ENTRY_KEYS);
+    const version = readDataField(value, "version");
+    const record = captureForwardApplyRecord(value, version === 1 ? ENTRY_V1_KEYS : ENTRY_V2_KEYS);
     const pagePath = snapshotPagePath(record?.pagePath);
+    const sourceAppliedContentHash =
+      version === 1 ? record?.baseContentHash : record?.sourceAppliedContentHash;
+    const previousEffectiveContentHash =
+      version === 1 ? record?.baseContentHash : record?.previousEffectiveContentHash;
     if (
       !record ||
-      record.version !== KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION ||
+      (version !== 1 && version !== KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION) ||
       record.kind !== "forward_revision_overlay_entry" ||
       !isForwardApplyIdentifier(record.bundleId) ||
       !pagePath ||
       record.windowsPathKey !== toWindowsPathKey(pagePath) ||
       !isForwardApplyIdentifier(record.sourceId) ||
       !isForwardApplyDigest(record.sourceBaseDigest) ||
-      !isForwardApplyDigest(record.baseContentHash) ||
+      !isForwardApplyDigest(sourceAppliedContentHash) ||
+      !isForwardApplyDigest(previousEffectiveContentHash) ||
       !isForwardApplyDigest(record.effectiveContentHash) ||
-      record.baseContentHash === record.effectiveContentHash ||
+      previousEffectiveContentHash === record.effectiveContentHash ||
       !isForwardApplyIdentifier(record.forwardTransactionId) ||
       !isForwardApplyDigest(record.acceptedDecisionDigest) ||
       !isForwardApplyDigest(record.forwardLedgerIdentityDigest) ||
@@ -191,7 +258,8 @@ export function snapshotKnowledgeForwardRevisionOverlayEntry(
       windowsPathKey: record.windowsPathKey,
       sourceId: record.sourceId,
       sourceBaseDigest: record.sourceBaseDigest,
-      baseContentHash: record.baseContentHash,
+      sourceAppliedContentHash,
+      previousEffectiveContentHash,
       effectiveContentHash: record.effectiveContentHash,
       forwardTransactionId: record.forwardTransactionId,
       acceptedDecisionDigest: record.acceptedDecisionDigest,
@@ -207,7 +275,7 @@ export function snapshotKnowledgeForwardRevisionOverlayEntry(
 /** Creates one strict overlay entry from exact finalized ledger fields. */
 export function createKnowledgeForwardRevisionOverlayEntry(
   value: CreateKnowledgeForwardRevisionOverlayEntryInput
-): Readonly<KnowledgeForwardRevisionOverlayEntryV1> {
+): Readonly<KnowledgeForwardRevisionOverlayEntryV2> {
   try {
     const record = captureForwardApplyRecord(value, CREATE_ENTRY_KEYS);
     const pagePath = snapshotPagePath(record?.pagePath);
@@ -228,24 +296,25 @@ export function createKnowledgeForwardRevisionOverlayEntry(
 /** Strictly snapshots the complete canonical reserved overlay extension. */
 export function snapshotKnowledgeForwardRevisionOverlayExtension(
   value: unknown
-): Readonly<KnowledgeForwardRevisionOverlayExtensionV1> {
+): Readonly<KnowledgeForwardRevisionOverlayExtensionV2> {
   try {
     const record = captureForwardApplyRecord(value, EXTENSION_KEYS);
     const rawEntries = snapshotEntryArray(record?.entries);
     if (
       !record ||
       !rawEntries ||
-      record.version !== KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION ||
+      (record.version !== 1 && record.version !== KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION) ||
       record.kind !== "forward_revision_overlay_extension"
     ) {
       invalid();
     }
-    const entries: Readonly<KnowledgeForwardRevisionOverlayEntryV1>[] = [];
+    const entries: Readonly<KnowledgeForwardRevisionOverlayEntryV2>[] = [];
     const transactionIds = new Set<string>();
     const ledgerIdentityDigests = new Set<string>();
     const acceptedDecisionDigests = new Set<string>();
     let previousKey: string | undefined;
     for (const rawEntry of rawEntries) {
+      if (readDataField(rawEntry, "version") !== record.version) invalid();
       const entry = snapshotKnowledgeForwardRevisionOverlayEntry(rawEntry);
       if (
         (previousKey !== undefined && compareText(previousKey, entry.windowsPathKey) >= 0) ||
@@ -276,7 +345,7 @@ export function snapshotKnowledgeForwardRevisionOverlayExtension(
 export function createKnowledgeForwardRevisionOverlayExtensionDigest(value: unknown): string {
   const extension = snapshotKnowledgeForwardRevisionOverlayExtension(value);
   return sha256(
-    `knowledge-forward-revision-overlay-extension-v1\n${canonicalizeJson(
+    `knowledge-forward-revision-overlay-extension-v2\n${canonicalizeJson(
       extension as unknown as JsonValue
     )}`
   );
@@ -285,7 +354,7 @@ export function createKnowledgeForwardRevisionOverlayExtensionDigest(value: unkn
 /** Parses an untrusted overlay extension into a detached value or fixed diagnostic. */
 export function parseKnowledgeForwardRevisionOverlayExtension(
   value: unknown
-): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionOverlayExtensionV1>> {
+): KnowledgeParseResult<Readonly<KnowledgeForwardRevisionOverlayExtensionV2>> {
   try {
     return { ok: true, value: snapshotKnowledgeForwardRevisionOverlayExtension(value) };
   } catch {
@@ -322,7 +391,7 @@ function cloneDiagnostic(value: Readonly<KnowledgeDiagnostic>): KnowledgeDiagnos
 export function findKnowledgeForwardRevisionOverlay(
   extensionValue: unknown,
   pagePath: string
-): Readonly<KnowledgeForwardRevisionOverlayEntryV1> | undefined {
+): Readonly<KnowledgeForwardRevisionOverlayEntryV2> | undefined {
   const parsedPath = snapshotPagePath(pagePath);
   if (!parsedPath) invalid();
   const extension = snapshotKnowledgeForwardRevisionOverlayExtension(extensionValue);
@@ -331,10 +400,10 @@ export function findKnowledgeForwardRevisionOverlay(
 }
 
 /**
- * Adds a new overlay to an exact Manifest while preserving every source entry.
+ * Adds or strictly advances one overlay head while preserving source history.
  *
- * Existing Windows-equivalent overlays are never replaced; supersession belongs
- * to a later protocol version.
+ * A replacement is admitted only when it consumes the exact previous effective
+ * head for the same Bundle, source, page, and immutable source-applied base.
  */
 export function projectKnowledgeForwardRevisionOverlayAddition(
   manifestValue: unknown,
@@ -373,7 +442,7 @@ export function projectKnowledgeForwardRevisionOverlayAddition(
       matchingPages[0]?.source.sourceId !== source.sourceId ||
       page.path !== entry.pagePath ||
       page.ownership !== "generated" ||
-      page.contentHash !== entry.baseContentHash ||
+      page.contentHash !== entry.sourceAppliedContentHash ||
       canonicalizeJson(source.lastSuccessful as unknown as JsonValue) !==
         canonicalizeJson(sourceBase.lastSuccessful as unknown as JsonValue) ||
       canonicalizeJson(runtimeCommit as JsonValue) !==
@@ -390,21 +459,37 @@ export function projectKnowledgeForwardRevisionOverlayAddition(
             entries: Object.freeze([]),
           })
         : snapshotKnowledgeForwardRevisionOverlayExtension(existingRaw);
+    const replaced = existing.entries.find(
+      (candidate) => candidate.windowsPathKey === entry.windowsPathKey
+    );
     if (
+      (replaced === undefined &&
+        entry.previousEffectiveContentHash !== entry.sourceAppliedContentHash) ||
+      (replaced !== undefined &&
+        (replaced.bundleId !== entry.bundleId ||
+          replaced.sourceId !== entry.sourceId ||
+          replaced.pagePath !== entry.pagePath ||
+          replaced.sourceAppliedContentHash !== entry.sourceAppliedContentHash ||
+          replaced.effectiveContentHash !== entry.previousEffectiveContentHash ||
+          entry.appliedAt < replaced.appliedAt)) ||
       existing.entries.some(
         (candidate) =>
-          candidate.windowsPathKey === entry.windowsPathKey ||
-          candidate.forwardTransactionId === entry.forwardTransactionId ||
-          candidate.forwardLedgerIdentityDigest === entry.forwardLedgerIdentityDigest
-      )
+          candidate !== replaced &&
+          (candidate.forwardTransactionId === entry.forwardTransactionId ||
+            candidate.forwardLedgerIdentityDigest === entry.forwardLedgerIdentityDigest ||
+            candidate.acceptedDecisionDigest === entry.acceptedDecisionDigest)
+      ) ||
+      replaced?.forwardTransactionId === entry.forwardTransactionId ||
+      replaced?.forwardLedgerIdentityDigest === entry.forwardLedgerIdentityDigest ||
+      replaced?.acceptedDecisionDigest === entry.acceptedDecisionDigest
     ) {
       invalid();
     }
     const nextExtension = snapshotKnowledgeForwardRevisionOverlayExtension({
       version: KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION,
       kind: "forward_revision_overlay_extension",
-      entries: [...existing.entries, entry].sort((left, right) =>
-        compareText(left.windowsPathKey, right.windowsPathKey)
+      entries: [...existing.entries.filter((candidate) => candidate !== replaced), entry].sort(
+        (left, right) => compareText(left.windowsPathKey, right.windowsPathKey)
       ),
     });
     const next: SourceManifest = {
@@ -417,6 +502,58 @@ export function projectKnowledgeForwardRevisionOverlayAddition(
       },
     };
     return freezeForwardApplyJson(next);
+  } catch (error) {
+    if (isAuthenticError(error)) throw error;
+    invalid();
+  }
+}
+
+/**
+ * Removes one exact active overlay from an already advanced source-commit Manifest.
+ *
+ * The source transaction owns the Manifest revision increment, so this leaf never
+ * changes `revision`. The supplied overlay must rejoin one and only one current
+ * entry by its complete canonical identity. Other overlays and extensions remain
+ * byte-semantically intact; an empty reserved extension is removed altogether.
+ */
+export function projectKnowledgeForwardRevisionOverlayRemovalAfterSourceCommit(
+  manifestValue: unknown,
+  entryValue: unknown
+): Readonly<SourceManifest> {
+  try {
+    const captured = captureForwardApplyJson(manifestValue);
+    if (captured === undefined) invalid();
+    const parsedManifest = parseSourceManifest(captured);
+    if (!parsedManifest.ok || !validateSourceManifest(parsedManifest.value).valid) invalid();
+    const manifest = freezeForwardApplyJson(parsedManifest.value);
+    const entry = snapshotKnowledgeForwardRevisionOverlayEntry(entryValue);
+    if (manifest.bundleId !== entry.bundleId) invalid();
+    const extensionValue = manifest.extensions?.[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY];
+    if (extensionValue === undefined) invalid();
+    const extension = snapshotKnowledgeForwardRevisionOverlayExtension(extensionValue);
+    const identity = canonicalizeJson(entry);
+    const matches = extension.entries.filter(
+      (candidate) => canonicalizeJson(candidate as unknown as JsonValue) === identity
+    );
+    if (matches.length !== 1) invalid();
+    const remaining = extension.entries.filter((candidate) => candidate !== matches[0]);
+    const extensions = { ...(manifest.extensions ?? {}) };
+    if (remaining.length === 0) {
+      delete extensions[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY];
+    } else {
+      extensions[KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY] =
+        snapshotKnowledgeForwardRevisionOverlayExtension({
+          version: KNOWLEDGE_FORWARD_REVISION_OVERLAY_VERSION,
+          kind: "forward_revision_overlay_extension",
+          entries: remaining,
+        }) as unknown as JsonValue;
+    }
+    const { extensions: _previousExtensions, ...manifestWithoutExtensions } = manifest;
+    void _previousExtensions;
+    return freezeForwardApplyJson({
+      ...manifestWithoutExtensions,
+      ...(Object.keys(extensions).length === 0 ? {} : { extensions }),
+    });
   } catch (error) {
     if (isAuthenticError(error)) throw error;
     invalid();

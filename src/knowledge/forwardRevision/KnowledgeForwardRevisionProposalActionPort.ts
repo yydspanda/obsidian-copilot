@@ -9,7 +9,8 @@ import type { KnowledgeKnownAppliedWikiOutputsSession } from "@/knowledge/wiki/K
 /** Closed UI-safe reasons why one known output cannot become a proposal. */
 export type KnowledgeForwardRevisionProposalActionIneligibilityReason =
   | "current_not_applied"
-  | "selected_is_current";
+  | "selected_is_current"
+  | "forward_origin_not_supported";
 
 /** Value-only proposal result that deliberately withholds publication identifiers. */
 export type KnowledgeForwardRevisionProposalActionResult =
@@ -60,6 +61,10 @@ const CURRENT_NOT_APPLIED_RESULT = Object.freeze({
 const SELECTED_IS_CURRENT_RESULT = Object.freeze({
   kind: "not_eligible" as const,
   reason: "selected_is_current" as const,
+});
+const FORWARD_ORIGIN_NOT_SUPPORTED_RESULT = Object.freeze({
+  kind: "not_eligible" as const,
+  reason: "forward_origin_not_supported" as const,
 });
 
 /** Reports whether one value is a bounded opaque forward Studio Review reference. */
@@ -117,9 +122,14 @@ function projectActionResult(
     case "unavailable":
       return UNAVAILABLE_RESULT;
     case "not_eligible":
-      return result.reason === "current_not_applied"
-        ? CURRENT_NOT_APPLIED_RESULT
-        : SELECTED_IS_CURRENT_RESULT;
+      switch (result.reason) {
+        case "current_not_applied":
+          return CURRENT_NOT_APPLIED_RESULT;
+        case "selected_is_current":
+          return SELECTED_IS_CURRENT_RESULT;
+        case "forward_origin_not_supported":
+          return FORWARD_ORIGIN_NOT_SUPPORTED_RESULT;
+      }
   }
 }
 

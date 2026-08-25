@@ -349,7 +349,10 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
         outputPath: "Wiki/personal/Shared.md",
         outputKey,
         ownership: "shared",
+        sourceAppliedContentHash: sharedHash,
+        effectiveContentHash: sharedHash,
         contentHash: sharedHash,
+        origin: { kind: "source_apply" },
         sourceIds: ["source-a", "source-b"],
       },
     ]);
@@ -370,7 +373,10 @@ describe("KnowledgeSourceWatchPlan strict projection", () => {
       outputPath: "Wiki/personal/Shared.md",
       outputKey,
       ownership: "shared",
+      sourceAppliedContentHash: sharedHash,
+      effectiveContentHash: sharedHash,
       contentHash: sharedHash,
+      origin: { kind: "source_apply" },
       sourceIds: ["source-a", "source-b"],
     });
   });

@@ -61,7 +61,8 @@ function deferred<T>(): Deferred<T> {
 function createSnapshot(
   content = "# Durable knowledge\n\nThe personal knowledge engine is grounded.\n",
   citations: readonly Readonly<ClaimCitation>[] = [CITATION, CITATION],
-  runtimeRevision = 7
+  runtimeRevision = 7,
+  pageOverrides: Partial<KnowledgeVerifiedWikiSnapshot["pages"][number]> = {}
 ): KnowledgeVerifiedWikiSnapshot {
   return {
     bundleId: "personal",
@@ -73,7 +74,10 @@ function createSnapshot(
         path: "Wiki/Durable.md",
         windowsPathKey: "wiki/durable.md",
         ownership: "generated",
+        sourceAppliedContentHash: PAGE_HASH,
+        effectiveContentHash: PAGE_HASH,
         contentHash: PAGE_HASH,
+        origin: { kind: "source_apply" },
         content,
         sources: [
           {
@@ -89,6 +93,7 @@ function createSnapshot(
             citations,
           },
         ],
+        ...pageOverrides,
       },
     ],
   };
@@ -517,6 +522,50 @@ describe("KnowledgeScopedQueryCoordinator", () => {
     expect(Object.isFrozen(navigation.open.mock.calls[0][0])).toBe(true);
     expect(Object.isFrozen(navigation.open.mock.calls[0][0].citation)).toBe(true);
     expect(Object.isFrozen(navigation.open.mock.calls[0][0].citation.locator)).toBe(true);
+  });
+
+  it("retrieves forward-revised Wiki bytes while citations remain Source-owned", async () => {
+    const content = "# Manual revision\n\nThe current wording came from a forward revision.\n";
+    const effectiveContentHash = "f".repeat(64);
+    const reader = createReader(
+      createSnapshot(content, [CITATION], 7, {
+        effectiveContentHash,
+        contentHash: effectiveContentHash,
+        origin: {
+          kind: "forward_revision",
+          overlay: {
+            version: 2,
+            kind: "forward_revision_overlay_entry",
+            bundleId: "personal",
+            pagePath: "Wiki/Durable.md",
+            windowsPathKey: "wiki/durable.md",
+            sourceId: "source-1",
+            sourceBaseDigest: "1".repeat(64),
+            sourceAppliedContentHash: PAGE_HASH,
+            previousEffectiveContentHash: PAGE_HASH,
+            effectiveContentHash,
+            forwardTransactionId: "forward-1",
+            acceptedDecisionDigest: "2".repeat(64),
+            forwardLedgerIdentityDigest: "3".repeat(64),
+            appliedAt: 300,
+          },
+        },
+      })
+    );
+    const coordinator = createCoordinator(reader);
+
+    const result = await coordinator.query(
+      "personal",
+      { query: "forward revision" },
+      new AbortController().signal
+    );
+
+    expect(result.hits[0]).toMatchObject({
+      pageContentHash: effectiveContentHash,
+      snippet: content,
+      citations: [{ sourceId: "source-1", sourcePath: "Sources/Raw.md" }],
+    });
+    expect(reader.read).toHaveBeenCalledTimes(1);
   });
 
   it("rejects unknown Bundle, query, and citation refs without calling navigation", async () => {

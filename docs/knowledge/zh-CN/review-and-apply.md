@@ -1,6 +1,6 @@
 # Review 与 Apply
 
-> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-14。
+> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-25。
 
 ## 本页目标
 
@@ -31,23 +31,33 @@
 
 ## 从已应用历史版本提出新 Review
 
-在已应用 Wiki 页的检查窗口中，`Known applied outputs` 会列出系统能够由持久记录验证的已知输出。当前页仍精确匹配最近一次应用结果、所选项是较早的已知输出、并且 Studio 只有一个可路由的 Knowledge Bundle 时，详情会显示 `Propose this output`。
+在已应用 Wiki 页的检查窗口中，`Known applied outputs` 会按精确内容哈希合并系统能由持久记录验证的已知输出。每行会说明它是来自 `Source Apply`、`Forward revision Apply`，还是同一精确正文同时拥有两种来源。混合来源不会被简化为其中一种；检查器会显示当前来源和 Source evidence 的适用边界，系统则在内部继续区分 Source 应用基线与当前有效正文。
 
-这个动作不是 Restore、Revert 或 Rollback，也不会立即修改 Wiki。它只把所选历史正文发布为一条新的 pending Forward Review，然后用不含写权限的引用打开 Knowledge Studio 的 `Review`。快速重复点击只会合并为同一次提案与一次导航；若插件换代，旧窗口不能把提案发到新运行代。
+只有当前 Wiki 仍精确匹配已证明的当前有效版本、所选项不是当前正文、该行有合格的普通 Source Apply 历史，并且 Studio 只有一个可路由的 Knowledge Bundle 时，详情才会显示 `Propose this output`。当前限制如下：
+
+- 只有 Forward 来源的历史行还不能作为另一条提案的候选正文；
+- 混合来源行只在当前详情权限可由 Source Apply 证明时才能提案；
+- 当前文件未被证明为已应用版本、所选项就是当前版本、或详情过大时，该行会明确说明不可提案的原因。
+
+这个动作不是 Restore、Revert 或 Rollback，也不会立即修改 Wiki。点击后，系统会重新复证当前 Source、pipeline 与 input lineage；只有复证通过，才会把所选历史正文发布为一条新的 pending Forward Review，然后用不含写权限的引用打开 Knowledge Studio 的 `Review`。不再合格的候选会显示不可用且不创建 Review。快速重复点击只会合并为同一次提案与一次导航；若插件换代，旧窗口不能把提案发到新运行代。
 
 在这类 Review 中：
 
 1. 重新阅读当前正文与历史候选的差异；
 2. 选择整页接受、允许时逐块接受、人工编辑，或拒绝；
 3. 点击 `Validate and apply selection`。系统先持久保存接受决定，再立即用当前 Source、Schema、引用、Manifest 和目标文件执行新的确定性核对；只有核对通过才创建 crash-safe journal 并尝试 exact-file 写入。拒绝不会写 Wiki；
-4. 若接受决定已经持久保存，但 journal 因 reload、disable、依赖漂移或暂时故障尚未开始，页面会显示 `Accepted revision ready to apply`。这个状态不会因为关闭视图或重新加载而消失；再次点击 `Validate and apply` 会重试当前核对，不会重做或替换已经保存的决定；
+4. 若接受决定已经持久保存，但 journal 因 reload、disable、依赖漂移或暂时故障尚未开始，页面会显示 `Accepted revision ready to apply`。这个状态不会因为关闭视图或重新加载而消失；再次点击 `Validate and apply` 会重试当前核对，不会重做或替换已经保存的决定。如果你改变主意，只要仍能证明 journal 和 Wiki 写入从未开始，可点击 `End without writing`：它只会以 “写入前结束” 的真实结果终结流程，不会改动 Wiki，也不会创建 Apply journal、ledger 或 overlay；
 5. 若 journal 已经开始，则页面改为 `Applying accepted revision` 或需要人工处理的 recovery 状态，而不是回到 pending Review。
 
-Forward Review 与普通编译 Review 使用不同的持久协议，但按钮语义相同：接受操作会进入受控 Apply。历史输出提案会先持久保存接受决定，再进行一次全新的确定性复核；若这两个阶段之间中断，`Accepted revision ready to apply` 提供显式重试入口。任何外部文件变化都会阻断覆盖。
+Forward Review 与普通编译 Review 使用不同的持久协议，但按钮语义相同：接受操作会进入受控 Apply。历史输出提案会先持久保存接受决定，再进行一次全新的确定性复核；若这两个阶段之间中断，`Accepted revision ready to apply` 提供显式重试或在写入前结束的入口。任何外部文件变化都会阻断覆盖。
 
 若同时配置多个 Bundle，当前 Studio 不提供可靠的跨 Bundle 导航，因此 `Propose this output` 保持不可用；查看历史输出本身仍是只读的。
 
-首版对同一 Wiki 页只支持一个未被拒绝的 Forward revision lifecycle。已经接受但永久无法通过新鲜核对的条目目前不能在界面中 abandon；已经提交的 lifecycle 也不能直接再叠加另一条历史输出提案。它们会保持可见并 fail closed，而不是被隐藏或强制覆盖。先恢复导致核对失败的 Source、Schema、Manifest 或文件条件；若无法恢复，请保留备份并使用受支持的故障排查流程，绝不要直接删除私有 Review、journal、overlay 或 ledger。
+同一 Bundle / Source / Wiki 页现在可以形成一条重复 Forward revision 链，但任何时刻只有一个当前有效页头。链上始终保留最后一次普通 Source Apply 的正文哈希作为来源基线；新 Forward 必须以上一个当前有效哈希作为精确 CAS 前件，不能跳过或猜测中间版本。因此，一条成功的 Forward Apply 之后可以再发起另一条合格提案，但上述“Forward-only 历史行不能当候选”限制仍然适用。
+
+日后普通 Source Apply 只有在成功提交了该 Source 的这一个精确目标页时，才会取代该页的 Forward 有效版本。其他页的 Source Apply、与该页无关的更新，以及真实的 `no_changes` 结果都会保留当前 Forward 页头；`no_changes` 本身不会伪造一笔新 Apply。如果精确链路、目标身份或页面字节不一致，系统会保持可见并 fail closed，而不是隐藏或强制覆盖。绝不要直接删除私有 Review、journal、overlay 或 ledger。
+
+> 这一轮 Source / Forward 有效页权威、重复 Forward 和新恢复动作已有自动化、格式与 Windows 路径/大小写边界检查，但尚未完成用户计划的真实 Windows Obsidian 实机验收。当前状态是“待 Windows 实测”，不是已获平台认证。
 
 ## 操作步骤：打开提案
 
@@ -161,7 +171,7 @@ OKF、Citations、Links 显示 `valid` 只说明机器可验证的结构符合�
 
 Apply 是受控事务：系统会重新确认提案、目标内容和持久状态仍然匹配。出现漂移时会阻断，而不是静默覆盖你的文件。
 
-Forward Apply 若显示 `Applying accepted revision`，说明 journal 已持久化，但当前运行代未必仍有后台任务继续推进；长时间停留时重新加载插件，让 startup recovery 继续核对。若显示 `Forward Apply needs recovery`，系统已经遇到不能安全猜测的精确文件冲突：当前界面只读、不会自动重试或覆盖，重新加载也不会自行清除 sticky recovery。先备份 Vault，再按 [维护与恢复](maintenance-and-recovery.md) 的 Forward recovery 说明处理。
+Forward Apply 若显示 `Applying accepted revision`，说明 journal 已持久化，但当前运行代未必仍有后台任务继续推进；长时间停留时重新加载插件，让 startup recovery 继续核对。若显示 `Forward Apply needs recovery`，系统已经遇到不能安全猜测的精确文件冲突：它不会自动重试或覆盖，reload 也不会自行清除 sticky recovery。先备份 Vault，再使用卡片上的 `Recheck / retry exact Apply` 或 `Keep current (no write)`；两者都先重读精确字节，第三状态不会被覆盖。详见 [维护与恢复](maintenance-and-recovery.md)。
 
 ## 你应该看到什么
 

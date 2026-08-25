@@ -25,6 +25,10 @@
 | Supported              | 证据足以支持回答                                 |
 | Partial                | 只能支持部分回答                                 |
 | Insufficient evidence  | 证据不足，不生成无根据结论                       |
+| Known applied outputs  | 按精确正文合并的已知 Source / Forward 应用历史   |
+| Source Apply           | 普通来源编译并应用的页面基线                     |
+| Forward revision Apply | 对当前 Wiki 页完成的已审核前向修订               |
+| End without writing    | 只在写入开始前结束已接受 Forward；Wiki 不变      |
 
 ## Setup & status 三张卡
 
@@ -89,6 +93,31 @@
 | Queue recovery required | Queue 因事务恢复暂停           | Check again        |
 | Queue commit pending    | 等待已提交事务确认             | Check again        |
 
+### Forward revision 状态与恢复规则
+
+`Accepted revision ready to apply` 和 sticky `recovery_required` 的专用按钮都已在当前 Review UI 接入。命令进行时两个 sticky 按钮都会禁用；当前 generation 没有 Forward 命令能力时也会禁用。
+
+| 状态 / 动作                      | 含义                                                                                                            | 写入规则                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Accepted revision ready to apply | 接受决定已保存，journal 与 Wiki 写入尚未开始                                                                    | Validate and apply，或在仍能证明零写入时 End without writing       |
+| Applying accepted revision       | durable journal 已开始管理这次精确转换                                                                          | 等待或 reload 后由 startup recovery 收敛                           |
+| Forward Apply needs recovery     | 文件既非 exact-before 也非 exact-after，或写后证明不完整                                                        | sticky；不自动重试，不强制覆盖                                     |
+| Recheck / retry exact Apply      | 先重读当前字节；accepted after-state 只收敛确认，合格 exact-before 每次命令最多一次 CAS，第三状态继续阻断       | 只有合格 exact-before 可能写入                                     |
+| Keep current (no write)          | 先重读；exact-after 收敛为已提交；可安全重试的 exact-before 被拒绝；其他状态只有在 journal 阶段允许时才零写终结 | 不写；按阶段记录写入前放弃、不确定写入后外部取代或已提交后外部取代 |
+| Force overwrite                  | 永远不可用                                                                                                      | 无 force 路径                                                      |
+
+### Known applied outputs 的提案资格
+
+| 行状态                       | 含义                                                        |
+| ---------------------------- | ----------------------------------------------------------- |
+| Available                    | 候选由普通 Source Apply 历史证明，且当前文件/路由都精确有效 |
+| Current file is not applied  | 当前 Wiki 字节不是已证明的 effective 页头，不能提案         |
+| Selected output is current   | 候选与当前有效正文相同，无需发起变更                        |
+| Forward origin not supported | 该行只有 Forward 权威；当前还不能用它发起另一条提案         |
+| Detail too large             | 已知输出可列出，但当前不授权载入详情并提案                  |
+
+已知输出会按精确内容哈希合并，并按 `Source Apply`、`Forward revision Apply` 的顺序分开保留来源。每个来源都会保留自己的已验证次数、最新 Apply 时间与 Manifest 版本信息。同一正文同时具有两种来源时显示 mixed，不会重新标签为某一种。mixed 本身不会自动授权提案；只有当前详情的规范权限可由 Source Apply 证明时才能提案，若详情权限是 Forward 则明确阻断。
+
 ## 文件夹导入结果
 
 | 界面结果  | 含义                                              |
@@ -149,6 +178,9 @@
 | Grounded answer Source evidence                    | 当前只支持 `.md`                                                                        |
 | PDF 检索引用与精确页跳转                           | 支持；不进入综合回答 evidence                                                           |
 | Save to Wiki → no_changes 或 Review/Apply          | 支持                                                                                    |
+| Source / Forward effective 页头和检查器来源披露    | 已实现并有自动化；用户计划的真实 Windows Obsidian 验收待完成                            |
+| 重复 Forward revision 精确链                       | 已实现并有 Windows 路径/大小写边界检查；真实 Windows Obsidian 验收待完成                |
+| Forward-only 历史输出发起另一提案                  | 当前不支持                                                                              |
 | Sources Missing / 精确原路径复查                   | 已接入并通过 Windows 有界实测                                                           |
 | 来源退役                                           | 已接入并通过 Windows 有界实测                                                           |
 | Setup & status 三卡本地诊断                        | 已实现并有自动化；Windows 主窗口已配置路径已验收，配置失败 / Recovery / popout 实机待补 |
@@ -162,6 +194,8 @@
 | 跨平台 Knowledge Studio                            | 不支持                                                                                  |
 | 多实例 / OneDrive / 网络文件系统                   | 未验收                                                                                  |
 
+> 本轮 R3c-b4/b5 的 effective 页头、重复 Forward 链和 sticky recovery 终结动作尚未由用户在真实 Windows Obsidian 中验收。表中的“已实现”只表示代码与自动化已就绪，不表示 Windows 实机验收已经完成。
+
 ## 网络调用速查
 
 | 操作                                             | 是否调用 DeepSeek                               |
@@ -171,6 +205,7 @@
 | 枚举/复制文件夹、本地 PDF 提取、SHA-256 校验     | 否                                              |
 | 新 Source 编译                                   | 通常是，分析与生成两个阶段                      |
 | 已有持久证明且输入/输出精确未变化                | 否                                              |
+| 读取已验证的 Forward effective 页头              | 否；不调用模型修复或重新编译                    |
 | 有合格证据的 Grounded Query                      | 是，单独回答请求                                |
 | 无合格证据的 Query                               | 否，返回 Insufficient evidence                  |
 | Save to Wiki 点击本身                            | 创建本地 managed source；随后编译可能调用       |
@@ -187,6 +222,18 @@
 ### Manifest
 
 持久记录已注册 Source、来源身份和成功编译结果的内部清单。用户不应手工编辑。
+
+### Source-applied 基线
+
+最后一次成功普通 Source Apply 为某个页面提交的精确正文。当 Forward revision 活跃时，Manifest 仍保留这个真实基线，不会把人工正文冒充为重新编译结果。
+
+### Effective 当前页头
+
+现在应被检查器和 Query 读取的精确 Wiki 正文。没有活跃 Forward revision 时它等于 Source-applied 基线；有活跃 Forward revision 时它等于链上最后一个已验证 Forward 哈希。
+
+### Forward revision
+
+用户审核后对当前 Wiki 页的前向修订。重复 Forward 在同一 Bundle / Source / 页上形成单一活跃链：来源基线哈希不变，每一次都以上一个 effective 哈希作为精确 CAS 前件。只有成功提交同一 Source 精确页面的后续普通 Source Apply 才能取代它；其他页的 Apply 和 `no_changes` 都会保留它。
 
 ### managed copy
 
@@ -224,9 +271,9 @@
 
 当前持久状态的单调版本。命令基于旧 revision 时会 stale，而不是覆盖新状态。
 
-### Runtime v5
+### Runtime v9
 
-当前 Vault 私有持久状态的外层格式。v5 在 v4 的完成证明基础上增加来源退役降级保护；旧版本升级由插件原子处理。它不是 Bundle 的 `version: 1`，也不应由用户手工编辑。
+当前 Vault 私有持久状态的外层格式。v5 曾在 v4 的完成证明基础上引入受保护的来源退役 tombstone 与降级保护；当前 v9 继续保留这份证明，同时承载后续增加的持久权威。旧版本升级由插件原子处理。它不是 Bundle 的 `version: 1`，也不应由用户手工编辑。
 
 ### OKF
 

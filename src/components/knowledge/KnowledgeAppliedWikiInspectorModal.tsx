@@ -83,6 +83,30 @@ function formatOwnership(
   }
 }
 
+/** Returns a concise user-facing label for the current effective-page origin. */
+function formatPageOrigin(
+  origin: Readonly<KnowledgeAppliedWikiPageInspectionSession>["origin"]
+): string {
+  return origin.kind === "source_apply" ? "Source-applied version" : "Forward revision";
+}
+
+/** Explains how the current effective page relates to its retained Source base. */
+function formatPageOriginDescription(
+  origin: Readonly<KnowledgeAppliedWikiPageInspectionSession>["origin"]
+): string {
+  return origin.kind === "source_apply"
+    ? "This is the last page version produced from its contributing Sources."
+    : "This is an accepted forward revision layered over the last Source-applied version.";
+}
+
+/** Explains the exact evidence scope without treating revised wording as newly proven. */
+function formatEvidenceScope(session: Readonly<KnowledgeAppliedWikiPageInspectionSession>): string {
+  if (session.origin.kind === "forward_revision") {
+    return "Evidence scope: underlying Source-applied version. The evidence below still comes from the original contributing Sources; it is not new proof for manually revised wording.";
+  }
+  return "Evidence scope: Source-applied version. Evidence below was attached to each accepted proposal as a whole. It can help you inspect the basis, but does not prove every sentence or changed block in this page.";
+}
+
 /** Returns a deterministic label for source custody. */
 function formatCustody(custody: Readonly<KnowledgeAppliedWikiSourceSummary>["custody"]): string {
   return custody === "managed_copy" ? "Managed copy" : "User-managed source";
@@ -383,12 +407,13 @@ export function KnowledgeAppliedWikiInspectorContent({
             <h3 className="tw-m-0 tw-text-sm tw-font-semibold" id={versionHeadingId}>
               Current applied version
             </h3>
-            <div className="tw-mt-2 tw-text-sm">
+            <div className="tw-mt-2 tw-flex tw-flex-wrap tw-gap-2 tw-text-sm">
               <Badge variant="secondary">{formatOwnership(session.ownership)}</Badge>
+              <Badge variant="outline">{formatPageOrigin(session.origin)}</Badge>
             </div>
             <p className="tw-m-0 tw-mt-2 tw-text-xs tw-text-muted">
-              This inspector shows the exact page version currently proven as applied. It does not
-              write, restore, or revise the Wiki.
+              {formatPageOriginDescription(session.origin)} This inspector shows the exact page
+              version currently proven as applied. It does not write, restore, or revise the Wiki.
             </p>
           </section>
 
@@ -396,9 +421,11 @@ export function KnowledgeAppliedWikiInspectorContent({
             <h3 className="tw-m-0 tw-text-sm tw-font-semibold" id={sourcesHeadingId}>
               Contributing Sources
             </h3>
-            <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted">
-              Evidence below was attached to each accepted proposal as a whole. It can help you
-              inspect the basis, but does not prove every sentence or changed block in this page.
+            <p
+              className="tw-m-0 tw-mt-2 tw-rounded-lg tw-border tw-border-solid tw-border-border tw-bg-secondary-alt tw-p-3 tw-text-xs tw-text-muted"
+              role="note"
+            >
+              {formatEvidenceScope(session)}
             </p>
 
             {evidenceError ? (

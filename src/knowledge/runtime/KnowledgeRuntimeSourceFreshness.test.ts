@@ -10,7 +10,7 @@ const HASH_C = "c".repeat(64);
 /** Creates common exact Runtime and Manifest source bindings. */
 function createCommonAuthority() {
   return {
-    version: 1,
+    version: 2,
     runtimeId: "runtime-1",
     runtimeRevision: 12,
     runtimeDigest: HASH_A,
@@ -26,7 +26,10 @@ function createCommonAuthority() {
         path: "Wiki/Concept.md",
         windowsPathKey: "wiki/concept.md",
         ownership: "generated",
+        sourceAppliedContentHash: HASH_C,
+        effectiveContentHash: HASH_C,
         contentHash: HASH_C,
+        origin: { kind: "source_apply" },
       },
     ],
   };
@@ -88,6 +91,45 @@ describe("parseKnowledgeRuntimeSourceFreshnessAuthority", () => {
     expect(parsed.kind).toBe("no_changes");
     expect(parsed.generatedPages).toEqual([]);
     expect(Object.isFrozen(parsed.generatedPages)).toBe(true);
+  });
+
+  it("retains exact forward lineage while treating the effective hash as current", () => {
+    const base = createAppliedAuthority();
+    const basePage = base.generatedPages[0];
+    const page = {
+      ...basePage,
+      effectiveContentHash: HASH_A,
+      contentHash: HASH_A,
+      origin: {
+        kind: "forward_revision" as const,
+        overlay: {
+          version: 2 as const,
+          kind: "forward_revision_overlay_entry" as const,
+          bundleId: "personal",
+          pagePath: basePage.path,
+          windowsPathKey: basePage.windowsPathKey,
+          sourceId: "source-1",
+          sourceBaseDigest: HASH_B,
+          sourceAppliedContentHash: HASH_C,
+          previousEffectiveContentHash: HASH_C,
+          effectiveContentHash: HASH_A,
+          forwardTransactionId: "forward-transaction-1",
+          acceptedDecisionDigest: HASH_A,
+          forwardLedgerIdentityDigest: HASH_B,
+          appliedAt: 90,
+        },
+      },
+    };
+    const input = { ...base, generatedPages: [page] };
+
+    const parsed = parseKnowledgeRuntimeSourceFreshnessAuthority(input);
+
+    expect(parsed.generatedPages[0]).toEqual(page);
+    expect(Object.isFrozen(parsed.generatedPages[0].origin)).toBe(true);
+    expect(
+      parsed.generatedPages[0].origin.kind === "forward_revision" &&
+        Object.isFrozen(parsed.generatedPages[0].origin.overlay)
+    ).toBe(true);
   });
 
   it("retains a legacy Runtime-proven Apply at input revision zero", () => {

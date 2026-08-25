@@ -13,6 +13,40 @@ const pageRef = `known-wiki-page-${"a".repeat(64)}`;
 const outputRef = `known-wiki-output-${"b".repeat(64)}`;
 const cursorRef = `known-wiki-cursor-${"c".repeat(64)}`;
 
+/** Creates one canonical source-Apply provenance summary. */
+function createOrigins(appliedAt: number, verifiedApplyCount = 1): readonly object[] {
+  return [
+    {
+      kind: "source_apply",
+      verifiedApplyCount,
+      newestAppliedAt: appliedAt,
+      newestManifestRevision: Math.max(1, appliedAt),
+    },
+  ];
+}
+
+/** Creates one strict output-row fixture. */
+function createSummary(
+  candidateRef: string,
+  appliedAt: number,
+  relation: "current_applied" | "latest_known" | "earlier_known",
+  proposalCapability:
+    | "available"
+    | "current_not_applied"
+    | "selected_is_current"
+    | "forward_origin_not_supported"
+    | "detail_too_large"
+): object {
+  return {
+    outputRef: candidateRef,
+    appliedAt,
+    verifiedApplyCount: 1,
+    origins: createOrigins(appliedAt),
+    relation,
+    proposalCapability,
+  };
+}
+
 /** Creates one strict first-page session fixture. */
 function createSession(): object {
   return {
@@ -21,14 +55,7 @@ function createSession(): object {
     currentState: "applied",
     currentMatch: "current_applied",
     knownOutputCount: 2,
-    items: [
-      {
-        outputRef,
-        appliedAt: 100,
-        verifiedApplyCount: 1,
-        relation: "current_applied",
-      },
-    ],
+    items: [createSummary(outputRef, 100, "current_applied", "selected_is_current")],
     nextCursor: cursorRef,
   };
 }
@@ -42,6 +69,8 @@ describe("KnowledgeKnownAppliedWikiOutputsPort", () => {
       outputRef,
       appliedAt: 100,
       verifiedApplyCount: 1,
+      origins: createOrigins(100),
+      proposalCapability: "selected_is_current",
       content: "exact\r\ntext",
     });
     const comparison = snapshotKnowledgeKnownAppliedWikiOutputComparison({
@@ -100,12 +129,13 @@ describe("KnowledgeKnownAppliedWikiOutputsPort", () => {
   it("enforces exact paging and content limits without normalizing text", () => {
     const items = Array.from(
       { length: KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.pageSize },
-      (_, index) => ({
-        outputRef: `known-wiki-output-${index.toString(16).padStart(64, "0")}`,
-        appliedAt: index,
-        verifiedApplyCount: 1,
-        relation: "earlier_known",
-      })
+      (_, index) =>
+        createSummary(
+          `known-wiki-output-${index.toString(16).padStart(64, "0")}`,
+          index,
+          "earlier_known",
+          "available"
+        )
     );
     expect(snapshotKnowledgeKnownAppliedWikiOutputsPage({ items }).items).toHaveLength(20);
     expect(() =>
@@ -116,6 +146,8 @@ describe("KnowledgeKnownAppliedWikiOutputsPort", () => {
         outputRef,
         appliedAt: 1,
         verifiedApplyCount: 1,
+        origins: createOrigins(1),
+        proposalCapability: "available",
         content: "e\u0301\r\n  ",
       }).content
     ).toBe("e\u0301\r\n  ");
@@ -124,6 +156,8 @@ describe("KnowledgeKnownAppliedWikiOutputsPort", () => {
         outputRef,
         appliedAt: 1,
         verifiedApplyCount: 1,
+        origins: createOrigins(1),
+        proposalCapability: "available",
         content: "x".repeat(KNOWLEDGE_KNOWN_APPLIED_WIKI_OUTPUT_LIMITS.maxContentCharacters + 1),
       })
     ).toThrow();
@@ -133,14 +167,7 @@ describe("KnowledgeKnownAppliedWikiOutputsPort", () => {
     expect(() =>
       snapshotKnowledgeKnownAppliedWikiOutputsSession({
         ...createSession(),
-        items: [
-          {
-            outputRef,
-            appliedAt: 100,
-            verifiedApplyCount: 1,
-            relation: "latest_known",
-          },
-        ],
+        items: [createSummary(outputRef, 100, "latest_known", "current_not_applied")],
       })
     ).toThrow();
     expect(() =>
@@ -148,16 +175,84 @@ describe("KnowledgeKnownAppliedWikiOutputsPort", () => {
         ...createSession(),
         currentState: "drifted",
         currentMatch: "none",
-        items: [
-          {
-            outputRef,
-            appliedAt: 100,
-            verifiedApplyCount: 1,
-            relation: "current_applied",
-          },
-        ],
+        items: [createSummary(outputRef, 100, "current_applied", "selected_is_current")],
       })
     ).toThrow();
+  });
+
+  it("preserves mixed origins and rejects dishonest aggregate or proposal capability claims", () => {
+    const mixed = {
+      outputRef,
+      appliedAt: 200,
+      verifiedApplyCount: 3,
+      origins: [
+        {
+          kind: "source_apply",
+          verifiedApplyCount: 1,
+          newestAppliedAt: 100,
+          newestManifestRevision: 10,
+        },
+        {
+          kind: "forward_revision",
+          verifiedApplyCount: 2,
+          newestAppliedAt: 200,
+          newestManifestRevision: 20,
+        },
+      ],
+      relation: "current_applied",
+      proposalCapability: "selected_is_current",
+    };
+    const captured = snapshotKnowledgeKnownAppliedWikiOutputsSession({
+      ...createSession(),
+      knownOutputCount: 1,
+      items: [mixed],
+      nextCursor: undefined,
+    });
+    expect(captured.items[0].origins.map((origin) => origin.kind)).toEqual([
+      "source_apply",
+      "forward_revision",
+    ]);
+    expect(Object.isFrozen(captured.items[0].origins)).toBe(true);
+
+    const forwardHistorical = createSummary(
+      `known-wiki-output-${"d".repeat(64)}`,
+      50,
+      "earlier_known",
+      "forward_origin_not_supported"
+    );
+    expect(
+      snapshotKnowledgeKnownAppliedWikiOutputsSession({
+        ...createSession(),
+        items: [(createSession() as { items: object[] }).items[0], forwardHistorical],
+        nextCursor: undefined,
+      }).items[1].proposalCapability
+    ).toBe("forward_origin_not_supported");
+
+    for (const candidate of [
+      { ...mixed, origins: [...mixed.origins].reverse() },
+      { ...mixed, verifiedApplyCount: 4 },
+      { ...mixed, proposalCapability: "available" },
+      {
+        ...mixed,
+        verifiedApplyCount: 10_001,
+        origins: [
+          {
+            ...mixed.origins[0],
+            verifiedApplyCount: 10_001,
+            newestAppliedAt: mixed.appliedAt,
+          },
+        ],
+      },
+    ]) {
+      expect(() =>
+        snapshotKnowledgeKnownAppliedWikiOutputsSession({
+          ...createSession(),
+          knownOutputCount: 1,
+          items: [candidate],
+          nextCursor: undefined,
+        })
+      ).toThrow();
+    }
   });
 
   it("recognizes only authentic sanitized errors", () => {

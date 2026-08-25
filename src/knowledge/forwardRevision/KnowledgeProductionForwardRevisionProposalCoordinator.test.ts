@@ -12,6 +12,7 @@ import {
 } from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import type {
+  KnowledgeKnownAppliedWikiOutputOriginSummary,
   KnowledgeKnownAppliedWikiOutputsPort,
   KnowledgeKnownAppliedWikiOutputsSession,
 } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
@@ -19,8 +20,23 @@ import type {
 const PAGE_PATH = "Wiki/Page.md";
 const SELECTED_CONTENT = "# Historical\n";
 const CURRENT_CONTENT = "# Current\n";
+const CURRENT_REF = `known-wiki-output-${"1".repeat(64)}`;
 const SELECTED_REF = `known-wiki-output-${"2".repeat(64)}`;
 const PAGE_REF = `known-wiki-page-${"3".repeat(64)}`;
+
+/** Creates canonical source-Apply provenance for one historical selection. */
+function origins(
+  appliedAt: number
+): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
+  return Object.freeze([
+    Object.freeze({
+      kind: "source_apply" as const,
+      verifiedApplyCount: 1,
+      newestAppliedAt: appliedAt,
+      newestManifestRevision: appliedAt,
+    }),
+  ]);
+}
 
 /** Minimal atomic file used only to mint a genuine read/write Runtime facade. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
@@ -84,14 +100,28 @@ function createSession(
     displayPagePath: PAGE_PATH,
     currentState,
     currentMatch: currentState === "applied" ? "current_applied" : "none",
-    knownOutputCount: 1,
+    knownOutputCount: 2,
     items: Object.freeze([
+      Object.freeze({
+        outputRef: CURRENT_REF,
+        appliedAt: 200,
+        verifiedApplyCount: 1,
+        origins: origins(200),
+        relation:
+          currentState === "applied" ? ("current_applied" as const) : ("latest_known" as const),
+        proposalCapability:
+          currentState === "applied"
+            ? ("selected_is_current" as const)
+            : ("current_not_applied" as const),
+      }),
       Object.freeze({
         outputRef: SELECTED_REF,
         appliedAt: 100,
         verifiedApplyCount: 1,
-        relation:
-          currentState === "applied" ? ("current_applied" as const) : ("latest_known" as const),
+        origins: origins(100),
+        relation: "earlier_known" as const,
+        proposalCapability:
+          currentState === "applied" ? ("available" as const) : ("current_not_applied" as const),
       }),
     ]),
   });
@@ -116,12 +146,16 @@ function createKnownOutputsDelegate(
       if (candidate !== session || outputRef !== SELECTED_REF) {
         return Object.freeze({ kind: "stale" as const });
       }
+      const summary = session.items.find((item) => item.outputRef === outputRef);
+      if (!summary) return Object.freeze({ kind: "stale" as const });
       return Object.freeze({
         kind: "loaded" as const,
         value: Object.freeze({
           outputRef,
-          appliedAt: 100,
-          verifiedApplyCount: 1,
+          appliedAt: summary.appliedAt,
+          verifiedApplyCount: summary.verifiedApplyCount,
+          origins: summary.origins,
+          proposalCapability: summary.proposalCapability,
           content: SELECTED_CONTENT,
         }),
       });
@@ -389,6 +423,38 @@ describe("KnowledgeProductionForwardRevisionProposalCoordinator", () => {
       coordinator.proposeKnownOutput(session, SELECTED_REF, new AbortController().signal)
     ).resolves.toEqual({ kind: "not_eligible", reason: "current_not_applied" });
     expect(delegate.calls).toHaveLength(0);
+  });
+
+  it("rejects canonical Forward-origin history before comparison or Runtime admission", async () => {
+    const base = createSession();
+    const forwardSession = Object.freeze({
+      ...base,
+      items: Object.freeze([
+        base.items[0],
+        Object.freeze({
+          ...base.items[1],
+          origins: Object.freeze([
+            Object.freeze({
+              kind: "forward_revision" as const,
+              verifiedApplyCount: 1,
+              newestAppliedAt: 100,
+              newestManifestRevision: 100,
+            }),
+          ]),
+          proposalCapability: "forward_origin_not_supported" as const,
+        }),
+      ]),
+    });
+    const { coordinator, delegate, session, runtime } = await createCoordinator(forwardSession);
+
+    await expect(
+      coordinator.proposeKnownOutput(session, SELECTED_REF, new AbortController().signal)
+    ).resolves.toEqual({
+      kind: "not_eligible",
+      reason: "forward_origin_not_supported",
+    });
+    expect(delegate.calls).toEqual([forwardSession]);
+    expect(runtime.file.processCallCount).toBe(0);
   });
 
   it("rejects a selected body equal to the exact current file before Runtime admission", async () => {

@@ -18,12 +18,28 @@ import {
 } from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import type {
+  KnowledgeKnownAppliedWikiOutputOriginSummary,
   KnowledgeKnownAppliedWikiOutputsPort,
   KnowledgeKnownAppliedWikiOutputsSession,
 } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsPort";
 
 const CURRENT_REF = `known-wiki-output-${"1".repeat(64)}`;
 const EARLIER_REF = `known-wiki-output-${"2".repeat(64)}`;
+
+/** Creates canonical source-Apply provenance for proposal action fixtures. */
+function origins(
+  appliedAt: number,
+  verifiedApplyCount: number
+): readonly Readonly<KnowledgeKnownAppliedWikiOutputOriginSummary>[] {
+  return Object.freeze([
+    Object.freeze({
+      kind: "source_apply" as const,
+      verifiedApplyCount,
+      newestAppliedAt: appliedAt,
+      newestManifestRevision: appliedAt,
+    }),
+  ]);
+}
 
 /** Minimal atomic file used only to mint a genuine Runtime facade. */
 class MemoryAtomicRuntimeFile implements AtomicRuntimeFile {
@@ -61,39 +77,48 @@ function createSession(): Readonly<KnowledgeKnownAppliedWikiOutputsSession> {
         outputRef: CURRENT_REF,
         appliedAt: 200,
         verifiedApplyCount: 1,
+        origins: origins(200, 1),
         relation: "current_applied" as const,
+        proposalCapability: "selected_is_current" as const,
       }),
       Object.freeze({
         outputRef: EARLIER_REF,
         appliedAt: 100,
         verifiedApplyCount: 2,
+        origins: origins(100, 2),
         relation: "earlier_known" as const,
+        proposalCapability: "available" as const,
       }),
     ]),
   });
 }
 
 /** Creates one genuine adapter and the authentic session bound to its R3b reader. */
-async function createFixture(): Promise<{
+async function createFixture(
+  sourceSession: Readonly<KnowledgeKnownAppliedWikiOutputsSession> = createSession()
+): Promise<{
   readonly adapter: KnowledgeProductionForwardRevisionProposalActionAdapter;
   readonly coordinator: KnowledgeProductionForwardRevisionProposalCoordinator;
   readonly session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>;
   readonly readOutput: jest.MockedFunction<KnowledgeKnownAppliedWikiOutputsPort["readOutput"]>;
   readonly retainDrain: jest.MockedFunction<(drain: Promise<void>) => void>;
 }> {
-  const sourceSession = createSession();
   const readOutput: jest.MockedFunction<KnowledgeKnownAppliedWikiOutputsPort["readOutput"]> =
-    jest.fn(async (_session, outputRef, _signal) =>
-      Object.freeze({
+    jest.fn(async (_session, outputRef, _signal) => {
+      const summary = sourceSession.items.find((item) => item.outputRef === outputRef);
+      if (!summary) return Object.freeze({ kind: "stale" as const });
+      return Object.freeze({
         kind: "loaded" as const,
         value: Object.freeze({
           outputRef,
-          appliedAt: outputRef === EARLIER_REF ? 100 : 200,
-          verifiedApplyCount: outputRef === EARLIER_REF ? 2 : 1,
+          appliedAt: summary.appliedAt,
+          verifiedApplyCount: summary.verifiedApplyCount,
+          origins: summary.origins,
+          proposalCapability: summary.proposalCapability,
           content: outputRef === EARLIER_REF ? "same current body" : "current body",
         }),
-      })
-    );
+      });
+    });
   const delegate: KnowledgeKnownAppliedWikiOutputsPort = Object.freeze({
     inspectKnownOutputs: async () => sourceSession,
     listMore: async () => Object.freeze({ kind: "stale" as const }),
@@ -241,6 +266,36 @@ describe("KnowledgeProductionForwardRevisionProposalActionAdapter", () => {
     await expect(
       action.proposeKnownOutput(copied, EARLIER_REF, new AbortController().signal)
     ).resolves.toEqual({ kind: "stale" });
+  });
+
+  it("preserves the explicit Forward-origin ineligibility without widening action authority", async () => {
+    const base = createSession();
+    const forwardSession = Object.freeze({
+      ...base,
+      items: Object.freeze([
+        base.items[0],
+        Object.freeze({
+          ...base.items[1],
+          origins: Object.freeze([
+            Object.freeze({
+              kind: "forward_revision" as const,
+              verifiedApplyCount: 2,
+              newestAppliedAt: 100,
+              newestManifestRevision: 100,
+            }),
+          ]),
+          proposalCapability: "forward_origin_not_supported" as const,
+        }),
+      ]),
+    });
+    const { adapter, session } = await createFixture(forwardSession);
+
+    await expect(
+      adapter.proposeKnownOutput(session, EARLIER_REF, new AbortController().signal)
+    ).resolves.toEqual({
+      kind: "not_eligible",
+      reason: "forward_origin_not_supported",
+    });
   });
 
   it("does not dispatch a pre-aborted action", async () => {

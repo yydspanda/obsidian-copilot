@@ -346,7 +346,7 @@ function snapshotHistorical(
     !isRevision(record.manifestAfterRevision) ||
     Number(record.manifestAfterRevision) < 1 ||
     !isRevision(record.appliedAt) ||
-    Number(record.appliedAt) < 1
+    Number(record.appliedAt) < 0
   ) {
     return undefined;
   }
@@ -392,8 +392,7 @@ function snapshotCurrent(
     Number(record.manifestRevision) < 1 ||
     !isDigest(record.manifestDigest) ||
     !isDigest(record.manifestBaseHash) ||
-    !isDigest(record.vaultObservedBeforeHash) ||
-    record.manifestBaseHash !== record.vaultObservedBeforeHash
+    !isDigest(record.vaultObservedBeforeHash)
   ) {
     return undefined;
   }
@@ -457,7 +456,7 @@ function snapshotCreateInput(
     historical.inputRevision >= current.inputRevision ||
     historical.manifestAfterRevision >= current.manifestRevision ||
     historical.manifestAfterDigest === current.manifestDigest ||
-    historical.selectedContentHash === current.manifestBaseHash
+    historical.selectedContentHash === current.vaultObservedBeforeHash
   ) {
     throw createValidationError([
       diagnostic(
@@ -540,7 +539,7 @@ export function snapshotKnowledgeForwardRevisionIntent(
       historical.inputRevision >= current.inputRevision ||
       historical.manifestAfterRevision >= current.manifestRevision ||
       historical.manifestAfterDigest === current.manifestDigest ||
-      historical.selectedContentHash === current.manifestBaseHash
+      historical.selectedContentHash === current.vaultObservedBeforeHash
     ) {
       throw createValidationError([
         diagnostic(

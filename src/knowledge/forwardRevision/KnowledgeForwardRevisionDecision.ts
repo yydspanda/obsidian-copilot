@@ -762,7 +762,7 @@ export function snapshotKnowledgeForwardRevisionAcceptedDecisionRecord(
       record.acceptedAfterHash !== payload.acceptedAfterHash ||
       record.manualOverride !== payload.manualOverride ||
       record.acceptedDecisionDigest !== digestAcceptedDecisionPayload(payload) ||
-      payload.acceptedAfterHash === authority.manifestBaseHash
+      payload.acceptedAfterHash === authority.vaultObservedBeforeHash
     ) {
       invalid();
     }

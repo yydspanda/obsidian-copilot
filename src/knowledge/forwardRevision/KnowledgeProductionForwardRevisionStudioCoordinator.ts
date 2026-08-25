@@ -15,9 +15,15 @@ import {
   type KnowledgeForwardRevisionReviewCommandV1,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionReviewCommand";
 import {
+  type KnowledgeForwardRevisionAbandonmentRecordV1,
+  snapshotKnowledgeForwardRevisionAbandonmentRecord,
+} from "@/knowledge/forwardRevision/KnowledgeForwardRevisionLifecycleTerminal";
+import {
   type KnowledgeForwardRevisionStudioAcceptedReadyRecord,
   type KnowledgeForwardRevisionStudioActiveRecord,
   type KnowledgeForwardRevisionStudioPendingRecord,
+  type KnowledgeForwardRevisionStudioRecoveryRequiredRecord,
+  createKnowledgeForwardRevisionStudioAcceptedIdentity,
   snapshotKnowledgeForwardRevisionStudioSnapshot,
 } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioProjection";
 import {
@@ -53,6 +59,8 @@ const MAX_RETAINED_BUNDLE_CACHES = 256;
 const APPLIED_RESULT = Object.freeze({ kind: "applied" as const });
 const REJECTED_RESULT = Object.freeze({ kind: "rejected" as const });
 const ACCEPTED_READY_RESULT = Object.freeze({ kind: "accepted_ready" as const });
+const ABANDONED_RESULT = Object.freeze({ kind: "abandoned" as const });
+const KEPT_CURRENT_RESULT = Object.freeze({ kind: "kept_current" as const });
 const APPLYING_RESULT = Object.freeze({ kind: "applying" as const });
 const NO_CHANGE_RESULT = Object.freeze({ kind: "no_change" as const });
 const RECOVERY_REQUIRED_RESULT = Object.freeze({ kind: "recovery_required" as const });
@@ -65,9 +73,22 @@ type CurrentObservation =
 
 interface HiddenReviewBinding {
   readonly bundleId: string;
+  readonly runtimeRevision: number;
   readonly durable: Readonly<KnowledgeForwardRevisionStudioActiveRecord>;
   readonly ui: Readonly<KnowledgeForwardRevisionStudioReview>;
 }
+
+/** Narrow Runtime mutation added to the authentic generation-bound Studio facade. */
+export interface KnowledgeForwardRevisionStudioAbandonRuntimePort {
+  /** Atomically terminalizes one exact accepted-ready identity without starting a write. */
+  abandonForwardRevisionAcceptedReady(
+    acceptedIdentity: unknown,
+    expectedRuntimeRevision: number
+  ): Promise<Readonly<KnowledgeForwardRevisionAbandonmentRecordV1>>;
+}
+
+type ProductionForwardRevisionStudioRuntime = KnowledgeRuntimeForwardRevisionStudioPort &
+  KnowledgeForwardRevisionStudioAbandonRuntimePort;
 
 interface BundleCache {
   sequence: number;
@@ -79,7 +100,7 @@ interface CoordinatorCache {
 }
 
 interface CoordinatorState {
-  readonly runtime: KnowledgeRuntimeForwardRevisionStudioPort;
+  readonly runtime: ProductionForwardRevisionStudioRuntime;
   readonly decisions: KnowledgeProductionForwardRevisionDecisionCoordinator;
   readonly apply: KnowledgeProductionForwardRevisionApplyCoordinator;
   readonly targetVisitor: ObsidianKnowledgeCompilerTargetResolver;
@@ -211,6 +232,15 @@ function freezeReviewBlocks(
 /** Produces one UI-only hash that is never accepted as a durable protocol digest. */
 function digestUiIdentity(namespace: string, value: JsonValue): string {
   return sha256(`${namespace}\u0000${canonicalizeJson(value)}`);
+}
+
+/** Compares two already bounded protocol values without retaining caller aliases. */
+function exactProtocolValuesEqual(left: unknown, right: unknown): boolean {
+  try {
+    return canonicalizeJson(left as JsonValue) === canonicalizeJson(right as JsonValue);
+  } catch {
+    return false;
+  }
 }
 
 /** Builds one exact single-file render plan without constructing a legacy ChangeSet. */
@@ -390,6 +420,21 @@ function projectNonPendingUiRecord(
   if (record.state === "accepted_ready") {
     return Object.freeze({ state: "accepted_ready" as const, ...base });
   }
+  if (record.state === "abandoned") {
+    return Object.freeze({
+      state: "abandoned" as const,
+      ...base,
+      abandonedAt: record.abandonedAt,
+    });
+  }
+  if (record.state === "kept_current") {
+    return Object.freeze({
+      state: "kept_current" as const,
+      ...base,
+      terminalizedAt: record.terminalizedAt,
+      outcome: record.outcome,
+    });
+  }
   if (record.state === "applying") {
     return Object.freeze({ state: "applying" as const, ...base, applyPhase: record.applyPhase });
   }
@@ -459,7 +504,15 @@ async function projectUiSnapshot(
               })
             : projectNonPendingUiRecord(record, productSnapshotRef);
         if (bindings.has(ui.reviewRef)) throw new TypeError();
-        bindings.set(ui.reviewRef, Object.freeze({ bundleId, durable: record, ui }));
+        bindings.set(
+          ui.reviewRef,
+          Object.freeze({
+            bundleId,
+            runtimeRevision: after.runtimeRevision,
+            durable: record,
+            ui,
+          })
+        );
         return ui;
       }
     );
@@ -512,6 +565,8 @@ function projectApplyResult(
       return APPLIED_RESULT;
     case "recovery_required":
       return RECOVERY_REQUIRED_RESULT;
+    case "kept_current":
+      return KEPT_CURRENT_RESULT;
     case "in_progress":
       return APPLYING_RESULT;
     case "idle":
@@ -548,6 +603,8 @@ function projectDurableReviewState(
   if (current === "committed") return APPLIED_RESULT;
   if (!current || current.state === "pending") return STALE_RESULT;
   if (current.state === "accepted_ready") return ACCEPTED_READY_RESULT;
+  if (current.state === "abandoned") return ABANDONED_RESULT;
+  if (current.state === "kept_current") return KEPT_CURRENT_RESULT;
   if (current.state === "applying") return APPLYING_RESULT;
   return RECOVERY_REQUIRED_RESULT;
 }
@@ -584,6 +641,8 @@ async function applyAcceptedRecord(
       );
       if (
         current === "committed" ||
+        current?.state === "abandoned" ||
+        current?.state === "kept_current" ||
         current?.state === "applying" ||
         current?.state === "recovery_required"
       ) {
@@ -605,6 +664,117 @@ async function applyAcceptedRecord(
   }
 }
 
+/** Rechecks one sticky recovery and projects only freshly re-read durable truth. */
+async function resolveRecoveryRecord(
+  state: Readonly<CoordinatorState>,
+  record: Readonly<KnowledgeForwardRevisionStudioRecoveryRequiredRecord>,
+  action: "retry_exact" | "keep_current",
+  signal: AbortSignal
+): Promise<Readonly<KnowledgeForwardRevisionStudioSubmissionResult>> {
+  const bundleId = record.acceptedDecision.proposal.request.bundleId;
+  let result: Readonly<KnowledgeProductionForwardRevisionApplyRecoveryResult> | undefined;
+  try {
+    result = await state.apply.resolveRecovery(record.recoveryExpectation, action, signal);
+  } catch (error) {
+    try {
+      const current = await readDurableReviewState(
+        state,
+        bundleId,
+        record.reviewRef,
+        record.decisionDigest
+      );
+      if (current !== undefined) return projectDurableReviewState(current);
+    } catch (confirmationError) {
+      if (signal.aborted || isAbortError(confirmationError)) throw createAbortError();
+    }
+    if (signal.aborted || isAbortError(error)) throw createAbortError();
+    assertCoordinatorCurrent(state, signal);
+    return UNAVAILABLE_RESULT;
+  }
+
+  try {
+    const current = await readDurableReviewState(
+      state,
+      bundleId,
+      record.reviewRef,
+      record.decisionDigest
+    );
+    return current === undefined ? projectApplyResult(result) : projectDurableReviewState(current);
+  } catch {
+    return projectApplyResult(result);
+  }
+}
+
+/** Atomically abandons one accepted-ready identity and then reloads the exact durable winner. */
+async function abandonAcceptedRecord(
+  state: Readonly<CoordinatorState>,
+  record: Readonly<KnowledgeForwardRevisionStudioAcceptedReadyRecord>,
+  expectedRuntimeRevision: number,
+  signal: AbortSignal
+): Promise<Readonly<KnowledgeForwardRevisionStudioSubmissionResult>> {
+  const bundleId = record.acceptedDecision.proposal.request.bundleId;
+  const acceptedIdentity = createKnowledgeForwardRevisionStudioAcceptedIdentity(
+    record.acceptedDecision
+  );
+  let committedAbandonment: Readonly<KnowledgeForwardRevisionAbandonmentRecordV1> | undefined;
+  try {
+    assertCoordinatorCurrent(state, signal);
+    committedAbandonment = snapshotKnowledgeForwardRevisionAbandonmentRecord(
+      await state.runtime.abandonForwardRevisionAcceptedReady(
+        acceptedIdentity,
+        expectedRuntimeRevision
+      )
+    );
+    if (!exactProtocolValuesEqual(committedAbandonment.acceptedIdentity, acceptedIdentity)) {
+      return UNAVAILABLE_RESULT;
+    }
+  } catch (error) {
+    try {
+      const current = await readDurableReviewState(
+        state,
+        bundleId,
+        record.reviewRef,
+        record.decisionDigest
+      );
+      if (
+        current === "committed" ||
+        current?.state === "abandoned" ||
+        current?.state === "kept_current" ||
+        current?.state === "applying" ||
+        current?.state === "recovery_required"
+      ) {
+        return projectDurableReviewState(current);
+      }
+      if (current === undefined || current.state === "pending") return STALE_RESULT;
+    } catch (confirmationError) {
+      if (signal.aborted || isAbortError(confirmationError)) throw createAbortError();
+    }
+    if (signal.aborted || isAbortError(error)) throw createAbortError();
+    assertCoordinatorCurrent(state, signal);
+    return UNAVAILABLE_RESULT;
+  }
+
+  try {
+    const current = await readDurableReviewState(
+      state,
+      bundleId,
+      record.reviewRef,
+      record.decisionDigest
+    );
+    if (
+      current !== "committed" &&
+      current?.state === "abandoned" &&
+      current.abandonmentDigest === committedAbandonment.abandonmentDigest &&
+      exactProtocolValuesEqual(current.abandonment, committedAbandonment)
+    ) {
+      return ABANDONED_RESULT;
+    }
+    return UNAVAILABLE_RESULT;
+  } catch {
+    return ABANDONED_RESULT;
+  }
+}
+
 /** Resolves one partial selection only against the exact hidden render plan. */
 function createPendingDecisionCommand(
   binding: Readonly<HiddenReviewBinding>,
@@ -615,7 +785,14 @@ function createPendingDecisionCommand(
   }
   const durable = binding.durable;
   const proposal = durable.proposal;
-  if (command.action === "apply") throw new TypeError();
+  if (
+    command.action === "apply" ||
+    command.action === "abandon" ||
+    command.action === "retry_recovery" ||
+    command.action === "keep_current"
+  ) {
+    throw new TypeError();
+  }
   if (command.action === "reject" || command.action === "accept_exact") {
     return createKnowledgeForwardRevisionReviewCommand({
       action: command.action,
@@ -670,6 +847,8 @@ async function continueAcceptedDecision(
   }
   if (current === "committed") return APPLIED_RESULT;
   if (!current) return STALE_RESULT;
+  if (current.state === "abandoned") return ABANDONED_RESULT;
+  if (current.state === "kept_current") return KEPT_CURRENT_RESULT;
   if (current.state === "accepted_ready") {
     try {
       assertCoordinatorCurrent(state, signal);
@@ -699,8 +878,13 @@ export class KnowledgeProductionForwardRevisionStudioCoordinator
     try {
       KnowledgeExecutionOwner.assert(executionOwner);
       if (typeof assertCurrent !== "function") throw new TypeError();
+      KnowledgeRuntimeForwardRevisionStudioPort.assert(runtime);
+      const productionRuntime = runtime as ProductionForwardRevisionStudioRuntime;
+      if (typeof productionRuntime.abandonForwardRevisionAcceptedReady !== "function") {
+        throw new TypeError();
+      }
       const state: Readonly<CoordinatorState> = Object.freeze({
-        runtime,
+        runtime: productionRuntime,
         decisions,
         apply,
         targetVisitor,
@@ -778,11 +962,32 @@ export class KnowledgeProductionForwardRevisionStudioCoordinator
       return STALE_RESULT;
     }
     if (binding.durable.state === "accepted_ready") {
-      return command.action === "apply"
-        ? applyAcceptedRecord(state, binding.durable, signal)
-        : STALE_RESULT;
+      if (command.action === "apply") {
+        return applyAcceptedRecord(state, binding.durable, signal);
+      }
+      if (command.action === "abandon") {
+        return abandonAcceptedRecord(state, binding.durable, binding.runtimeRevision, signal);
+      }
+      return STALE_RESULT;
     }
-    if (binding.durable.state !== "pending" || command.action === "apply") return STALE_RESULT;
+    if (binding.durable.state === "recovery_required") {
+      if (command.action === "retry_recovery") {
+        return resolveRecoveryRecord(state, binding.durable, "retry_exact", signal);
+      }
+      if (command.action === "keep_current") {
+        return resolveRecoveryRecord(state, binding.durable, "keep_current", signal);
+      }
+      return STALE_RESULT;
+    }
+    if (
+      binding.durable.state !== "pending" ||
+      command.action === "apply" ||
+      command.action === "abandon" ||
+      command.action === "retry_recovery" ||
+      command.action === "keep_current"
+    ) {
+      return STALE_RESULT;
+    }
 
     let decisionCommand: Readonly<KnowledgeForwardRevisionReviewCommandV1>;
     try {

@@ -84,7 +84,6 @@ describe("KnowledgeForwardRevisionAcceptanceAuthority", () => {
         ),
       },
       { ...createAuthority(), runtimeRevision: 21 },
-      { ...createAuthority(), manifestBaseHash: HASH_D },
       { ...createAuthority(), extra: true },
       accessor,
       revoked.proxy,
@@ -96,6 +95,16 @@ describe("KnowledgeForwardRevisionAcceptanceAuthority", () => {
       );
     }
     expect(getterCalls).toBe(0);
+  });
+
+  it("preserves distinct source-applied and effective hashes", () => {
+    const authority = snapshotKnowledgeForwardRevisionAcceptanceAuthorityValue({
+      ...createAuthority(),
+      vaultObservedBeforeHash: HASH_D,
+    });
+
+    expect(authority.manifestBaseHash).toBe(HASH_C);
+    expect(authority.vaultObservedBeforeHash).toBe(HASH_D);
   });
 
   it("translates hostile failures into a fresh frozen authentic error", () => {

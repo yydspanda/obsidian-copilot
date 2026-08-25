@@ -522,6 +522,21 @@ class TestKnowledgeStudioController {
     this.calls.push(`forward-apply:${reviewRef}`);
   }
 
+  /** Records one accepted-ready no-write terminal command. */
+  async abandonForwardRevision(reviewRef: string): Promise<void> {
+    this.calls.push(`forward-abandon:${reviewRef}`);
+  }
+
+  /** Records one sticky exact-state recheck and bounded Forward Apply retry. */
+  async retryForwardRevisionRecovery(reviewRef: string): Promise<void> {
+    this.calls.push(`forward-recovery-retry:${reviewRef}`);
+  }
+
+  /** Records one sticky zero-write decision to retain the freshly observed Wiki value. */
+  async keepCurrentForwardRevision(reviewRef: string): Promise<void> {
+    this.calls.push(`forward-recovery-keep:${reviewRef}`);
+  }
+
   /** Returns no retained Review decisions from this focused composition fake. */
   getReviewDraft(_plan: Readonly<KnowledgeReviewPlan>): Readonly<Record<string, never>> {
     return Object.freeze({});
@@ -928,7 +943,7 @@ describe("KnowledgeStudioRoot", () => {
     });
   });
 
-  it("keeps accepted-ready work actionable and renders applying and recovery states read-only", () => {
+  it("keeps accepted-ready and sticky recovery work explicitly actionable", () => {
     const accepted = Object.freeze({
       state: "accepted_ready" as const,
       reviewRef: FORWARD_REVIEW_REF,
@@ -943,12 +958,55 @@ describe("KnowledgeStudioRoot", () => {
 
     expect(screen.getByRole("tab", { name: /Review/ }).textContent).toContain("1");
     expect(screen.getByText("Accepted revision ready to apply")).toBeTruthy();
-    expect(screen.getByText(/has no abandon or force-apply action/i).textContent).toContain(
-      "no file is overwritten"
+    expect(screen.getByText(/available only while no Apply journal/i).textContent).toContain(
+      "does not modify the Wiki file"
     );
     expect(screen.getByText(/manual full-file edit/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Validate and apply" }));
-    expect(controller.calls).toEqual([`forward-apply:${FORWARD_REVIEW_REF}`]);
+    fireEvent.click(screen.getByRole("button", { name: "End without writing" }));
+    expect(controller.calls).toEqual([
+      `forward-apply:${FORWARD_REVIEW_REF}`,
+      `forward-abandon:${FORWARD_REVIEW_REF}`,
+    ]);
+
+    act(() =>
+      controller.publish(
+        createForwardReadyState([
+          {
+            ...accepted,
+            state: "abandoned",
+            abandonedAt: 42,
+            updatedAt: 42,
+          },
+        ])
+      )
+    );
+    expect(
+      screen.getByRole("status", { name: "Forward revision ended before write" }).textContent
+    ).toContain("No file was changed");
+    expect(screen.queryByRole("button", { name: "Validate and apply" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "End without writing" })).toBeNull();
+
+    act(() =>
+      controller.publish(
+        createForwardReadyState([
+          {
+            ...accepted,
+            state: "kept_current",
+            outcome: "write_outcome_uncertain_external_supersession",
+            terminalizedAt: 43,
+            updatedAt: 43,
+          },
+        ])
+      )
+    );
+    expect(
+      screen.getByRole("status", { name: "Forward revision kept current Wiki value" }).textContent
+    ).toContain("retained the freshly observed Wiki value");
+    expect(
+      screen.getByRole("status", { name: "Forward revision kept current Wiki value" }).textContent
+    ).toContain("not a force action or rollback");
+    expect(screen.queryByRole("button", { name: "Validate and apply" })).toBeNull();
 
     act(() =>
       controller.publish(
@@ -988,9 +1046,89 @@ describe("KnowledgeStudioRoot", () => {
     expect(
       screen.getByRole("alert", { name: "Forward revision recovery required" }).textContent
     ).toContain("no automatic retry");
-    expect(controller.calls).toEqual([`forward-apply:${FORWARD_REVIEW_REF}`]);
+    expect(
+      screen.getByRole("alert", { name: "Forward revision recovery required" }).textContent
+    ).toContain("Exact-before bytes may receive one bounded compare-and-swap retry");
+    expect(
+      screen.getByRole("alert", { name: "Forward revision recovery required" }).textContent
+    ).toContain("performs no Wiki write");
+    fireEvent.click(screen.getByRole("button", { name: "Recheck / retry exact Apply" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep current (no write)" }));
+    expect(controller.calls).toEqual([
+      `forward-apply:${FORWARD_REVIEW_REF}`,
+      `forward-abandon:${FORWARD_REVIEW_REF}`,
+      `forward-recovery-retry:${FORWARD_REVIEW_REF}`,
+      `forward-recovery-keep:${FORWARD_REVIEW_REF}`,
+    ]);
 
     rendered.unmount();
+  });
+
+  it("disables sticky Forward recovery commands while busy or capability is absent", () => {
+    const recovery = Object.freeze({
+      state: "recovery_required" as const,
+      reviewRef: FORWARD_REVIEW_REF,
+      snapshotRef: FORWARD_SNAPSHOT_REF,
+      pagePath: "Wiki/Forward.md",
+      updatedAt: 45,
+      acceptedAt: 35,
+      manualOverride: false,
+      conflictCode: "file_state_conflict" as const,
+      actualKind: "file" as const,
+      detectedAt: 45,
+    });
+    const enabled = createForwardReadyState([recovery]);
+    const controller = new TestKnowledgeStudioController({
+      ...enabled,
+      snapshot: {
+        ...enabled.snapshot!,
+        commandCapabilities: {
+          ...enabled.snapshot!.commandCapabilities,
+          forwardRevisionReview: false,
+        },
+      },
+    });
+    renderStudio(controller);
+
+    const retry = screen.getByRole("button", { name: "Recheck / retry exact Apply" });
+    const keep = screen.getByRole("button", { name: "Keep current (no write)" });
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    expect(keep.hasAttribute("disabled")).toBe(true);
+
+    act(() =>
+      controller.publish({
+        ...enabled,
+        pendingAction: {
+          kind: "retry_forward_revision_recovery",
+          targetId: FORWARD_REVIEW_REF,
+        },
+      })
+    );
+    expect(screen.getByText("Rechecking the exact Forward Apply state…")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("alert", { name: "Forward revision recovery required" })
+        .getAttribute("aria-busy")
+    ).toBe("true");
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    expect(keep.hasAttribute("disabled")).toBe(true);
+
+    act(() =>
+      controller.publish({
+        ...enabled,
+        pendingAction: {
+          kind: "keep_current_forward_revision",
+          targetId: FORWARD_REVIEW_REF,
+        },
+      })
+    );
+    expect(screen.getByText("Rechecking before keeping the current Wiki value…")).toBeTruthy();
+    expect(retry.hasAttribute("disabled")).toBe(true);
+    expect(keep.hasAttribute("disabled")).toBe(true);
+
+    act(() => controller.publish(enabled));
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    expect(keep.hasAttribute("disabled")).toBe(false);
   });
 
   it("reveals Recovery only for durable rows and delegates its exact actions", () => {
