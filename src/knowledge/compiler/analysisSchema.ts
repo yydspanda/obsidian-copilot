@@ -140,12 +140,13 @@ export const compilerAnalysisModelOutputSchema: z.ZodType<CompilerAnalysisModelO
  * @param path - Zod property and array-index path
  * @returns Stable field path for future review UI
  */
-function formatIssuePath(path: (string | number)[]): string {
+function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") {
       return `${result}[${segment}]`;
     }
-    return result ? `${result}.${segment}` : segment;
+    const text = String(segment);
+    return result ? `${result}.${text}` : text;
   }, "");
 }
 

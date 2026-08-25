@@ -12,10 +12,7 @@ export interface ChatLMStudioInput {
   modelName?: string;
   apiKey?: string;
   configuration?: Record<string, unknown>;
-  temperature?: number;
   maxTokens?: number;
-  topP?: number;
-  frequencyPenalty?: number;
   streaming?: boolean;
   streamUsage?: boolean;
   [key: string]: unknown;
@@ -28,6 +25,7 @@ export interface ChatLMStudioInput {
  * tools are stripped regardless of which LangChain code path produced them.
  */
 function createLMStudioFetch(baseFetch?: typeof window.fetch): typeof window.fetch {
+  // scorecard: streaming requires fetch — cannot use requestUrl
   const underlyingFetch = baseFetch || window.fetch;
 
   return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {

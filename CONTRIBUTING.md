@@ -49,9 +49,20 @@ In the case of Copilot for Obsidian, you will need to:
 6. Ensure your editor respects the `.editorconfig` and Prettier settings.
 7. Run `npm run dev` in your repo to see the effect of your changes.
 8. Before committing, run `npm run format` to ensure all files are properly formatted.
-9. When you are ready to make a pull request, ensure to make your changes in **a branch on your fork**, and then submit a pull request to the **main repo**.
+9. Before opening a pull request, run `npm run review:obsidian` as described below.
+10. When you are ready to make a pull request, ensure to make your changes in **a branch on your fork**, and then submit a pull request to the **main repo**.
 
 Try to be descriptive in your branch names and pull requests. Happy coding!
+
+### Obsidian community review preflight
+
+`npm run review:obsidian` reproduces the public Obsidian source, CSS, manifest/license, and runtime dependency checks. Errors fail the command; warnings remain visible for conservative follow-up work when an automatic cleanup could change plugin behavior or UI. The command rebuilds and scans the packaged `styles.css`, then runs rejection fixtures to ensure every guarded review family is still detected.
+
+ESLint and Stylelint findings include the file, line, rule, and message; the same details appear as annotations in GitHub Actions. Dependency-audit findings remain visible for explicit, compatibility-tested follow-up work; critical advisories block the preflight.
+
+The upstream review packages are pinned in `package.json`. Update those versions and the lockfile together, review the upstream rule changes, and rerun the complete preflight before committing an upgrade. Do not weaken an error merely to re-establish a passing baseline, and do not promote a warning to blocking until its remediation is behavior-preserving.
+
+Maintainers should also read the [review-gate maintenance guide](./designdocs/OBSIDIAN_COMMUNITY_REVIEW.md) before changing review rules, severities, or fixtures.
 
 #### Fast Iteration with `npm run test:vault` (macOS)
 
@@ -153,7 +164,7 @@ The most basic ones are model changes and mode changes.
   - In Plus mode make sure you trigger this query with `@vault` or cmd/ctrl + shift + enter. And then check "Show Sources" button for the expected docs.
 - To debug any failed QA query, we need to understand if it failed at 1. indexing 2. retrieval 3. generation.
   - First use "list all indexed files" command to check if the docs are indexed correctly.
-  - Then check the console log for "retrieved chunks" from the hybrid retriever.
+  - Then check the console log for "retrieved chunks" from the hybrid retriever. Debug logs go to `console.debug`, so tick "Verbose" in the console's level filter to see them; the same lines are also in the rolling log file.
   - If correctly retrieved, it means the Chat Model is too weak to process the context effectively. Use a stronger Chat Model
 
 ### Plus mode

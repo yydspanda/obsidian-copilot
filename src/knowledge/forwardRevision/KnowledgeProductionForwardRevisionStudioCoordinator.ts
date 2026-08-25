@@ -863,9 +863,7 @@ async function continueAcceptedDecision(
 }
 
 /** Production coordinator for opaque Forward Review display, decision, and Apply. */
-export class KnowledgeProductionForwardRevisionStudioCoordinator
-  implements KnowledgeForwardRevisionStudioPort
-{
+export class KnowledgeProductionForwardRevisionStudioCoordinator implements KnowledgeForwardRevisionStudioPort {
   /** Captures one exact production owner and its genuine read/decision/Apply boundaries. */
   constructor(
     runtime: KnowledgeRuntimeForwardRevisionStudioPort,

@@ -19,22 +19,8 @@ jest.mock("./ChatPersistenceManager", () => ({
 }));
 
 jest.mock("@/aiParams", () => ({
-  getCurrentProject: jest.fn().mockReturnValue(null),
   getChainType: jest.fn().mockReturnValue("copilot_plus_chain"),
 }));
-
-jest.mock("@/LLMProviders/projectManager", () => {
-  const mockFn = jest.fn().mockResolvedValue(null);
-  return {
-    __esModule: true,
-    default: {
-      instance: {
-        getProjectContext: mockFn,
-      },
-    },
-    __mockGetProjectContext: mockFn,
-  };
-});
 
 jest.mock("@/settings/model", () => ({
   getSettings: jest.fn().mockReturnValue({ enableCustomPromptTemplating: true }),
@@ -82,11 +68,6 @@ type MockPlugin = {
   app: {
     workspace: { getActiveFile: jest.Mock };
     vault?: { adapter?: { stat: jest.Mock } };
-  };
-  projectManager: {
-    getCurrentChainManager: jest.Mock;
-    getCurrentProjectId: jest.Mock;
-    getCachedMessages: jest.Mock;
   };
 };
 
@@ -138,11 +119,6 @@ describe("ChatManager", () => {
         workspace: {
           getActiveFile: jest.fn(),
         },
-      },
-      projectManager: {
-        getCurrentChainManager: jest.fn().mockReturnValue(mockChainManager),
-        getCurrentProjectId: jest.fn().mockReturnValue(null),
-        getCachedMessages: jest.fn().mockReturnValue(null),
       },
     };
 
@@ -196,6 +172,7 @@ describe("ChatManager", () => {
         undefined
       );
       expect(mockContextManager.processMessageContext).toHaveBeenCalledWith(
+        mockPlugin.app,
         mockMessage,
         mockFileParserManager,
         mockPlugin.app.vault,
@@ -306,6 +283,7 @@ describe("ChatManager", () => {
       expect(result).toBe(true);
       expect(mockMessageRepo.editMessage).toHaveBeenCalledWith("msg-1", "Edited message");
       expect(mockContextManager.reprocessMessageContext).toHaveBeenCalledWith(
+        mockPlugin.app,
         "msg-1",
         mockMessageRepo,
         mockFileParserManager,
@@ -401,6 +379,7 @@ describe("ChatManager", () => {
 
       expect(result).toBe(true);
       expect(mockContextManager.reprocessMessageContext).toHaveBeenCalledWith(
+        mockPlugin.app,
         "msg-1",
         expect.anything(), // messageRepo
         expect.anything(), // fileParserManager
@@ -667,6 +646,7 @@ describe("ChatManager", () => {
 
         expect(result).toBe(true);
         expect(mockContextManager.reprocessMessageContext).toHaveBeenCalledWith(
+          mockPlugin.app,
           "msg-1",
           mockMessageRepo,
           mockFileParserManager,
@@ -1243,7 +1223,6 @@ describe("ChatManager", () => {
         getEffectiveUserPrompt: jest.Mock;
       }>("@/system-prompts/systemPromptBuilder");
     const { getSettings } = jest.requireMock<{ getSettings: jest.Mock }>("@/settings/model");
-    const { getCurrentProject } = jest.requireMock<{ getCurrentProject: jest.Mock }>("@/aiParams");
 
     beforeEach(() => {
       // Reset to defaults
@@ -1252,7 +1231,6 @@ describe("ChatManager", () => {
       getSystemPrompt.mockReturnValue("Test system prompt");
       getSystemPromptWithMemory.mockResolvedValue("Test system prompt");
       getSettings.mockReturnValue({ enableCustomPromptTemplating: true });
-      getCurrentProject.mockReturnValue(null);
     });
 
     describe("Template Skip Logic", () => {
@@ -1282,7 +1260,7 @@ describe("ChatManager", () => {
         expect(processPrompt).not.toHaveBeenCalled();
 
         // Trailing whitespace should be preserved (no trimEnd when templates not processed)
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain(userCustomPrompt);
       });
 
@@ -1320,7 +1298,7 @@ describe("ChatManager", () => {
         expect(processPrompt).toHaveBeenCalled();
 
         // JSON content should be preserved (processPrompt handles it internally)
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain(userCustomPrompt.trimEnd());
       });
 
@@ -1354,6 +1332,7 @@ describe("ChatManager", () => {
 
         // Verify processPrompt was called with skipEmptyBraces: true
         expect(processPrompt).toHaveBeenCalledWith(
+          mockPlugin.app,
           userCustomPrompt,
           "",
           mockPlugin.app.vault,
@@ -1362,7 +1341,7 @@ describe("ChatManager", () => {
         );
 
         // Verify {} is preserved as literal
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain("{}");
       });
 
@@ -1396,7 +1375,7 @@ describe("ChatManager", () => {
         await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN);
 
         // Since processPrompt doesn't modify the JSON, trailing whitespace is trimmed by trimEnd()
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain('{"format": "json"}');
       });
 
@@ -1476,6 +1455,7 @@ describe("ChatManager", () => {
 
         // Verify processPrompt was called with correct arguments
         expect(processPrompt).toHaveBeenCalledWith(
+          mockPlugin.app, // app
           userCustomPrompt, // prompt
           "", // selectedText (empty for system prompts)
           mockPlugin.app.vault, // vault
@@ -1513,6 +1493,7 @@ describe("ChatManager", () => {
 
         // Verify contextManager received includedFiles
         expect(mockContextManager.processMessageContext).toHaveBeenCalledWith(
+          mockPlugin.app,
           mockMessage,
           mockFileParserManager,
           mockPlugin.app.vault,
@@ -1558,7 +1539,7 @@ describe("ChatManager", () => {
         await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN);
 
         // Verify the system prompt passed to contextManager has injected content
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain("<user_custom_instructions>");
         expect(systemPromptArg).toContain(processedContent.trimEnd());
         expect(systemPromptArg).toContain("</user_custom_instructions>");
@@ -1592,7 +1573,7 @@ describe("ChatManager", () => {
         await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN);
 
         // Verify the $ characters are preserved exactly as-is
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain("$100");
         expect(systemPromptArg).toContain("$&");
         expect(systemPromptArg).toContain("$1");
@@ -1646,7 +1627,7 @@ describe("ChatManager", () => {
         await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN);
 
         // Verify $ characters from processed content are preserved
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain("$100");
         expect(systemPromptArg).toContain("$50");
         expect(systemPromptArg).toContain("$&");
@@ -1697,6 +1678,7 @@ describe("ChatManager", () => {
         // Verify processPrompt was only called with user custom prompt, not memory
         expect(processPrompt).toHaveBeenCalledTimes(1);
         expect(processPrompt).toHaveBeenCalledWith(
+          mockPlugin.app,
           userCustomPrompt, // Only user custom prompt
           "",
           mockPlugin.app.vault,
@@ -1705,7 +1687,7 @@ describe("ChatManager", () => {
         );
 
         // Verify the final system prompt still contains memory prefix
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toContain(memoryContent);
       });
     });
@@ -1772,7 +1754,7 @@ describe("ChatManager", () => {
         await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN);
 
         // Verify the system prompt is the processed content (not wrapped in block)
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toBe(processedContent.trimEnd());
         // Should NOT contain the original unprocessed prompt
         expect(systemPromptArg).not.toContain(userCustomPrompt);
@@ -1804,7 +1786,7 @@ describe("ChatManager", () => {
 
         await chatManager.sendMessage("Hello", context, ChainType.LLM_CHAIN);
 
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         // Should contain memory prefix
         expect(systemPromptArg).toContain(memoryContent);
         // Should contain processed content
@@ -1848,170 +1830,8 @@ describe("ChatManager", () => {
         expect(mockContextManager.processMessageContext).toHaveBeenCalled();
 
         // In fallback case, should return original basePromptWithMemory unchanged
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
+        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][8];
         expect(systemPromptArg).toBe("Memory\n\nACTUAL_SYSTEM_PROMPT_THAT_DOESNT_MATCH");
-      });
-    });
-
-    describe("Project Chain Integration", () => {
-      // Access the mock function via requireMock
-      const getProjectContextMock = () =>
-        jest.requireMock("@/LLMProviders/projectManager").__mockGetProjectContext as jest.Mock;
-
-      beforeEach(() => {
-        // Reset mock for each test
-        getProjectContextMock().mockReset();
-        getProjectContextMock().mockResolvedValue(null);
-      });
-
-      it("should process project system prompt templates", async () => {
-        const mockActiveFile = mockTFile({ path: "test.md", basename: "Test Note" });
-        const mockMessage = createMockMessage("msg-1", "Hello", USER_SENDER);
-        const context: MessageContext = { notes: [], urls: [], selectedTextContexts: [] };
-
-        // Setup project
-        const mockProject = {
-          id: "proj-1",
-          name: "Test Project",
-          systemPrompt: "Project prompt with {activeNote}",
-        };
-        getCurrentProject.mockReturnValue(mockProject);
-        getProjectContextMock().mockResolvedValue("Project context data");
-
-        // No user custom prompt
-        getEffectiveUserPrompt.mockReturnValue("");
-        getSystemPrompt.mockReturnValue("DEFAULT_SYSTEM_PROMPT");
-        getSystemPromptWithMemory.mockResolvedValue("DEFAULT_SYSTEM_PROMPT");
-
-        const projectIncludedFile = mockTFile({
-          path: "project-note.md",
-          basename: "Project Note",
-        });
-        processPrompt.mockResolvedValue({
-          processedPrompt: "PROCESSED_PROJECT_PROMPT",
-          includedFiles: [projectIncludedFile],
-        });
-
-        mockPlugin.app.workspace.getActiveFile.mockReturnValue(mockActiveFile);
-        mockPlugin.app.vault = { adapter: { stat: jest.fn() } };
-        mockMessageRepo.addMessage.mockReturnValue("msg-1");
-        mockMessageRepo.getMessage.mockReturnValue(mockMessage);
-        mockContextManager.processMessageContext.mockResolvedValue(createContextResult());
-
-        await chatManager.sendMessage("Hello", context, ChainType.PROJECT_CHAIN);
-
-        // Verify processPrompt was called for project system prompt
-        expect(processPrompt).toHaveBeenCalledWith(
-          mockProject.systemPrompt,
-          "",
-          mockPlugin.app.vault,
-          mockActiveFile,
-          true // skipEmptyBraces
-        );
-
-        // Verify the final prompt contains project blocks
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
-        expect(systemPromptArg).toContain("<project_system_prompt>");
-        expect(systemPromptArg).toContain("PROCESSED_PROJECT_PROMPT");
-        expect(systemPromptArg).toContain("</project_system_prompt>");
-        expect(systemPromptArg).toContain("<project_context>");
-        expect(systemPromptArg).toContain("Project context data");
-        expect(systemPromptArg).toContain("</project_context>");
-
-        // Verify includedFiles contains project file
-        const includedFilesArg = mockContextManager.processMessageContext.mock.calls[0][8];
-        expect(includedFilesArg).toContainEqual(projectIncludedFile);
-      });
-
-      it("should merge includedFiles from both user and project prompts", async () => {
-        const mockActiveFile = mockTFile({ path: "test.md", basename: "Test Note" });
-        const mockMessage = createMockMessage("msg-1", "Hello", USER_SENDER);
-        const context: MessageContext = { notes: [], urls: [], selectedTextContexts: [] };
-
-        const mockProject = {
-          id: "proj-1",
-          name: "Test Project",
-          systemPrompt: "Project {activeNote}",
-        };
-        getCurrentProject.mockReturnValue(mockProject);
-        getProjectContextMock().mockResolvedValue(null);
-
-        const userCustomPrompt = "User {activeNote}";
-        getEffectiveUserPrompt.mockReturnValue(userCustomPrompt);
-        getSystemPrompt.mockReturnValue(
-          `DEFAULT\n<user_custom_instructions>\n${userCustomPrompt}\n</user_custom_instructions>`
-        );
-        getSystemPromptWithMemory.mockResolvedValue(
-          `DEFAULT\n<user_custom_instructions>\n${userCustomPrompt}\n</user_custom_instructions>`
-        );
-
-        const userIncludedFile = mockTFile({ path: "user-note.md", basename: "User Note" });
-        const projectIncludedFile = mockTFile({
-          path: "project-note.md",
-          basename: "Project Note",
-        });
-
-        // First call for user prompt, second call for project prompt
-        processPrompt
-          .mockResolvedValueOnce({
-            processedPrompt: "PROCESSED_USER",
-            includedFiles: [userIncludedFile],
-          })
-          .mockResolvedValueOnce({
-            processedPrompt: "PROCESSED_PROJECT",
-            includedFiles: [projectIncludedFile],
-          });
-
-        mockPlugin.app.workspace.getActiveFile.mockReturnValue(mockActiveFile);
-        mockPlugin.app.vault = { adapter: { stat: jest.fn() } };
-        mockMessageRepo.addMessage.mockReturnValue("msg-1");
-        mockMessageRepo.getMessage.mockReturnValue(mockMessage);
-        mockContextManager.processMessageContext.mockResolvedValue(createContextResult());
-
-        await chatManager.sendMessage("Hello", context, ChainType.PROJECT_CHAIN);
-
-        // Verify processPrompt was called twice (user + project)
-        expect(processPrompt).toHaveBeenCalledTimes(2);
-
-        // Verify includedFiles contains both files
-        const includedFilesArg = mockContextManager.processMessageContext.mock.calls[0][8];
-        expect(includedFilesArg).toContainEqual(userIncludedFile);
-        expect(includedFilesArg).toContainEqual(projectIncludedFile);
-      });
-
-      it("should not add project_context block when context is null", async () => {
-        const mockActiveFile = mockTFile({ path: "test.md", basename: "Test Note" });
-        const mockMessage = createMockMessage("msg-1", "Hello", USER_SENDER);
-        const context: MessageContext = { notes: [], urls: [], selectedTextContexts: [] };
-
-        const mockProject = {
-          id: "proj-1",
-          name: "Test Project",
-          systemPrompt: "Project prompt",
-        };
-        getCurrentProject.mockReturnValue(mockProject);
-        getProjectContextMock().mockResolvedValue(null);
-
-        getEffectiveUserPrompt.mockReturnValue("");
-        getSystemPrompt.mockReturnValue("DEFAULT");
-        getSystemPromptWithMemory.mockResolvedValue("DEFAULT");
-
-        processPrompt.mockResolvedValue({
-          processedPrompt: "PROCESSED",
-          includedFiles: [],
-        });
-
-        mockPlugin.app.workspace.getActiveFile.mockReturnValue(mockActiveFile);
-        mockPlugin.app.vault = { adapter: { stat: jest.fn() } };
-        mockMessageRepo.addMessage.mockReturnValue("msg-1");
-        mockMessageRepo.getMessage.mockReturnValue(mockMessage);
-        mockContextManager.processMessageContext.mockResolvedValue(createContextResult());
-
-        await chatManager.sendMessage("Hello", context, ChainType.PROJECT_CHAIN);
-
-        const systemPromptArg = mockContextManager.processMessageContext.mock.calls[0][7];
-        expect(systemPromptArg).toContain("<project_system_prompt>");
-        expect(systemPromptArg).not.toContain("<project_context>");
       });
     });
   });

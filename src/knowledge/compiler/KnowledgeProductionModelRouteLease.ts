@@ -486,7 +486,7 @@ function createGuardedCompilerDependencies(
 
 /** Opaque, single-use join of one Queue attempt and its fully derived Compiler input. */
 export class KnowledgeProductionCompileAttempt {
-  private declare readonly productionCompileAttemptBrand: void;
+  declare private readonly productionCompileAttemptBrand: void;
 
   /** Rejects direct construction without the module-private builder token. */
   constructor(token: symbol) {

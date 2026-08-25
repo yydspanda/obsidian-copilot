@@ -1,29 +1,31 @@
 import { ProjectConfig } from "@/aiParams";
-import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { logError, logInfo, logWarn } from "@/logger";
 import { COPILOT_PROJECT_ID, PROJECTS_UNSUPPORTED_FOLDER_NAME } from "@/projects/constants";
-import { deriveProjectFolderName, sanitizeVaultPathSegment } from "@/projects/projectPaths";
+import { reconcileLegacyAgentsResidue } from "@/projects/legacyAgentsResidue";
+import {
+  deriveProjectFolderName,
+  getProjectAnchorFromConfigPath,
+  sanitizeVaultPathSegment,
+} from "@/projects/projectPaths";
 import {
   createProjectStateOwnerAssertion,
   ensureProjectFrontmatter,
   getProjectConfigFilePath,
-  getProjectFolderPath,
   getProjectsFolder,
-  getProjectsUnsupportedFolder,
   readFrontmatterFieldFromFile,
   scanAllProjectConfigFiles,
   writeProjectFrontmatter,
 } from "@/projects/projectUtils";
 import {
   acquireProjectFileWrite,
-  isProjectStateOwnerActive,
   ProjectFileWriteLease,
   ProjectStateOwner,
   releaseProjectFileWrite,
 } from "@/projects/state";
 import { getSettings, updateSetting } from "@/settings/model";
+import type { StartupMigrationItem } from "@/services/startupMigration";
 import { ensureFolderExists, stripFrontmatter } from "@/utils";
-import { App, Notice, parseYaml, TFile, TFolder, Vault } from "obsidian";
+import { App, normalizePath, parseYaml, TFile, TFolder, Vault } from "obsidian";
 import { trashFile } from "@/utils/vaultAdapterUtils";
 
 /**
@@ -48,12 +50,15 @@ async function saveFailedProjectToUnsupported(
   vault: Vault,
   project: ProjectConfig,
   reason: string,
+  projectsFolder: string,
   assertOwnerActive: () => void
 ): Promise<boolean> {
   try {
-    const unsupportedFolder = getProjectsUnsupportedFolder();
+    const unsupportedFolder = normalizePath(
+      `${projectsFolder}/${PROJECTS_UNSUPPORTED_FOLDER_NAME}`
+    );
     assertOwnerActive();
-    await ensureFolderExists(unsupportedFolder, vault, assertOwnerActive);
+    await ensureFolderExists(vault, unsupportedFolder, assertOwnerActive);
     assertOwnerActive();
 
     const safeId = sanitizeVaultPathSegment(project.id || "unknown") || "unknown";
@@ -205,17 +210,20 @@ async function writeProjectToVaultFile(
   owner: ProjectStateOwner,
   project: ProjectConfig,
   folderName: string,
+  projectsFolder: string,
   assertOwnerActive: () => void
 ): Promise<TFile> {
   const vault = app.vault;
-  const projectsFolder = getProjectsFolder();
   assertOwnerActive();
-  await ensureFolderExists(projectsFolder, vault, assertOwnerActive);
+  await ensureFolderExists(vault, projectsFolder, assertOwnerActive);
   assertOwnerActive();
-  await ensureFolderExists(`${projectsFolder}/${folderName}`, vault, assertOwnerActive);
+  await ensureFolderExists(vault, `${projectsFolder}/${folderName}`, assertOwnerActive);
   assertOwnerActive();
 
-  const filePath = getProjectConfigFilePath(folderName);
+  // Reuse the root this call already ensured rather than re-reading the live
+  // one: a Copilot root change between the ensure and here would write outside
+  // the directory that was just created.
+  const filePath = getProjectConfigFilePath(folderName, projectsFolder);
 
   const folderPath = `${projectsFolder}/${folderName}`;
 
@@ -331,10 +339,13 @@ function getMigrationFolderName(projectId: string, projectName?: string): string
 export async function migrateProjectsFromSettingsToVault(
   app: App,
   owner: ProjectStateOwner
-): Promise<void> {
+): Promise<StartupMigrationItem | null> {
   const assertOwnerActive = createProjectStateOwnerAssertion(owner);
   assertOwnerActive();
-
+  // One root for the whole pass. This runs on layout-ready and loops with awaits
+  // per project, so re-reading the live root mid-pass could plan against one
+  // tree and write into another.
+  const passProjectsFolder = getProjectsFolder();
   const vault = app.vault;
   const settings = getSettings();
   const legacyProjects = settings.projectList || [];
@@ -342,7 +353,7 @@ export async function migrateProjectsFromSettingsToVault(
   if (legacyProjects.length === 0) {
     assertOwnerActive();
     logInfo("[Projects] No legacy projects to migrate");
-    return;
+    return null;
   }
 
   assertOwnerActive();
@@ -362,7 +373,13 @@ export async function migrateProjectsFromSettingsToVault(
     // Dirty data defense: skip empty ids
     if (!id) {
       logWarn("[Projects] Skip migrating project with empty id");
-      await saveFailedProjectToUnsupported(vault, project, "empty project id", assertOwnerActive);
+      await saveFailedProjectToUnsupported(
+        vault,
+        project,
+        "empty project id",
+        passProjectsFolder,
+        assertOwnerActive
+      );
       assertOwnerActive();
       continue;
     }
@@ -374,6 +391,7 @@ export async function migrateProjectsFromSettingsToVault(
         vault,
         project,
         `duplicate project id: ${id}`,
+        passProjectsFolder,
         assertOwnerActive
       );
       assertOwnerActive();
@@ -395,13 +413,14 @@ export async function migrateProjectsFromSettingsToVault(
         vault,
         project,
         `folder name collision: "${folderName}" already used by id="${firstIdForFolder}"`,
+        passProjectsFolder,
         assertOwnerActive
       );
       assertOwnerActive();
       continue;
     }
     seenFolderNames.set(folderKey, id);
-    const filePath = getProjectConfigFilePath(folderName);
+    const filePath = getProjectConfigFilePath(folderName, passProjectsFolder);
 
     // Retry-safety: if target file already exists from a prior partial migration, skip it
     // but only if the frontmatter id matches (to avoid treating conflict files as successful)
@@ -498,6 +517,7 @@ export async function migrateProjectsFromSettingsToVault(
           vault,
           project,
           `existing file content mismatch at ${filePath} (delete/rename the file and re-run migration)`,
+          passProjectsFolder,
           assertOwnerActive
         );
         assertOwnerActive();
@@ -512,6 +532,7 @@ export async function migrateProjectsFromSettingsToVault(
         vault,
         project,
         `target file exists at ${filePath} with mismatched id="${existingId}"`,
+        passProjectsFolder,
         assertOwnerActive
       );
       assertOwnerActive();
@@ -524,6 +545,7 @@ export async function migrateProjectsFromSettingsToVault(
         owner,
         project,
         folderName,
+        passProjectsFolder,
         assertOwnerActive
       );
       assertOwnerActive();
@@ -539,13 +561,14 @@ export async function migrateProjectsFromSettingsToVault(
         // Reason: rollback the just-created file to prevent a permanent retry-failure loop.
         // Without this, the existing-file branch on next restart re-detects, re-verifies,
         // and fails again indefinitely.
-        const folderPath = `${getProjectsFolder()}/${folderName}`;
+        const folderPath = `${passProjectsFolder}/${folderName}`;
         await rollbackCreatedFile(app, file.path, folderPath, assertOwnerActive);
         assertOwnerActive();
         await saveFailedProjectToUnsupported(
           vault,
           project,
           "content verification mismatch",
+          passProjectsFolder,
           assertOwnerActive
         );
         assertOwnerActive();
@@ -556,7 +579,13 @@ export async function migrateProjectsFromSettingsToVault(
       assertOwnerActive();
       const msg = error instanceof Error ? error.message : String(error);
       logError(`[Projects] Failed to migrate project id=${id}`, error);
-      await saveFailedProjectToUnsupported(vault, project, msg, assertOwnerActive);
+      await saveFailedProjectToUnsupported(
+        vault,
+        project,
+        msg,
+        passProjectsFolder,
+        assertOwnerActive
+      );
       assertOwnerActive();
     }
   }
@@ -577,77 +606,57 @@ export async function migrateProjectsFromSettingsToVault(
 
   const successCount = migratedEntries.length;
   const failedCount = legacyProjects.length - successCount;
-  const projectsFolder = getProjectsFolder();
-  const unsupportedFolder = getProjectsUnsupportedFolder();
-
-  // Reason: reveal the target folder in Obsidian's file explorer so users can
-  // quickly navigate to their migrated project files or unsupported backups.
-  const revealFolderInExplorer = (folderPath: string) => {
-    // The modal can outlive this plugin lifecycle. Ignore clicks from an obsolete owner.
-    if (!isProjectStateOwnerActive(owner)) return;
-
-    const folder = vault.getAbstractFileByPath(folderPath);
-    if (folder instanceof TFolder) {
-      // Reason: use the internal file-explorer plugin API to reveal and highlight the folder.
-      const fileExplorer = (
-        app as unknown as {
-          internalPlugins?: {
-            getPluginById?: (id: string) =>
-              | {
-                  enabled?: boolean;
-                  instance?: { revealInFolder?: (folder: TFolder) => void };
-                }
-              | undefined;
-          };
-        }
-      ).internalPlugins?.getPluginById?.("file-explorer");
-      if (fileExplorer?.enabled && fileExplorer.instance?.revealInFolder) {
-        fileExplorer.instance.revealInFolder(folder);
-      }
-    } else {
-      // Reason: hidden-folder files are not in vault cache, so revealInFolder silently fails.
-      new Notice(`Folder "${folderPath}" is hidden and cannot be revealed in Obsidian's explorer.`);
-    }
-  };
+  const projectsFolder = passProjectsFolder;
+  const unsupportedFolder = normalizePath(
+    `${passProjectsFolder}/${PROJECTS_UNSUPPORTED_FOLDER_NAME}`
+  );
 
   assertOwnerActive();
   if (failedCount === 0) {
     logInfo(
       `[Projects] Migration succeeded: all ${successCount} project(s) migrated to vault files`
     );
-    new ConfirmModal(
-      app,
-      () => revealFolderInExplorer(projectsFolder),
-      `Your projects have been upgraded to the new file-based format. They are now stored in: ${projectsFolder}\n\nYou can now:\n• Edit project settings directly in the file\n• View and manage project files in the vault\n• All ${successCount} project(s) were migrated successfully.`,
-      "🚀 Projects Upgraded",
-      "Show in Folder",
-      "OK"
-    ).open();
+    return {
+      id: "projects",
+      title: "Projects",
+      status: "success",
+      summary: `All ${successCount} project${successCount === 1 ? " was" : "s were"} migrated to note files.`,
+      details: [`Stored in ${projectsFolder}.`],
+    };
   } else if (successCount > 0) {
     logWarn(
       `[Projects] Migration partially succeeded: ${successCount} migrated, ${failedCount} failed`
     );
-    new ConfirmModal(
-      app,
-      () => revealFolderInExplorer(projectsFolder),
-      `⚠️ Projects migration partially completed.\n\n✅ ${successCount} project(s) migrated successfully.\n❌ ${failedCount} project(s) failed — their data has been backed up to:\n${unsupportedFolder}\n\nYou can manually recover failed projects from the unsupported folder.`,
-      "⚠️ Projects Migration: Partial Success",
-      "Show in Folder",
-      "OK"
-    ).open();
+    return {
+      id: "projects",
+      title: "Projects",
+      status: "action-required",
+      summary: `${successCount} project${successCount === 1 ? " was" : "s were"} migrated; ${failedCount} could not be migrated.`,
+      details: [
+        `Migrated projects are in ${projectsFolder}.`,
+        `Recover the remaining projects from ${unsupportedFolder}.`,
+      ],
+    };
   } else {
     logWarn("[Projects] Migration failed: no projects were migrated");
-    new ConfirmModal(
-      app,
-      () => revealFolderInExplorer(unsupportedFolder),
-      `⚠️ Projects migration could not be completed.\n\nYour project data has been backed up to:\n${unsupportedFolder}\n\nTo recover:\n1. Open the files in the unsupported folder\n2. Review the content\n3. Recreate the projects manually`,
-      "⚠️ Projects Migration Failed",
-      "Show in Folder",
-      "OK"
-    ).open();
+    return {
+      id: "projects",
+      title: "Projects",
+      status: "error",
+      summary: "No projects could be migrated, but recovery copies were created.",
+      details: [`Recover the projects from ${unsupportedFolder}.`],
+    };
   }
 }
 
+/**
+ * Read-side fallback: auto-trigger migration when data.json has unmigrated projects.
+ *
+ * Retry-safe: even if vault already has some project files (from a prior partial migration),
+ * we still attempt migration — the migration loop will skip already-existing target files.
+ *
+ * @param vault - Vault instance
+ */
 /**
  * Migrate existing project folders from id-based to name-based naming.
  * Scans all project config files and renames folders where the current folder name
@@ -669,7 +678,6 @@ async function migrateProjectFolderNames(app: App, owner: ProjectStateOwner): Pr
   if (records.length === 0) return;
 
   let renamed = 0;
-  const projectsFolder = getProjectsFolder();
   // Reason: track reserved lowercase folder names to prevent case-insensitive collisions
   // (e.g. "Foo" and "foo" both targeting the same path on macOS/Windows).
   // Matches the same guard used in createProject() and updateProject().
@@ -692,10 +700,16 @@ async function migrateProjectFolderNames(app: App, owner: ProjectStateOwner): Pr
 
     if (safeFolderName === record.folderName) continue; // Already correct
 
-    const newFolderPath = `${projectsFolder}/${safeFolderName}`;
-    const oldFolderPath = getProjectFolderPath(record.folderName);
+    // Anchored on the record's own config path, not the live root: this loop
+    // awaits a rename per project, and a Copilot root change mid-loop would
+    // otherwise pair a source in one tree with a destination in another.
+    const { projectsRoot: recordProjectsRoot, projectFolderPath: oldFolderPath } =
+      getProjectAnchorFromConfigPath(record.filePath);
+    const newFolderPath = `${recordProjectsRoot}/${safeFolderName}`;
     const oldFilePath = record.filePath;
-    const newFilePath = getProjectConfigFilePath(safeFolderName);
+    // Reason: a folder rename preserves the config basename (`project.md`), so the new path
+    // is just the same config name under the renamed folder.
+    const newFilePath = getProjectConfigFilePath(safeFolderName, recordProjectsRoot);
 
     // Reason: case-insensitive collision guard — skip if another project already
     // occupies or is targeting this lowercase folder name (cross-platform safety).
@@ -786,20 +800,26 @@ async function migrateProjectFolderNames(app: App, owner: ProjectStateOwner): Pr
 export async function ensureProjectsMigratedIfNeeded(
   app: App,
   owner: ProjectStateOwner
-): Promise<void> {
+): Promise<StartupMigrationItem | null> {
   const assertOwnerActive = createProjectStateOwnerAssertion(owner);
   assertOwnerActive();
-
   const legacyProjects = getSettings().projectList || [];
+  let migrationResult: StartupMigrationItem | null = null;
   if (legacyProjects.length > 0) {
-    await migrateProjectsFromSettingsToVault(app, owner);
+    migrationResult = await migrateProjectsFromSettingsToVault(app, owner);
     assertOwnerActive();
   }
 
+  // Reason: dev-only — restore `project.md` from any unreleased PR2b-1 `AGENTS.md`-only config
+  // before scanning/renaming, so those projects are recognized again. No-op for real users.
+  assertOwnerActive();
+  await reconcileLegacyAgentsResidue(app);
+  assertOwnerActive();
+
   // Reason: run naming migration after data.json migration to rename id-based folders
   // to name-based folders. This also handles pre-existing projects from before the
-  // naming convention change. Runs before loadAllProjects() in initialization flow.
-  assertOwnerActive();
+  // naming convention change. Runs before the initial project scan.
   await migrateProjectFolderNames(app, owner);
   assertOwnerActive();
+  return migrationResult;
 }

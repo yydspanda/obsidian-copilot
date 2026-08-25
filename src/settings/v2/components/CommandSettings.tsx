@@ -2,7 +2,7 @@ import React, { useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { useCustomCommands } from "@/commands/state";
 import { MobileCard, MobileCardDropdownAction } from "@/components/ui/mobile-card";
-import { CopyPlus, GripVertical, Lightbulb, PenLine, Plus, Trash2 } from "lucide-react";
+import { CopyPlus, GripVertical, Info, PenLine, Plus, Trash2 } from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -38,17 +38,16 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { EMPTY_COMMAND } from "@/commands/constants";
 import { CustomCommandManager } from "@/commands/customCommandManager";
 import { CustomCommandSettingsModal } from "@/commands/CustomCommandSettingsModal";
-import {
-  generateCopyCommandName,
-  loadAllCustomCommands,
-  sortCommandsByOrder,
-} from "@/commands/customCommandUtils";
+import { generateCopyCommandName, sortCommandsByOrder } from "@/commands/customCommandUtils";
 import { generateDefaultCommands } from "@/commands/migrator";
 import { CustomCommand } from "@/commands/type";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
+import { deriveCustomPromptsFolder } from "@/settings/copilotFolder";
 import { useApp } from "@/context";
 import { SettingItem } from "@/components/ui/setting-item";
+import { SettingSection } from "@/components/ui/setting-section";
 import { Notice } from "obsidian";
+import { safeAsyncHandler } from "@/utils/safeAsyncHandler";
 
 const MobileCommandCard: React.FC<{
   command: CustomCommand;
@@ -134,7 +133,7 @@ const MobileCommandCard: React.FC<{
         </div>
         <Checkbox
           checked={command.showInSlashMenu}
-          onCheckedChange={(checked) =>
+          onCheckedChange={safeAsyncHandler(async (checked) =>
             onUpdate(
               {
                 ...command,
@@ -142,7 +141,7 @@ const MobileCommandCard: React.FC<{
               },
               command.title
             )
-          }
+          )}
         />
       </div>
     </div>
@@ -226,7 +225,7 @@ const SortableTableRow: React.FC<{
       <TableCell className="tw-text-center">
         <Checkbox
           checked={command.showInSlashMenu}
-          onCheckedChange={(checked) =>
+          onCheckedChange={safeAsyncHandler(async (checked) =>
             onUpdate(
               {
                 ...command,
@@ -234,7 +233,7 @@ const SortableTableRow: React.FC<{
               },
               command.title
             )
-          }
+          )}
           className="tw-mx-auto"
         />
       </TableCell>
@@ -260,7 +259,7 @@ const SortableTableRow: React.FC<{
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => onCopy(command)}
+            onClick={safeAsyncHandler(async () => onCopy(command))}
             title="Duplicate command"
           >
             <CopyPlus className="tw-size-4" />
@@ -295,6 +294,9 @@ export const CommandSettings: React.FC = () => {
   }, [rawCommands]);
 
   const settings = useSettingsValue();
+  // Derived from the single Copilot root; the folder is no longer separately
+  // editable, so the banner shows where commands are actually loaded from.
+  const customPromptsFolder = deriveCustomPromptsFolder(settings);
   const containerRef = useRef<HTMLDivElement>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -406,59 +408,47 @@ export const CommandSettings: React.FC = () => {
 
   return (
     <div className="tw-space-y-4" ref={containerRef}>
-      <section>
-        <div className="tw-mb-4 tw-flex tw-flex-col tw-gap-2">
+      <section className={cn("tw-flex tw-flex-col tw-gap-4")}>
+        <div className="tw-flex tw-flex-col tw-gap-2">
           <div className="tw-text-xl tw-font-bold">Custom Commands</div>
           <div className="tw-text-sm tw-text-muted">
-            Custom commands are preset prompts that you can trigger in the editor by right-clicking
-            and selecting them from the context menu or by using a <code>/</code> command in the
-            chat to load them into your chat input.
+            Preset prompts you trigger from the editor right-click menu or with a <code>/</code>{" "}
+            command in chat.
           </div>
         </div>
 
-        <SettingItem
-          type="text"
-          title="Custom Prompts Folder Name"
-          description="Folder where custom prompts are stored"
-          value={settings.customPromptsFolder}
-          onChange={(value) => {
-            updateSetting("customPromptsFolder", value);
-            void loadAllCustomCommands().catch((err) =>
-              logError("loadAllCustomCommands failed", err)
-            );
-          }}
-          placeholder="copilot/copilot-custom-prompts"
-        />
-        <SettingItem
-          type="switch"
-          title="Custom Prompt Templating"
-          description="Process variables like {activenote}, {foldername}, or {#tag} in prompts. Disable for raw prompts."
-          checked={settings.enableCustomPromptTemplating}
-          onCheckedChange={(checked) => {
-            updateSetting("enableCustomPromptTemplating", checked);
-          }}
-        />
-        <SettingItem
-          type="select"
-          title="Custom Prompts Sort Strategy"
-          description="Sort order for slash command menu prompts"
-          value={settings.promptSortStrategy}
-          onChange={(value) => updateSetting("promptSortStrategy", value)}
-          options={[
-            { label: "Recency", value: PromptSortStrategy.TIMESTAMP },
-            { label: "Alphabetical", value: PromptSortStrategy.ALPHABETICAL },
-            { label: "Manual", value: PromptSortStrategy.MANUAL },
-          ]}
-        />
-
-        <div className="tw-mb-4 tw-flex tw-items-start tw-gap-2 tw-rounded-md tw-border tw-border-solid tw-border-border tw-p-4 tw-text-muted">
-          <Lightbulb className="tw-size-5" />{" "}
+        <div className="tw-flex tw-items-start tw-gap-2 tw-rounded-md tw-border tw-border-solid tw-border-border tw-p-4 tw-text-muted tw-bg-interactive-accent/10">
+          <Info className="tw-size-5 tw-shrink-0 tw-text-accent" />{" "}
           <div>
             Commands are automatically loaded from .md files in your custom prompts folder{" "}
-            <strong>{settings.customPromptsFolder}</strong>. Modifying the files will also update
-            the command settings.
+            <strong>{customPromptsFolder}</strong>. Modifying the files will also update the command
+            settings.
           </div>
         </div>
+
+        <SettingSection>
+          <SettingItem
+            type="switch"
+            title="Custom Prompt Templating"
+            description="Process variables like {activenote}, {foldername}, or {#tag} in prompts. Disable for raw prompts."
+            checked={settings.enableCustomPromptTemplating}
+            onCheckedChange={(checked) => {
+              updateSetting("enableCustomPromptTemplating", checked);
+            }}
+          />
+          <SettingItem
+            type="select"
+            title="Custom Prompts Sort Strategy"
+            description="Sort order for slash command menu prompts"
+            value={settings.promptSortStrategy}
+            onChange={(value) => updateSetting("promptSortStrategy", value)}
+            options={[
+              { label: "Recency", value: PromptSortStrategy.TIMESTAMP },
+              { label: "Alphabetical", value: PromptSortStrategy.ALPHABETICAL },
+              { label: "Manual", value: PromptSortStrategy.MANUAL },
+            ]}
+          />
+        </SettingSection>
 
         <div className="tw-flex tw-flex-col tw-gap-4">
           <div className="tw-flex tw-w-full tw-justify-between tw-gap-2 md:tw-justify-end">

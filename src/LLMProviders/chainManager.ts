@@ -1,19 +1,19 @@
-import { getChainType, getCurrentProject, getModelKey, SetChainOptions } from "@/aiParams";
+import { getChainType, getModelKey, SetChainOptions } from "@/aiParams";
 import { ChainType } from "@/chainType";
-import { BUILTIN_CHAT_MODELS, USER_SENDER } from "@/constants";
+import { USER_SENDER } from "@/constants";
 import {
   AutonomousAgentChainRunner,
   ChainRunner,
   CopilotPlusChainRunner,
   LLMChainRunner,
-  ProjectChainRunner,
   VaultQAChainRunner,
 } from "@/LLMProviders/chainRunner/index";
 import { logError, logInfo } from "@/logger";
 import { getSettings, subscribeToSettingsChange } from "@/settings/model";
 import { getSystemPrompt } from "@/system-prompts/systemPromptBuilder";
 import { ChatMessage } from "@/types/message";
-import { findCustomModel, isOSeriesModel } from "@/utils";
+import { isOSeriesModel } from "@/utils";
+import { resolveChatBackendModel, type ModelManagementApi } from "@/modelManagement";
 import { MissingModelKeyError } from "@/error";
 import {
   ChatPromptTemplate,
@@ -21,16 +21,11 @@ import {
   MessagesPlaceholder,
 } from "@langchain/core/prompts";
 import { Document } from "@langchain/core/documents";
-import { App, Notice } from "obsidian";
+import { App } from "obsidian";
 import ChatModelManager from "./chatModelManager";
 import MemoryManager from "./memoryManager";
 import PromptManager from "./promptManager";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
-import {
-  assertSavedModelReferenceCanRun,
-  findFirstRunnableFallbackModel,
-} from "@/LLMProviders/modelSelectionPolicy";
-import { isDeepSeekThinkingEffort } from "@/LLMProviders/deepseekModelPolicy";
 
 export default class ChainManager {
   private retrievedDocuments: Document[] = [];
@@ -45,12 +40,13 @@ export default class ChainManager {
   public promptManager: PromptManager;
   public userMemoryManager: UserMemoryManager;
   private pendingModelError: Error | null = null;
-  private settingsUnsubscriber?: () => void;
-  private disposed = false;
+  /** Model-management API — resolves the chat backend's selected model. */
+  private readonly modelManagement: ModelManagementApi;
 
-  constructor(app: App) {
+  constructor(app: App, modelManagement: ModelManagementApi) {
     // Instantiate singletons
     this.app = app;
+    this.modelManagement = modelManagement;
     this.memoryManager = MemoryManager.getInstance();
     this.chatModelManager = ChatModelManager.getInstance();
     this.promptManager = PromptManager.getInstance();
@@ -59,30 +55,21 @@ export default class ChainManager {
     // Initialize async operations
     void this.initialize().catch((err) => logError("ChainManager initialize failed", err));
 
-    this.settingsUnsubscriber = subscribeToSettingsChange(() => {
-      if (this.disposed) {
-        return;
-      }
+    subscribeToSettingsChange(() => {
       void this.createChainWithNewModel().catch((err) =>
         logError("createChainWithNewModel failed", err)
       );
     });
-  }
-
-  /**
-   * Permanently stops lifecycle-owned subscriptions.
-   *
-   * Provider initialization already in flight cannot be cancelled, but its
-   * continuation will stop before any later chain housekeeping.
-   */
-  public dispose(): void {
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    const settingsUnsubscriber = this.settingsUnsubscriber;
-    this.settingsUnsubscriber = undefined;
-    settingsUnsubscriber?.();
+    modelManagement.providerRegistry.subscribe(() => {
+      void this.createChainWithNewModel().catch((err) =>
+        logError("createChainWithNewModel after provider change failed", err)
+      );
+    });
+    modelManagement.backendConfigRegistry.subscribe(() => {
+      void this.createChainWithNewModel().catch((err) =>
+        logError("createChainWithNewModel after chat backend change failed", err)
+      );
+    });
   }
 
   private async initialize() {
@@ -117,104 +104,51 @@ export default class ChainManager {
     options: SetChainOptions = {},
     neededReInitChatMode: boolean = true
   ): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
-    let newModelKey: string | undefined;
+    // The selection is a `configuredModelId` in the chat backend (no longer a
+    // legacy "name|provider" key).
+    let selectedModelId: string | undefined;
     const chainType = getChainType();
-    const currentProject = getCurrentProject();
-
-    if (chainType === ChainType.PROJECT_CHAIN && !currentProject) {
-      return;
-    }
 
     try {
-      newModelKey =
-        chainType === ChainType.PROJECT_CHAIN ? currentProject?.projectModelKey : getModelKey();
-
-      if (!newModelKey) {
-        throw new MissingModelKeyError("No model key found. Please select a model in settings.");
-      }
+      const preferredId = getModelKey();
 
       if (neededReInitChatMode) {
-        assertSavedModelReferenceCanRun(newModelKey);
-        let customModel = findCustomModel(newModelKey, getSettings().activeModels);
-        assertSavedModelReferenceCanRun(newModelKey, customModel);
-        if (!customModel) {
-          // Reset default model if no model is found
-          console.error("Resetting default model. No model configuration found for: ", newModelKey);
-          customModel = BUILTIN_CHAT_MODELS[0];
-          newModelKey = customModel.name + "|" + customModel.provider;
-        }
-
-        // Add validation for project mode
-        if (chainType === ChainType.PROJECT_CHAIN && !customModel.projectEnabled) {
-          const unavailableModelName = customModel.name;
-          // If the model is not project-enabled, find the first project-enabled model
-          const projectEnabledModel = findFirstRunnableFallbackModel(
-            getSettings().activeModels.filter((model) => model.projectEnabled)
+        const resolution = await resolveChatBackendModel(
+          this.modelManagement,
+          preferredId || undefined
+        );
+        if (!resolution.ok) {
+          throw new MissingModelKeyError(
+            "No chat model enabled. Enable a model under Settings → Basic → Agents → Quick Chat, " +
+              "or add one on the Models (BYOK) tab."
           );
-          if (projectEnabledModel) {
-            customModel = projectEnabledModel;
-            newModelKey = projectEnabledModel.name + "|" + projectEnabledModel.provider;
-            new Notice(
-              `Model ${unavailableModelName} is not available in project mode. Switching to ${projectEnabledModel.name}.`
-            );
-          } else {
-            throw new Error(
-              "No project-enabled models available. Please enable a model for project mode in settings."
-            );
-          }
         }
+        selectedModelId = resolution.configuredModelId;
 
-        const mergedModel = {
-          ...customModel,
-          ...currentProject?.modelConfigs,
-        };
-        if (
-          chainType === ChainType.PROJECT_CHAIN &&
-          mergedModel.provider === "deepseek" &&
-          isDeepSeekThinkingEffort(mergedModel.reasoningEffort) &&
-          currentProject?.modelConfigs.temperature !== undefined &&
-          (customModel.temperature === undefined || customModel.temperature === 0)
-        ) {
-          mergedModel.temperature = 0;
-        }
-        await this.chatModelManager.setChatModel(mergedModel);
-        if (this.disposed) {
-          return;
-        }
+        await this.chatModelManager.setChatModelFromBridged(resolution.customModel);
         this.pendingModelError = null;
       }
 
       // Chain-type housekeeping. Do NOT write `chainType` back to the atom —
-      // the atom is owned by the UI dropdowns and `applyPlusSettings`. The
+      // the atom is owned by the UI dropdowns. The
       // captured local `chainType` may already be stale by the time we reach
       // here (we just awaited `setChatModel(...)`), and writing it back used
-      // to create a self-sustaining `setChainType` → ProjectManager
+      // to create a self-sustaining `setChainType` → ChainOwner
       // subscriber → `createChainWithNewModel` loop that froze Obsidian on
       // apply-Plus-key.
       if (this.chatModelManager.validateChatModel(this.chatModelManager.getChatModel())) {
         this.validateChainType(chainType);
         if (options.refreshIndex) {
           await this.refreshVaultIndex();
-          if (this.disposed) {
-            return;
-          }
         }
       } else {
-        console.error(
-          "createChainWithNewModel: skipping chain-type housekeeping — no chat model set."
-        );
+        logError("createChainWithNewModel: skipping chain-type housekeeping — no chat model set.");
       }
-      logInfo(`Setting model to ${newModelKey}`);
+      logInfo(`Setting chat model to configuredModelId=${selectedModelId}`);
     } catch (error) {
-      if (this.disposed) {
-        return;
-      }
       this.pendingModelError = error instanceof Error ? error : new Error(String(error));
       logError(`createChainWithNewModel failed: ${error}`);
-      logInfo(`modelKey: ${newModelKey || getModelKey()}`);
+      logInfo(`configuredModelId: ${selectedModelId ?? getModelKey()}`);
     }
   }
 
@@ -233,8 +167,6 @@ export default class ChainManager {
           return new AutonomousAgentChainRunner(this);
         }
         return new CopilotPlusChainRunner(this);
-      case ChainType.PROJECT_CHAIN:
-        return new ProjectChainRunner(this);
       default:
         throw new Error(`Unsupported chain type: ${String(chainType)}`);
     }
@@ -245,10 +177,9 @@ export default class ChainManager {
    * semantic search is disabled — v3 lexical search builds its index on
    * demand and doesn't need a precomputed store.
    */
-  private async refreshVaultIndex(): Promise<void> {
-    if (this.disposed || !getSettings().enableSemanticSearchV3) return;
+  private async refreshVaultIndex() {
+    if (!getSettings().enableSemanticSearchV3) return;
     const VectorStoreManager = (await import("@/search/vectorStoreManager")).default;
-    if (this.disposed) return;
     await VectorStoreManager.getInstance().indexVaultToVectorStore(false);
   }
 

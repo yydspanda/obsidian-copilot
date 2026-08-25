@@ -137,7 +137,7 @@ export function KnowledgeFolderImportButton({
     if (!button || importing) return;
 
     releasePicker();
-    const input = button.doc.createElement("input");
+    const input = button.doc.win.createEl("input");
     input.type = "file";
     input.multiple = true;
     input.hidden = true;

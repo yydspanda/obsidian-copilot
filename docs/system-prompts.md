@@ -1,126 +1,86 @@
-# System Prompts
+# Instructions for Agent Chat and Quick Chat
 
-A system prompt is a set of instructions you give the AI that shapes how it behaves in all conversations. Think of it as a persistent briefing: "You are an assistant that helps me with academic writing. Always cite sources. Respond in formal English."
+Instructions are rules Copilot should keep following, such as your writing style, folder conventions, preferred formats, and safety boundaries.
 
----
+Agent Chat and Quick Chat use different instruction systems:
 
-## Overview
+- **Agent Chat** reads `AGENTS.md` files that are shared across opencode, Claude, and Codex.
+- **Quick Chat** uses selectable system prompt files.
 
-Copilot has two layers of system prompts:
+Changing one does not change the other.
 
-1. **Built-in system prompt** — Always active. Defines core behaviors specific to Obsidian (how to format Obsidian links, how to handle note references, etc.)
-2. **Custom system prompt** — Optional. You can write your own instructions that are appended to the built-in prompt.
+## Choose the right instruction tool
 
----
+| Use                          | Best for                                                      |
+| ---------------------------- | ------------------------------------------------------------- |
+| Vault `AGENTS.md`            | Rules every Agent Chat in a vault should follow               |
+| Project `AGENTS.md`          | More specific rules for one Project                           |
+| **Skill**                    | A reusable workflow with instructions and supporting files    |
+| **Copilot command**          | A short saved prompt or template you want to run again        |
+| **Quick Chat system prompt** | A role, tone, or response style for a Quick Chat conversation |
+| One-off prompt               | A request that matters only for the current turn              |
 
-## Built-In System Prompt
+Keep stable conventions in `AGENTS.md`. Use a [Skill](agent-mode-and-tools.md#skills-across-agents) when an agent needs a repeatable process. Use a [Copilot command](custom-commands.md) for a short reusable prompt.
 
-The built-in prompt is always active and cannot be edited. It tells the AI:
+## Vault instructions for Agent Chat
 
-- It is "Obsidian Copilot" — an AI integrated into Obsidian
-- How to format Obsidian internal links: `[[Note Title]]`
-- How to format Obsidian image links: `![[image.png]]`
-- How to format LaTeX math: use `$...$` not `\[...\]`
-- How to handle @vault and @tool mentions
-- To use `-` for bullet points (not `*`)
-- To respond in the language of the user's query
-- To treat "note" as referring to an Obsidian note
+Vault-wide instructions live in `AGENTS.md` at the root of your vault. They apply to new Agent Chats with opencode, Claude, and Codex.
 
-This prompt ensures Copilot's output is correctly formatted for Obsidian and aware of its context.
+Open [**Settings → Copilot → Basic → Custom instructions**](settings.md#basic) and edit **Custom vault instructions**. Copilot saves the text to the vault-root file as you type. Select **Open AGENTS.md** to edit the same file as a normal note.
 
-> **Warning**: Disabling the built-in prompt can break features like Vault QA, memory, and agent tools. Avoid disabling it unless you have a specific reason.
+Good instructions are short and concrete:
 
----
-
-## Custom System Prompts
-
-Custom system prompts let you add your own instructions on top of the built-in prompt.
-
-### Where They're Stored
-
-Custom system prompts are stored as markdown files in your vault, in the folder:
-```
-copilot/system-prompts/
-```
-
-You can change this folder in **Settings → Copilot → Advanced → System Prompts Folder Name**.
-
-### Creating a System Prompt
-
-#### From Settings
-
-1. Go to **Settings → Copilot → Advanced**
-2. Under **User System Prompt**, click the `+` button
-3. Enter a title for the prompt (e.g., "Academic Writing")
-4. A new markdown file is created in your system prompts folder
-5. Open the file and write your instructions
-
-#### From the System Prompts Folder
-
-Create any `.md` file in the `copilot/system-prompts/` folder. Its filename (without `.md`) becomes the prompt's title.
-
-### Writing Good System Prompts
-
-Tips for effective system prompts:
-
-- **Be specific**: "Always respond in bullet points with no more than 5 bullets" is better than "be concise"
-- **Set a persona**: "You are an expert in cognitive science helping me build a Zettelkasten"
-- **Define output format**: Specify if you want headers, lists, prose, or code blocks
-- **Set language**: "Always respond in French" if you want non-English output
-- **Limit scope**: "Only answer questions related to my research notes on climate science"
-
-**Example system prompt:**
 ```markdown
-You are a Zettelkasten assistant helping me build a knowledge base.
-- Always connect new ideas to existing notes when possible
-- Suggest up to 3 related concepts per response
-- Format all note suggestions as [[Note Title]]
-- Keep responses concise — under 200 words
+- Keep meeting notes under Meetings/.
+- Use YYYY-MM-DD dates.
+- Preserve existing frontmatter unless I ask you to change it.
+- Ask before deleting a note.
 ```
 
----
+Start a new Agent Chat after changing `AGENTS.md` so the selected backend reads the latest version.
 
-## Setting a Global Default
+## Project instructions
 
-You can set one of your custom prompts as the global default — it will be used for all new chat sessions:
+Each [Project](projects.md) can add its own `AGENTS.md` inside the Project folder. Open the Project info menu and select **AGENTS.md**, or use **Edit project → Project instructions**.
 
-1. Go to **Settings → Copilot → Advanced**
-2. Under **Default System Prompt**, select your prompt from the dropdown
-3. Any new conversation will start with this prompt active
+A Project chat follows both files:
 
-To stop using a custom default, select **None (use built-in prompt)** from the dropdown.
+1. The vault-root `AGENTS.md` provides general rules.
+2. The Project `AGENTS.md` provides more specific rules and takes precedence when the two conflict.
 
----
+Use Project instructions for details that should not affect the rest of the vault, such as a client's tone, deliverable format, source folders, or output location.
 
-## Per-Session Override (Gear Icon)
+## Claude compatibility
 
-You can override the system prompt for just the current conversation:
+Claude Code normally reads `CLAUDE.md`. To keep `AGENTS.md` as the shared source of truth, Copilot adds this import to the related `CLAUDE.md`:
 
-1. Click the **gear icon** in the chat panel toolbar
-2. Select a different system prompt (or type a one-off prompt directly)
-3. This applies to the current session only and resets when you start a new chat
+```markdown
+@AGENTS.md
+```
 
----
+If `CLAUDE.md` already contains Claude-specific instructions, Copilot preserves them and adds the import. You do not need to copy shared rules into both files.
 
-## How Prompts Combine
+## System prompts for Quick Chat
 
-When you have a custom prompt active:
+Quick Chat system prompts are Markdown files under:
 
-1. The built-in Copilot prompt runs first
-2. Your custom prompt is appended after it
+```text
+<Copilot folder>/system-prompts/
+```
 
-Both sets of instructions are active simultaneously. Your custom instructions can refine, restrict, or extend the default behavior, but they don't replace it.
+Create a `.md` file in that folder. The filename becomes the prompt name, and the file body contains the instructions. Copilot refreshes the prompt list when you create, edit, rename, or delete a file.
 
----
+In Quick Chat, open **Chat Settings** and choose a **System Prompt**. Select **None (use built-in prompt)** to return to Copilot's default.
 
-## Per-Project System Prompts
+The selected system prompt applies only to Quick Chat. It is not sent to opencode, Claude, or Codex. Agent Chat reads `AGENTS.md` instead.
 
-Each [Project](projects.md) can have its own system prompt, independent of the global default. Configure this in the project settings under **System Prompt**.
+## Examples and next steps
 
----
+Start with the [`AGENTS.md` examples](agents-md-examples.md), then keep only rules that reflect how you actually work. Long procedures are easier to maintain as [Skills](agent-mode-and-tools.md#skills-across-agents).
 
 ## Related
 
-- [Chat Interface](chat-interface.md) — Per-session gear settings
-- [Projects](projects.md) — Per-project system prompts
-- [Getting Started](getting-started.md) — Initial setup
+- [Agent Chat](agent-mode-and-tools.md)
+- [Projects](projects.md)
+- [Copilot Commands and Quick Ask](custom-commands.md)
+- [Quick Chat](chat-interface.md)

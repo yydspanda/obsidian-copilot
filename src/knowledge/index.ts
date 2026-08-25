@@ -94,7 +94,6 @@ export * from "@/knowledge/sourceLifecycle/KnowledgeSourceIssueNotificationSink"
 export * from "@/knowledge/setup/KnowledgeSetupNavigationPort";
 export * from "@/knowledge/setup/KnowledgeSetupNavigation";
 export * from "@/knowledge/setup/KnowledgeChatModelReadiness";
-export * from "@/knowledge/setup/KnowledgeChatModelReadinessComposition";
 export * from "@/knowledge/setup/KnowledgeSetupReadiness";
 export * from "@/knowledge/setup/KnowledgeSetupReadinessStore";
 export * from "@/knowledge/setup/KnowledgeSetupSelectionSubscription";
@@ -112,6 +111,7 @@ export * from "@/knowledge/startup/KnowledgeSourceObservationStartupCoordinator"
 export * from "@/knowledge/startup/KnowledgeSourceObservationStartupReconciler";
 export * from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
 export * from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
+export * from "@/knowledge/compiler/KnowledgeConfiguredModelBridge";
 export * from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
 export * from "@/knowledge/ui/KnowledgeStudioController";
 export * from "@/knowledge/ui/KnowledgeStudioReviewEvidencePort";

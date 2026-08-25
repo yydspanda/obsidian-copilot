@@ -103,8 +103,7 @@ interface KnowledgeKnownAppliedWikiOutputAuthorityBase {
 }
 
 /** Exact ordinary Source Apply authority retained behind an opaque detail ref. */
-export interface KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity
-  extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
+export interface KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
   readonly origin: "source_apply";
   readonly changeSetId: string;
   readonly changeSetDigest: string;
@@ -112,8 +111,7 @@ export interface KnowledgeKnownAppliedWikiSourceApplyAuthorityIdentity
 }
 
 /** Exact forward revision authority retained behind an opaque detail ref. */
-export interface KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity
-  extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
+export interface KnowledgeKnownAppliedWikiForwardRevisionAuthorityIdentity extends KnowledgeKnownAppliedWikiOutputAuthorityBase {
   readonly origin: "forward_revision";
   readonly ledgerId: string;
   readonly ledgerDigest: string;
@@ -538,7 +536,10 @@ function snapshotAcceptedRecord(
   });
   if (!parsed.ok || !validateChangeSetReviewSnapshot(parsed.value).valid) return undefined;
   const record = parsed.value.records[0];
-  return record?.outcome === "accepted" ? record : undefined;
+  return record?.outcome === "accepted" &&
+    canonicalizeJson(snapshot) === canonicalizeJson(record as unknown as JsonValue)
+    ? record
+    : undefined;
 }
 
 /** Re-proves accepted bytes, digest, and final Manifest intent. */

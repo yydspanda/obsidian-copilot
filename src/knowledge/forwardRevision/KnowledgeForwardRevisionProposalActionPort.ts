@@ -134,9 +134,7 @@ function projectActionResult(
 }
 
 /** Genuine adapter from the production coordinator to the receipt-free UI action surface. */
-export class KnowledgeProductionForwardRevisionProposalActionAdapter
-  implements KnowledgeForwardRevisionProposalActionPort
-{
+export class KnowledgeProductionForwardRevisionProposalActionAdapter implements KnowledgeForwardRevisionProposalActionPort {
   /**
    * Captures one exact production coordinator and its required cross-generation drain owner.
    *

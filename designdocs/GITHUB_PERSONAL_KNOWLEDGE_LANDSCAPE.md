@@ -43,15 +43,15 @@ GitHub Trending 页面没有稳定的历史排名接口，因此这里的“近�
 
 ## 3. 新一代 LLM Wiki / OKF 项目
 
-| 项目 | 快照关注度 | 主要技术 | 核心做法 | 对本项目的判断 |
-| --- | ---: | --- | --- | --- |
-| [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) | 约 14.7k stars | Tauri、React/TypeScript、Rust、LanceDB、Graphology/Sigma.js | Raw → Wiki → Schema；两阶段摄入；hash 增量缓存；持久队列；混合检索；图扩展；人工审核；MCP/HTTP | 最完整的产品参考；借鉴机制，不引入 Tauri/Rust Runtime |
-| [AgriciDaniel/claude-obsidian](https://github.com/AgriciDaniel/claude-obsidian) | 约 9.5k stars | Python、Agent Skills、Obsidian REST/文件系统、BM25、可选 Ollama | 支持 LYT/PARA/Zettelkasten；`hot.md`/`index.md` 渐进检索；manifest 增量更新；文件锁；Git 自动提交 | 适合借鉴 Vault 工作流、渐进披露和多写者保护 |
-| [inkeep/open-knowledge](https://github.com/inkeep/open-knowledge) | 约 2.9k stars | TypeScript、Bun/Turbo、桌面与 Web 编辑器、MCP/CLI、Git | 面向 Markdown/MDX 的 AI 编辑环境，多 Agent 并排编辑，图谱、同步和搜索 | UI/Agent 接入参考；与 Obsidian 编辑器职责重叠，不应移植产品外壳 |
-| [Ar9av/obsidian-wiki](https://github.com/Ar9av/obsidian-wiki) | 约 2.9k stars | Python、Agent Skills、Obsidian Vault | 摄入 → 抽取概念/实体/主张/关系 → 合并矛盾 → 演化 schema；doctor/query/lint/trust-check | 工作流清晰，适合作为 Skills 与命令体验参考 |
-| [atomicstrata/llm-wiki-compiler](https://github.com/atomicstrata/llm-wiki-compiler) | 约 1.8k stars | TypeScript、Node.js、Zod/Ajv、MCP、OpenAI/Anthropic SDK | 两阶段编译；类型化生命周期 profile；source/line citation；混合检索；lint/eval；OKF 导入导出 | 与本项目技术栈和目标最贴合，优先做代码与依赖审计 |
-| [VectifyAI/OpenKB](https://github.com/VectifyAI/OpenKB) | 约 3.0k stars | Python、LiteLLM、OpenAI Agents SDK、PageIndex、MarkItDown | 多格式摄入；长文档使用无向量的树状推理检索；多模态；OKF-ready；Skill Factory | 长 PDF/报告摄入的重要参考；不在 MVP 中引入 Python sidecar |
-| [GoogleCloudPlatform/knowledge-catalog](https://github.com/GoogleCloudPlatform/knowledge-catalog) | 约 7.2k stars | Markdown、YAML、OKF 规范与工具 | 用极小文件契约表达可移植知识 Bundle | 作为兼容格式采用，不作为运行时依赖 |
+| 项目                                                                                              |     快照关注度 | 主要技术                                                        | 核心做法                                                                                          | 对本项目的判断                                                  |
+| ------------------------------------------------------------------------------------------------- | -------------: | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki)                                             | 约 14.7k stars | Tauri、React/TypeScript、Rust、LanceDB、Graphology/Sigma.js     | Raw → Wiki → Schema；两阶段摄入；hash 增量缓存；持久队列；混合检索；图扩展；人工审核；MCP/HTTP    | 最完整的产品参考；借鉴机制，不引入 Tauri/Rust Runtime           |
+| [AgriciDaniel/claude-obsidian](https://github.com/AgriciDaniel/claude-obsidian)                   |  约 9.5k stars | Python、Agent Skills、Obsidian REST/文件系统、BM25、可选 Ollama | 支持 LYT/PARA/Zettelkasten；`hot.md`/`index.md` 渐进检索；manifest 增量更新；文件锁；Git 自动提交 | 适合借鉴 Vault 工作流、渐进披露和多写者保护                     |
+| [inkeep/open-knowledge](https://github.com/inkeep/open-knowledge)                                 |  约 2.9k stars | TypeScript、Bun/Turbo、桌面与 Web 编辑器、MCP/CLI、Git          | 面向 Markdown/MDX 的 AI 编辑环境，多 Agent 并排编辑，图谱、同步和搜索                             | UI/Agent 接入参考；与 Obsidian 编辑器职责重叠，不应移植产品外壳 |
+| [Ar9av/obsidian-wiki](https://github.com/Ar9av/obsidian-wiki)                                     |  约 2.9k stars | Python、Agent Skills、Obsidian Vault                            | 摄入 → 抽取概念/实体/主张/关系 → 合并矛盾 → 演化 schema；doctor/query/lint/trust-check            | 工作流清晰，适合作为 Skills 与命令体验参考                      |
+| [atomicstrata/llm-wiki-compiler](https://github.com/atomicstrata/llm-wiki-compiler)               |  约 1.8k stars | TypeScript、Node.js、Zod/Ajv、MCP、OpenAI/Anthropic SDK         | 两阶段编译；类型化生命周期 profile；source/line citation；混合检索；lint/eval；OKF 导入导出       | 与本项目技术栈和目标最贴合，优先做代码与依赖审计                |
+| [VectifyAI/OpenKB](https://github.com/VectifyAI/OpenKB)                                           |  约 3.0k stars | Python、LiteLLM、OpenAI Agents SDK、PageIndex、MarkItDown       | 多格式摄入；长文档使用无向量的树状推理检索；多模态；OKF-ready；Skill Factory                      | 长 PDF/报告摄入的重要参考；不在 MVP 中引入 Python sidecar       |
+| [GoogleCloudPlatform/knowledge-catalog](https://github.com/GoogleCloudPlatform/knowledge-catalog) |  约 7.2k stars | Markdown、YAML、OKF 规范与工具                                  | 用极小文件契约表达可移植知识 Bundle                                                               | 作为兼容格式采用，不作为运行时依赖                              |
 
 ### 3.1 `nashsu/llm_wiki`：完整产品形态
 
@@ -103,13 +103,13 @@ OpenKB 没有把所有文档都强制放进同一种向量检索：短文档走�
 
 ## 4. 邻近成熟路线
 
-| 项目 | 主要定位 | 关键技术思想 | 应如何使用 |
-| --- | --- | --- | --- |
-| [khoj-ai/khoj](https://github.com/khoj-ai/khoj) | 自托管个人 AI、RAG、Agent 与自动化 | Python/TypeScript，多格式语义搜索，多端入口，自定义知识和定时任务 | 用于对比成熟产品体验，不复制其后端架构 |
-| [mem0ai/mem0](https://github.com/mem0ai/mem0) | Agent 长期记忆层 | 事实抽取、实体链接、semantic + BM25 + entity 融合检索 | 仅用于偏好、人物和会话记忆；不能替代 Vault Wiki |
-| [getzep/graphiti](https://github.com/getzep/graphiti) | 时序知识图谱 | episode provenance、事实有效时间、旧事实失效而非删除、混合图检索 | 借鉴时间与来源语义；MVP 不引入 Neo4j/FalkorDB/Neptune |
-| [topoteretes/cognee](https://github.com/topoteretes/cognee) | 面向 Agent 的知识图谱记忆 | 数据摄入、图结构、检索与记忆 pipeline | 作为图记忆对照，不作为基础依赖 |
-| [letta-ai/letta](https://github.com/letta-ai/letta) | 有状态 Agent Runtime | Agent 状态、memory blocks、长时运行和工具 | 只参考状态与记忆边界，不替换 Copilot Runtime |
+| 项目                                                        | 主要定位                           | 关键技术思想                                                      | 应如何使用                                            |
+| ----------------------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------- |
+| [khoj-ai/khoj](https://github.com/khoj-ai/khoj)             | 自托管个人 AI、RAG、Agent 与自动化 | Python/TypeScript，多格式语义搜索，多端入口，自定义知识和定时任务 | 用于对比成熟产品体验，不复制其后端架构                |
+| [mem0ai/mem0](https://github.com/mem0ai/mem0)               | Agent 长期记忆层                   | 事实抽取、实体链接、semantic + BM25 + entity 融合检索             | 仅用于偏好、人物和会话记忆；不能替代 Vault Wiki       |
+| [getzep/graphiti](https://github.com/getzep/graphiti)       | 时序知识图谱                       | episode provenance、事实有效时间、旧事实失效而非删除、混合图检索  | 借鉴时间与来源语义；MVP 不引入 Neo4j/FalkorDB/Neptune |
+| [topoteretes/cognee](https://github.com/topoteretes/cognee) | 面向 Agent 的知识图谱记忆          | 数据摄入、图结构、检索与记忆 pipeline                             | 作为图记忆对照，不作为基础依赖                        |
+| [letta-ai/letta](https://github.com/letta-ai/letta)         | 有状态 Agent Runtime               | Agent 状态、memory blocks、长时运行和工具                         | 只参考状态与记忆边界，不替换 Copilot Runtime          |
 
 这三种概念必须分开：
 
@@ -207,13 +207,13 @@ manifest 至少应记录：
 
 ## 7. 许可证与复用边界
 
-| 项目 | 许可证 | 建议 |
-| --- | --- | --- |
-| `llm-wiki-compiler`、`claude-obsidian`、`obsidian-wiki` | MIT | 可在保留版权与许可声明后复用；仍需先做代码适配审计 |
-| `OpenKB`、OKF、Mem0、Graphiti、Cognee、Letta | Apache-2.0 | 可参考或复用，但保留 NOTICE/归属并检查专利与再分发要求 |
-| `llm_wiki` | GPL-3.0 | 适合研究机制；复制代码前需单独确认与本项目 AGPL 分发的合规方式 |
-| `open-knowledge` | GPL-3.0 | 主要借鉴交互，不引入其编辑器代码 |
-| Khoj | AGPL-3.0 | 架构参考；复用代码会带来对应的网络分发义务 |
+| 项目                                                    | 许可证     | 建议                                                           |
+| ------------------------------------------------------- | ---------- | -------------------------------------------------------------- |
+| `llm-wiki-compiler`、`claude-obsidian`、`obsidian-wiki` | MIT        | 可在保留版权与许可声明后复用；仍需先做代码适配审计             |
+| `OpenKB`、OKF、Mem0、Graphiti、Cognee、Letta            | Apache-2.0 | 可参考或复用，但保留 NOTICE/归属并检查专利与再分发要求         |
+| `llm_wiki`                                              | GPL-3.0    | 适合研究机制；复制代码前需单独确认与本项目 AGPL 分发的合规方式 |
+| `open-knowledge`                                        | GPL-3.0    | 主要借鉴交互，不引入其编辑器代码                               |
+| Khoj                                                    | AGPL-3.0   | 架构参考；复用代码会带来对应的网络分发义务                     |
 
 许可证兼容不等于可以忽略署名、NOTICE、依赖许可证或素材来源。正式复制代码前应以目标 commit 的 `LICENSE`、依赖清单和文件头完成一次独立审计；本文不是法律意见。
 

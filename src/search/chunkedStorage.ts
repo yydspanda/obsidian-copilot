@@ -1,8 +1,9 @@
 // DEPRECATED: Legacy partitioned Orama store. v3 uses JSONL snapshots + MemoryIndexManager.
 import { CustomError } from "@/error";
-import { logInfo } from "@/logger";
+import { logError, logInfo, logWarn } from "@/logger";
+import type { CopilotOrama, CopilotOramaSchema } from "@/search/dbOperations";
 import { getSettings } from "@/settings/model";
-import { create, load, Orama, RawData, save } from "@orama/orama";
+import { create, load, RawData, save } from "@orama/orama";
 import { App } from "obsidian";
 
 const CHUNK_PREFIX = "copilot-index-chunk-";
@@ -10,7 +11,7 @@ const LEGACY_INDEX_SUFFIX = ".json";
 
 export interface ChunkMetadata {
   numPartitions: number;
-  schema: Record<string, string>;
+  schema: CopilotOramaSchema;
   lastModified: number;
   documentPartitions: Record<string, number>;
 }
@@ -89,7 +90,7 @@ export class ChunkedStorage {
     if (getSettings().debug) {
       logInfo(`Total documents distributed: ${totalDistributed}`);
       if (totalDistributed !== documents.length) {
-        console.error(
+        logError(
           `Document count mismatch! Original: ${documents.length}, Distributed: ${totalDistributed}`
         );
       }
@@ -105,8 +106,7 @@ export class ChunkedStorage {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Orama<any> is required here as it controls Orama's type inference
-  async saveDatabase(db: Orama<any>): Promise<void> {
+  async saveDatabase(db: CopilotOrama): Promise<void> {
     try {
       const rawData: RawData = save(db);
       const numPartitions = getSettings().numPartitions;
@@ -238,20 +238,19 @@ export class ChunkedStorage {
         logInfo("Saved all partitions");
       }
     } catch (error) {
-      console.error(`Error saving database:`, error);
+      logError(`Error saving database:`, error);
       throw new CustomError(`Failed to save database: ${(error as Error).message}`);
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Orama<any> is required here as it controls Orama's type inference
-  async loadDatabase(): Promise<Orama<any>> {
+  async loadDatabase(): Promise<CopilotOrama> {
     try {
       const legacyPath = this.getLegacyPath();
 
       // Try loading legacy format first
       if (await this.app.vault.adapter.exists(legacyPath)) {
         const legacyData = JSON.parse(await this.app.vault.adapter.read(legacyPath)) as RawData & {
-          schema?: Record<string, string>;
+          schema?: CopilotOramaSchema;
         };
         if (!legacyData?.schema) {
           throw new CustomError("Invalid legacy database format");
@@ -322,7 +321,7 @@ export class ChunkedStorage {
           orderedDocs[nextDocId.toString()] = doc;
           nextDocId++;
         } else if (getSettings().debug) {
-          console.warn(`Document ${internalId} not found in any chunk`);
+          logWarn(`Document ${internalId} not found in any chunk`);
         }
       }
 
@@ -348,7 +347,7 @@ export class ChunkedStorage {
       load(newDb, mergedData as RawData);
       return newDb;
     } catch (error) {
-      console.error(`Error loading database:`, error);
+      logError(`Error loading database:`, error);
       throw new CustomError(`Failed to load database: ${(error as Error).message}`);
     }
   }
@@ -371,7 +370,7 @@ export class ChunkedStorage {
         }
       }
     } catch (error) {
-      console.error(`Error clearing storage:`, error);
+      logError(`Error clearing storage:`, error);
       throw new CustomError(`Failed to clear storage: ${(error as Error).message}`);
     }
   }

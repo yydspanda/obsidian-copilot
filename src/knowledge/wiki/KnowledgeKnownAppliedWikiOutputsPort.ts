@@ -58,8 +58,7 @@ export interface KnowledgeKnownAppliedWikiOutputsPage {
 }
 
 /** Opaque exact-generation session returned for one canonical Wiki path. */
-export interface KnowledgeKnownAppliedWikiOutputsSession
-  extends KnowledgeKnownAppliedWikiOutputsPage {
+export interface KnowledgeKnownAppliedWikiOutputsSession extends KnowledgeKnownAppliedWikiOutputsPage {
   readonly pageRef: string;
   readonly displayPagePath: string;
   readonly currentState: KnowledgeKnownAppliedWikiCurrentState;

@@ -103,9 +103,7 @@ function originsEqual(
 }
 
 /** Explicit fail-closed capability used outside a released production generation. */
-class UnavailableKnowledgeKnownAppliedWikiOutputsPort
-  implements KnowledgeKnownAppliedWikiOutputsPort
-{
+class UnavailableKnowledgeKnownAppliedWikiOutputsPort implements KnowledgeKnownAppliedWikiOutputsPort {
   /** Rejects a new browsing session while no generation is installed. */
   async inspectKnownOutputs(): Promise<Readonly<KnowledgeKnownAppliedWikiOutputsSession>> {
     throw new KnowledgeKnownAppliedWikiOutputsError("unavailable");
@@ -247,9 +245,7 @@ function resolveSession(
 }
 
 /** Stable generation-revocable port for the optional Known outputs UI. */
-export class DelegatingKnowledgeKnownAppliedWikiOutputsPort
-  implements KnowledgeKnownAppliedWikiOutputsPort
-{
+export class DelegatingKnowledgeKnownAppliedWikiOutputsPort implements KnowledgeKnownAppliedWikiOutputsPort {
   /** Creates one fail-closed stable surface. */
   constructor() {
     const unavailable = Object.freeze(new UnavailableKnowledgeKnownAppliedWikiOutputsPort());

@@ -1,5 +1,7 @@
 import { Platform } from "obsidian";
 
+import { isDesktopRuntime } from "@/utils/desktopRuntime";
+
 /** Minimal platform capabilities needed by the Windows-only knowledge surface. */
 export interface KnowledgeStudioPlatformCapabilities {
   isDesktopApp: boolean;
@@ -18,7 +20,7 @@ export interface KnowledgeStudioPlatformCapabilities {
  */
 export function isKnowledgeStudioPlatformSupported(
   capabilities: KnowledgeStudioPlatformCapabilities = {
-    isDesktopApp: Platform.isDesktopApp,
+    isDesktopApp: isDesktopRuntime(),
     isWin: Platform.isWin,
   }
 ): boolean {

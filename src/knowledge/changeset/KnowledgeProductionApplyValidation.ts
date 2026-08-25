@@ -125,9 +125,7 @@ Object.freeze(KnowledgeProductionProjectionValidator);
  * nor the model's earlier result. The apply transaction repeats both citation
  * and document checks after durable acceptance.
  */
-export class KnowledgeProductionReviewCandidateValidator
-  implements KnowledgeReviewCandidateValidator
-{
+export class KnowledgeProductionReviewCandidateValidator implements KnowledgeReviewCandidateValidator {
   /** Captures one exact parser preparation for the review command. */
   constructor(
     private readonly bundle: KnowledgeBundleConfig,

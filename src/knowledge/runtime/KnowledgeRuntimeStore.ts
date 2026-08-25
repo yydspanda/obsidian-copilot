@@ -658,8 +658,7 @@ export interface KnowledgeSourceRetirementReceipt {
 }
 
 /** Exact durable receipt returned by the atomic Runtime Reject boundary. */
-export interface KnowledgeRuntimeReviewRejectReceipt
-  extends KnowledgeReviewRejectTransitionReceipt {
+export interface KnowledgeRuntimeReviewRejectReceipt extends KnowledgeReviewRejectTransitionReceipt {
   runtimeRevision: number;
 }
 
@@ -983,7 +982,7 @@ const nonNegativeSafeIntegerSchema = z.number().int().safe().nonnegative();
 const runtimeBundleSlotSchema: z.ZodType<KnowledgeRuntimeBundleSlot> = z
   .object({
     bundleId: nonEmptyStringSchema,
-    value: z.record(z.unknown()),
+    value: z.record(z.string(), z.unknown()),
   })
   .strict();
 
@@ -1135,9 +1134,9 @@ const legacyKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<LegacyKnowledgeRuntim
     queues: z.array(runtimeBundleSlotSchema),
     reviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
     inputRevisions: z.array(previousRuntimeInputRevisionBundleSchema),
-    applyCommits: z.array(z.record(z.unknown())),
+    applyCommits: z.array(z.record(z.string(), z.unknown())),
   })
   .strict();
 
@@ -1148,7 +1147,7 @@ const runtimeV2StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV2> =
     queues: z.array(runtimeBundleSlotSchema),
     reviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
     inputRevisions: z.array(previousRuntimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
   })
@@ -1163,7 +1162,7 @@ const previousKnowledgeRuntimeStoreSnapshotSchema: z.ZodType<PreviousKnowledgeRu
       queues: z.array(runtimeBundleSlotSchema),
       reviews: z.array(runtimeBundleSlotSchema),
       manifests: z.array(runtimeBundleSlotSchema),
-      activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+      activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
       inputRevisions: z.array(runtimeInputRevisionBundleSchema),
       applyCommits: z.array(applyCommitLedgerRecordSchema),
     })
@@ -1177,7 +1176,7 @@ const runtimeV4StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV4> =
     queues: z.array(runtimeBundleSlotSchema),
     reviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
     inputRevisions: z.array(runtimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
   })
@@ -1191,7 +1190,7 @@ const runtimeV5StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV5> =
     queues: z.array(runtimeBundleSlotSchema),
     reviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
     inputRevisions: z.array(runtimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
   })
@@ -1206,7 +1205,7 @@ const runtimeV6StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV6> =
     reviews: z.array(runtimeBundleSlotSchema),
     forwardRevisionReviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
     inputRevisions: z.array(runtimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
   })
@@ -1221,7 +1220,7 @@ const runtimeV7StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV7> =
     reviews: z.array(runtimeBundleSlotSchema),
     forwardRevisionReviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
     inputRevisions: z.array(runtimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
   })
@@ -1236,11 +1235,11 @@ const runtimeV8StoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapshotV8> =
     reviews: z.array(runtimeBundleSlotSchema),
     forwardRevisionReviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
-    activeForwardRevisionApply: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
+    activeForwardRevisionApply: z.union([z.record(z.string(), z.unknown()), z.null()]),
     inputRevisions: z.array(runtimeInputRevisionBundleSchema),
     applyCommits: z.array(applyCommitLedgerRecordSchema),
-    forwardRevisionApplyCommits: z.array(z.record(z.unknown())),
+    forwardRevisionApplyCommits: z.array(z.record(z.string(), z.unknown())),
   })
   .strict();
 
@@ -1262,7 +1261,7 @@ const knowledgeRuntimeStoreSnapshotSchema: z.ZodType<KnowledgeRuntimeStoreSnapsh
     reviews: z.array(runtimeBundleSlotSchema),
     forwardRevisionReviews: z.array(runtimeBundleSlotSchema),
     manifests: z.array(runtimeBundleSlotSchema),
-    activeTransaction: z.union([z.record(z.unknown()), z.null()]),
+    activeTransaction: z.union([z.record(z.string(), z.unknown()), z.null()]),
     activeForwardRevisionApply: z.union([
       z.custom<KnowledgeForwardRevisionApplyJournalV1>(
         (value) => parseKnowledgeForwardRevisionApplyJournal(value).ok

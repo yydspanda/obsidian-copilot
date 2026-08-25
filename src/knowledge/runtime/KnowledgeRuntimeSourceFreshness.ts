@@ -97,8 +97,7 @@ interface KnowledgeRuntimeSourceFreshnessAuthorityBase {
 }
 
 /** Latest source outcome proven by the Runtime Apply ledger and current Manifest. */
-export interface KnowledgeRuntimeAppliedFreshnessAuthority
-  extends KnowledgeRuntimeSourceFreshnessAuthorityBase {
+export interface KnowledgeRuntimeAppliedFreshnessAuthority extends KnowledgeRuntimeSourceFreshnessAuthorityBase {
   readonly kind: "applied";
   readonly transactionId: string;
   readonly changeSetId: string;
@@ -110,8 +109,7 @@ export interface KnowledgeRuntimeAppliedFreshnessAuthority
 }
 
 /** Latest source outcome proven by an exact Runtime/Queue no-changes commit. */
-export interface KnowledgeRuntimeNoChangesFreshnessAuthority
-  extends KnowledgeRuntimeSourceFreshnessAuthorityBase {
+export interface KnowledgeRuntimeNoChangesFreshnessAuthority extends KnowledgeRuntimeSourceFreshnessAuthorityBase {
   readonly kind: "no_changes";
   readonly noChangesId: string;
   readonly reason: NoChangesManifestCommitReason;

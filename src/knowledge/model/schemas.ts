@@ -32,7 +32,7 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
     z.boolean(),
     z.null(),
     z.array(jsonValueSchema),
-    z.record(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
   ])
 );
 
@@ -92,7 +92,7 @@ export const sourceManifestEntrySchema = z
     custody: z.enum(["user_managed", "managed_copy"]),
     lastSuccessful: sourceCompileSnapshotSchema.optional(),
     lastFailure: sourceCompileFailureSchema.optional(),
-    extensions: z.record(jsonValueSchema).optional(),
+    extensions: z.record(z.string(), jsonValueSchema).optional(),
   })
   .strict();
 
@@ -103,7 +103,7 @@ export const sourceManifestSchema: z.ZodType<SourceManifest> = z
     bundleId: nonEmptyStringSchema,
     revision: nonNegativeIntegerSchema,
     entries: z.array(sourceManifestEntrySchema),
-    extensions: z.record(jsonValueSchema).optional(),
+    extensions: z.record(z.string(), jsonValueSchema).optional(),
   })
   .strict();
 
@@ -172,7 +172,7 @@ const okfConceptDocumentSchema = z
     resource: nonEmptyStringSchema.optional(),
     tags: z.array(nonEmptyStringSchema).optional(),
     timestamp: nonEmptyStringSchema.optional(),
-    extensions: z.record(jsonValueSchema),
+    extensions: z.record(z.string(), jsonValueSchema),
     citations: z.array(claimCitationSchema),
   })
   .strict();
@@ -361,13 +361,23 @@ export const knowledgeChangeSetSchema: z.ZodType<KnowledgeChangeSet> = z
  * @param path - Zod issue path
  * @returns Stable dotted and indexed field path
  */
-function formatIssuePath(path: (string | number)[]): string {
+function formatIssuePath(path: PropertyKey[]): string {
   return path.reduce<string>((result, segment) => {
     if (typeof segment === "number") {
       return `${result}[${segment}]`;
     }
-    return result ? `${result}.${segment}` : segment;
+    const text = String(segment);
+    return result ? `${result}.${text}` : text;
   }, "");
+}
+
+/** Keeps schema diagnostic codes stable across Zod's combined value issue. */
+function formatIssueCode(issue: z.ZodIssue): string {
+  if (issue.code !== "invalid_value") {
+    return issue.code;
+  }
+
+  return issue.values.length === 1 ? "invalid_literal" : "invalid_enum_value";
 }
 
 /**
@@ -383,7 +393,7 @@ function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown): KnowledgePars
     return { ok: true, value: result.data };
   }
   const issues: KnowledgeDiagnostic[] = result.error.issues.map((issue) => ({
-    code: `schema_${issue.code}`,
+    code: `schema_${formatIssueCode(issue)}`,
     severity: "error",
     field: formatIssuePath(issue.path),
     message: issue.message,

@@ -1,8 +1,8 @@
-import { atom, createStore, useAtomValue } from "jotai";
-import { normalizePath } from "obsidian";
-
+import { atom, createStore } from "jotai";
+import { useAtomValue } from "jotai";
 import { ProjectConfig } from "@/aiParams";
 import { ProjectFileRecord } from "@/projects/type";
+import { normalizePath } from "obsidian";
 
 // Independent store for projects (aligned with system-prompts pattern)
 const projectsStore = createStore();
@@ -43,8 +43,7 @@ let projectStateOwnershipActivated = false;
 const projectFileWriteLeases = new Map<ProjectFileWriteLease, ProjectFileWriteLeaseRecord>();
 const projectFileWriteLeasesByPath = new Map<string, Set<ProjectFileWriteLease>>();
 
-// Compatibility-only counters for callers that have not yet migrated to opaque leases.
-// Once explicit lifecycle ownership is activated, these wrappers are permanently disabled.
+// Compatibility counters remain available to upstream helpers that cannot retain opaque leases.
 const legacyPendingFileWrites = new Map<string, number>();
 
 /**
@@ -182,7 +181,7 @@ export function getCachedProjectRecordById(projectId: string): ProjectFileRecord
 
 /**
  * Non-reactive: find a cached record by file path.
- * @param filePath - Vault path of project.md
+ * @param filePath - Vault path of the project.md metadata/config record
  * @returns Matching record or undefined
  */
 export function getCachedProjectRecordByFilePath(filePath: string): ProjectFileRecord | undefined {
@@ -278,7 +277,7 @@ function replaceProjectRecordByFilePath(
  * This compatibility wrapper works only until explicit lifecycle ownership is
  * activated. Afterwards, unowned writes are deterministic no-ops.
  *
- * @param filePath - Vault path of project.md being modified
+ * @param filePath - Vault path of the project.md metadata/config record being modified
  * @param record - Parsed record to store for that file
  */
 export function replaceCachedProjectRecordByFilePath(
@@ -407,7 +406,7 @@ export function deleteCachedProjectRecordByFilePathForOwner(
  * This compatibility wrapper works only until explicit lifecycle ownership is
  * activated. Afterwards, unowned writes are deterministic no-ops.
  *
- * @param filePath - Vault path of project.md
+ * @param filePath - Vault path of the project.md metadata/config record
  */
 export function deleteCachedProjectRecordByFilePath(filePath: string): void {
   if (projectStateOwnershipActivated) {
@@ -422,7 +421,7 @@ export function deleteCachedProjectRecordByFilePath(filePath: string): void {
 }
 
 /**
- * Subscribe to project records changes (for non-React code like projectManager).
+ * Subscribe to project records changes (for non-React code).
  * Returns an unsubscribe function.
  * @param callback - Called with the new records array whenever it changes
  * @returns Unsubscribe function
@@ -496,17 +495,12 @@ export function releaseProjectFileWrite(lease: ProjectFileWriteLease): boolean {
 /**
  * Mark a file path as pending write.
  *
- * This compatibility wrapper works only until explicit lifecycle ownership is
- * activated. New lifecycle-aware callers must retain an opaque lease from
- * {@link acquireProjectFileWrite}.
+ * Lifecycle-aware callers should retain an opaque lease from
+ * {@link acquireProjectFileWrite}; this wrapper remains for bounded upstream helpers.
  *
  * @param path - Vault path being written
  */
 export function addPendingFileWrite(path: string): void {
-  if (projectStateOwnershipActivated) {
-    return;
-  }
-
   const key = normalizePath(path);
   legacyPendingFileWrites.set(key, (legacyPendingFileWrites.get(key) ?? 0) + 1);
 }
@@ -514,16 +508,11 @@ export function addPendingFileWrite(path: string): void {
 /**
  * Remove a file path from compatibility pending writes.
  *
- * This compatibility wrapper works only until explicit lifecycle ownership is
- * activated. It never releases owner-bound leases.
+ * This compatibility wrapper never releases owner-bound leases.
  *
  * @param path - Vault path whose compatibility guard should be decremented
  */
 export function removePendingFileWrite(path: string): void {
-  if (projectStateOwnershipActivated) {
-    return;
-  }
-
   const key = normalizePath(path);
   const count = (legacyPendingFileWrites.get(key) ?? 0) - 1;
   if (count <= 0) {

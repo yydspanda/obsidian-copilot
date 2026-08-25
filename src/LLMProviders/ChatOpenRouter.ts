@@ -1,5 +1,5 @@
 import { BaseChatModelParams } from "@langchain/core/language_models/chat_models";
-import { AIMessageChunk, BaseMessage } from "@langchain/core/messages";
+import { AIMessage, AIMessageChunk, BaseMessage } from "@langchain/core/messages";
 import type { UsageMetadata } from "@langchain/core/messages";
 import { ChatGenerationChunk } from "@langchain/core/outputs";
 import { ChatOpenAI } from "@langchain/openai";
@@ -50,10 +50,7 @@ export interface ChatOpenRouterInput extends BaseChatModelParams {
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     [key: string]: unknown;
   };
-  temperature?: number;
   maxTokens?: number;
-  topP?: number;
-  frequencyPenalty?: number;
   streaming?: boolean;
   maxRetries?: number;
   maxConcurrency?: number;
@@ -140,6 +137,14 @@ export class ChatOpenRouter extends ChatOpenAI {
         logInfo(`OpenRouter reasoning enabled with max_tokens: 1024`);
         return {
           ...withCaching,
+          // No top-level `max_tokens` alongside this. OpenRouter's docs say the
+          // two must differ where both are present, which reads like the
+          // request needs one, but the gateway accepts a reasoning budget on
+          // its own: checked live against `anthropic/claude-haiku-4.5` and
+          // `nvidia/nemotron-3-nano-30b-a3b`, both 200 with the field absent.
+          // Supplying one here would put a ceiling back on every reasoning
+          // model, which is the thing this change removes.
+          // https://github.com/logancyang/obsidian-copilot-preview/issues/312
           reasoning: {
             max_tokens: 1024,
           },
@@ -207,9 +212,6 @@ export class ChatOpenRouter extends ChatOpenAI {
         text: typeof messageChunk.content === "string" ? messageChunk.content : "",
         generationInfo: {
           finish_reason: choice.finish_reason,
-          // Reason: system_fingerprint is marked deprecated by some scorecards but is still
-          // returned by OpenAI-style streaming APIs and is useful for telemetry.
-          system_fingerprint: rawChunk["system_fingerprint"],
           model: rawChunk.model,
         },
       });
@@ -238,10 +240,7 @@ export class ChatOpenRouter extends ChatOpenAI {
   private toOpenRouterMessages(messages: BaseMessage[]): OpenRouterMessageParam[] {
     return messages.map((msg) => {
       const msgRecord = msg as unknown as Record<string, unknown>;
-      const role =
-        typeof msg._getType === "function"
-          ? msg._getType()
-          : ((msgRecord.role as string) ?? "user");
+      const role = BaseMessage.isInstance(msg) ? msg.type : ((msgRecord.role as string) ?? "user");
       const mappedRole =
         role === "human"
           ? "user"
@@ -257,20 +256,23 @@ export class ChatOpenRouter extends ChatOpenAI {
         } as OpenRouterMessageParam;
       }
 
-      if (msg.additional_kwargs?.function_call) {
+      // First-class tool_calls on AIMessage (used by the autonomous agent when
+      // reconstructing assistant turns) must be serialized to the OpenAI wire format,
+      // otherwise the following "tool" role messages would violate the protocol and the
+      // provider rejects the turn.
+      // https://github.com/logancyang/obsidian-copilot-preview/issues/300
+      if (AIMessage.isInstance(msg) && msg.tool_calls && msg.tool_calls.length > 0) {
         return {
-          role: mappedRole,
+          role: "assistant",
           content: msg.content,
-          function_call: msg.additional_kwargs.function_call,
-        } as OpenRouterMessageParam;
-      }
-
-      // Handle modern tool_calls format (used by autonomous agent)
-      if (msg.additional_kwargs?.tool_calls) {
-        return {
-          role: mappedRole,
-          content: msg.content,
-          tool_calls: msg.additional_kwargs.tool_calls,
+          tool_calls: msg.tool_calls.map((toolCall) => ({
+            id: toolCall.id ?? "",
+            type: "function" as const,
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.args ?? {}),
+            },
+          })),
         } as OpenRouterMessageParam;
       }
 
@@ -299,14 +301,6 @@ export class ChatOpenRouter extends ChatOpenAI {
     const toolCallChunks = this.extractToolCallChunks(delta.tool_calls);
 
     const additionalKwargs: Record<string, unknown> = {};
-
-    if (delta.function_call) {
-      additionalKwargs.function_call = delta.function_call;
-    }
-
-    if (Array.isArray(delta.tool_calls)) {
-      additionalKwargs.tool_calls = delta.tool_calls;
-    }
 
     const deltaPayload: Record<string, unknown> = {};
     if (reasoningText) {
@@ -484,14 +478,6 @@ export class ChatOpenRouter extends ChatOpenAI {
 
     if (rawChunk.model) {
       metadata.model = rawChunk.model;
-    }
-
-    // Reason: system_fingerprint is marked deprecated by some scorecards but is still
-    // returned by OpenAI-style streaming APIs and is useful for telemetry. Use bracket
-    // access to bypass JSDoc deprecation warnings.
-    const fingerprint = rawChunk["system_fingerprint"];
-    if (fingerprint) {
-      metadata.system_fingerprint = fingerprint;
     }
 
     if (rawChunk.usage) {

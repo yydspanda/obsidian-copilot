@@ -142,12 +142,16 @@ const WORKSPACE_DIAGNOSTICS = new Set([
 ]);
 
 const KNOWLEDGE_DIAGNOSTIC_REASONS = new Map<string, KnowledgeSetupKnowledgeModelReason>([
+  ["production_preflight_project_missing", "knowledge_model_configuration_invalid"],
   ["production_preflight_profile_project_missing", "knowledge_model_configuration_invalid"],
   ["production_preflight_profile_model_key_invalid", "knowledge_model_missing"],
+  ["production_preflight_model_missing", "knowledge_model_missing"],
   ["production_preflight_profile_model_missing", "knowledge_model_missing"],
+  ["production_preflight_model_ambiguous", "knowledge_model_ambiguous"],
   ["production_preflight_profile_model_ambiguous", "knowledge_model_ambiguous"],
   ["production_preflight_profile_model_disabled", "knowledge_model_disabled"],
   ["production_preflight_profile_model_not_project_enabled", "knowledge_model_not_project_enabled"],
+  ["production_preflight_provider_unsupported", "knowledge_model_unsupported"],
   ["production_preflight_profile_provider_unsupported", "knowledge_model_unsupported"],
   ["production_preflight_profile_model_unsupported", "knowledge_model_unsupported"],
   ["production_preflight_model_unsupported", "knowledge_model_unsupported"],

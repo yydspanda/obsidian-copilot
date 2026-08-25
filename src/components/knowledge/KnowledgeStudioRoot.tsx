@@ -426,7 +426,7 @@ function ForwardRevisionStatusPanel({
     <section
       aria-busy={retryBusy || keepCurrentBusy}
       aria-label="Forward revision recovery required"
-      className="tw-border-error tw-space-y-3 tw-rounded-xl tw-border tw-border-solid tw-bg-error tw-p-4"
+      className="tw-space-y-3 tw-rounded-xl tw-border tw-border-solid tw-border-error tw-bg-error tw-p-4"
       role="alert"
     >
       <div className="tw-flex tw-items-center tw-gap-2">

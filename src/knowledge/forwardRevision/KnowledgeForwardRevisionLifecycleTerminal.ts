@@ -160,20 +160,17 @@ interface KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
 }
 
 /** Recovery revision one proves no write was authorized. */
-export interface KnowledgeForwardRevisionRecoveryJournalRefRevision1V1
-  extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
+export interface KnowledgeForwardRevisionRecoveryJournalRefRevision1V1 extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly journalRevision: 1;
 }
 
 /** Recovery revision two has an intentionally uncertain write outcome. */
-export interface KnowledgeForwardRevisionRecoveryJournalRefRevision2V1
-  extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
+export interface KnowledgeForwardRevisionRecoveryJournalRefRevision2V1 extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly journalRevision: 2;
 }
 
 /** Recovery revision three proves an exact committed marker preceded external drift. */
-export interface KnowledgeForwardRevisionRecoveryJournalRefRevision3V1
-  extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
+export interface KnowledgeForwardRevisionRecoveryJournalRefRevision3V1 extends KnowledgeForwardRevisionRecoveryJournalRefBaseV1 {
   readonly journalRevision: 3;
   readonly committedAt: number;
 }
@@ -203,22 +200,19 @@ interface KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
 }
 
 /** Prepared recovery abandoned without starting a Vault write. */
-export interface KnowledgeForwardRevisionAbandonedRecoveryTerminalRecordV1
-  extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
+export interface KnowledgeForwardRevisionAbandonedRecoveryTerminalRecordV1 extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly outcome: "abandoned_before_write";
   readonly journal: Readonly<KnowledgeForwardRevisionRecoveryJournalRefRevision1V1>;
 }
 
 /** Applying recovery closed only after an unrelated external supersession. */
-export interface KnowledgeForwardRevisionUncertainRecoveryTerminalRecordV1
-  extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
+export interface KnowledgeForwardRevisionUncertainRecoveryTerminalRecordV1 extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly outcome: "write_outcome_uncertain_external_supersession";
   readonly journal: Readonly<KnowledgeForwardRevisionRecoveryJournalRefRevision2V1>;
 }
 
 /** Committed recovery closed only after a later external supersession. */
-export interface KnowledgeForwardRevisionCommittedRecoveryTerminalRecordV1
-  extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
+export interface KnowledgeForwardRevisionCommittedRecoveryTerminalRecordV1 extends KnowledgeForwardRevisionRecoveryTerminalRecordBaseV1 {
   readonly outcome: "committed_then_external_supersession";
   readonly journal: Readonly<KnowledgeForwardRevisionRecoveryJournalRefRevision3V1>;
 }

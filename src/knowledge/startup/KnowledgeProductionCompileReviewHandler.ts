@@ -70,7 +70,7 @@ const handlerStates = new WeakMap<object, HandlerState>();
 
 // Capturing the concrete base method prevents an own-property override or later
 // prototype mutation from replacing the strict durable repository boundary.
-// eslint-disable-next-line @typescript-eslint/unbound-method
+// eslint-disable-next-line @typescript-eslint/unbound-method -- capture the concrete base method before prototype mutation can replace it
 const REVIEW_SAVE_PROPOSAL = ChangeSetReviewRepository.prototype.saveProposal;
 
 const CONTROLLED_COMPILER_FAILURES: Readonly<

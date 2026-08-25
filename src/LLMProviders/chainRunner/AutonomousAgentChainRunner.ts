@@ -2,7 +2,7 @@ import { AGENT_LOOP_TIMEOUT_MS } from "@/constants";
 import { MessageContent } from "@/imageProcessing/imageProcessor";
 import { logError, logInfo, logWarn } from "@/logger";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
-import { checkIsPlusUser } from "@/plusUtils";
+import { checkIsPaidUser } from "@/plusUtils";
 import { getSettings } from "@/settings/model";
 import { getSystemPromptWithMemory } from "@/system-prompts/systemPromptBuilder";
 import { initializeBuiltinTools } from "@/tools/builtinTools";
@@ -134,7 +134,7 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
 
     // Initialize tools if not already done
     if (registry.getAllTools().length === 0) {
-      initializeBuiltinTools(this.chainManager.app?.vault);
+      initializeBuiltinTools(this.chainManager.app);
     }
 
     // Get enabled tool IDs from settings
@@ -387,7 +387,8 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
     this.llmFormattedMessages = [];
     this.lastDisplayedContent = "";
 
-    const isPlusUser = await checkIsPlusUser({
+    const isPaidUser = await checkIsPaidUser(this.chainManager.app, {
+      trigger: "legacy_chat_turn",
       isAutonomousAgent: true,
     });
 
@@ -396,10 +397,9 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
     // Agent mode should never show thinking tokens in the response
     const thinkStreamer = new ThinkBlockStreamer(updateCurrentAiMessage, true);
 
-    if (!isPlusUser) {
-      await this.handleError(
-        new Error("Invalid license key"),
-        thinkStreamer.processErrorChunk.bind(thinkStreamer) as (message: string) => void
+    if (!isPaidUser) {
+      await this.handleError(new Error("Invalid license key"), (message) =>
+        thinkStreamer.processErrorChunk(message)
       );
       const errorResponse = thinkStreamer.close().content;
       return this.handleResponse(
@@ -509,9 +509,8 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
         const fallbackErrorMsg =
           `\n\nFallback to regular Plus mode also failed: ` + err2String(fallbackError);
 
-        await this.handleError(
-          new Error(autonomousAgentErrorMsg + fallbackErrorMsg),
-          thinkStreamer.processErrorChunk.bind(thinkStreamer) as (message: string) => void
+        await this.handleError(new Error(autonomousAgentErrorMsg + fallbackErrorMsg), (message) =>
+          thinkStreamer.processErrorChunk(message)
         );
 
         const fullAIResponse = thinkStreamer.close().content;

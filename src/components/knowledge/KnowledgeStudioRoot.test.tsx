@@ -93,7 +93,12 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
       <span>Review reject {String(props.rejectCommandsEnabled)}</span>
       <span>Review evidence opening {props.openingEvidenceRef ?? "none"}</span>
       <span>Review evidence error {props.evidenceError ?? "none"}</span>
-      <button type="button" onClick={() => props.onOpenEvidence?.("opaque-evidence-ref")}>
+      <button
+        type="button"
+        onClick={() => {
+          void props.onOpenEvidence?.("opaque-evidence-ref");
+        }}
+      >
         Review open evidence
       </button>
       <button type="button" onClick={props.onBack}>
@@ -102,14 +107,14 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
       <button
         disabled={!props.rejectCommandsEnabled}
         type="button"
-        onClick={() =>
-          props.onSubmit({
+        onClick={() => {
+          void props.onSubmit({
             changeSetId: props.plan.changeSetId,
             proposalDigest: props.plan.proposalDigest,
             expectedSnapshotToken: props.plan.snapshotToken,
             decisions: [],
-          })
-        }
+          });
+        }}
       >
         Review submit
       </button>

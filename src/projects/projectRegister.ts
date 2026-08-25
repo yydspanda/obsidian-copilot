@@ -1,5 +1,3 @@
-import { getCurrentProject } from "@/aiParams";
-import { ProjectContextCache } from "@/cache/projectContextCache";
 import { logError, logInfo, logWarn } from "@/logger";
 import { ProjectFileManager } from "@/projects/ProjectFileManager";
 import {
@@ -12,7 +10,6 @@ import {
   deleteCachedProjectRecordByFilePathForOwner,
   getCachedProjectRecordByFilePath,
   getCachedProjectRecordById,
-  getCachedProjectRecords,
   isPendingFileWrite,
   isProjectStateOwnerActive,
   ProjectStateOwner,
@@ -21,7 +18,9 @@ import {
 } from "@/projects/state";
 import { PROJECT_CONFIG_FILE_NAME, PROJECTS_UNSUPPORTED_FOLDER_NAME } from "@/projects/constants";
 import { getSettings, subscribeToSettingsChange } from "@/settings/model";
-import { debounce } from "@/utils/debounce";
+import { deriveProjectsFolder } from "@/settings/copilotFolder";
+import type { StartupMigrationItem } from "@/services/startupMigration";
+import { debounce, type DebouncedFunction } from "@/utils/debounce";
 import { App, Notice, TAbstractFile, Vault } from "obsidian";
 
 /** Reports an attempt to reuse a ProjectRegister after permanent plugin cleanup. */
@@ -53,16 +52,17 @@ interface PendingFileModify {
  * Aligned with system-prompts Register pattern.
  *
  * Responsibilities:
- * - Auto-sync project.md create/modify/delete/rename to in-memory cache
+ * - Auto-sync project config (project.md) create/modify/delete/rename to cache
  * - Listen for projectsFolder setting changes with latest-wins reload
  * - Avoid event loops from pending file writes
+ *
+ * AGENTS.md is an instruction file rather than a project config, so these handlers ignore it.
  */
 export class ProjectRegister {
   private readonly app: App;
   private readonly vault: Vault;
   private readonly manager: ProjectFileManager;
   private readonly stateOwner: ProjectStateOwner;
-  private readonly projectContextCache: ProjectContextCache;
   private settingsUnsubscriber?: () => void;
   /** Whether this generation currently owns the four Vault listeners. */
   private eventListenersRegistered = false;
@@ -71,20 +71,22 @@ export class ProjectRegister {
   /** Permanent plugin-unload boundary; disposed instances cannot be revived. */
   private disposed = false;
   /** Shared initialization work for concurrent callers in the current generation. */
-  private initializePromise?: Promise<void>;
+  private initializePromise?: Promise<StartupMigrationItem | null>;
   /** Monotonic lifecycle generation invalidated synchronously by cleanup. */
   private lifecycleGeneration = 0;
   /** Monotonic request id for latest-wins semantics on folder change. */
   private folderChangeRequestId = 0;
   /** Per-file debounced modify handlers to avoid cross-file debounce collisions. */
-  private fileModifyDebouncers = new Map<string, ReturnType<typeof debounce>>();
+  private fileModifyDebouncers = new Map<
+    string,
+    DebouncedFunction<(pendingModify: PendingFileModify) => void>
+  >();
 
   constructor(app: App) {
     this.app = app;
     this.vault = app.vault;
     this.manager = ProjectFileManager.startLifecycle(app);
     this.stateOwner = this.manager.getStateOwner();
-    this.projectContextCache = ProjectContextCache.getInstance(this.vault);
   }
 
   /**
@@ -97,12 +99,12 @@ export class ProjectRegister {
    * before migration has completed. Deferring to initialize() (called from
    * onLayoutReady) avoids this race.
    */
-  initialize(): Promise<void> {
+  initialize(): Promise<StartupMigrationItem | null> {
     if (this.disposed) {
       return Promise.reject(new ProjectRegisterDisposedError());
     }
     if (this.initialized) {
-      return Promise.resolve();
+      return Promise.resolve(null);
     }
     if (this.initializePromise) {
       return this.initializePromise;
@@ -128,12 +130,13 @@ export class ProjectRegister {
    *
    * @param generation - Generation that registered the current listeners
    */
-  private async performInitialization(generation: number): Promise<void> {
+  private async performInitialization(generation: number): Promise<StartupMigrationItem | null> {
     try {
-      await this.manager.initialize();
+      const migrationResult = await this.manager.initialize();
       if (generation === this.lifecycleGeneration) {
         this.initialized = true;
       }
+      return migrationResult;
     } catch (error) {
       if (generation === this.lifecycleGeneration) {
         this.initialized = false;
@@ -277,13 +280,14 @@ export class ProjectRegister {
     next: ReturnType<typeof getSettings>
   ): void => {
     if (this.disposed || !isProjectStateOwnerActive(this.stateOwner)) return;
-    if (prev.projectsFolder !== next.projectsFolder) {
+    const nextFolder = deriveProjectsFolder(next);
+    if (deriveProjectsFolder(prev) !== nextFolder) {
       // Reason: invalidate synchronously at the settings linearization point.
       // Waiting for the debounce would let an older folder scan commit after
       // CRUD paths had already switched to the new configured folder.
       const requestId = ++this.folderChangeRequestId;
       this.manager.invalidateProjectsFolder();
-      this.debouncedFolderChange({ nextFolder: next.projectsFolder, requestId });
+      this.debouncedFolderChange({ nextFolder, requestId });
     }
   };
 
@@ -350,38 +354,9 @@ export class ProjectRegister {
       for (const d of this.fileModifyDebouncers.values()) d.cancel();
       this.fileModifyDebouncers.clear();
 
-      // Reason: await old cache clears before installing new records to prevent
-      // same-id race: fire-and-forget clears could delete freshly rebuilt cache.
-      const oldRecords = getCachedProjectRecords();
-      const cache = this.projectContextCache;
-      await Promise.all(
-        oldRecords.map((old) =>
-          cache
-            .clearForProject(old.project)
-            .catch((err) =>
-              logError("[Projects] Failed to clear context cache on folder switch", err)
-            )
-        )
-      );
-
-      // Reason: cleanup or a newer folder request may have occurred while context caches cleared.
-      if (!this.isLifecycleCurrent(generation) || currentRequestId !== this.folderChangeRequestId) {
-        return;
-      }
       if (!this.manager.commitPreparedProjectScan(preparedScan, nextRecords)) {
         this.scheduleFolderChangeRetry(nextFolder, currentRequestId);
         return;
-      }
-
-      // Reason: don't call setCurrentProject(null) here — ProjectManager's
-      // records subscriber will detect the disappearance after updateCachedProjectRecords
-      // and handle save-first ordering via switchProject(null).
-      const current = getCurrentProject();
-      if (current) {
-        const stillExists = getCachedProjectRecordById(current.id);
-        if (!stillExists) {
-          new Notice(`Project "${current.name}" not found in new folder. Cleared selection.`);
-        }
       }
 
       logInfo(`[Projects] Folder changed -> reloaded: ${nextFolder}`);
@@ -402,24 +377,6 @@ export class ProjectRegister {
       for (const d of this.fileModifyDebouncers.values()) d.cancel();
       this.fileModifyDebouncers.clear();
 
-      // Reason: clear context caches before wiping records to prevent same-id
-      // projects from reusing stale context on a later retry.
-      const oldRecords = getCachedProjectRecords();
-      const cache = this.projectContextCache;
-      await Promise.all(
-        oldRecords.map((old) =>
-          cache
-            .clearForProject(old.project)
-            .catch((err) =>
-              logError("[Projects] Failed to clear context cache on folder switch failure", err)
-            )
-        )
-      );
-
-      // Reason: cleanup or a newer folder request may have occurred while context caches cleared.
-      if (!this.isLifecycleCurrent(generation) || currentRequestId !== this.folderChangeRequestId) {
-        return;
-      }
       if (!this.manager.commitPreparedProjectScan(preparedScan, [])) {
         this.scheduleFolderChangeRetry(nextFolder, currentRequestId);
         return;
@@ -514,23 +471,6 @@ export class ProjectRegister {
       // Reason: if the deleted file was the current project, clear selection to avoid UI pointing
       // to a non-existent project (aligned with system-prompts delete handler).
       if (record) {
-        // Reason: await cache clear to prevent same-ID recreation from having its
-        // fresh cache wiped by a stale async cleanup. Consistent with folder-switch path.
-        await this.projectContextCache
-          .clearForProject(record.project)
-          .catch((err) =>
-            logError("[Projects] Failed to clear context cache on external delete", err)
-          );
-        if (!this.isProjectEventAuthorityCurrent(authority)) return;
-
-        // Reason: don't call setCurrentProject(null) here — ProjectManager's
-        // records subscriber will detect the disappearance and handle save-first
-        // ordering via switchProject(null) to avoid misclassifying the chat.
-        const current = getCurrentProject();
-        if (current?.id === record.project.id) {
-          new Notice(`Project "${record.project.name}" was deleted.`);
-        }
-
         // Reason: rescan to re-admit any previously-ignored duplicate-id files
         // that were hidden while the deleted file was the "kept" entry.
         // Re-merge legacy projects after rescan so unmigrated fallback entries stay visible.
@@ -629,20 +569,6 @@ export class ProjectRegister {
 
       // Reason: project moved out of projects folder → clear current selection and context cache
       if (wasValid && !isValidNow && oldRecord) {
-        // Reason: await cache clear to prevent same-ID recreation from having its
-        // fresh cache wiped by a stale async cleanup. Consistent with folder-switch path.
-        await this.projectContextCache
-          .clearForProject(oldRecord.project)
-          .catch((err) => logError("[Projects] Failed to clear context cache on rename-out", err));
-        if (!this.isProjectEventAuthorityCurrent(authority)) return;
-
-        // Reason: don't call setCurrentProject(null) here — ProjectManager's
-        // records subscriber handles save-first ordering via switchProject(null).
-        const current = getCurrentProject();
-        if (current?.id === oldRecord.project.id) {
-          new Notice(`Project "${oldRecord.project.name}" was moved.`);
-        }
-
         // Reason: rescan to re-admit any previously-ignored duplicate-id files
         // that were hidden while the moved file was the "kept" entry.
         this.reloadProjectsAfterEvent("[Projects] Rescan after rename-out failed");
@@ -701,12 +627,6 @@ export class ProjectRegister {
         this.manager.invalidatePreparedProjectScans();
         deleteCachedProjectRecordByFilePathForOwner(this.stateOwner, file.path);
         if (staleRecord) {
-          await this.projectContextCache
-            .clearForProject(staleRecord.project)
-            .catch((err) =>
-              logError("[Projects] Failed to clear context cache on invalid edit", err)
-            );
-          if (!this.isProjectEventAuthorityCurrent(authority)) return;
           // Reason: rescan to re-admit previously-ignored duplicate-id files
           this.reloadProjectsAfterEvent("[Projects] Rescan after invalid edit failed");
         }
@@ -721,12 +641,6 @@ export class ProjectRegister {
         this.manager.invalidatePreparedProjectScans();
         deleteCachedProjectRecordByFilePathForOwner(this.stateOwner, file.path);
         if (staleRecord) {
-          await this.projectContextCache
-            .clearForProject(staleRecord.project)
-            .catch((err) =>
-              logError("[Projects] Failed to clear context cache on duplicate edit", err)
-            );
-          if (!this.isProjectEventAuthorityCurrent(authority)) return;
           // Reason: rescan to re-admit previously-ignored duplicate-id files
           this.reloadProjectsAfterEvent("[Projects] Rescan after duplicate edit failed");
         }
@@ -735,16 +649,6 @@ export class ProjectRegister {
             `existing=${existing.filePath}, incoming=${record.filePath}; ignored`
         );
         return;
-      }
-
-      // Reason: if the user edited copilot-project-id directly, clear the old id's
-      // context cache to prevent stale context resurrection when the old id is reused.
-      const oldRecord = getCachedProjectRecordByFilePath(file.path);
-      if (oldRecord && oldRecord.project.id !== record.project.id) {
-        await this.projectContextCache
-          .clearForProject(oldRecord.project)
-          .catch((err) => logError("[Projects] Failed to clear context cache on id change", err));
-        if (!this.isProjectEventAuthorityCurrent(authority)) return;
       }
 
       // Reason: single atomic write avoids transient gap where subscribers see the project disappear
@@ -762,7 +666,9 @@ export class ProjectRegister {
    * Reason: per-file debounce avoids cross-file collisions where modifying projectA
    * within the debounce window of projectB would drop projectB's cache update.
    */
-  private getFileModifyDebouncer(filePath: string): ReturnType<typeof debounce> {
+  private getFileModifyDebouncer(
+    filePath: string
+  ): DebouncedFunction<(pendingModify: PendingFileModify) => void> {
     let d = this.fileModifyDebouncers.get(filePath);
     if (!d) {
       d = debounce(

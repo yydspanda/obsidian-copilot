@@ -110,7 +110,6 @@ export class VaultDataManager {
       logInfo("VaultDataManager: Already initialized, skipping");
       return;
     }
-
     logInfo("VaultDataManager: Initializing with vault event listeners");
 
     // Initial data load
@@ -301,7 +300,7 @@ export class VaultDataManager {
     const tagSet = new Set<string>();
 
     this.vault.getMarkdownFiles().forEach((file: TFile) => {
-      const fileTags = getTagsFromNote(file, true, this.metadataCache); // frontmatterOnly = true
+      const fileTags = getTagsFromNote(this.app, file, true); // frontmatterOnly = true
       fileTags.forEach((tag) => {
         const tagWithHash = tag.startsWith("#") ? tag : `#${tag}`;
         tagSet.add(tagWithHash);
@@ -323,7 +322,7 @@ export class VaultDataManager {
     const tagSet = new Set<string>();
 
     this.vault.getMarkdownFiles().forEach((file: TFile) => {
-      const fileTags = getTagsFromNote(file, false, this.metadataCache); // frontmatterOnly = false (all tags)
+      const fileTags = getTagsFromNote(this.app, file, false); // frontmatterOnly = false (all tags)
       fileTags.forEach((tag) => {
         const tagWithHash = tag.startsWith("#") ? tag : `#${tag}`;
         tagSet.add(tagWithHash);

@@ -1,6 +1,6 @@
-import type { Vault } from "obsidian";
+import { TFile, type Vault } from "obsidian";
 
-import { FileCache, FileCacheDisposedError } from "@/cache/fileCache";
+import { FileCache } from "@/cache/fileCache";
 
 jest.mock("@/logger", () => ({
   logError: jest.fn(),
@@ -27,11 +27,6 @@ interface VaultFixture {
   vault: Vault;
 }
 
-/**
- * Build a Vault with an observable cache-storage adapter.
- *
- * @returns Vault mock whose cache directory starts empty
- */
 function createVault(): VaultFixture {
   const adapter = {
     exists: jest.fn(async () => false),
@@ -47,65 +42,84 @@ function createVault(): VaultFixture {
   };
 }
 
-describe("FileCache Vault lifecycle", () => {
-  let cache: FileCache<string> | undefined;
+describe("fileCache", () => {
+  describe("FileCache", () => {
+    const cache = FileCache.getInstance<unknown>(".cache");
 
-  afterEach(() => {
-    cache?.dispose();
-    cache = undefined;
-  });
+    describe("getInstance()", () => {
+      it("reuses the singleton without capturing a Vault", () => {
+        expect(FileCache.getInstance<unknown>(".other-cache")).toBe(cache);
+      });
+    });
 
-  it("reuses one cache for the same Vault and directory", () => {
-    const vault = createVault();
+    describe("getCacheKey()", () => {
+      it("hashes file identity together with optional context", () => {
+        const file = Object.assign(new TFile(), {
+          path: "notes/example.md",
+          stat: { mtime: 20, size: 10 },
+        });
 
-    const first = FileCache.getInstance<string>(".cache", vault.vault);
-    cache = first;
-    const second = FileCache.getInstance<string>(".cache", vault.vault);
+        expect(cache.getCacheKey(file, "context")).toBe("hash:notes/example.md:10:20:context");
+      });
+    });
 
-    expect(second).toBe(first);
-  });
+    describe("get()", () => {
+      it("reads and parses cached content through the supplied Vault", async () => {
+        const owner = createVault();
+        const other = createVault();
+        owner.adapter.exists.mockResolvedValue(true);
+        owner.adapter.read.mockResolvedValue('{"enabled":true}');
 
-  it("rebinds on Vault change without carrying old memory entries", async () => {
-    const firstVault = createVault();
-    const secondVault = createVault();
-    const first = FileCache.getInstance<string>(".cache", firstVault.vault);
+        await expect(cache.get(owner.vault, "disk-json-key")).resolves.toEqual({ enabled: true });
+        expect(owner.adapter.exists).toHaveBeenCalledWith(".cache/disk-json-key.md");
+        expect(owner.adapter.read).toHaveBeenCalledWith(".cache/disk-json-key.md");
+        expect(other.adapter.exists).not.toHaveBeenCalled();
+      });
+    });
 
-    await first.set("shared-key", "old-vault-content");
-    const second = FileCache.getInstance<string>(".cache", secondVault.vault);
-    cache = second;
+    describe("set()", () => {
+      it("creates and writes the cache through the supplied Vault", async () => {
+        const owner = createVault();
+        const other = createVault();
 
-    expect(second).not.toBe(first);
-    await expect(first.get("shared-key")).rejects.toBeInstanceOf(FileCacheDisposedError);
-    await expect(second.get("shared-key")).resolves.toBeNull();
-    expect(secondVault.adapter.read).not.toHaveBeenCalled();
-  });
+        await cache.set(owner.vault, "owner-key", "owner-content");
 
-  it("uses the captured owner Vault instead of the global active Vault", async () => {
-    const ownerVault = createVault();
-    const otherVault = createVault();
-    (window as unknown as { app: { vault: Vault } }).app = { vault: otherVault.vault };
-    cache = FileCache.getInstance<string>(".cache", ownerVault.vault);
+        expect(owner.adapter.mkdir).toHaveBeenCalledWith(".cache");
+        expect(owner.adapter.write).toHaveBeenCalledWith(".cache/owner-key.md", "owner-content");
+        expect(other.adapter.exists).not.toHaveBeenCalled();
+        expect(other.adapter.write).not.toHaveBeenCalled();
+      });
+    });
 
-    await cache.set("owner-key", "owner-content");
+    describe("remove()", () => {
+      it("removes memory and disk entries through the supplied Vault", async () => {
+        const vault = createVault();
+        vault.adapter.exists.mockResolvedValue(true);
+        await cache.set(vault.vault, "remove-key", "content");
 
-    expect(ownerVault.adapter.mkdir).toHaveBeenCalledWith(".cache");
-    expect(ownerVault.adapter.write).toHaveBeenCalledWith(".cache/owner-key.md", "owner-content");
-    expect(otherVault.adapter.exists).not.toHaveBeenCalled();
-    expect(otherVault.adapter.write).not.toHaveBeenCalled();
-  });
+        await cache.remove(vault.vault, "remove-key");
 
-  it("disposes idempotently and creates a clean replacement", async () => {
-    const vault = createVault();
-    const first = FileCache.getInstance<string>(".cache", vault.vault);
-    await first.set("key", "content");
+        expect(vault.adapter.remove).toHaveBeenCalledWith(".cache/remove-key.md");
+      });
+    });
 
-    first.dispose();
-    first.dispose();
-    const second = FileCache.getInstance<string>(".cache", vault.vault);
-    cache = second;
+    describe("clear()", () => {
+      it("clears memory and removes listed disk entries through the supplied Vault", async () => {
+        const vault = createVault();
+        const emptyVault = createVault();
+        vault.adapter.exists.mockResolvedValue(true);
+        vault.adapter.list.mockResolvedValue({
+          files: [".cache/first.md", ".cache/second.md"],
+          folders: [],
+        });
+        await cache.set(vault.vault, "clear-memory-key", "content");
 
-    expect(second).not.toBe(first);
-    await expect(first.get("key")).rejects.toBeInstanceOf(FileCacheDisposedError);
-    await expect(second.get("key")).resolves.toBeNull();
+        await cache.clear(vault.vault);
+
+        expect(vault.adapter.remove).toHaveBeenNthCalledWith(1, ".cache/first.md");
+        expect(vault.adapter.remove).toHaveBeenNthCalledWith(2, ".cache/second.md");
+        await expect(cache.get(emptyVault.vault, "clear-memory-key")).resolves.toBeNull();
+      });
+    });
   });
 });

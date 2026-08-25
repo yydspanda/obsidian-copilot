@@ -55,7 +55,7 @@ interface KnowledgeCitationNavigationQueueState {
 const navigationQueueStates = new WeakMap<object, KnowledgeCitationNavigationQueueState>();
 
 // Captured intrinsic performs a non-spoofable ArrayBuffer internal-slot check.
-// eslint-disable-next-line @typescript-eslint/unbound-method
+// eslint-disable-next-line @typescript-eslint/unbound-method -- capture the intrinsic getter for a non-spoofable receiver check
 const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
   "byteLength"

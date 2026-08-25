@@ -1,148 +1,89 @@
-# Getting Started with Copilot for Obsidian
+# Getting Started with Copilot V4
 
-Copilot for Obsidian is an AI-powered plugin that brings large language models (LLMs) directly into your note-taking workflow. You can chat with AI, ask questions about your vault, run custom commands, search the web, and even have the AI edit your notes — all without leaving Obsidian.
+Copilot V4 is built around **Agent Chat**, a desktop workspace where opencode, Claude Code, or Codex can read your vault, use tools, and complete multi-step work with the permissions you choose.
 
-## What Can Copilot Do?
+Agent Chat is available in Obsidian on desktop. Quick Chat, Copilot Commands, and Quick Ask remain available for shorter tasks and on mobile.
 
-- **Chat**: Have a conversation with an AI assistant
-- **Vault Q&A**: Ask questions and get answers grounded in your own notes
-- **Note editing**: Ask the AI to write or update your notes for you
-- **Semantic search**: Find notes by meaning, not just keywords
-- **Custom commands**: Run AI-powered prompts on selected text
-- **Web search**: Fetch and summarize information from the internet
-- **Memory**: Have the AI remember facts about you across conversations
+## Install Copilot
 
-Copilot supports 16+ AI providers including OpenAI, Anthropic, Google Gemini, Ollama (local), and more.
+1. Open **Obsidian Settings → Community plugins**.
+2. Select **Browse**, search for **Copilot**, and install it.
+3. Enable Copilot. The Agent Chat icon appears in the left ribbon on desktop.
 
----
+## Set Up Your First Agent Chat
 
-## Installation
+Open **Settings → Copilot → Basic** and find **Agents**. For most people, the quickest path is the managed opencode setup.
 
-1. Open **Obsidian Settings** → **Community plugins**
-2. Turn off **Safe mode** if prompted
-3. Click **Browse** and search for **Copilot**
-4. Click **Install**, then **Enable**
+### Recommended: Download opencode
 
-Copilot is now installed. A robot icon will appear in the left sidebar ribbon.
+1. Select the **opencode** tab under **Agents**.
+2. Click **Download opencode**. Copilot downloads the `opencode` binary and manages it for you.
+3. Choose how opencode gets models:
+   - **Copilot-hosted models:** enter an eligible license under **Copilot License** on the Basic tab. Eligible hosted models then appear in opencode and Quick Chat.
+   - **Bring your own key:** open the **BYOK** tab, select **Add a provider**, enter your provider details, and choose models. Copilot stores the key in this device's Obsidian Keychain and enables the selected models for opencode and Quick Chat.
+4. Return to **Basic → Agents → opencode** and choose the default model for new chats.
 
----
+Already have the `opencode` binary? Click **I already have it**. If detection fails, click **Configure**, choose **My own binary**, and enter its absolute path.
 
-## First-Time Setup
+### Alternative: Link Claude Code
 
-### Step 1: Open Plugin Settings
+If Claude Code is already installed, Copilot checks its common install locations automatically and marks **Claude** as installed. If it is not found:
 
-Go to **Settings** → **Copilot** (scroll down to the Community Plugins section).
+1. Open **Basic → Agents → Claude → Configure**.
+2. Select **Auto-detect**, or enter the path to the `claude` binary.
+3. Sign in when prompted.
 
-### Step 2: Add an API Key
+Claude uses the account held by the Claude Code CLI. You do not paste that account's key into Copilot.
 
-On the **Basic** tab, click **Set Keys** to open the API key dialog. Enter the key for your chosen provider:
+### Alternative: Link Codex
 
-| Provider | Where to get a key |
-|---|---|
-| OpenRouter (default) | https://openrouter.ai/keys |
-| OpenAI | https://platform.openai.com/api-keys |
-| Anthropic | https://console.anthropic.com/settings/keys |
-| Google Gemini | https://makersuite.google.com/app/apikey |
+Copilot connects to Codex through the `codex-acp` adapter. If you already use Codex:
 
-The default model is **OpenRouter Gemini 2.5 Flash**, which requires an OpenRouter API key. If you'd prefer a different provider, set up that key first, then change the default model.
+1. Install the adapter for your platform:
+   - **Windows:** follow [Windows setup for Agent Chat](agent-mode-windows-setup.md#3-connect-codex). Its PowerShell installer downloads the native `codex-acp.exe` that Copilot requires.
+   - **macOS or Linux:** run:
 
-### Step 3: Choose a Default Model
+     ```bash
+     npm install -g @agentclientprotocol/codex-acp
+     ```
 
-Still on the **Basic** tab, use the **Default Chat Model** dropdown to select the model you want to use. Any model whose provider has an API key configured will be available.
+2. Run `codex login` if the Codex CLI is not already signed in.
+3. Open **Basic → Agents → Codex → Configure**, then use **Auto-detect** or enter the path to `codex-acp.exe` on Windows or `codex-acp` on macOS and Linux.
 
-### Step 4: Choose a Chat Mode
+Codex inherits the Codex CLI's credentials; there is no Codex key to paste into Copilot.
 
-Use the **Default Mode** dropdown to set which mode opens by default:
+## Start Your First Agent Chat
 
-- **Chat** — General conversation, good for most tasks
-- **Vault QA** — Ask questions answered from your notes
-- **Copilot Plus** — Advanced mode with autonomous agent and tools (requires Copilot Plus license)
-- **Projects** — Focused workspaces (alpha feature)
+1. Click the **Agent Chat** ribbon icon, or run **Open Copilot Agent Chat Window** from the command palette.
+2. If **Select your agent** appears, choose an **Installed** agent and select **Start chat**. When the default backend is already ready, Copilot opens its chat automatically.
+3. Pick a model and permission setting beside the message box, then describe the outcome you want.
 
-Most users should start with **Chat** mode.
+Try a concrete first request such as: “Review the unfinished tasks in this vault and make a short plan.” With **Default** selected, Agent Chat shows its work and asks before actions that need your approval.
 
----
+## Projects, Skills, and Commands
 
-## Opening the Chat Panel
+### Keep Work Focused with Projects
 
-You can open Copilot in several ways:
+From Agent Chat Home, open **Projects** and select **New project**. A project keeps its own instructions, reusable context, and chat history, so work for one client or topic stays together. See [Projects](projects.md) for supported context sources and setup.
 
-- Click the **robot icon** in the left ribbon (sidebar)
-- Use the command palette: `Ctrl/Cmd+P` → **Open Copilot Chat Window**
-- Use the hotkey `Ctrl/Cmd+P` → **Toggle Copilot Chat Window** to show/hide it
+### Share Skills Across Agents
 
-### Sidebar vs. Editor Tab
+Skills are reusable instruction packets for jobs such as reviewing a change or drafting a release note. Open **Settings → Copilot → Skills** to see skills from Copilot's shared skills folder and the native opencode, Claude, and Codex skill folders. Enable each skill for the agents that should use it; Copilot links shared skills into the right agent folders for you.
 
-By default, Copilot opens as a **view** (sidebar panel). You can change this in Settings → Copilot → Basic → **Open chat in**:
-- **View** — Opens in the sidebar, stays visible as you work
-- **Editor** — Opens as an editor tab, giving it more screen space
+Type `/` in Agent Chat to choose an available skill. Copilot also includes skills for Obsidian Markdown, Bases, Canvas, and the Obsidian CLI. Learn more in [Skills across agents](agent-mode-and-tools.md#skills-across-agents).
 
----
+### Reuse Copilot Commands
 
-## Your First Conversation
+Create preset prompts under **Settings → Copilot → Command**. Run them from the command palette, the editor's **Copilot** menu, or by typing `/` in Agent Chat. See [Copilot Commands and Quick Ask](custom-commands.md).
 
-1. Open the chat panel
-2. Type your message in the input box at the bottom
-3. Press **Enter** (or **Shift+Enter** if you changed the send shortcut) to send
-4. Watch the AI's response stream in real time
-5. Continue the conversation naturally
+### Ask Without Leaving the Editor
 
-The AI will automatically include your currently open note as context, so you can say things like "summarize this note" or "what are the action items in this note?"
-
----
-
-## Keyboard Shortcuts
-
-These are the default shortcuts. You can customize them in **Obsidian Settings** → **Hotkeys** → search for "Copilot".
-
-| Action | Default Shortcut |
-|---|---|
-| Open Copilot Chat Window | *(unbound — assign in Hotkeys)* |
-| Toggle Copilot Chat Window | *(unbound — assign in Hotkeys)* |
-| New Copilot Chat | *(unbound — assign in Hotkeys)* |
-| Quick Ask (floating input) | *(unbound — assign in Hotkeys)* |
-| Trigger Quick Command | *(unbound — assign in Hotkeys)* |
-| Add selection to chat context | *(unbound — assign in Hotkeys)* |
-
-### Send Shortcut
-
-By default, **Enter** sends a message and **Shift+Enter** adds a new line. You can swap this in Settings → Copilot → Basic → **Default Send Shortcut**.
-
----
-
----
-
-## Glossary
-
-**LLM (Large Language Model)**
-The AI "brain" behind Copilot — a model trained on vast text to understand and generate human language, powering chat, summarization, and writing assistance.
-
-**API (Application Programming Interface)**
-A way for Copilot to communicate with external AI services. You provide an API key, which is like a password that lets Copilot use a provider's AI models on your behalf. Note: an OpenAI API key is *different* from a ChatGPT Plus subscription — you don't need ChatGPT Plus to use Copilot.
-
-**API Key**
-A secret token from an AI provider that authorizes Copilot to make requests. Most providers require you to have a billing account with a positive balance.
-
-**Token**
-A small unit of text (roughly ¾ of a word) that AI models process. Tokens measure how much text the AI can handle at once and relate to usage costs.
-
-**Context Window**
-The amount of text the AI can consider at one time when generating a response. A larger context window means the AI can use more of your notes or conversation history.
-
-**Embeddings**
-A method of converting text into numbers that capture meaning. Embeddings let the AI find notes that are conceptually related, even if they don't share exact words.
-
-**RAG (Retrieval-Augmented Generation)**
-A technique that enhances AI responses by first searching for relevant notes, then generating an answer based on both your query and the retrieved content. This is how Vault QA works.
-
-**Vector Store / Index**
-A database that stores your notes as mathematical vectors (embeddings) so they can be searched by meaning. Think of it as a smart index that understands the context of your notes, not just their keywords.
-
----
+Run **Quick Ask** from the command palette, or assign it a hotkey under **Obsidian Settings → Hotkeys**. It opens a small prompt beside your cursor or selection for quick rewrites, explanations, and follow-up questions. Quick Ask uses your Quick Chat model, so set up a Copilot-hosted or BYOK model first.
 
 ## Next Steps
 
-- [Chat Interface](chat-interface.md) — Learn about modes, history, and settings
-- [LLM Providers](llm-providers.md) — Set up your preferred AI provider
-- [Context and Mentions](context-and-mentions.md) — Control what context the AI sees
-- [Vault Search and Indexing](vault-search-and-indexing.md) — Set up semantic search over your notes
+- [Agent Chat](agent-mode-and-tools.md): agents, permissions, context, models, and skills
+- [Projects](projects.md): focused agent workspaces
+- [Copilot Commands and Quick Ask](custom-commands.md): reusable prompts and in-editor help
+- [Model Sources and BYOK](llm-providers.md): BYOK setup for opencode and Quick Chat
+- [Copilot Settings](settings.md): every settings tab explained

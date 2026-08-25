@@ -1,198 +1,137 @@
-# Agent Mode and Tools
+# Agent Chat
 
-Copilot Plus includes an **autonomous agent** that can reason step-by-step and decide which tools to use to answer your question. Instead of you specifying every step, the agent figures out what to do on its own.
+Agent Chat is the default Copilot experience on desktop. It gives an AI agent a working view of your vault so it can answer questions, use tools, and make permissioned changes while you follow the work in chat.
 
-This feature requires a [Copilot Plus](copilot-plus-and-self-host.md) license.
+Quick Chat remains available for lightweight conversation and is the main chat experience on mobile. For multi-step work, Projects, Skills, or file changes, start with Agent Chat.
 
----
+## Choose an agent
 
-## Overview
+Open [**Settings → Copilot → Basic → Agents**](settings.md#basic). Configure at least one agent, then choose the **Default backend** for new chats.
 
-When the autonomous agent is enabled, Copilot can:
+| Agent        | Best starting point                             | Where model access comes from                                              |
+| ------------ | ----------------------------------------------- | -------------------------------------------------------------------------- |
+| **opencode** | Recommended for most people                     | Copilot-hosted models, your API providers, or local OpenAI-compatible APIs |
+| **Claude**   | You already use Claude Code                     | Your Claude Code installation and Anthropic account                        |
+| **Codex**    | You already use the Codex CLI and Codex account | Your Codex CLI login through the `codex-acp` adapter                       |
 
-1. Break down your request into sub-tasks
-2. Use tools to gather information (search your vault, search the web, read a note)
-3. Create or edit notes
-4. Combine results and give you a comprehensive answer
+A one-agent chat can work without a Copilot license when you bring your own model access. An eligible paid plan adds Copilot-hosted models and cloud-backed features. [Compare Copilot plans](copilot-plus-and-self-host.md).
 
-**Example**: Ask "What did I work on last week?" and the agent will automatically search your vault for dated notes from the past 7 days, read the relevant ones, and summarize your week.
+### opencode
 
----
+opencode is the most flexible choice because it can use Copilot-hosted, BYOK, and local models.
 
-## Enabling Agent Mode
+1. In the **opencode** tab, click **Download opencode** to let Copilot install and manage it.
+2. If you already installed it, click **I already have it**. If detection fails, open **Configure**, choose **My own binary**, then auto-detect it or enter the absolute path.
+3. Enable the models you want to see and choose a **Default model**.
 
-1. Go to **Settings → Copilot → Plus**
-2. Turn on **Enable Autonomous Agent**
+There are three ways to provide model access:
 
-The agent activates automatically when you're in **Copilot Plus** mode. You don't need to do anything special — just ask your question.
+- **Copilot-hosted:** add your license under **Basic → Copilot License**. Models included with your plan appear automatically.
+- **Your API key:** open [**Settings → Copilot → BYOK**](settings.md#byok), add a provider, and configure its models. Copilot stores supported secrets in the Obsidian Keychain.
+- **Local:** add an OpenAI-compatible endpoint from software such as Ollama or LM Studio under **BYOK**.
 
-### Max Iterations
+### Claude
 
-The agent works in iteration cycles (think → use a tool → think → use a tool → answer). You can control the maximum number of iterations before the agent stops:
+The Claude backend runs through Claude Code on your computer:
 
-- **Default**: 4 iterations
-- **Maximum**: 16 iterations
-- **Setting**: **Settings → Copilot → Plus → Autonomous Agent Max Iterations**
+1. Open **Basic → Agents → Claude → Configure**.
+2. Select **Auto-detect**, or enter the absolute path to the `claude` executable.
+3. Select **Sign in** if Claude Code is not already authenticated.
+4. Enable the models you want and choose a default.
 
-The agent also has a maximum runtime of 5 minutes per response, regardless of iteration count.
+Claude models and billing come from your Claude Code account. Models added under **BYOK** do not join the Claude model list.
 
-### DeepSeek Thinking Compatibility
+### Codex
 
-Direct DeepSeek V4 models can use Agent tools only with **Minimal** reasoning for now. High and
-XHigh thinking return a `reasoning_content` value that must be replayed after a tool call; Copilot
-does not yet preserve that provider-specific field across Agent iterations. The request stops before
-the first tool call instead of continuing with incomplete context. Choose Minimal reasoning or a
-different model when using Agent tools. Ordinary tool-free chat can still use DeepSeek thinking.
+The Codex backend needs the Codex CLI and its `codex-acp` adapter:
 
----
+1. Install the Codex CLI and run `codex login`.
+2. Open **Basic → Agents → Codex → Configure**.
+3. Run the adapter installation command shown in the dialog.
+4. Select **Auto-detect**, or enter the absolute path to `codex-acp` and select **Apply**.
+5. Enable the models you want and choose a default.
 
-## Available Tools
+Copilot uses your existing Codex CLI login. Models added under **BYOK** do not join the Codex model list.
 
-Copilot Plus has 13 built-in tools. Some are always active; others can be enabled or disabled.
+For Windows-specific installation help, see [Windows setup for Agent Chat](agent-mode-windows-setup.md).
 
-### Always-Enabled Tools
+### Start a chat
 
-These tools are always available and cannot be disabled:
+Select the **Agent Chat** ribbon icon or run **Open Copilot Agent Chat Window** from the command palette. If the default agent is not ready, Copilot opens **Select your agent**. Configure an agent, choose an installed row, then select **Start chat**.
 
-#### Get Current Time
+## Models, effort, and permissions
 
-Gets the current time in any timezone. Useful for time-aware queries like "what should I do today?"
+Each agent has its own model list. The models shown in one agent do not automatically appear in another.
 
-#### Get Time Range
+- Set the model and effort used by new chats under [**Settings → Copilot → Basic → Agents**](settings.md#basic).
+- Use the controls beside the composer to change the model or effort for the current chat.
+- Before the first message, choosing a model from another installed agent switches the empty chat to that agent. Once a conversation has started, it stays with its agent.
+- **Effort** appears only when the selected agent and model support it. Higher effort can improve difficult reasoning but may take longer and use more of your account allowance.
 
-Converts natural time expressions (like "last week" or "yesterday") into exact date ranges. Usually called automatically before a time-based vault search.
+The permission picker shows only choices supported by the current agent:
 
-#### Get Time Info
+| Choice      | What it does                                                                        |
+| ----------- | ----------------------------------------------------------------------------------- |
+| **Default** | Uses the agent's normal approval behavior and is the safest starting point          |
+| **Plan**    | Prepares a read-only plan before edits when the current agent supports this choice  |
+| **Auto**    | Reduces approval prompts according to the current agent's automatic permission rule |
 
-Converts an epoch timestamp to a human-readable date and time.
+opencode supports **Default** and **Auto**. Claude supports **Default**, **Plan**, and **Auto**. Codex shows the choices supported by the installed adapter. Claude also has an **Auto mode permissions** setting that controls how much Auto may approve.
 
-#### Convert Timezones
+When an action needs approval, Agent Chat displays a **Permission required** card with the proposed change or tool input. Choose one of the temporary or persistent allow or deny options offered by that agent. Stopping the turn cancels unanswered requests.
 
-Converts a time from one timezone to another. Ask: "What time is 3pm EST in Tokyo?"
+When an agent asks a set of questions, answer every question tab before **Submit** becomes available; **Cancel** declines the entire request.
 
-#### Read Note
+Your vault or project is the agent's working directory, not a security sandbox. Auto or bypass permissions can reach other files and services available to the agent or your account. Use **Default** for unfamiliar work and review persistent permissions carefully.
 
-Reads the content of a specific note. The agent uses this to inspect a note it found via search, or that you mentioned explicitly. Works on large notes by reading them in chunks.
+## Context and history
 
-#### File Tree
+Agent Chat keeps each conversation separate:
 
-Browses the file structure of your vault. The agent uses this to find folder paths before creating new notes or to count files in a folder.
+- Select **+** for another session. Each tab keeps its own history, draft, attachments, and queued follow-ups.
+- Select **New Chat** to reset the current tab.
+- Use **Recent Chats** from the Agent Chat home screen, or **Chat History** inside a conversation, to resume saved work.
+- Add the active note, selected text, other notes, folders, a Copilot Web Viewer tab, or supported images. You can also mention a note with `[[Note title]]`.
+- Messages taller than about 60% of the Agent Chat window start as a compact preview. Use **Show more** or **Show less** on the message to expand or collapse its full text.
+- Hover the context ring beside the send controls to see how much of the model's context window is in use. If the connected account reports usage limits, the same panel shows the available limit and reset time.
 
-#### Tag List
+Attachments apply to the next message. For instructions and context that should be reused, create a [Project](projects.md) or add rules to [`AGENTS.md`](system-prompts.md). See [Context and Mentions](context-and-mentions.md) for every context option.
 
-Lists all tags in your vault with usage statistics. Useful for tag reorganization or finding notes by tag patterns.
+Type `/` to insert an enabled Skill or [Copilot command](custom-commands.md). For a quick question or rewrite beside the current selection, use [Quick Ask](custom-commands.md#quick-ask).
 
-#### Update Memory
+## Multi-agent answers
 
-Saves information to your memory when you explicitly ask the AI to remember something. See [Copilot Plus and Self-Host](copilot-plus-and-self-host.md#memory-system) for details.
+With active Plus access, type `@`, open **Agents**, and mention one or more other installed agents in the same prompt. Copilot sends the same question, that turn's attachments, and a bounded slice of the visible conversation to each mentioned agent in parallel. The current agent summarizes their answers; it does not automatically produce a separate answer of its own.
 
-> **Requires**: **Settings → Copilot → Plus → Reference Saved Memories** must be enabled. If this setting is off, the tool is not registered and memory commands will not work.
+This is useful for research, second opinions, and reviews. Mentioning only the current agent behaves like a normal turn.
 
-### Configurable Tools
+Each answer appears in its own tab, with **Summary** first. If one answerer fails, Copilot keeps the successful answers and summarizes what completed.
 
-These tools can be individually enabled or disabled in **Settings → Copilot → Plus → Tool Settings**:
+Multi-agent answers are designed for read-only research, not edits. Copilot denies explicit vault edit, delete, and move tools, along with tools it cannot classify. Retrieval Skills can still run their own scripts under the agent's permissions, so multi-agent answers are not a security sandbox. Use only trusted Skills, and use a regular single-agent turn when you want files changed.
 
-#### Vault Search
+The default model and effort saved for each mentioned agent are used for its answer. If an agent is not installed or ready, configure it before adding it to the prompt.
 
-Searches your vault notes by content. The agent uses this to find notes relevant to your question.
+## Skills across agents
 
-- **Trigger**: Automatically for vault-related questions, or explicitly with `@vault`
-- **Uses**: Both semantic search (if enabled) and lexical search
+Skills are reusable instruction packets built around a `SKILL.md` file. One Skill can be made available to opencode, Claude, and Codex without maintaining three copies.
 
-#### Web Search
+1. Open [**Settings → Copilot → Skills**](settings.md#skills).
+2. Find a Skill and toggle the opencode, Claude, or Codex icons for the agents that should use it.
+3. Type `/` in Agent Chat to choose it, or describe the task and let the agent select an enabled Skill.
 
-Searches the internet for current information.
+Shared Skills live under `<Copilot folder>/skills/`. Copilot links them into the native folders used by each agent: `.opencode/skills/`, `.claude/skills/`, and `.agents/skills/`. Skills already present in those native folders also appear in the settings list.
 
-- **Trigger**: Automatically when your question implies web/online content, or explicitly with `@websearch` or `@web`
-- **Requires**: A web search service configured (Firecrawl or Perplexity in self-host mode, or handled by Plus)
+Custom Skills and built-in Obsidian Skills are free. Active Plus access adds cloud-backed Skills for web research, PDF reading, YouTube transcripts, X posts, and Symposium.
 
-#### Write to File
+In Self-Host Mode with OpenCode selected, Agent Chat's built-in web-search Skill uses the search provider selected under **Settings → Copilot → Self-Host**. Provider credentials stay inside Obsidian rather than being passed to OpenCode, and the feature does not require Obsidian's command line interface. Copilot disables OpenCode's native web-search and web-fetch tools so they cannot bypass that route. Full-page web fetching is unavailable through OpenCode in Self-Host Mode because the supported search providers do not share a page-fetch interface; Agent Chat can still use the configured provider's search results.
 
-Creates a new note or overwrites an existing one entirely.
-
-- **Trigger**: Automatically for "create a note" requests, or explicitly with `@composer` (available in both Copilot Plus and Projects mode)
-- **Behavior**: Shows a preview of the content before writing. You can review and accept or reject the change.
-- **Auto-accept**: Enable **Settings → Copilot → Plus → Auto-accept edits** to skip the preview
-
-#### Replace in File
-
-Makes targeted changes to an existing note using search-and-replace blocks.
-
-- **Use case**: Small edits (adding a bullet, updating a section) — more precise than rewriting the whole note
-- **Behavior**: Shows a diff preview before applying the change
-- **Auto-accept**: Same setting as Write to File
-
-#### YouTube Transcription
-
-Fetches the transcript of a YouTube video.
-
-- **Trigger**: Automatically when you paste a YouTube URL in your message
-- **No extra setup needed**: Just include the URL in your message
-- **Self-host option**: Use your own Supadata API key for transcription in self-host mode
-
----
-
-## Tool Settings
-
-Go to **Settings → Copilot → Plus → Tool Settings** to:
-
-- See all available tools
-- Enable or disable individual configurable tools
-- View what each tool does
-
----
-
-## Using Tools Explicitly
-
-While the agent automatically decides when to use tools, you can also trigger them explicitly with @-mentions:
-
-```
-@vault find all notes about my reading list
-@websearch what is the latest version of Python?
-@composer create a new meeting notes template
-@memory remember that I prefer bullet points for lists
-```
-
-See [Context and Mentions](context-and-mentions.md) for the full @-mention reference.
-
----
-
-## Tool Call Indicators
-
-While the agent is working, the chat shows status indicators for each tool call:
-
-- "Reading files"
-- "Searching the web"
-- "Reading file tree"
-- "Compacting"
-
-This lets you see what the agent is doing as it works.
-
----
-
-## File Editing: Preview and Diff
-
-When the agent uses **Write to File** or **Replace in File**, it shows a preview before making changes:
-
-- **Split view**: Before/after shown side by side
-- **Side-by-side view**: Changes highlighted inline
-
-You can choose your preferred diff view in **Settings → Copilot → Plus → Diff View Mode**.
-
-Review the proposed change and click:
-
-- **Accept** — Apply the change to your note
-- **Reject** — Discard without making any changes
-- **Revert** — Undo a change that was already accepted
-
-### Auto-Accept Edits
-
-If you trust the agent and don't want to review every file change, enable **Auto-accept edits** in **Settings → Copilot → Plus**. File changes will be applied immediately without a confirmation step.
-
----
+On Windows, creating the folder links may require **Developer Mode** or administrator access. If a sync service replaces a link, toggle that Skill off and on for the affected agent to recreate it.
 
 ## Related
 
-- [Copilot Plus and Self-Host](copilot-plus-and-self-host.md) — Licensing and memory
-- [Vault Search and Indexing](vault-search-and-indexing.md) — How vault search works
-- [Context and Mentions](context-and-mentions.md) — @-mention triggers for tools
+- [Getting Started](getting-started.md)
+- [Models, Effort, and Permissions](models-and-parameters.md)
+- [Projects](projects.md)
+- [Instructions for Agent Chat and Quick Chat](system-prompts.md)
+- [Copilot Commands and Quick Ask](custom-commands.md)
+- [Copilot Plans, Privacy, and Self-Hosting](copilot-plus-and-self-host.md)

@@ -80,9 +80,7 @@ function selectUnavailableBundleId(state: KnowledgePluginStartupState): string |
  * the current session identity; zero or multiple Bundles clear selection instead
  * of inventing a default.
  */
-export class KnowledgeStudioStartupAvailabilityAdapter
-  implements KnowledgeStudioStartupAvailabilityPort
-{
+export class KnowledgeStudioStartupAvailabilityAdapter implements KnowledgeStudioStartupAvailabilityPort {
   /**
    * Creates the one-way unavailable adapter.
    *

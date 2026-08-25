@@ -1,5 +1,6 @@
 import { ChatButtons } from "@/components/chat-components/ChatButtons";
 import { KnowledgeChatDraftDialog } from "@/components/chat-components/KnowledgeChatDraftDialog";
+import { AssistantResponseFooter } from "@/components/ui/AssistantResponseFooter";
 import { SourcesModal } from "@/components/modals/SourcesModal";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -11,7 +12,6 @@ import {
   ContextWebTabBadge,
 } from "@/components/chat-components/ContextBadges";
 import { InlineMessageEditor } from "@/components/chat-components/InlineMessageEditor";
-import { TokenLimitWarning } from "@/components/chat-components/TokenLimitWarning";
 import {
   cleanupMessageErrorBlockRoots,
   cleanupMessageToolCallRoots,
@@ -28,6 +28,7 @@ import {
   type ToolCallRootRecord,
 } from "@/components/chat-components/toolCallRootManager";
 import { AgentReasoningBlock } from "@/components/chat-components/AgentReasoningBlock";
+import { ClampedContent } from "@/components/ui/clamped-content";
 import { AI_SENDER, USER_SENDER } from "@/constants";
 import { cn } from "@/lib/utils";
 import { parseToolCallMarkers } from "@/LLMProviders/chainRunner/utils/toolCallParser";
@@ -39,9 +40,10 @@ import type {
   KnowledgeChatDraftSession,
 } from "@/knowledge/capture/KnowledgeChatCapturePort";
 import { ChatMessage } from "@/types/message";
-import { cleanMessageForCopy, extractYoutubeVideoId, insertIntoEditor } from "@/utils";
+import { cleanMessageForCopy, extractYoutubeVideoId, insertAtCursor } from "@/utils";
 import { preprocessAIResponse } from "@/utils/markdownPreprocess";
-import { App, Component, MarkdownRenderer, MarkdownView, Notice, TFile } from "obsidian";
+import { renderMarkdown } from "@/utils/renderMarkdown";
+import { App, Component, Notice, TFile } from "obsidian";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettingsValue } from "@/settings/model";
 import {
@@ -53,6 +55,13 @@ import {
 } from "@/components/chat-components/collapsibleStateUtils";
 
 const FOOTNOTE_SUFFIX_PATTERN = /^\d+-\d+$/;
+
+/**
+ * A pasted prompt, log, or transcript pushes the reply and every earlier turn
+ * off the chat surface, so a user message taller than this collapses behind a
+ * Show more control: https://github.com/Brevilabs/obsidian-copilot-private/issues/151
+ */
+const COLLAPSED_USER_MESSAGE_CLASS_NAME = cn("tw-max-h-[60vh]");
 
 /**
  * Normalizes rendered markdown footnotes to align with inline citation UX.
@@ -150,7 +159,7 @@ const linkInlineCitations = (root: HTMLElement): void => {
     const text = node.textContent || "";
     INLINE_CITATION_RE.lastIndex = 0;
 
-    const fragment = doc.createDocumentFragment();
+    const fragment = doc.win.createFragment();
     let lastIndex = 0;
     let match: RegExpExecArray | null;
 
@@ -164,13 +173,12 @@ const linkInlineCitations = (root: HTMLElement): void => {
       const allResolved = nums.every((num) => citationAnchors.has(num));
 
       if (allResolved) {
-        const span = doc.createElement("span");
-        span.className = "copilot-citation-group";
+        const span = doc.win.createSpan("copilot-citation-group");
         span.appendChild(doc.createTextNode("["));
         nums.forEach((num, i) => {
           if (i > 0) span.appendChild(doc.createTextNode(", "));
           const sourceAnchor = citationAnchors.get(num)!;
-          const link = doc.createElement("a");
+          const link = doc.win.createEl("a");
           // Copy all attributes from the source anchor so Obsidian internal-link
           // metadata (e.g. data-href, class="internal-link") is preserved.
           for (const attr of Array.from(sourceAnchor.attributes)) {
@@ -306,7 +314,11 @@ interface ChatSingleMessageProps {
   isStreaming: boolean;
   onRegenerate?: () => void;
   onEdit?: (newMessage: string) => void;
-  onDelete: () => void;
+  onDelete?: () => void;
+  /** Agent Mode metadata placed at the response footer's leading edge, before the timestamp. */
+  footerStart?: React.ReactNode;
+  /** Whether overflowing user text should start collapsed. Agent Chat opts in; Quick Chat does not. */
+  collapseLongUserMessages?: boolean;
   knowledgeChatCapturePort?: KnowledgeChatCapturePort;
 }
 
@@ -317,9 +329,10 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
   onRegenerate,
   onEdit,
   onDelete,
+  footerStart,
+  collapseLongUserMessages = false,
   knowledgeChatCapturePort,
 }) => {
-  const [isCopied, setIsCopied] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [knowledgeDraftSession, setKnowledgeDraftSession] =
     useState<Readonly<KnowledgeChatDraftSession> | null>(null);
@@ -372,24 +385,6 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
 
   // Check if current model has reasoning capability
   const settings = useSettingsValue();
-
-  const copyToClipboard = () => {
-    if (!navigator.clipboard || !navigator.clipboard.writeText) {
-      return;
-    }
-
-    const cleanedContent = cleanMessageForCopy(message.message);
-    navigator.clipboard
-      .writeText(cleanedContent)
-      .then(() => {
-        setIsCopied(true);
-
-        window.setTimeout(() => {
-          setIsCopied(false);
-        }, 2000);
-      })
-      .catch((err) => logError("Clipboard writeText failed", err));
-  };
 
   const preprocess = useCallback(
     (content: string): string => {
@@ -560,14 +555,6 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
         '<span class="copilot-citation-ref">[$1]</span>'
       );
 
-      // Transform [[link]] to clickable format but exclude ![[]] image links
-      const noteLinksProcessed = replaceLinks(
-        citationPlaceholderProcessed,
-        /(?<!!)\[\[([^\]]+)]]/g,
-        (file: TFile) =>
-          `<a href="obsidian://open?file=${encodeURIComponent(file.path)}">${file.basename}</a>`
-      );
-
       /**
        * Converts YouTube video embeds to static thumbnails during streaming.
        * This prevents iframe flickering caused by repeated DOM recreation.
@@ -595,7 +582,7 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
         });
       };
 
-      return processYouTubeEmbed(noteLinksProcessed);
+      return processYouTubeEmbed(citationPlaceholderProcessed);
     },
     [app, isStreaming, settings.enableInlineCitations, collapsibleOpenStateMap]
   );
@@ -692,6 +679,9 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
         // Bind DOM ops to the document that owns the message container so
         // popout-window chats don't pick up the wrong document if focus shifts.
         const doc = contentRef.current.doc;
+        // Resolve internal links against the active note so vaults with
+        // duplicate basenames or heading-only links open the right file.
+        const sourcePath = app.workspace.getActiveFile()?.path ?? "";
         // Track existing tool call and error block IDs
         const existingToolCallIds = new Set<string>();
         const existingErrorIds = new Set<string>();
@@ -719,8 +709,11 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
             // Find where to insert this text segment
             const insertBefore = contentRef.current!.children[currentIndex];
 
-            const textDiv = doc.createElement("div");
-            textDiv.className = "message-segment";
+            // `markdown-rendered` opts the container into Obsidian's native
+            // reading-view stylesheet so reloaded messages match the live
+            // render path (AgentMarkdownText). Most visibly, it restores the
+            // gray background pill on inline `<code>` spans.
+            const textDiv = doc.win.createDiv("message-segment markdown-rendered");
 
             if (insertBefore) {
               contentRef.current!.insertBefore(textDiv, insertBefore);
@@ -728,14 +721,9 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
               contentRef.current!.appendChild(textDiv);
             }
 
-            void MarkdownRenderer.renderMarkdown(
-              segment.content,
-              textDiv,
-              "",
-              componentRef.current!
-            )
+            void renderMarkdown(app, segment.content, textDiv, sourcePath, componentRef.current!)
               .then(() => normalizeFootnoteRendering(textDiv))
-              .catch((err) => logError("renderMarkdown failed", err));
+              .catch((err: unknown) => logError("renderMarkdown failed", err));
             currentIndex++;
           } else if (segment.type === "toolCall" && segment.toolCall) {
             const toolCallId = segment.toolCall.id;
@@ -743,9 +731,10 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
 
             if (!container) {
               const insertBefore = contentRef.current!.children[currentIndex];
-              const toolDiv = doc.createElement("div");
-              toolDiv.className = "tool-call-container";
-              toolDiv.id = `tool-call-${toolCallId}`;
+              const toolDiv = doc.win.createDiv({
+                cls: "tool-call-container",
+                attr: { id: `tool-call-${toolCallId}` },
+              });
 
               if (insertBefore) {
                 contentRef.current!.insertBefore(toolDiv, insertBefore);
@@ -777,9 +766,10 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
             if (!container) {
               // Insert error block at the current stream position
               const insertBefore = contentRef.current!.children[currentIndex];
-              const errorDiv = doc.createElement("div");
-              errorDiv.className = "error-block-container";
-              errorDiv.id = `error-block-${errorId}`;
+              const errorDiv = doc.win.createDiv({
+                cls: "error-block-container",
+                attr: { id: `error-block-${errorId}` },
+              });
 
               if (insertBefore) {
                 contentRef.current!.insertBefore(errorDiv, insertBefore);
@@ -932,15 +922,7 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
   };
 
   const handleInsertIntoEditor = () => {
-    let leaf = app.workspace.getMostRecentLeaf();
-    if (!leaf || !(leaf.view instanceof MarkdownView)) {
-      leaf = app.workspace.getLeaf(false);
-      if (!leaf || !(leaf.view instanceof MarkdownView)) return;
-    }
-
-    const editor = leaf.view.editor;
-    const hasSelection = editor.getSelection().length > 0;
-    void insertIntoEditor(message.message, hasSelection);
+    void insertAtCursor(app, message.message);
   };
 
   const knowledgeDraftBody = cleanMessageForCopy(message.message);
@@ -962,6 +944,23 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
     setKnowledgeDraftSession(session);
   };
 
+  const renderUserMessageText = () => {
+    const text = (
+      <div className="tw-whitespace-pre-wrap tw-break-words tw-text-[calc(var(--font-text-size)_-_2px)] tw-font-normal">
+        {message.message}
+      </div>
+    );
+
+    // Agent Chat can fold a pasted prompt without changing the shared Quick Chat
+    // renderer or moving images and message actions into the clipped region.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/151
+    return collapseLongUserMessages ? (
+      <ClampedContent collapsedClassName={COLLAPSED_USER_MESSAGE_CLASS_NAME}>{text}</ClampedContent>
+    ) : (
+      text
+    );
+  };
+
   const renderMessageContent = () => {
     if (message.content) {
       return (
@@ -973,9 +972,7 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
                   // eslint-disable-next-line @eslint-react/no-array-index-key -- content array is fixed once message is rendered; items not reordered
                   <div key={index}>
                     {message.sender === USER_SENDER ? (
-                      <div className="tw-whitespace-pre-wrap tw-break-words tw-text-[calc(var(--font-text-size)_-_2px)] tw-font-normal">
-                        {message.message}
-                      </div>
+                      renderUserMessageText()
                     ) : (
                       <div
                         ref={contentRef}
@@ -1005,9 +1002,7 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
 
     // Fallback for messages without content array
     return message.sender === USER_SENDER ? (
-      <div className="tw-whitespace-pre-wrap tw-break-words tw-text-[calc(var(--font-text-size)_-_2px)] tw-font-normal">
-        {message.message}
-      </div>
+      renderUserMessageText()
     ) : (
       <div ref={contentRef} className={message.isErrorMessage ? "tw-text-error" : ""}></div>
     );
@@ -1058,26 +1053,23 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
             {renderMessageContent()}
           </div>
 
-          {message.responseMetadata?.wasTruncated && message.sender !== USER_SENDER && (
-            <TokenLimitWarning message={message} app={app} />
-          )}
-
           {!isStreaming && (
-            <div className="tw-flex tw-items-center tw-justify-between">
-              <div className="tw-text-xs tw-text-faint">{message.timestamp?.display}</div>
-              <ChatButtons
-                message={message}
-                onCopy={copyToClipboard}
-                isCopied={isCopied}
-                onInsertIntoEditor={handleInsertIntoEditor}
-                onRegenerate={onRegenerate}
-                onEdit={handleEdit}
-                onDelete={onDelete}
-                onShowSources={handleShowSources}
-                onCreateKnowledgeDraft={canCreateKnowledgeDraft ? openKnowledgeDraft : undefined}
-                hasSources={message.sources && message.sources.length > 0 ? true : false}
-              />
-            </div>
+            <AssistantResponseFooter
+              leading={footerStart}
+              timestamp={message.timestamp?.display}
+              actions={
+                <ChatButtons
+                  message={message}
+                  onInsertIntoEditor={handleInsertIntoEditor}
+                  onRegenerate={onRegenerate}
+                  onEdit={onEdit ? handleEdit : undefined}
+                  onDelete={onDelete}
+                  onShowSources={handleShowSources}
+                  onCreateKnowledgeDraft={canCreateKnowledgeDraft ? openKnowledgeDraft : undefined}
+                  hasSources={message.sources && message.sources.length > 0 ? true : false}
+                />
+              }
+            />
           )}
         </div>
       </div>

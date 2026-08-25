@@ -1,183 +1,85 @@
-# Models and Parameters
+# Models, Effort, and Permissions
 
-This guide explains how to manage chat models, embedding models, and the parameters that control how the AI behaves.
+Copilot keeps a separate model list for each experience. A model can be
+available in Copilot without appearing in every picker: you choose where it is
+enabled, then choose the default for new chats.
 
----
+## Where models come from
 
-## Chat Models
+| Model source                            | Where you can use it                                              |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| Copilot-hosted models from your license | Quick Chat and **opencode**                                       |
+| Your API key or endpoint (BYOK)         | Quick Chat and **opencode**, when opencode supports that provider |
+| Models reported by opencode             | **opencode** only                                                 |
+| Models reported by Claude Code          | **Claude** only                                                   |
+| Models reported by Codex                | **Codex** only                                                    |
 
-### Built-In Models
+The available lineups can change, so the lists in Copilot are the source of
+truth. See [Model Sources and BYOK](llm-providers.md) to activate a Copilot license, add
+a BYOK provider, or connect an agent account.
 
-Copilot comes with a set of built-in models across many providers. Some are always included ("core" models); others can be enabled or disabled.
+## Enable models and choose defaults
 
-| Model                         | Provider     | Capabilities            |
-| ----------------------------- | ------------ | ----------------------- |
-| copilot-plus-flash            | Copilot Plus | Vision (Plus exclusive) |
-| google/gemini-2.5-flash       | OpenRouter   | Vision                  |
-| google/gemini-2.5-pro         | OpenRouter   | Vision                  |
-| google/gemini-3.5-flash       | OpenRouter   | Vision, Reasoning       |
-| google/gemini-3.1-pro-preview | OpenRouter   | Vision, Reasoning       |
-| openai/gpt-5.4                | OpenRouter   | Vision                  |
-| openai/gpt-5-mini             | OpenRouter   | Vision                  |
-| gpt-5.4                       | OpenAI       | Vision                  |
-| gpt-5-mini                    | OpenAI       | Vision                  |
-| gpt-4.1                       | OpenAI       | Vision                  |
-| gpt-4.1-mini                  | OpenAI       | Vision                  |
-| claude-opus-4-6               | Anthropic    | Vision, Reasoning       |
-| claude-sonnet-4-5-20250929    | Anthropic    | Vision, Reasoning       |
-| gemini-2.5-pro                | Google       | Vision                  |
-| gemini-2.5-flash              | Google       | Vision                  |
-| gemini-3.5-flash              | Google       | Vision, Reasoning       |
-| grok-4-1-fast                 | XAI          | Vision                  |
-| deepseek-v4-flash             | DeepSeek     | Reasoning               |
-| deepseek-v4-pro               | DeepSeek     | Reasoning               |
+Open **Settings → Copilot → Basic → Agents**.
 
-### Model Capability Badges
+1. Set **Default backend** to the agent you want when a new Agent Chat opens.
+2. Select **opencode**, **Claude**, **Codex**, or **Quick Chat**.
+3. Turn on the models you want shown in that experience's model picker.
+4. Choose **Default model**. For an agent, **Agent default** leaves the choice
+   to that agent.
+5. If the selected agent model supports it, choose **Default effort**. The
+   available effort levels come from the agent and model, so they vary.
 
-Models may show capability badges:
+The four lists are independent:
 
-- **Reasoning** — Extended internal thinking before responding; better for complex tasks
-- **Vision** — Can process images (e.g., screenshots, diagrams embedded in notes)
-- **Web Search** — Can access the internet directly (model-native feature)
+- **opencode** can combine Copilot-hosted models, compatible BYOK models, and
+  models reported by opencode.
+- **Claude** and **Codex** show only models reported by their installed tools.
+  Their CLI accounts own access and billing; BYOK models are not added to these
+  lists.
+- **Quick Chat models** contains Copilot-hosted and BYOK chat models. Agent-owned
+  models do not appear here.
 
-### Managing Models
+New BYOK chat models start enabled for both Quick Chat and opencode. You can
+turn either copy off without affecting the other. Models newly reported by an
+agent may also appear switched off until you enable them.
 
-Go to **Settings → Copilot → Model** to see the full model list.
+## Choose a model while chatting
 
-- **Enable/disable** — Toggle individual models on or off to control what appears in the model selector
-- **Reorder** — Drag models to change their order in the dropdown
-- **Delete** — Remove custom models you've added
+In **Agent Chat**, the model picker is grouped by agent. Before the first message in
+an empty session, choosing a model from another installed agent switches that
+session to the other agent. After the conversation has started, the picker
+stays with the current agent.
 
-### Adding Custom Models
+A model or effort picked beside the message box applies to that chat; it does
+not replace the saved **Default model** or **Default effort**. Saved agent
+defaults are used for new chats and multi-agent answers. Changes to an explicit
+default apply to open chats on their next turn; choosing **Agent default**
+leaves open chats unchanged.
 
-If your provider offers a model that isn't in the built-in list, you can add it manually:
+In **Quick Chat**, the picker shows only enabled **Quick Chat models**. Its
+**Default model** is the model new Quick Chat conversations start with.
 
-1. Go to **Settings → Copilot → Model**
-2. Click **Add Model**
-3. Enter the model name exactly as the provider expects it (e.g., `gpt-4-turbo-preview`)
-4. Select the provider
-5. Optionally set a custom base URL (useful for proxies or alternate endpoints)
-6. Save
+## Model, effort, and permissions
 
-### Importing Models from Provider
+| Experience     | Choices available now                                                                                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **opencode**   | Model; effort when the model reports it; **Default** or **Auto** permissions. **Plan** is not available.                                                                                                                                         |
+| **Claude**     | Model; effort when supported; **Default**, **Plan**, and **Auto** permissions. **Auto mode permissions** controls what Auto may approve. **Show extended thinking** controls whether reasoning blocks are displayed; it is separate from effort. |
+| **Codex**      | Model; effort when reported; whichever of **Default**, **Plan**, and **Auto** the installed adapter supports.                                                                                                                                    |
+| **Quick Chat** | Model only. Agent effort and permission controls do not apply.                                                                                                                                                                                   |
 
-You can automatically import the full list of available models from a provider:
+**Default** uses the agent's normal approval behavior, **Plan** prepares a plan
+before editing, and **Auto** uses the selected agent's automatic permission
+behavior.
 
-1. Go to **Settings → Copilot → Model**
-2. Find the **Import models** button for your provider
-3. Copilot will fetch the provider's model list and add new ones
-
----
-
-## Embedding Models
-
-Embedding models convert text into numerical vectors, which powers semantic (meaning-based) search in Vault QA and the "Relevant Notes" feature.
-
-### Built-In Embedding Models
-
-| Model                         | Provider                          |
-| ----------------------------- | --------------------------------- |
-| copilot-plus-small            | Copilot Plus (Plus exclusive)     |
-| copilot-plus-large            | Copilot Plus (Believer exclusive) |
-| copilot-plus-multilingual     | Copilot Plus (Plus exclusive)     |
-| openai/text-embedding-3-small | OpenRouter                        |
-| text-embedding-3-small        | OpenAI                            |
-| text-embedding-3-large        | OpenAI                            |
-| embed-multilingual-light-v3.0 | Cohere                            |
-| text-embedding-004            | Google                            |
-| gemini-embedding-001          | Google                            |
-| Qwen3-Embedding-0.6B          | SiliconFlow                       |
-
-### Selecting an Embedding Model
-
-Go to **Settings → Copilot → QA** → **Embedding Model**.
-
-If you change embedding models, you must rebuild the vault index because the old vectors are incompatible with the new model. Copilot will prompt you to confirm before rebuilding.
-
-### What Embeddings Affect
-
-- **Vault QA mode** — Uses embeddings to find relevant notes by meaning
-- **Semantic Search** — The "Enable Semantic Search" toggle in QA settings
-- **Relevant Notes** — Shows semantically similar notes in the sidebar
-
----
-
-## Model Parameters
-
-These settings control how the AI responds. Global defaults live in Settings → Copilot → Model. You can override them per-session using the gear icon in the chat panel.
-
-### Temperature
-
-Controls how random or creative the responses are.
-
-- **Range**: 0.0–1.0
-- **Default**: 0.1
-- **Low (0.0–0.2)**: Precise, factual, deterministic
-- **Medium (0.4–0.6)**: Balanced
-- **High (0.8–1.0)**: Creative, varied, less predictable
-
-### Max Tokens
-
-Maximum number of tokens in the AI's response. A **token** is roughly ¾ of a word (so 1,000 tokens ≈ 750 words).
-
-- **Default**: 6,000
-- Higher values allow longer responses but cost more
-
-### Conversation Turns in Context
-
-How many past conversation turns to include in each request. More turns = more context but larger requests.
-
-- **Default**: 15 turns
-- Reduce this if you hit context limits or want to lower costs
-
-### Auto-Compact Threshold
-
-When the conversation reaches this many tokens, older messages are automatically summarized.
-
-- **Default**: 128,000 tokens
-- **Range**: 64,000–1,000,000 tokens
-- See [Chat Interface](chat-interface.md#auto-compact) for details
-
-### Reasoning Effort
-
-For reasoning-capable models (like `deepseek-v4-pro` and `claude-opus-4-6`), controls how much internal reasoning the model does before responding.
-
-- **Options**: minimal, low, medium, high, xhigh
-- **Default**: low
-- Higher effort = better results on complex tasks, slower responses
-
-Direct DeepSeek V4 models use an explicit mode. Minimal turns thinking off. High turns thinking on,
-and XHigh maps to DeepSeek's maximum effort. Low and Medium are not offered because DeepSeek maps
-both to High instead of honoring them as distinct effort levels. Thinking mode does not send
-Temperature or Top P. Frequency Penalty is not supported by the direct DeepSeek integration.
-
-### Verbosity
-
-For models that support it, controls response length and detail.
-
-- **Options**: low, medium, high
-- **Default**: medium
-
-### Top P
-
-An alternative to temperature for controlling randomness. Leave at default unless you have a specific reason to change it.
-
-### Frequency Penalty
-
-Reduces the likelihood of the model repeating itself.
-
----
-
-## Default Model Selection
-
-Your **default model** is the one Copilot uses when you open a new chat. Set it in:
-**Settings → Copilot → Basic → Default Chat Model**
-
-The default is **OpenRouter Gemini 2.5 Flash** (requires OpenRouter API key).
-
----
+Copilot V4 does not expose temperature, top-p, or similar tuning in these model
+lists. In Quick Chat, **Chat Settings** controls the session system prompt; it
+does not add Agent Chat effort or permission controls.
 
 ## Related
 
-- [LLM Providers](llm-providers.md) — Set up API keys for your provider
-- [Vault Search and Indexing](vault-search-and-indexing.md) — How embedding models are used
+- [Model Sources and BYOK](llm-providers.md)
+- [Agent Chat](agent-mode-and-tools.md)
+- [Settings: Basic](settings.md#basic)
+- [Copilot Plans, Privacy, and Self-Hosting](copilot-plus-and-self-host.md)

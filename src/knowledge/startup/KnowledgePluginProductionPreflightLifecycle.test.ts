@@ -161,6 +161,71 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     expect(fetchPort).not.toHaveBeenCalled();
   });
 
+  it("installs a configured-model preparation without reading legacy settings", async () => {
+    const candidate = createCandidate();
+    const getSettings = jest.fn(() => createSettings());
+    const createPreflight = jest.fn(() => createCandidate());
+    const prepareConfiguredModelPreflight = jest.fn(
+      async (
+        input: Parameters<
+          NonNullable<
+            KnowledgePluginProductionPreflightLifecycleDependencies["prepareConfiguredModelPreflight"]
+          >
+        >[0]
+      ) => {
+        const profileSource = new ProjectKnowledgePipelineProfileSource(
+          input.projects.map((project) => ({
+            id: project.id,
+            projectModelKey: MODEL_KEY,
+            modelConfigs: project.modelConfigs,
+          })),
+          createSettings(),
+          input.profileOptions
+        );
+        return { kind: "ready" as const, profileSource, preflight: candidate };
+      }
+    );
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle(
+      createDependencies({
+        getSettings,
+        createPreflight,
+        prepareConfiguredModelPreflight,
+      })
+    );
+
+    const result = await lifecycle.load(new AbortController().signal);
+
+    expect(result).toMatchObject({ kind: "configured", bundleIds: ["personal"] });
+    expect(prepareConfiguredModelPreflight).toHaveBeenCalledTimes(1);
+    expect(prepareConfiguredModelPreflight.mock.calls[0][0].projects).toEqual([
+      { id: PROJECT_ID, modelSelection: MODEL_KEY, modelConfigs: {} },
+    ]);
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(createPreflight).not.toHaveBeenCalled();
+    expect(candidate.close).not.toHaveBeenCalled();
+    lifecycle.close();
+    expect(candidate.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a configured-model preparation diagnostic without constructing a legacy preflight", async () => {
+    const createPreflight = jest.fn(() => createCandidate());
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle(
+      createDependencies({
+        createPreflight,
+        prepareConfiguredModelPreflight: async () => ({
+          kind: "diagnostic",
+          code: "model_missing",
+        }),
+      })
+    );
+
+    await expect(lifecycle.load(new AbortController().signal)).resolves.toEqual({
+      kind: "invalid",
+      diagnosticCodes: ["production_preflight_model_missing"],
+    });
+    expect(createPreflight).not.toHaveBeenCalled();
+  });
+
   it("captures one Projects/Settings generation and retains the exact frozen owners it preflights", async () => {
     const events: string[] = [];
     const fetchPort = createFetchPort();

@@ -6,7 +6,7 @@ import type {
 import { sha256, sha256Bytes } from "@/utils/hash";
 
 // Capturing this intrinsic accessor is intentional; Reflect.apply supplies the candidate receiver.
-// eslint-disable-next-line @typescript-eslint/unbound-method
+// eslint-disable-next-line @typescript-eslint/unbound-method -- capture the intrinsic getter for a non-spoofable receiver check
 const TYPED_ARRAY_TO_STRING_TAG_GETTER = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype) as object,
   Symbol.toStringTag

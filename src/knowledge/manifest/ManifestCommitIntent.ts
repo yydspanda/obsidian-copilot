@@ -302,7 +302,7 @@ function prefixDiagnostics(
  * @param path - Structural issue path
  * @returns Dotted field path
  */
-function formatIssuePath(path: (string | number)[]): string {
+function formatIssuePath(path: PropertyKey[]): string {
   return path.map(String).join(".");
 }
 

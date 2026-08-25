@@ -1,14 +1,13 @@
 import { CustomModel } from "@/aiParams";
 import { BREVILABS_MODELS_BASE_URL, EmbeddingModelProviders, ProviderInfo } from "@/constants";
-import { getDecryptedKey } from "@/encryptionService";
 import { CustomError } from "@/error";
-import { logInfo } from "@/logger";
+import { logInfo, logWarn } from "@/logger";
 import { getModelKeyFromModel, getSettings, subscribeToSettingsChange } from "@/settings/model";
-import { err2String, safeFetch } from "@/utils";
+import { err2String, safeFetchNoThrow } from "@/utils";
 import { Embeddings } from "@langchain/core/embeddings";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { OllamaEmbeddings } from "@langchain/ollama";
-import { AzureOpenAIEmbeddings, OpenAIEmbeddings } from "@langchain/openai";
+import { OpenAIEmbeddings } from "@langchain/openai";
 import { Notice } from "obsidian";
 import { BrevilabsClient } from "./brevilabsClient";
 import { CustomJinaEmbeddings } from "./CustomJinaEmbeddings";
@@ -22,7 +21,6 @@ const EMBEDDING_PROVIDER_CONSTRUCTORS = {
   [EmbeddingModelProviders.OPENAI]: OpenAIEmbeddings,
   [EmbeddingModelProviders.COHEREAI]: OpenAIEmbeddings,
   [EmbeddingModelProviders.GOOGLE]: GoogleGenerativeAIEmbeddings,
-  [EmbeddingModelProviders.AZURE_OPENAI]: AzureOpenAIEmbeddings,
   [EmbeddingModelProviders.OLLAMA]: OllamaEmbeddings,
   [EmbeddingModelProviders.LM_STUDIO]: CustomOpenAIEmbeddings,
   [EmbeddingModelProviders.OPENAI_FORMAT]: OpenAIEmbeddings,
@@ -51,7 +49,6 @@ export default class EmbeddingManager {
     [EmbeddingModelProviders.OPENAI]: () => getSettings().openAIApiKey,
     [EmbeddingModelProviders.COHEREAI]: () => getSettings().cohereApiKey,
     [EmbeddingModelProviders.GOOGLE]: () => getSettings().googleApiKey,
-    [EmbeddingModelProviders.AZURE_OPENAI]: () => getSettings().azureOpenAIApiKey,
     [EmbeddingModelProviders.OLLAMA]: () => "default-key",
     [EmbeddingModelProviders.LM_STUDIO]: () => "default-key",
     [EmbeddingModelProviders.OPENAI_FORMAT]: () => "default-key",
@@ -80,7 +77,7 @@ export default class EmbeddingManager {
   getProviderConstructor(model: CustomModel): EmbeddingConstructorType {
     const constructor = EMBEDDING_PROVIDER_CONSTRUCTORS[model.provider as EmbeddingModelProviders];
     if (!constructor) {
-      console.warn(`Unknown provider: ${model.provider} for model: ${model.name}`);
+      logWarn(`Unknown provider: ${model.provider} for model: ${model.name}`);
       throw new Error(`Unknown provider: ${model.provider} for model: ${model.name}`);
     }
     return constructor;
@@ -98,7 +95,7 @@ export default class EmbeddingManager {
             model.provider as EmbeddingModelProviders
           )
         ) {
-          console.warn(`Unknown provider: ${model.provider} for embedding model: ${model.name}`);
+          logWarn(`Unknown provider: ${model.provider} for embedding model: ${model.name}`);
           return;
         }
         const constructor = this.getProviderConstructor(model);
@@ -147,7 +144,7 @@ export default class EmbeddingManager {
     const customModel = this.getCustomModel(embeddingModelKey);
 
     // Check if model is plus-exclusive but user is not a plus user
-    if (customModel.plusExclusive && !getSettings().isPlusUser) {
+    if (customModel.plusExclusive && !getSettings().isPaidUser) {
       new Notice("Plus-only model, please consider upgrading to Plus to access it.");
       throw new CustomError("Plus-only model selected but user is not on Plus plan");
     }
@@ -155,7 +152,9 @@ export default class EmbeddingManager {
     // Check if model is believer-exclusive but user is not on believer plan
     if (customModel.believerExclusive) {
       const brevilabsClient = BrevilabsClient.getInstance();
-      const result = await brevilabsClient.validateLicenseKey();
+      const result = await brevilabsClient.validateLicenseKey(undefined, {
+        trigger: "model_gate",
+      });
       if (!result.plan || result.plan.toLowerCase() !== "believer") {
         new Notice("Believer-only model, please consider upgrading to Believer to access it.");
         throw new CustomError("Believer-only model selected but user is not on Believer plan");
@@ -209,101 +208,93 @@ export default class EmbeddingManager {
     } = {
       [EmbeddingModelProviders.COPILOT_PLUS]: {
         modelName,
-        apiKey: await getDecryptedKey(settings.plusLicenseKey),
+        apiKey: settings.plusLicenseKey,
+        headers: BrevilabsClient.getInstance().getPluginVersionHeaders(),
         timeout: 10000,
         batchSize: getSettings().embeddingBatchSize,
         configuration: {
           baseURL: BREVILABS_MODELS_BASE_URL,
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
       },
       [EmbeddingModelProviders.COPILOT_PLUS_JINA]: {
         model: modelName,
-        apiKey: await getDecryptedKey(settings.plusLicenseKey),
+        apiKey: settings.plusLicenseKey,
+        headers: BrevilabsClient.getInstance().getPluginVersionHeaders(),
         timeout: 10000,
         batchSize: getSettings().embeddingBatchSize,
         dimensions: customModel.dimensions,
         baseUrl: BREVILABS_MODELS_BASE_URL + "/embeddings",
         configuration: {
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
       },
       [EmbeddingModelProviders.OPENAI]: {
         modelName,
-        apiKey: await getDecryptedKey(customModel.apiKey || settings.openAIApiKey),
+        apiKey: customModel.apiKey || settings.openAIApiKey,
         timeout: 10000,
         batchSize: getSettings().embeddingBatchSize,
         configuration: {
           baseURL: customModel.baseUrl,
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
       },
       [EmbeddingModelProviders.COHEREAI]: {
         modelName,
-        apiKey: await getDecryptedKey(customModel.apiKey || settings.cohereApiKey),
+        apiKey: customModel.apiKey || settings.cohereApiKey,
         timeout: 10000,
         batchSize: getSettings().embeddingBatchSize,
         configuration: {
           baseURL: customModel.baseUrl || ProviderInfo[EmbeddingModelProviders.COHEREAI].host,
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
       },
       [EmbeddingModelProviders.GOOGLE]: {
         modelName: modelName,
-        apiKey: await getDecryptedKey(settings.googleApiKey),
-      },
-      [EmbeddingModelProviders.AZURE_OPENAI]: {
-        modelName,
-        azureOpenAIApiKey: await getDecryptedKey(customModel.apiKey || settings.azureOpenAIApiKey),
-        azureOpenAIApiInstanceName:
-          customModel.azureOpenAIApiInstanceName || settings.azureOpenAIApiInstanceName,
-        azureOpenAIApiDeploymentName:
-          customModel.azureOpenAIApiEmbeddingDeploymentName ||
-          settings.azureOpenAIApiEmbeddingDeploymentName,
-        azureOpenAIApiVersion: customModel.azureOpenAIApiVersion || settings.azureOpenAIApiVersion,
+        apiKey: settings.googleApiKey,
       },
       [EmbeddingModelProviders.OLLAMA]: {
         baseUrl: customModel.baseUrl || "http://localhost:11434",
         model: modelName,
         truncate: true,
         headers: {
-          Authorization: `Bearer ${await getDecryptedKey(customModel.apiKey || "default-key")}`,
+          Authorization: `Bearer ${customModel.apiKey || "default-key"}`,
         },
       },
       [EmbeddingModelProviders.LM_STUDIO]: {
         modelName,
-        openAIApiKey: await getDecryptedKey(customModel.apiKey || "default-key"),
+        openAIApiKey: customModel.apiKey || "default-key",
         configuration: {
           baseURL: customModel.baseUrl || "http://localhost:1234/v1",
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
       },
       [EmbeddingModelProviders.OPENAI_FORMAT]: {
         modelName,
-        openAIApiKey: await getDecryptedKey(customModel.apiKey || ""),
+        openAIApiKey: customModel.apiKey || "",
         batchSize: getSettings().embeddingBatchSize,
         configuration: {
           baseURL: customModel.baseUrl,
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
           dangerouslyAllowBrowser: true,
         },
       },
       [EmbeddingModelProviders.SILICONFLOW]: {
         modelName,
-        apiKey: await getDecryptedKey(customModel.apiKey || settings.siliconflowApiKey),
+        apiKey: customModel.apiKey || settings.siliconflowApiKey,
         batchSize: getSettings().embeddingBatchSize,
         configuration: {
           baseURL: customModel.baseUrl || ProviderInfo[EmbeddingModelProviders.SILICONFLOW].host,
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
       },
       [EmbeddingModelProviders.OPENROUTERAI]: {
         modelName,
-        apiKey: await getDecryptedKey(customModel.apiKey || settings.openRouterAiApiKey),
+        apiKey: customModel.apiKey || settings.openRouterAiApiKey,
         batchSize: getSettings().embeddingBatchSize,
         configuration: {
           baseURL: customModel.baseUrl || "https://openrouter.ai/api/v1",
-          fetch: customModel.enableCors ? safeFetch : undefined,
+          fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
       },
     };

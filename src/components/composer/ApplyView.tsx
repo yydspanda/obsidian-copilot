@@ -6,12 +6,13 @@ import type { Change } from "diff";
 import { Check, X as XIcon } from "lucide-react";
 import { App, ItemView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import React, { useRef, useState } from "react";
-import { Button } from "../ui/button";
-import { SettingSwitch } from "../ui/setting-switch";
+import { Button } from "@/components/ui/button";
+import { SettingSwitch } from "@/components/ui/setting-switch";
 import { getChangeBlocks } from "@/composerUtils";
 import { ApplyViewResult } from "@/types";
 import { ensureFolderExists } from "@/utils";
 import { SideBySideDiffBlock, SplitDiffBlock } from "@/components/composer/DiffPreview";
+import { safeAsyncHandler } from "@/utils/safeAsyncHandler";
 
 export const APPLY_VIEW_TYPE = "obsidian-copilot-apply-view";
 
@@ -203,7 +204,7 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     // Create the folder if it doesn't exist (supports nested paths)
     if (file_path.includes("/")) {
       const folderPath = file_path.split("/").slice(0, -1).join("/");
-      await ensureFolderExists(folderPath);
+      await ensureFolderExists(app.vault, folderPath);
     }
     return await app.vault.create(file_path, "");
   };
@@ -323,11 +324,11 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
   return (
     <div className="tw-relative tw-flex tw-h-full tw-flex-col">
       <div className="tw-fixed tw-bottom-4 tw-left-1/2 tw-z-[9999] tw-flex tw-gap-2 tw-rounded-md tw-border tw-border-solid tw-border-border tw-bg-secondary tw-p-2 tw-shadow-lg">
-        <Button variant="destructive" size="sm" onClick={handleReject}>
+        <Button variant="destructive" size="sm" onClick={safeAsyncHandler(handleReject)}>
           <XIcon className="tw-size-4" />
           Reject
         </Button>
-        <Button variant="success" size="sm" onClick={handleAccept}>
+        <Button variant="success" size="sm" onClick={safeAsyncHandler(handleAccept)}>
           <Check className="tw-size-4" />
           Accept
         </Button>

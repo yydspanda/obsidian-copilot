@@ -2,7 +2,7 @@ import type { App, Vault } from "obsidian";
 
 import { logFileManager } from "@/logFileManager";
 
-jest.mock("@/encryptionService", () => ({
+jest.mock("@/services/settingsSecretTransforms", () => ({
   isSensitiveKey: jest.fn(() => false),
 }));
 
@@ -19,6 +19,7 @@ jest.mock("@/utils", () => ({
 }));
 
 jest.mock("obsidian", () => ({
+  normalizePath: (path: string) => path.replace(/\/{2,}/g, "/").replace(/^\/|\/$/g, ""),
   TFile: class MockTFile {},
 }));
 
@@ -83,15 +84,15 @@ function createApp(vault: Vault): App {
 }
 
 describe("LogFileManager lifecycle Vault ownership", () => {
-  it("keeps an in-flight explicit flush on its captured Vault after the global App changes", async () => {
+  it("keeps an in-flight flush on its captured Vault after the manager is rebound", async () => {
     const ownerExists = createDeferred<boolean>();
     const ownerA = createVault(ownerExists.promise);
     const ownerB = createVault(true);
-    (window as unknown as { app: App }).app = { vault: ownerB.vault } as App;
+    logFileManager.setApp(createApp(ownerA.vault));
     await logFileManager.append("INFO", "owner-a-entry");
 
-    const flush = logFileManager.flush(ownerA.vault);
-    (window as unknown as { app: App }).app = { vault: ownerB.vault } as App;
+    const flush = logFileManager.flush();
+    logFileManager.setApp(createApp(ownerB.vault));
     ownerExists.resolve(true);
     await flush;
 
@@ -104,14 +105,14 @@ describe("LogFileManager lifecycle Vault ownership", () => {
     expect(ownerB.adapter.write).not.toHaveBeenCalled();
   });
 
-  it("keeps an in-flight clear on its explicit Vault after the global App changes", async () => {
+  it("keeps an in-flight clear on its captured Vault after the manager is rebound", async () => {
     const ownerExists = createDeferred<boolean>();
     const ownerA = createVault(ownerExists.promise);
     const ownerB = createVault(true);
-    (window as unknown as { app: App }).app = createApp(ownerB.vault);
+    logFileManager.setApp(createApp(ownerA.vault));
 
-    const clear = logFileManager.clear(ownerA.vault);
-    (window as unknown as { app: App }).app = createApp(ownerB.vault);
+    const clear = logFileManager.clear();
+    logFileManager.setApp(createApp(ownerB.vault));
     ownerExists.resolve(true);
     await clear;
 
@@ -121,17 +122,17 @@ describe("LogFileManager lifecycle Vault ownership", () => {
     expect(ownerB.adapter.remove).not.toHaveBeenCalled();
   });
 
-  it("keeps an in-flight open on its explicit App after the global App changes", async () => {
+  it("keeps an in-flight open on its captured App after the manager is rebound", async () => {
     const ownerExists = createDeferred<boolean>();
     const ownerA = createVault(ownerExists.promise);
     const ownerB = createVault(true);
     const appA = createApp(ownerA.vault);
     const appB = createApp(ownerB.vault);
-    (window as unknown as { app: App }).app = appB;
+    logFileManager.setApp(appA);
     await logFileManager.append("INFO", "owner-a-open-entry");
 
-    const open = logFileManager.openLogFile(appA);
-    (window as unknown as { app: App }).app = appB;
+    const open = logFileManager.openLogFile();
+    logFileManager.setApp(appB);
     ownerExists.resolve(true);
     await open;
 

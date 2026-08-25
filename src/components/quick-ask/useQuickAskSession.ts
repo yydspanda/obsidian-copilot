@@ -16,21 +16,16 @@ import {
   appendIncludeNoteContextPlaceholders,
 } from "@/commands/quickCommandPrompts";
 import { processCommandPrompt } from "@/commands/customCommandUtils";
-import { findCustomModel } from "@/utils";
-import { logError, logWarn } from "@/logger";
+import { useApp } from "@/context";
+import { useResolvedChatBackendModel } from "@/hooks/useResolvedChatBackendModel";
+import { logError } from "@/logger";
 import type { QuickAskMessage } from "./types";
-import type { CopilotSettings } from "@/settings/model";
-import {
-  assertSavedModelReferenceCanRun,
-  findFirstRunnableFallbackModel,
-  isSavedModelReferenceError,
-} from "@/LLMProviders/modelSelectionPolicy";
 
 interface UseQuickAskSessionParams {
   selectedText: string;
+  /** Selected model — a `configuredModelId` in the chat backend. */
   selectedModelKey: string;
   includeNoteContext: boolean;
-  settings: CopilotSettings;
 }
 
 interface QuickAskSessionApi {
@@ -45,7 +40,8 @@ interface QuickAskSessionApi {
  * Hook for managing Quick Ask session state and streaming.
  */
 export function useQuickAskSession(params: UseQuickAskSessionParams): QuickAskSessionApi {
-  const { selectedText, selectedModelKey, includeNoteContext, settings } = params;
+  const app = useApp();
+  const { selectedText, selectedModelKey, includeNoteContext } = params;
 
   // Message history (completed messages only)
   const [messages, setMessages] = useState<QuickAskMessage[]>([]);
@@ -62,33 +58,8 @@ export function useQuickAskSession(params: UseQuickAskSessionParams): QuickAskSe
     };
   }, []);
 
-  // Resolve ordinary stale selections with the historical fallback, while retired
-  // and unsupported direct-provider references remain explicit user decisions.
-  const modelResolution = useMemo((): {
-    model: CopilotSettings["activeModels"][number] | null;
-    error: string | null;
-  } => {
-    try {
-      assertSavedModelReferenceCanRun(selectedModelKey);
-      const model = findCustomModel(selectedModelKey, settings.activeModels);
-      assertSavedModelReferenceCanRun(selectedModelKey, model);
-      if (!model.enabled) {
-        logWarn("Selected model is disabled; falling back to first enabled model.", {
-          selectedModelKey,
-        });
-        return { model: findFirstRunnableFallbackModel(settings.activeModels), error: null };
-      }
-      return { model, error: null };
-    } catch (error) {
-      if (isSavedModelReferenceError(error)) {
-        logWarn(error.message);
-        return { model: null, error: error.message };
-      }
-      logWarn("Selected model not found; falling back to first enabled model.");
-      return { model: findFirstRunnableFallbackModel(settings.activeModels), error: null };
-    }
-  }, [selectedModelKey, settings.activeModels]);
-  const resolvedModel = modelResolution.model;
+  // Resolve the selected chat-backend model (preferred id → first enabled → null).
+  const resolvedModel = useResolvedChatBackendModel(app, selectedModelKey);
 
   // Use shared streaming hook
   const {
@@ -102,11 +73,8 @@ export function useQuickAskSession(params: UseQuickAskSessionParams): QuickAskSe
     systemPrompt: QUICK_COMMAND_SYSTEM_PROMPT,
     excludeThinking: true,
     onNoModel: () => {
-      const message =
-        modelResolution.error ??
-        "No active model configured. Please configure a model in Copilot settings.";
-      logError(message);
-      new Notice(message);
+      logError("No active model is configured. Please configure a model in Copilot settings.");
+      new Notice("No active model configured. Please configure a model in Copilot settings.");
     },
     onNonAbortError: (error) => {
       logError("Error generating response:", error);
@@ -141,7 +109,12 @@ export function useQuickAskSession(params: UseQuickAskSessionParams): QuickAskSe
         if (ctx.signal.aborted) return "";
 
         // Process prompt (follow-up messages skip appending selected text)
-        const prompt = await processCommandPrompt(processedInput, selectedText, !ctx.isFirstTurn);
+        const prompt = await processCommandPrompt(
+          app,
+          processedInput,
+          selectedText,
+          !ctx.isFirstTurn
+        );
 
         return prompt;
       });
@@ -178,7 +151,7 @@ export function useQuickAskSession(params: UseQuickAskSessionParams): QuickAskSe
         });
       }
     },
-    [includeNoteContext, runTurn, selectedText]
+    [app, includeNoteContext, runTurn, selectedText]
   );
 
   const stop = useCallback(() => {

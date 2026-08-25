@@ -301,9 +301,7 @@ function projectObservation(
  * The adapter never returns file content and has no write capability. Requests
  * are limited to paths supplied by the Runtime freshness authority.
  */
-export class ObsidianKnowledgeOutputObservationReader
-  implements KnowledgeOutputObservationReaderPort
-{
+export class ObsidianKnowledgeOutputObservationReader implements KnowledgeOutputObservationReaderPort {
   private readonly visit: ReturnType<typeof captureVisitor>;
   private readonly maxOutputs: number;
   private readonly maxBytesPerOutput: number;

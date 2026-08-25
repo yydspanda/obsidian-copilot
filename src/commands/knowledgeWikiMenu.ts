@@ -44,16 +44,16 @@ function hasOneExactAdvisoryRow(value: unknown, pagePath: string): boolean {
     const indexedPath = Object.getOwnPropertyDescriptor(row, "pagePath");
     return Boolean(
       bundleId &&
-        "value" in bundleId &&
-        bundleId.enumerable &&
-        typeof bundleId.value === "string" &&
-        bundleId.value.length > 0 &&
-        bundleId.value.length <= 256 &&
-        bundleId.value.trim() === bundleId.value &&
-        indexedPath &&
-        "value" in indexedPath &&
-        indexedPath.enumerable &&
-        indexedPath.value === pagePath
+      "value" in bundleId &&
+      bundleId.enumerable &&
+      typeof bundleId.value === "string" &&
+      bundleId.value.length > 0 &&
+      bundleId.value.length <= 256 &&
+      bundleId.value.trim() === bundleId.value &&
+      indexedPath &&
+      "value" in indexedPath &&
+      indexedPath.enumerable &&
+      indexedPath.value === pagePath
     );
   } catch {
     return false;

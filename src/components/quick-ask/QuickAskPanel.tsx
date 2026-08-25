@@ -15,6 +15,7 @@ import type { ResizeDirection } from "@/hooks/use-resizable";
 import { useSettingsValue, updateSetting } from "@/settings/model";
 import { cleanMessageForCopy } from "@/utils";
 import { ModelSelector } from "@/components/ui/ModelSelector";
+import { useChatModelPicker } from "@/components/chat-components/useChatModelPicker";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useQuickAskSession } from "./useQuickAskSession";
@@ -23,6 +24,7 @@ import { QuickAskInput } from "./QuickAskInput";
 import type { QuickAskPanelProps } from "./types";
 import type { ReplaceInvalidReason } from "@/editor/replaceGuard";
 import { Button } from "@/components/ui/button";
+import { safeAsyncHandler } from "@/utils/safeAsyncHandler";
 
 /**
  * QuickAskPanel - Floating panel for Quick Ask interactions.
@@ -66,7 +68,6 @@ export function QuickAskPanel({
     selectedText,
     selectedModelKey,
     includeNoteContext,
-    settings,
   });
 
   // Derived state
@@ -240,9 +241,12 @@ export function QuickAskPanel({
     [messages, replaceGuard, onClose]
   );
 
-  const handleModelChange = useCallback((modelKey: string) => {
-    updateSetting("quickCommandModelKey", modelKey);
+  const handleModelChange = useCallback((configuredModelId: string) => {
+    updateSetting("quickCommandModelKey", configuredModelId);
   }, []);
+
+  // Chat-backend picker entries for the model selector.
+  const chatPicker = useChatModelPicker({ value: selectedModelKey, onChange: handleModelChange });
 
   const handleIncludeNoteContextChange = useCallback((checked: boolean) => {
     setIncludeNoteContext(checked);
@@ -302,7 +306,7 @@ export function QuickAskPanel({
               message={msg}
               isStreaming={isStreaming && msg.id === lastMessageId && msg.role === "assistant"}
               isLastAssistantMessage={msg.role === "assistant" && idx === lastAssistantIdx}
-              onCopy={handleCopy}
+              onCopy={safeAsyncHandler(handleCopy)}
               onInsert={handleInsert}
               onReplace={handleReplace}
               hasSelection={hasSelection}
@@ -324,7 +328,7 @@ export function QuickAskPanel({
         <QuickAskInput
           value={inputText}
           onChange={setInputText}
-          onSubmit={handleSubmit}
+          onSubmit={safeAsyncHandler(handleSubmit)}
           sendShortcut={settings.defaultSendShortcut}
           placeholder={isStreaming ? "Generating..." : "Ask a question... "}
           currentActiveFile={currentActiveFile}
@@ -337,8 +341,9 @@ export function QuickAskPanel({
           <ModelSelector
             size="sm"
             variant="ghost"
-            value={selectedModelKey}
-            onChange={handleModelChange}
+            value={chatPicker.value}
+            models={chatPicker.models}
+            onChange={chatPicker.onChange}
             disabled={isStreaming}
           />
 
@@ -381,7 +386,7 @@ export function QuickAskPanel({
             <Button
               variant="default"
               size="icon"
-              onClick={handleSubmit}
+              onClick={safeAsyncHandler(handleSubmit)}
               disabled={!inputText.trim()}
               title="Send message"
             >

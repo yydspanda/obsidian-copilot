@@ -3,18 +3,6 @@ import type { App, Vault } from "obsidian";
 import { ProjectRegister, ProjectRegisterDisposedError } from "@/projects/projectRegister";
 import { ProjectFileRecord } from "@/projects/type";
 
-jest.mock("@/aiParams", () => ({
-  getCurrentProject: jest.fn(() => null),
-}));
-
-jest.mock("@/cache/projectContextCache", () => ({
-  ProjectContextCache: {
-    getInstance: jest.fn(() => ({
-      clearForProject: jest.fn(async () => {}),
-    })),
-  },
-}));
-
 jest.mock("@/logger", () => ({
   logError: jest.fn(),
   logInfo: jest.fn(),
@@ -32,7 +20,6 @@ jest.mock("@/projects/projectUtils", () => ({
   ensureProjectFrontmatter: jest.fn(async () => {}),
   getProjectsFolder: jest.fn(() => "Projects"),
   isProjectConfigFile: jest.fn(() => false),
-  loadAllProjects: jest.fn(async () => []),
   parseProjectConfigFile: jest.fn(async () => null),
 }));
 
@@ -49,8 +36,14 @@ jest.mock("@/projects/state", () => ({
 }));
 
 jest.mock("@/settings/model", () => ({
-  getSettings: jest.fn(() => ({ projectsFolder: "Projects" })),
+  getSettings: jest.fn(() => ({ copilotFolder: "copilot" })),
   subscribeToSettingsChange: jest.fn(),
+}));
+
+jest.mock("@/settings/copilotFolder", () => ({
+  deriveProjectsFolder: jest.fn(
+    (settings: { copilotFolder?: string }) => `${settings.copilotFolder ?? "copilot"}/projects`
+  ),
 }));
 
 jest.mock("@/utils/debounce", () => ({
@@ -66,6 +59,12 @@ interface Deferred<T> {
   resolve: (value: T) => void;
   reject: (error: unknown) => void;
 }
+
+interface RootSettings {
+  copilotFolder: string;
+}
+
+type SettingsChangeHandler = (previous: RootSettings, next: RootSettings) => void;
 
 /**
  * Creates an externally settled Promise for lifecycle interleaving tests.
@@ -186,7 +185,7 @@ describe("ProjectRegister lifecycle", () => {
     getStateOwner: jest.fn(() => projectStateOwner),
   };
   let vault: jest.Mocked<Vault>;
-  let subscribeToSettingsChange: jest.Mock;
+  let subscribeToSettingsChange: jest.Mock<() => void, [SettingsChangeHandler]>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -215,16 +214,9 @@ describe("ProjectRegister lifecycle", () => {
     }>("@/projects/ProjectFileManager");
     ProjectFileManager.startLifecycle.mockReturnValue(manager);
     ({ subscribeToSettingsChange } = jest.requireMock<{
-      subscribeToSettingsChange: jest.Mock;
+      subscribeToSettingsChange: jest.Mock<() => void, [SettingsChangeHandler]>;
     }>("@/settings/model"));
     subscribeToSettingsChange.mockReturnValue(jest.fn());
-
-    const { ProjectContextCache } = jest.requireMock<{
-      ProjectContextCache: { getInstance: jest.Mock };
-    }>("@/cache/projectContextCache");
-    ProjectContextCache.getInstance.mockReturnValue({
-      clearForProject: jest.fn(async () => {}),
-    });
 
     const { isProjectConfigFile, parseProjectConfigFile } = jest.requireMock<{
       isProjectConfigFile: jest.Mock;
@@ -251,6 +243,96 @@ describe("ProjectRegister lifecycle", () => {
     getCachedProjectRecords.mockReturnValue([]);
     isPendingFileWrite.mockReturnValue(false);
     isProjectStateOwnerActive.mockReturnValue(true);
+  });
+
+  describe("handleSettingsChange()", () => {
+    function getSettingsHandler(): SettingsChangeHandler {
+      return subscribeToSettingsChange.mock.calls[0][0];
+    }
+
+    it("reloads projects when the derived folder changes because the root changed", async () => {
+      const register = new ProjectRegister(createApp(vault));
+      await register.initialize();
+
+      getSettingsHandler()({ copilotFolder: "copilot" }, { copilotFolder: "team/ai" });
+      await flushPromises();
+
+      expect(manager.invalidateProjectsFolder).toHaveBeenCalledTimes(1);
+      expect(manager.fetchPreparedProjectScan).toHaveBeenCalledTimes(1);
+      expect(manager.commitPreparedProjectScan).toHaveBeenCalledWith(expect.anything(), []);
+    });
+
+    it("does not reload when the root and derived folder are unchanged", async () => {
+      const register = new ProjectRegister(createApp(vault));
+      await register.initialize();
+
+      getSettingsHandler()({ copilotFolder: "copilot" }, { copilotFolder: "copilot" });
+      await flushPromises();
+
+      expect(manager.invalidateProjectsFolder).not.toHaveBeenCalled();
+      expect(manager.fetchPreparedProjectScan).not.toHaveBeenCalled();
+    });
+
+    it("discards a slow reload that resolves after a newer one committed", async () => {
+      const staleScan = createDeferred<ProjectFileRecord[]>();
+      const freshRecords = [createProjectRecord("final")];
+      manager.fetchPreparedProjectScan
+        .mockReturnValueOnce(staleScan.promise)
+        .mockResolvedValueOnce(freshRecords);
+      const register = new ProjectRegister(createApp(vault));
+      await register.initialize();
+      const settingsHandler = getSettingsHandler();
+
+      settingsHandler({ copilotFolder: "a" }, { copilotFolder: "b" });
+      await flushPromises();
+      settingsHandler({ copilotFolder: "b" }, { copilotFolder: "c" });
+      await flushPromises();
+
+      expect(manager.commitPreparedProjectScan).toHaveBeenCalledTimes(1);
+      expect(manager.commitPreparedProjectScan.mock.calls[0]?.[1]).toBe(freshRecords);
+
+      staleScan.resolve([createProjectRecord("intermediate")]);
+      await flushPromises();
+
+      expect(manager.commitPreparedProjectScan).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the newer records when an earlier reload fails after a newer one committed", async () => {
+      const staleScan = createDeferred<ProjectFileRecord[]>();
+      const freshRecords = [createProjectRecord("final")];
+      manager.fetchPreparedProjectScan
+        .mockReturnValueOnce(staleScan.promise)
+        .mockResolvedValueOnce(freshRecords);
+      const register = new ProjectRegister(createApp(vault));
+      await register.initialize();
+      const settingsHandler = getSettingsHandler();
+
+      settingsHandler({ copilotFolder: "a" }, { copilotFolder: "b" });
+      await flushPromises();
+      settingsHandler({ copilotFolder: "b" }, { copilotFolder: "c" });
+      await flushPromises();
+
+      staleScan.reject(new Error("fetch failed"));
+      await flushPromises();
+
+      expect(manager.commitPreparedProjectScan).toHaveBeenCalledTimes(1);
+      expect(manager.commitPreparedProjectScan.mock.calls[0]?.[1]).toBe(freshRecords);
+    });
+
+    it("stops an in-flight reload from committing after teardown", async () => {
+      const pendingScan = createDeferred<ProjectFileRecord[]>();
+      manager.fetchPreparedProjectScan.mockReturnValueOnce(pendingScan.promise);
+      const register = new ProjectRegister(createApp(vault));
+      await register.initialize();
+
+      getSettingsHandler()({ copilotFolder: "a" }, { copilotFolder: "b" });
+      await flushPromises();
+      register.cleanup();
+      pendingScan.resolve([createProjectRecord("late")]);
+      await flushPromises();
+
+      expect(manager.commitPreparedProjectScan).not.toHaveBeenCalled();
+    });
   });
 
   it("shares one in-flight initialize and registers each lifecycle hook once", async () => {
@@ -394,51 +476,6 @@ describe("ProjectRegister lifecycle", () => {
     expect(upsertCachedProjectRecordForOwner).not.toHaveBeenCalled();
   });
 
-  it("does not install folder-scan records after cleanup during context-cache clearing", async () => {
-    const contextClear = createDeferred<void>();
-    const nextRecords = [
-      {
-        project: {
-          id: "next",
-          name: "Next",
-          systemPrompt: "",
-          projectModelKey: "",
-          modelConfigs: {},
-          contextSource: {},
-          created: 1,
-          UsageTimestamps: 0,
-        },
-        filePath: "Projects/Next/project.md",
-        folderName: "Next",
-      },
-    ];
-    manager.fetchPreparedProjectScan.mockResolvedValueOnce(nextRecords);
-    const { ProjectContextCache } = jest.requireMock<{
-      ProjectContextCache: { getInstance: jest.Mock };
-    }>("@/cache/projectContextCache");
-    ProjectContextCache.getInstance.mockReturnValue({
-      clearForProject: jest.fn(() => contextClear.promise),
-    });
-    const { getCachedProjectRecords } = jest.requireMock<{
-      getCachedProjectRecords: jest.Mock;
-    }>("@/projects/state");
-    getCachedProjectRecords.mockReturnValue(nextRecords);
-    const register = new ProjectRegister(createApp(vault));
-    await register.initialize();
-
-    const folderChange = (
-      register as unknown as {
-        handleProjectsFolderChange: (folder: string) => Promise<void>;
-      }
-    ).handleProjectsFolderChange("Next Projects");
-    await flushPromises();
-    register.cleanup();
-    contextClear.resolve();
-    await folderChange;
-
-    expect(manager.commitPreparedProjectScan).not.toHaveBeenCalled();
-  });
-
   it("invalidates an in-flight folder scan immediately before an event mutation", async () => {
     const pendingFolderScan = createDeferred<ProjectFileRecord[]>();
     const eventRecord = createProjectRecord("Event");
@@ -497,10 +534,7 @@ describe("ProjectRegister lifecycle", () => {
     }>("@/projects/state");
     const register = new ProjectRegister(createApp(vault));
     await register.initialize();
-    const settingsHandler = subscribeToSettingsChange.mock.calls[0][0] as (
-      previous: { projectsFolder: string },
-      next: { projectsFolder: string }
-    ) => void;
+    const settingsHandler = subscribeToSettingsChange.mock.calls[0][0];
 
     const staleCreate = getVaultHandler(
       vault,
@@ -509,7 +543,7 @@ describe("ProjectRegister lifecycle", () => {
       path: oldFolderRecord.filePath,
     });
     await flushPromises();
-    settingsHandler({ projectsFolder: "Folder A" }, { projectsFolder: "Folder B" });
+    settingsHandler({ copilotFolder: "Folder A" }, { copilotFolder: "Folder B" });
     await flushPromises();
     await flushPromises();
     expect(manager.commitPreparedProjectScan.mock.calls[0]?.[1]).toBe(newFolderRecords);
@@ -538,14 +572,11 @@ describe("ProjectRegister lifecycle", () => {
     }>("@/projects/state");
     const register = new ProjectRegister(createApp(vault));
     await register.initialize();
-    const settingsHandler = subscribeToSettingsChange.mock.calls[0][0] as (
-      previous: { projectsFolder: string },
-      next: { projectsFolder: string }
-    ) => void;
+    const settingsHandler = subscribeToSettingsChange.mock.calls[0][0];
 
     void getVaultHandler(vault, "modify")({ path: oldFolderRecord.filePath });
     await flushPromises();
-    settingsHandler({ projectsFolder: "Folder A" }, { projectsFolder: "Folder B" });
+    settingsHandler({ copilotFolder: "Folder A" }, { copilotFolder: "Folder B" });
     await flushPromises();
     await flushPromises();
 
@@ -556,51 +587,6 @@ describe("ProjectRegister lifecycle", () => {
     expect(replaceCachedProjectRecordByFilePathForOwner).not.toHaveBeenCalled();
     expect(manager.commitPreparedProjectScan).toHaveBeenCalledTimes(1);
     expect(manager.commitPreparedProjectScan.mock.calls[0]?.[1]).toBe(newFolderRecords);
-  });
-
-  it("invalidates folder B synchronously when settings move on to folder C", async () => {
-    const folderBCacheClear = createDeferred<void>();
-    const oldRecords = [createProjectRecord("Old")];
-    const folderBRecords = [createProjectRecord("Folder B")];
-    const folderCRecords = [createProjectRecord("Folder C")];
-    manager.fetchPreparedProjectScan
-      .mockResolvedValueOnce(folderBRecords)
-      .mockResolvedValueOnce(folderCRecords);
-    const { ProjectContextCache } = jest.requireMock<{
-      ProjectContextCache: { getInstance: jest.Mock };
-    }>("@/cache/projectContextCache");
-    const clearForProject = jest
-      .fn()
-      .mockReturnValueOnce(folderBCacheClear.promise)
-      .mockResolvedValue(undefined);
-    ProjectContextCache.getInstance.mockReturnValue({ clearForProject });
-    const { getCachedProjectRecords } = jest.requireMock<{
-      getCachedProjectRecords: jest.Mock;
-    }>("@/projects/state");
-    getCachedProjectRecords.mockReturnValue(oldRecords);
-    const register = new ProjectRegister(createApp(vault));
-    await register.initialize();
-    const settingsHandler = subscribeToSettingsChange.mock.calls[0][0] as (
-      previous: { projectsFolder: string },
-      next: { projectsFolder: string }
-    ) => void;
-
-    settingsHandler({ projectsFolder: "Folder A" }, { projectsFolder: "Folder B" });
-    await flushPromises();
-    expect(clearForProject).toHaveBeenCalledTimes(1);
-
-    settingsHandler({ projectsFolder: "Folder B" }, { projectsFolder: "Folder C" });
-    await flushPromises();
-    await flushPromises();
-
-    expect(manager.commitPreparedProjectScan).toHaveBeenCalledTimes(1);
-    expect(manager.commitPreparedProjectScan.mock.calls[0]?.[1]).toBe(folderCRecords);
-
-    folderBCacheClear.resolve();
-    await flushPromises();
-    await flushPromises();
-
-    expect(manager.commitPreparedProjectScan).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a newer same-App Register active when the older Register cleans up late", async () => {

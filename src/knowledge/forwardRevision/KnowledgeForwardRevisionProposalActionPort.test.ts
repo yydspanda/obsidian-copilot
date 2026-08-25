@@ -336,9 +336,8 @@ describe("KnowledgeProductionForwardRevisionProposalActionAdapter", () => {
       jest.doMock(coordinatorModule, () => ({
         KnowledgeProductionForwardRevisionProposalCoordinator: ControlledProposalCoordinator,
       }));
-      const isolated = await import(
-        "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort"
-      );
+      const isolated =
+        await import("@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort");
       const retainDrain = jest.fn<void, [Promise<void>]>();
       const adapter = new isolated.KnowledgeProductionForwardRevisionProposalActionAdapter(
         new ControlledProposalCoordinator(),

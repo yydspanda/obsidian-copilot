@@ -108,12 +108,19 @@ describe("projectKnowledgeSetupReadiness", () => {
 
   it.each([
     [
+      "production_preflight_project_missing",
+      "knowledge_model_configuration_invalid",
+      "needs_action",
+    ],
+    [
       "production_preflight_profile_project_missing",
       "knowledge_model_configuration_invalid",
       "needs_action",
     ],
     ["production_preflight_profile_model_key_invalid", "knowledge_model_missing", "needs_action"],
+    ["production_preflight_model_missing", "knowledge_model_missing", "needs_action"],
     ["production_preflight_profile_model_missing", "knowledge_model_missing", "needs_action"],
+    ["production_preflight_model_ambiguous", "knowledge_model_ambiguous", "needs_action"],
     ["production_preflight_profile_model_ambiguous", "knowledge_model_ambiguous", "needs_action"],
     ["production_preflight_profile_model_disabled", "knowledge_model_disabled", "needs_action"],
     [
@@ -121,6 +128,7 @@ describe("projectKnowledgeSetupReadiness", () => {
       "knowledge_model_not_project_enabled",
       "needs_action",
     ],
+    ["production_preflight_provider_unsupported", "knowledge_model_unsupported", "needs_action"],
     [
       "production_preflight_profile_provider_unsupported",
       "knowledge_model_unsupported",

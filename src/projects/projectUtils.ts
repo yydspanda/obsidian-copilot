@@ -36,6 +36,7 @@ import {
 
 // Re-export path utilities so existing consumers don't need to change imports
 export {
+  getProjectAnchorFromConfigPath,
   getProjectsFolder,
   getProjectsUnsupportedFolder,
   getProjectFolderPath,
@@ -73,7 +74,7 @@ export function createProjectStateOwnerAssertion(owner: ProjectStateOwner): () =
  * Write all project frontmatter fields to a file (overwrite mode).
  * Shared by both ProjectFileManager and migration to avoid duplication.
  *
- * @param appContext - App that owns the target file and Vault
+ * @param app - App that owns the target file and Vault
  * @param file - Target TFile
  * @param project - ProjectConfig to serialize
  * @param folderName - Folder name (used as fallback for id/name)
@@ -81,7 +82,7 @@ export function createProjectStateOwnerAssertion(owner: ProjectStateOwner): () =
  * @param assertActive - Optional lifecycle assertion checked before, during, and after the write
  */
 export async function writeProjectFrontmatter(
-  appContext: App,
+  app: App,
   file: TFile,
   project: ProjectConfig,
   folderName: string,
@@ -92,7 +93,7 @@ export async function writeProjectFrontmatter(
   const youtubeUrls = splitUrlsStringToArray(project.contextSource?.youtubeUrls || "");
 
   assertActive?.();
-  await appContext.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+  await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
     // processFrontMatter may defer this callback until after plugin reload. Check at the
     // mutation boundary so an old lifecycle cannot edit a newer lifecycle's file.
     assertActive?.();
@@ -193,7 +194,9 @@ function joinUrlsArrayToString(urls: string[]): string {
 }
 
 /**
- * Parse a project.md file into a ProjectFileRecord.
+ * Parse a project config file (`project.md`) into a ProjectFileRecord. The legacy
+ * `systemPrompt` comes from the body for missing-AGENTS compatibility; metadata/config
+ * comes from frontmatter. AGENTS.md is intentionally not a project record.
  *
  * Key constraints:
  * - id: frontmatter is authoritative, folder name is fallback
@@ -201,22 +204,21 @@ function joinUrlsArrayToString(urls: string[]): string {
  * - inclusions/exclusions: kept as encoded strings with YAML folding stripped
  * - webUrls/youtubeUrls: stored as YAML arrays, converted to newline strings for runtime
  *
- * @param appContext - App that owns the target file and Vault
- * @param file - project.md TFile
+ * @param file - recognized project config TFile
  * @returns ProjectFileRecord, or null if parse fails
  */
 export async function parseProjectConfigFile(
-  appContext: App,
+  app: App,
   file: TFile
 ): Promise<ProjectFileRecord | null> {
   // Reason: vault.read() calls internal TFile.cache which doesn't exist on synthetic TFiles
   // created by resolveFileByPath() for hidden-folder or not-yet-indexed files.
   // Use the cached real TFile for vault API calls; fall back to adapter for synthetic files.
-  const cachedFile = appContext.vault.getAbstractFileByPath(file.path);
+  const cachedFile = app.vault.getAbstractFileByPath(file.path);
   const isRealVaultFile = cachedFile instanceof TFile;
   const rawContent = isRealVaultFile
-    ? await appContext.vault.read(cachedFile)
-    : await appContext.vault.adapter.read(file.path);
+    ? await app.vault.read(cachedFile)
+    : await app.vault.adapter.read(file.path);
   const content = stripFrontmatter(rawContent, { trimStart: false });
 
   // Reason: rawContent is authoritative — metadataCache can lag behind writes from
@@ -236,7 +238,7 @@ export async function parseProjectConfigFile(
     }
   }
   if (!frontmatter && isRealVaultFile) {
-    const metadata = appContext.metadataCache.getFileCache(cachedFile);
+    const metadata = app.metadataCache.getFileCache(cachedFile);
     frontmatter = metadata?.frontmatter;
   }
 
@@ -332,26 +334,25 @@ export async function parseProjectConfigFile(
 }
 
 /**
- * Scan all project config files with duplicate id detection.
+ * Scan all project config files (`project.md`) with per-id deduplication.
  *
  * Performance: only traverses the projectsFolder subtree, not the entire vault.
  * Looks for \<projectsFolder\>/\<folderName\>/project.md (one level deep).
  *
- * Duplicate rules:
- * - Build id -> path[] index during scan
- * - On duplicate: logWarn, keep first by path alphabetical order (stable)
+ * Dedup rule:
+ * - Per id (across folders): build id -> path[] index; on duplicate logWarn and keep the
+ *   first by folder/path order (stable).
  *
- * @param appContext - App whose Vault should be scanned
  * @returns Records and diagnostics
  */
-export async function scanAllProjectConfigFiles(appContext: App): Promise<{
+export async function scanAllProjectConfigFiles(app: App): Promise<{
   records: ProjectFileRecord[];
   diagnostics: ProjectScanDiagnostics;
 }> {
   // Reason: §1.8 requires targeted folder traversal, not vault-wide scan.
   // Falls back to adapter-based listing for hidden folders not indexed by vault cache.
   const projectsFolder = getProjectsFolder();
-  const rootFolder = appContext.vault.getAbstractFileByPath(projectsFolder);
+  const rootFolder = app.vault.getAbstractFileByPath(projectsFolder);
 
   const files: TFile[] = [];
   if (rootFolder instanceof TFolder) {
@@ -365,22 +366,23 @@ export async function scanAllProjectConfigFiles(appContext: App): Promise<{
         files.push(configFile);
       }
     }
-  } else if (await appContext.vault.adapter.exists(projectsFolder)) {
+  } else if (await app.vault.adapter.exists(projectsFolder)) {
     // Reason: hidden folders (e.g. ".copilot/projects") are not indexed by vault cache.
     // Use adapter.list() to discover project sub-folders and resolve config files.
     const { resolveFileByPath } = await import("@/utils/vaultAdapterUtils");
-    const listing = await appContext.vault.adapter.list(projectsFolder);
+    const listing = await app.vault.adapter.list(projectsFolder);
     for (const subFolderPath of listing.folders) {
       const folderName = subFolderPath.split("/").pop() ?? "";
       if (folderName === PROJECTS_UNSUPPORTED_FOLDER_NAME) continue;
       const configPath = `${subFolderPath}/${PROJECT_CONFIG_FILE_NAME}`;
-      if (await appContext.vault.adapter.exists(configPath)) {
-        const resolved = await resolveFileByPath(appContext, configPath);
+      if (await app.vault.adapter.exists(configPath)) {
+        const resolved = await resolveFileByPath(app, configPath);
         if (resolved) files.push(resolved);
       }
     }
   }
 
+  // Reason: stable ordering by path keeps duplicate-id "keep first" deterministic across folders.
   files.sort((a, b) => a.path.localeCompare(b.path));
 
   const duplicateIdIndex: Record<string, string[]> = {};
@@ -390,7 +392,7 @@ export async function scanAllProjectConfigFiles(appContext: App): Promise<{
   for (const file of files) {
     let record: ProjectFileRecord | null;
     try {
-      record = await parseProjectConfigFile(appContext, file);
+      record = await parseProjectConfigFile(app, file);
     } catch (error) {
       logError(`[Projects] Failed to parse project file, skipping: ${file.path}`, error);
       ignoredFiles.push(file.path);
@@ -429,39 +431,38 @@ export async function scanAllProjectConfigFiles(appContext: App): Promise<{
  * custom command and system prompt migration patterns). Failed projects
  * are recovered from the unsupported/ folder, not from settings.
  *
- * @param appContext - App whose Vault should be scanned and cached
+ * @param app - App whose Vault should be scanned and cached
  * @param owner - Active Projects state lifecycle owner
  * @returns Array of ProjectFileRecord
  */
 export async function loadAllProjects(
-  appContext: App,
+  app: App,
   owner: ProjectStateOwner
 ): Promise<ProjectFileRecord[]> {
-  const { records } = await scanAllProjectConfigFiles(appContext);
+  const { records } = await scanAllProjectConfigFiles(app);
   updateCachedProjectRecordsForOwner(owner, records);
   return records;
 }
 
 /**
  * Fetch all projects from vault without updating the cache.
- * @param appContext - App whose Vault should be scanned
  * @returns Array of ProjectFileRecord
  */
-export async function fetchAllProjects(appContext: App): Promise<ProjectFileRecord[]> {
-  const { records } = await scanAllProjectConfigFiles(appContext);
+export async function fetchAllProjects(app: App): Promise<ProjectFileRecord[]> {
+  const { records } = await scanAllProjectConfigFiles(app);
   return records;
 }
 
 /**
  * Ensure a project.md has required frontmatter fields (idempotent, only fills missing).
  *
- * @param appContext - App that owns the target file and Vault
+ * @param app - App that owns the target file and Vault
  * @param owner - Active Projects state lifecycle owner
  * @param file - project.md TFile
  * @param record - Parsed record providing default values
  */
 export async function ensureProjectFrontmatter(
-  appContext: App,
+  app: App,
   owner: ProjectStateOwner,
   file: TFile,
   record: ProjectFileRecord
@@ -487,71 +488,68 @@ export async function ensureProjectFrontmatter(
 
   try {
     assertOwnerActive();
-    await appContext.fileManager.processFrontMatter(
-      file,
-      (frontmatter: Record<string, unknown>) => {
-        // The callback can run after processFrontMatter was scheduled. Re-check the exact
-        // lifecycle at the mutation boundary before touching the frontmatter object.
-        assertOwnerActive();
+    await app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+      // The callback can run after processFrontMatter was scheduled. Re-check the exact
+      // lifecycle at the mutation boundary before touching the frontmatter object.
+      assertOwnerActive();
 
-        // Reason: do NOT fallback to record.folderName for id — with name-based folders,
-        // folderName is derived from project name, not id.
-        if (frontmatter[COPILOT_PROJECT_ID] == null && record.project.id) {
-          frontmatter[COPILOT_PROJECT_ID] = record.project.id;
-        }
-        if (frontmatter[COPILOT_PROJECT_NAME] == null) {
-          frontmatter[COPILOT_PROJECT_NAME] = record.project.name || record.folderName;
-        }
-        if (frontmatter[COPILOT_PROJECT_DESCRIPTION] == null && record.project.description) {
-          frontmatter[COPILOT_PROJECT_DESCRIPTION] = record.project.description;
-        }
-        if (frontmatter[COPILOT_PROJECT_MODEL_KEY] == null && record.project.projectModelKey) {
-          frontmatter[COPILOT_PROJECT_MODEL_KEY] = record.project.projectModelKey;
-        }
-        if (
-          frontmatter[COPILOT_PROJECT_TEMPERATURE] == null &&
-          record.project.modelConfigs?.temperature != null
-        ) {
-          frontmatter[COPILOT_PROJECT_TEMPERATURE] = record.project.modelConfigs.temperature;
-        }
-        if (
-          frontmatter[COPILOT_PROJECT_MAX_TOKENS] == null &&
-          record.project.modelConfigs?.maxTokens != null
-        ) {
-          frontmatter[COPILOT_PROJECT_MAX_TOKENS] = record.project.modelConfigs.maxTokens;
-        }
-        if (
-          frontmatter[COPILOT_PROJECT_INCLUSIONS] == null &&
-          record.project.contextSource?.inclusions
-        ) {
-          frontmatter[COPILOT_PROJECT_INCLUSIONS] = record.project.contextSource.inclusions;
-        }
-        if (
-          frontmatter[COPILOT_PROJECT_EXCLUSIONS] == null &&
-          record.project.contextSource?.exclusions
-        ) {
-          frontmatter[COPILOT_PROJECT_EXCLUSIONS] = record.project.contextSource.exclusions;
-        }
-        if (frontmatter[COPILOT_PROJECT_WEB_URLS] == null && webUrls.length > 0) {
-          frontmatter[COPILOT_PROJECT_WEB_URLS] = webUrls;
-        }
-        if (frontmatter[COPILOT_PROJECT_YOUTUBE_URLS] == null && youtubeUrls.length > 0) {
-          frontmatter[COPILOT_PROJECT_YOUTUBE_URLS] = youtubeUrls;
-        }
-        if (frontmatter[COPILOT_PROJECT_CREATED] == null) {
-          frontmatter[COPILOT_PROJECT_CREATED] = createdMs;
-        }
-        if (frontmatter[COPILOT_PROJECT_LAST_USED] == null) {
-          frontmatter[COPILOT_PROJECT_LAST_USED] = lastUsedMs;
-        }
-        if (
-          !(COPILOT_PROJECT_KNOWLEDGE_BUNDLE in frontmatter) &&
-          record.project.knowledgeBundle !== undefined
-        ) {
-          frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE] = record.project.knowledgeBundle;
-        }
+      // Reason: do NOT fallback to record.folderName for id — with name-based folders,
+      // folderName is derived from project name, not id.
+      if (frontmatter[COPILOT_PROJECT_ID] == null && record.project.id) {
+        frontmatter[COPILOT_PROJECT_ID] = record.project.id;
       }
-    );
+      if (frontmatter[COPILOT_PROJECT_NAME] == null) {
+        frontmatter[COPILOT_PROJECT_NAME] = record.project.name || record.folderName;
+      }
+      if (frontmatter[COPILOT_PROJECT_DESCRIPTION] == null && record.project.description) {
+        frontmatter[COPILOT_PROJECT_DESCRIPTION] = record.project.description;
+      }
+      if (frontmatter[COPILOT_PROJECT_MODEL_KEY] == null && record.project.projectModelKey) {
+        frontmatter[COPILOT_PROJECT_MODEL_KEY] = record.project.projectModelKey;
+      }
+      if (
+        frontmatter[COPILOT_PROJECT_TEMPERATURE] == null &&
+        record.project.modelConfigs?.temperature != null
+      ) {
+        frontmatter[COPILOT_PROJECT_TEMPERATURE] = record.project.modelConfigs.temperature;
+      }
+      if (
+        frontmatter[COPILOT_PROJECT_MAX_TOKENS] == null &&
+        record.project.modelConfigs?.maxTokens != null
+      ) {
+        frontmatter[COPILOT_PROJECT_MAX_TOKENS] = record.project.modelConfigs.maxTokens;
+      }
+      if (
+        frontmatter[COPILOT_PROJECT_INCLUSIONS] == null &&
+        record.project.contextSource?.inclusions
+      ) {
+        frontmatter[COPILOT_PROJECT_INCLUSIONS] = record.project.contextSource.inclusions;
+      }
+      if (
+        frontmatter[COPILOT_PROJECT_EXCLUSIONS] == null &&
+        record.project.contextSource?.exclusions
+      ) {
+        frontmatter[COPILOT_PROJECT_EXCLUSIONS] = record.project.contextSource.exclusions;
+      }
+      if (frontmatter[COPILOT_PROJECT_WEB_URLS] == null && webUrls.length > 0) {
+        frontmatter[COPILOT_PROJECT_WEB_URLS] = webUrls;
+      }
+      if (frontmatter[COPILOT_PROJECT_YOUTUBE_URLS] == null && youtubeUrls.length > 0) {
+        frontmatter[COPILOT_PROJECT_YOUTUBE_URLS] = youtubeUrls;
+      }
+      if (frontmatter[COPILOT_PROJECT_CREATED] == null) {
+        frontmatter[COPILOT_PROJECT_CREATED] = createdMs;
+      }
+      if (frontmatter[COPILOT_PROJECT_LAST_USED] == null) {
+        frontmatter[COPILOT_PROJECT_LAST_USED] = lastUsedMs;
+      }
+      if (
+        !(COPILOT_PROJECT_KNOWLEDGE_BUNDLE in frontmatter) &&
+        record.project.knowledgeBundle !== undefined
+      ) {
+        frontmatter[COPILOT_PROJECT_KNOWLEDGE_BUNDLE] = record.project.knowledgeBundle;
+      }
+    });
     assertOwnerActive();
   } finally {
     releaseProjectFileWrite(fileWriteLease);

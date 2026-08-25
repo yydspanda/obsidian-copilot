@@ -31,6 +31,7 @@ function createChange(
     value,
     added: kind === "added",
     removed: kind === "removed",
+    count: 1,
   };
 }
 
@@ -65,8 +66,8 @@ describe("DiffPreview", () => {
       { original: "", modified: null, isUnchanged: false },
     ]);
     expect(block).toEqual([
-      { value: "old  \nsecond\n\n", added: false, removed: true },
-      { value: "new\t\n", added: true, removed: false },
+      { value: "old  \nsecond\n\n", added: false, removed: true, count: 1 },
+      { value: "new\t\n", added: true, removed: false, count: 1 },
     ]);
   });
 

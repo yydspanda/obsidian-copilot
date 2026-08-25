@@ -43,9 +43,12 @@ jest.mock("@/logger", () => ({
 jest.mock("@/projects/projectUtils", () => ({
   sanitizeVaultPathSegment: jest.fn((s: string) => s.replace(/[/\\]/g, "_")),
   fetchAllProjects: jest.fn(async () => []),
-  loadAllProjects: jest.fn(async () => []),
   writeProjectFrontmatter: jest.fn(async () => {}),
   getProjectsFolder: jest.fn(() => "copilot-projects"),
+  getProjectAnchorFromConfigPath: jest.fn(() => ({
+    projectFolderPath: "copilot-projects/Project A",
+    projectsRoot: "copilot-projects",
+  })),
   getProjectFolderPath: jest.fn((name: string) => `copilot-projects/${name}`),
   getProjectConfigFilePath: jest.fn((name: string) => `copilot-projects/${name}/project.md`),
   splitUrlsStringToArray: jest.fn((value: string) => (value ? value.split("\n") : [])),
@@ -62,16 +65,6 @@ jest.mock("@/utils/vaultAdapterUtils", () => ({
   resolveFileByPath: jest.fn(),
   trashFile: jest.fn(async () => {}),
 }));
-
-jest.mock("@/cache/projectContextCache", () => ({
-  ProjectContextCache: {
-    getInstance: jest.fn(() => ({
-      clearForProject: jest.fn(async () => {}),
-      dispose: jest.fn(),
-    })),
-  },
-}));
-
 jest.mock("@/utils/recentUsageManager", () => ({
   RecentUsageManager: jest.fn().mockImplementation(() => ({
     touch: jest.fn(),
@@ -201,20 +194,6 @@ describe("ProjectFileManager lifecycle ownership", () => {
   });
 
   it("starts a fresh owner for overlapping hot reloads on the same App", () => {
-    const firstContextCache = {
-      clearForProject: jest.fn(async () => {}),
-      dispose: jest.fn(),
-    };
-    const secondContextCache = {
-      clearForProject: jest.fn(async () => {}),
-      dispose: jest.fn(),
-    };
-    const { ProjectContextCache } = jest.requireMock<{
-      ProjectContextCache: { getInstance: jest.Mock };
-    }>("@/cache/projectContextCache");
-    ProjectContextCache.getInstance
-      .mockReturnValueOnce(firstContextCache)
-      .mockReturnValueOnce(secondContextCache);
     const appContext = makeMockApp(makeMockVault());
     const first = ProjectFileManager.startLifecycle(appContext);
     const firstOwner = first.getStateOwner();
@@ -228,8 +207,6 @@ describe("ProjectFileManager lifecycle ownership", () => {
     expect(releaseProjectStateLifecycle).toHaveBeenCalledTimes(1);
     expect(jest.mocked(releaseProjectStateLifecycle).mock.calls[0]?.[0]).toBe(firstOwner);
     expect(jest.mocked(releaseProjectStateLifecycle).mock.calls[0]?.[0]).not.toBe(secondOwner);
-    expect(firstContextCache.dispose).toHaveBeenCalledTimes(1);
-    expect(secondContextCache.dispose).not.toHaveBeenCalled();
     expect(ProjectFileManager.getInstance()).toBe(second);
     expect(() => second.getProjects()).not.toThrow();
   });

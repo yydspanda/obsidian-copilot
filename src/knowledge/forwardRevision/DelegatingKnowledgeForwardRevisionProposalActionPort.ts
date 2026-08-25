@@ -31,9 +31,7 @@ const states = new WeakMap<object, State>();
 const UNAVAILABLE_RESULT = Object.freeze({ kind: "unavailable" as const });
 
 /** Explicit fail-closed action used before and between production generations. */
-class UnavailableKnowledgeForwardRevisionProposalActionPort
-  implements KnowledgeForwardRevisionProposalActionPort
-{
+class UnavailableKnowledgeForwardRevisionProposalActionPort implements KnowledgeForwardRevisionProposalActionPort {
   /** Returns a value-free unavailable result without reading caller values. */
   async proposeKnownOutput(
     _session: Readonly<KnowledgeKnownAppliedWikiOutputsSession>,
@@ -119,9 +117,7 @@ function requireState(value: unknown): State {
 }
 
 /** Stable generation-revocable action surface exposed to Known applied outputs UI. */
-export class DelegatingKnowledgeForwardRevisionProposalActionPort
-  implements KnowledgeForwardRevisionProposalActionPort
-{
+export class DelegatingKnowledgeForwardRevisionProposalActionPort implements KnowledgeForwardRevisionProposalActionPort {
   /** Creates one unavailable stable action surface. */
   constructor() {
     const unavailable = Object.freeze(new UnavailableKnowledgeForwardRevisionProposalActionPort());

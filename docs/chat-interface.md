@@ -1,159 +1,58 @@
-# Chat Interface
+# Quick Chat
 
-The Copilot chat panel is the main way you interact with AI in Obsidian. This guide covers everything about the chat UI: modes, message controls, history, settings, and advanced features like auto-compact.
+Quick Chat is Copilot V4's lightweight conversation view. Use it for a short question, rewrite, or discussion that does not need agent tools or a project workspace.
 
----
+On desktop, start with **Agent Chat** for multi-step work, reusable Skills, permissioned file changes, or project context. Click **Open Copilot Agent Chat** in the ribbon or run **Open Copilot Agent Chat Window** from the command palette. On mobile, where Agent Chat is unavailable, Quick Chat is the main conversation view. See [Agent Chat](agent-mode-and-tools.md).
 
-## Chat Modes
+## Open Quick Chat
 
-Copilot offers four modes. You can switch between them using the mode selector at the top of the chat panel.
+Run **Open Copilot Chat Window** from the command palette. On mobile, the Copilot ribbon button opens Quick Chat because Agent Chat requires desktop Obsidian.
 
-### Chat
-General-purpose conversation. Good for writing, brainstorming, summarizing, or any task where you want to talk to an AI. Your currently open note and selected text are automatically included as context.
+## Choose a model
 
-### Vault QA (Basic)
-Ask questions about your vault content. Copilot uses lexical search (keyword matching) to find relevant notes and passes them as context to the AI. No indexing required. Good for quick questions about your notes.
+Use the model picker below the message box. It shows only models enabled under **Settings → Copilot → Basic → Agents → Quick Chat**, including Copilot-hosted and bring-your-own-key models.
 
-### Copilot Plus
-The most powerful mode. Requires a [Copilot Plus](copilot-plus-and-self-host.md) license. Combines Chat and Vault QA with an autonomous agent that can:
-- Search your vault and the web
-- Read and edit notes
-- Remember things across conversations
-- Use a growing set of tools automatically
+The **Default model** in that settings panel controls which model a new Quick Chat starts with. See [Models, Effort, and Permissions](models-and-parameters.md) to manage the list.
 
-### Projects (alpha)
-Focused workspaces with their own context, model, system prompt, and isolated chat history. Useful for keeping separate AI conversations per project. See [Projects](projects.md) for details.
+## Ask with context
 
----
+Quick Chat can include the active note, selected text, other notes, folders, and images; on desktop it can also include open Web Viewer tabs. The selected model must support images. Context appears above the message box, where you can review or remove it before sending.
 
-## Sending Messages
+- Use **Add context** (`+`) or type `@` to find context.
+- Type `[[Note Title]]` to reference a note directly.
 
-Type your message in the input box at the bottom of the chat panel and press **Enter** to send (or **Shift+Enter** to add a new line). You can change the send key in Settings → Basic → **Default Send Shortcut**.
+By default, a new chat includes the active note. A text selection takes priority over the full active note. For all supported context types, see [Context and Mentions](context-and-mentions.md).
 
-While the AI is generating a response, a **Stop** button appears. Click it to interrupt the stream at any time.
+## Send and manage messages
 
-### Referencing Notes Inline
+Press **Enter** to send by default. You can switch this to **Shift + Enter** under **Settings → Copilot → Basic → General → Send Shortcut**. Use the stop button to interrupt a response.
 
-You can mention specific notes directly in your message using double-bracket syntax:
+Hover over a message to use its actions:
 
-```
-[[Note Title]]
-```
+- Your messages: **Copy**, **Edit**, and **Delete**.
+- Copilot responses: **Insert / Replace at cursor**, **Copy**, **Regenerate**, and **Delete**.
 
-Copilot adds the note's content to your message as context in the background. This is different from @-mentions — it's typed directly in your message text.
+After a response, the token counter in the top bar shows the context used for the latest response when the provider reports token usage.
 
-### User Message Buttons
+## Start or reopen a chat
 
-Each message you send has action buttons that appear on hover:
-- **Edit** — Modify your prompt. Press Enter to re-send the edited message to the AI.
-- **Copy** — Copy the message text to clipboard
-- **Delete** — Remove this message from the conversation
+Use **New Chat** in the top bar or run **New Copilot Quick Chat**. Starting over clears the current messages and resets context to the active note when automatic context is enabled.
 
-### AI Message Buttons
+Use **Chat History** to search saved conversations, reopen one, rename it, open its Markdown source, or delete it.
 
-Each AI response has action buttons:
-- **Insert at cursor** — Insert the AI's response at your cursor position in the active note
-- **Replace at cursor** — Replace the selected text in your note with the AI's response
-- **Copy** — Copy the response to clipboard
-- **Regenerate** — Ask the AI to generate a new response to the same message
-- **Delete** — Remove this response from the conversation
+**Autosave Chat as Markdown** is enabled by default. Copilot saves after each user message and response under `<Copilot folder>/copilot-conversations/`. If autosave is off, use **Save Chat as Note** in the top bar. Change autosave and **Conversation Filename Template** under **Settings → Copilot → Basic → Saving conversations**.
 
----
+## Chat settings
 
-## Chat History
+Use **Chat Settings** (gear) to choose a **System Prompt** for the current chat or reset the session choice. These settings do not configure Agent Chat, which reads `AGENTS.md` instead. See [Instructions for Agent Chat and Quick Chat](system-prompts.md).
 
-### Autosave
+## Quick Ask
 
-By default, Copilot automatically saves your conversations as markdown files in your vault. Each saved chat appears in the `copilot/copilot-conversations/` folder.
-
-You can turn off autosave in Settings → Basic. When you start a new chat, any unsaved conversation is saved automatically.
-
-### Chat File Name Format
-
-The filename template controls how saved chats are named. The default is:
-
-```
-{$topic}@{$date}_{$time}
-```
-
-Where:
-- `{$topic}` — An AI-generated title (or the first few words of your first message if AI titles are off)
-- `{$date}` — Date in YYYY-MM-DD format
-- `{$time}` — Time in HH-MM-SS format
-
-All three variables are required. You can customize the format in Settings → Basic → **Conversation note name**.
-
-### AI-Generated Titles
-
-When **Generate AI chat title on save** is enabled (default), Copilot asks the AI to generate a short, descriptive title for the conversation when saving. When disabled, the first 10 words of your first message are used instead.
-
-### Loading Previous Chats
-
-Click the **clock/history icon** in the chat panel toolbar to open the Chat History list. You can:
-- Browse previous conversations
-- Click a conversation to load it and continue from where you left off
-- Delete conversations you no longer need
-
-The history list can be sorted by most recent or alphabetically.
-
----
-
-## Per-Session Settings (Gear Icon)
-
-Click the **gear icon** inside the chat panel to open per-session settings. These apply only to the current conversation and reset when you start a new chat:
-
-- **System prompt** — Override the default system prompt for this session
-- **Temperature** — Controls randomness (0 = deterministic, 1 = creative)
-- **Max tokens** — Maximum length of the AI's response
-
----
-
-## Token Counter
-
-Copilot shows a token count indicator at the bottom of the chat. This estimates how many tokens are being used by your current context. Useful for knowing when you're approaching context limits.
-
----
-
-## Auto-Compact
-
-When a conversation grows very long, it can exceed the model's context window. Auto-compact automatically summarizes the older portion of the conversation and replaces it with a compressed summary, letting you continue chatting without losing track of what was discussed.
-
-The threshold is configured in Settings → Basic → **Auto-compact threshold**, which defaults to 128,000 tokens. Valid range: 64,000–1,000,000 tokens.
-
-When auto-compact triggers, you'll see a "Compacting" indicator in the chat. The conversation continues normally — older messages are replaced by a summary, so the AI still understands the history even though you can no longer scroll back to see the original messages.
-
----
-
-## Suggested Prompts
-
-When starting a new chat, Copilot may show suggested prompts based on your active note or previous conversations. You can enable or disable this in Settings → Basic → **Show suggested prompts**.
-
-## Relevant Notes
-
-Copilot can display a list of notes related to your currently active note in the chat panel. This helps surface notes you might want to reference without manually searching.
-
-Enable in **Settings → Copilot → Basic → Relevant Notes** (on by default).
-
-## Saving a Chat Manually
-
-If autosave is off, or you want to save mid-conversation, click the **Save Chat as Note** button above the chat input box. This saves the current conversation to your configured save folder.
-
----
-
-## New Chat Behavior
-
-Click the **pencil/new chat icon** to start a fresh conversation. This:
-1. Saves the current conversation (if autosave is enabled)
-2. Clears the chat window
-3. Resets the context to your currently active note
-
-You can also use the command palette: **New Copilot Chat**.
-
----
+For one question or rewrite without opening a chat pane, run **Quick Ask** from the command palette or the editor's **Copilot** menu. Quick Ask uses a Quick Chat model, not the model in your Agent Chat session. See [Copilot Commands and Quick Ask](custom-commands.md#quick-ask).
 
 ## Related
 
-- [Context and Mentions](context-and-mentions.md) — Control what context the AI sees
-- [System Prompts](system-prompts.md) — Customize AI behavior with system prompts
-- [Agent Mode and Tools](agent-mode-and-tools.md) — What Plus mode can do
-- [Projects](projects.md) — Isolated workspaces with separate histories
+- [Getting Started](getting-started.md)
+- [Agent Chat](agent-mode-and-tools.md)
+- [Copilot Commands and Quick Ask](custom-commands.md)
+- [Context and Mentions](context-and-mentions.md)

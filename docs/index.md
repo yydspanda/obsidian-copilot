@@ -1,31 +1,46 @@
-# Copilot for Obsidian — Documentation
+# Copilot for Obsidian V4
 
-Welcome to the official documentation for **Copilot for Obsidian**, an AI-powered assistant plugin that brings the power of large language models directly into your note-taking workflow.
+Copilot V4 starts with **Agent Chat**, where opencode, Claude Code, or Codex can read your vault, use tools, and complete multi-step work with your approval. Quick Ask, Copilot Commands, and Quick Chat remain available for smaller jobs and mobile use.
 
-## Table of Contents
+## Start here
 
-| Document                                                     | What it covers                                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| [Getting Started](getting-started.md)                        | Installation, first-time setup, opening the chat panel, keyboard shortcuts      |
-| [Chat Interface](chat-interface.md)                          | Chat modes, sending messages, history, settings, auto-compact                   |
-| [LLM Providers](llm-providers.md)                            | All 16+ supported providers and how to set them up                              |
-| [Models and Parameters](models-and-parameters.md)            | Chat models, embedding models, temperature, max tokens, and other parameters    |
-| [Context and Mentions](context-and-mentions.md)              | Active note context, @-mentions, URLs, tags, and the web viewer                 |
-| [Custom Commands](custom-commands.md)                        | Creating and using preset prompts, template variables, Quick Command, Quick Ask |
-| [Vault Search and Indexing](vault-search-and-indexing.md)    | Lexical search, semantic search, index management, exclusions                   |
-| [Agent Mode and Tools](agent-mode-and-tools.md)              | Autonomous agent, all 13 tools, file editing, web search                        |
-| [Projects](projects.md)                                      | Focused workspaces with isolated context, model, and chat history               |
-| [Personal Knowledge Studio](personal-knowledge.md)           | Windows-only Studio, review/recovery, and grounded personal-knowledge Query     |
-| [中文 Personal Knowledge 使用手册](knowledge/zh-CN/index.md) | 从首次配置、文件夹导入到 Review/Apply、Query、维护与故障恢复                    |
-| [System Prompts](system-prompts.md)                          | Customizing AI behavior with built-in and custom system prompts                 |
-| [Copilot Plus and Self-Host](copilot-plus-and-self-host.md)  | Copilot Plus features, memory system, self-host mode, Miyo                      |
-| [Troubleshooting and FAQ](troubleshooting-and-faq.md)        | Common errors, provider-specific issues, performance, FAQ                       |
+1. Install Copilot from Obsidian's Community Plugins.
+2. Open **Settings → Copilot → Basic → Agents**. Follow [Getting Started with Copilot V4](getting-started.md) to download managed opencode, auto-detect Claude Code, or connect Codex through `codex-acp`.
+3. Run **Open Copilot Agent Chat Window**. A ready default agent opens automatically; if **Select your agent** appears, choose an **Installed** agent and select **Start chat**.
 
-## Quick Start
+For most people, opencode is the best starting point because Copilot can install and manage it for you. Claude Code and Codex use their existing command-line accounts. Windows users can also follow [Windows setup for Agent Chat](agent-mode-windows-setup.md).
 
-1. Install Copilot from Obsidian Community Plugins
-2. Add an API key in Settings → Copilot → Basic → API Keys
-3. Open the chat panel with the robot icon in the left ribbon
-4. Start chatting!
+## Agent Chat
 
-For a full walkthrough, see [Getting Started](getting-started.md).
+- [Agent Chat](agent-mode-and-tools.md) explains agents, models, permissions, sessions, and safe use.
+- [Choose an agent](agent-mode-and-tools.md#choose-an-agent) for opencode, Claude Code, or Codex.
+- [Ask multiple agents](agent-mode-and-tools.md#multi-agent-answers) to research or review the same question in parallel.
+- [Share Skills across agents](agent-mode-and-tools.md#skills-across-agents) so one reusable workflow works in opencode, Claude Code, and Codex.
+- [Projects](projects.md) give ongoing work its own instructions, context, and chat history.
+- [Context and Mentions](context-and-mentions.md) add notes, selections, folders, URLs, and other agents to a request.
+- [Instructions for Agent Chat and Quick Chat](system-prompts.md) and [`AGENTS.md` examples](agents-md-examples.md) set durable guidance for your vault and projects.
+
+## Everyday tools
+
+- [Copilot Commands and Quick Ask](custom-commands.md) reuse prompts or work with selected text without leaving the editor.
+- [Quick Chat](chat-interface.md) handles lightweight conversations and is the main chat view on mobile, where Agent Chat is unavailable.
+
+## Models, plans, and Miyo
+
+- [Model Sources and BYOK](llm-providers.md) covers Copilot-hosted models, BYOK for opencode and Quick Chat, and local endpoints.
+- [Models, Effort, and Permissions](models-and-parameters.md) explains model selection, defaults, approval behavior, and reasoning effort.
+- [Miyo: Local-First Search and AI Ownership](vault-search-and-indexing.md) brings more powerful local-first search and AI ownership to your knowledge.
+- [Copilot Plans, Privacy, and Self-Hosting](copilot-plus-and-self-host.md) compares free and paid access, hosted features, privacy, and self-hosting.
+
+## Personal Knowledge Studio
+
+- [Personal Knowledge Studio](personal-knowledge.md) covers the Windows-scoped, review-gated source-to-Wiki workflow, grounded Query, recovery, and current limitations.
+- [中文 Personal Knowledge 使用手册](knowledge/zh-CN/index.md) 介绍配置、文件夹导入、Review/Apply、Query 和故障恢复。自动化验证已覆盖主要路径，但计划中的 Windows Obsidian 实机验收仍未完成。
+
+## Settings
+
+[Copilot Settings](settings.md) walks through every tab in the order it appears in Obsidian: **Basic**, **BYOK**, **Miyo**, **Skills**, **Command**, **Self-Host**, and **Advanced**.
+
+## Help
+
+- [Troubleshooting and FAQ](troubleshooting-and-faq.md) fixes common Agent Chat, model, search, and Quick Ask problems.

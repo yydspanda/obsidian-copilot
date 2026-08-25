@@ -3,6 +3,7 @@ import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 
 import { ModelCapability, ReasoningEffort, Verbosity } from "@/constants";
+import type { MaterializedSourceType } from "@/context/contextCacheStore";
 import { settingsAtom, settingsStore } from "@/settings/model";
 import { SelectedTextContext } from "@/types/message";
 import { atom, useAtom } from "jotai";
@@ -26,39 +27,91 @@ const userChainTypeAtom = atom<ChainType | null>(null);
 const chainTypeAtom = atom(
   (get) => {
     const userValue = get(userChainTypeAtom);
-    if (userValue !== null) {
-      return userValue;
-    }
-    return get(settingsAtom).defaultChainType;
+    return userValue !== null ? userValue : get(settingsAtom).defaultChainType;
   },
   (get, set, newValue) => {
     set(userChainTypeAtom, newValue);
   }
 );
 
-const currentProjectAtom = atom<ProjectConfig | null>(null);
-const projectLoadingAtom = atom<boolean>(false);
-
 export interface FailedItem {
   path: string;
   type: "md" | "web" | "youtube" | "nonMd";
   error?: string;
   timestamp?: number;
+  /**
+   * The source's refresh failed but a previous snapshot is still in use, so
+   * it's stale-but-usable rather than missing. Lets the status icon stay
+   * "ready" (green) while the popover flags the staleness.
+   */
+  usedStaleSnapshot?: boolean;
 }
 
-interface ProjectContextLoadState {
-  success: Array<string>;
-  failed: Array<FailedItem>;
-  processingFiles: Array<string>;
-  total: Array<string>;
+/** Done-of-total progress for one materialization step (prefetch / parse). */
+export interface ContextLoadStepCount {
+  done: number;
+  total: number;
 }
 
-export const projectContextLoadAtom = atom<ProjectContextLoadState>({
-  success: [],
-  failed: [],
-  processingFiles: [],
-  total: [],
-});
+export interface AgentProjectContextLoadState {
+  phase: "idle" | "resolve" | "prefetch" | "parse" | "done";
+  blocking: boolean; // true while send should be gated for this project
+  /**
+   * In-vault binary files queued for text materialization, known once the
+   * materializer resolves inclusions. Drives the card's "Resolve files (N)" row.
+   * Omitted until resolve completes (and stays omitted for a context with none).
+   */
+  resolved?: number;
+  /** Remote (web/YouTube) prefetch progress; omitted when there are no remotes. */
+  prefetch?: ContextLoadStepCount;
+  /** Binary-file parse progress; omitted when there are no files to parse. */
+  parsed?: ContextLoadStepCount;
+  /**
+   * Per-source fetch/parse failures from the last run. A run with failures still
+   * completes as `phase: "done"` (the session degrades gracefully); these drive
+   * the status icon's warning state and the popover's failed-source list. Always
+   * republished on `done` (empty array when everything succeeded) so a prior
+   * run's failures never linger.
+   */
+  failedSources?: FailedItem[];
+  /**
+   * Sources the full materialization run is fetching/parsing RIGHT NOW.
+   * Published incrementally as each source
+   * starts and settles, so the popover renders a true queue: URLs (fetched in
+   * parallel) appear together while files (parsed sequentially) appear one at a
+   * time, and each flips to its real outcome the instant it settles — never
+   * waiting for the whole run. Only the single-flight owner publishes it; cleared
+   * on `done`. `failedSources` is likewise published incrementally during a run.
+   */
+  processingSources?: AgentInFlightSource[];
+  /**
+   * Sources whose per-source retry is currently in flight (the popover row
+   * "Retry"). Drives an optimistic "processing" state on that row so a click has
+   * immediate feedback even when the retry ends up failing again. Never gates
+   * send (`blocking` stays false); cleared when each retry settles.
+   */
+  retryingSources?: AgentRetryingSource[];
+}
+
+/** A source whose per-source retry is currently in flight (popover row "Retry"). */
+export interface AgentRetryingSource {
+  kind: MaterializedSourceType;
+  source: string;
+}
+
+/** A source the full materialization run is currently fetching/parsing. */
+export interface AgentInFlightSource {
+  kind: MaterializedSourceType;
+  source: string;
+}
+
+/** Frozen empty list — referential stability for the "no retries in flight" case. */
+export const EMPTY_RETRYING_SOURCES: readonly AgentRetryingSource[] = Object.freeze([]);
+/** Frozen empty list — referential stability for the "nothing materializing" case. */
+export const EMPTY_PROCESSING_SOURCES: readonly AgentInFlightSource[] = Object.freeze([]);
+/** Per-project context-load state, keyed by projectId. Driven by AgentSessionManager's
+ *  materialize step; read by AgentContextStatusIcon / AgentChatInput to show progress + gate send. */
+export const agentProjectContextLoadAtom = atom<Record<string, AgentProjectContextLoadState>>({});
 
 interface IndexingProgressState {
   isActive: boolean;
@@ -89,7 +142,13 @@ export interface ProjectConfig {
   /** Untrusted knowledge Bundle frontmatter, validated only by the knowledge config source. */
   knowledgeBundle?: unknown;
   systemPrompt: string;
+  // Not read at runtime: Agent Mode picks its model from agentMode.activeBackend
+  // plus that backend's default. Retained so the `project.md` frontmatter written
+  // by earlier versions round-trips instead of being dropped on rewrite.
   projectModelKey: string;
+  // Not read at runtime either, for the same reason as `projectModelKey`: the
+  // dialog stopped surfacing these and no request consults them. Kept so the
+  // frontmatter written by earlier versions round-trips.
   modelConfigs: {
     temperature?: number;
     maxTokens?: number;
@@ -106,7 +165,6 @@ export interface ProjectConfig {
 
 export interface ModelConfig {
   modelName: string;
-  temperature?: number;
   streaming: boolean;
   maxRetries: number;
   maxConcurrency: number;
@@ -116,10 +174,6 @@ export interface ModelConfig {
   openAIOrgId?: string;
   anthropicApiKey?: string;
   cohereApiKey?: string;
-  azureOpenAIApiKey?: string;
-  azureOpenAIApiInstanceName?: string;
-  azureOpenAIApiDeploymentName?: string;
-  azureOpenAIApiVersion?: string;
   // Google and TogetherAI API key share this property
   apiKey?: string;
   openAIProxyBaseUrl?: string;
@@ -137,10 +191,14 @@ export interface SetChainOptions {
 }
 
 export interface CustomModel {
+  /** Present for chat-backend bridged models; distinguishes same wire id across providers. */
+  configuredModelId?: string;
   name: string;
   provider: string;
   baseUrl?: string;
   apiKey?: string;
+  /** Runtime auth contract for bridged models; undefined preserves legacy behavior. */
+  requiresApiKey?: boolean;
   enabled: boolean;
   isEmbeddingModel?: boolean;
   isBuiltIn?: boolean;
@@ -148,10 +206,7 @@ export interface CustomModel {
   core?: boolean;
   stream?: boolean;
   streamUsage?: boolean;
-  temperature?: number;
   maxTokens?: number;
-  topP?: number;
-  frequencyPenalty?: number;
 
   // Ollama specific fields
   numCtx?: number;
@@ -162,7 +217,6 @@ export interface CustomModel {
   // OpenRouter specific fields
   enablePromptCaching?: boolean;
 
-  projectEnabled?: boolean;
   plusExclusive?: boolean;
   believerExclusive?: boolean;
   capabilities?: ModelCapability[];
@@ -174,15 +228,6 @@ export interface CustomModel {
   dimensions?: number;
   // OpenAI specific fields
   openAIOrgId?: string;
-
-  // Azure OpenAI specific fields
-  azureOpenAIApiInstanceName?: string;
-  azureOpenAIApiDeploymentName?: string;
-  azureOpenAIApiVersion?: string;
-  azureOpenAIApiEmbeddingDeploymentName?: string;
-
-  // Amazon Bedrock specific fields
-  bedrockRegion?: string;
 
   // OpenAI GPT-5 and O-series specific fields
   reasoningEffort?: ReasoningEffort;
@@ -225,36 +270,6 @@ export function useChainType() {
   });
 }
 
-export function setCurrentProject(project: ProjectConfig | null) {
-  settingsStore.set(currentProjectAtom, project);
-}
-
-export function getCurrentProject(): ProjectConfig | null {
-  return settingsStore.get(currentProjectAtom);
-}
-
-export function subscribeToProjectChange(
-  callback: (project: ProjectConfig | null) => void
-): () => void {
-  return settingsStore.sub(currentProjectAtom, () => {
-    callback(settingsStore.get(currentProjectAtom));
-  });
-}
-
-export function setProjectLoading(loading: boolean) {
-  settingsStore.set(projectLoadingAtom, loading);
-}
-
-export function useProjectLoading() {
-  return useAtom(projectLoadingAtom, {
-    store: settingsStore,
-  });
-}
-
-export function isProjectMode() {
-  return getChainType() === ChainType.PROJECT_CHAIN;
-}
-
 export function setSelectedTextContexts(contexts: SelectedTextContext[]) {
   settingsStore.set(selectedTextContextsAtom, contexts);
 }
@@ -269,40 +284,12 @@ export function removeSelectedTextContext(id: string) {
 }
 
 export function clearSelectedTextContexts() {
+  if (getSelectedTextContexts().length === 0) return;
   setSelectedTextContexts([]);
 }
 
 export function useSelectedTextContexts() {
   return useAtom(selectedTextContextsAtom, {
-    store: settingsStore,
-  });
-}
-
-/**
- * Sets the project context load state in the atom.
- */
-export function setProjectContextLoadState(state: ProjectContextLoadState) {
-  settingsStore.set(projectContextLoadAtom, state);
-}
-
-/**
- * Updates a specific field in the project context load state.
- */
-export function updateProjectContextLoadState<K extends keyof ProjectContextLoadState>(
-  key: K,
-  valueFn: (prev: ProjectContextLoadState[K]) => ProjectContextLoadState[K]
-) {
-  settingsStore.set(projectContextLoadAtom, (prev) => ({
-    ...prev,
-    [key]: valueFn(prev[key]),
-  }));
-}
-
-/**
- * Hook to get the project context load state from the atom.
- */
-export function useProjectContextLoad() {
-  return useAtom(projectContextLoadAtom, {
     store: settingsStore,
   });
 }

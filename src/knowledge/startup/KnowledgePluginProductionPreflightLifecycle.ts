@@ -1,4 +1,8 @@
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
+import type {
+  PrepareKnowledgeConfiguredModelPreflightInput,
+  PreparedKnowledgeConfiguredModelPreflight,
+} from "@/knowledge/compiler/KnowledgeConfiguredModelBridge";
 import {
   KnowledgeProductionModelRouteLease,
   KnowledgeProductionModelRouteLeaseOwner,
@@ -59,8 +63,8 @@ export interface KnowledgePluginProductionPreflightLifecycleDependencies {
   executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim;
   /** Captures project records once after ordinary Projects initialization. */
   getProjectRecords(): readonly KnowledgePluginProductionPreflightProjectRecord[];
-  /** Captures already-hydrated settings once for the same synchronous generation. */
-  getSettings(): KnowledgeProductionPreflightSettingsInput;
+  /** Captures legacy hydrated settings when no configured-model preparation edge is supplied. */
+  getSettings?(): KnowledgeProductionPreflightSettingsInput;
   /** Stable renderer-native fetch capability captured for this plugin instance. */
   fetchPort?: KnowledgeDeepSeekFetchPort;
   /** Creates the reviewed parser/compiler/profile resources for this generation. */
@@ -71,6 +75,16 @@ export interface KnowledgePluginProductionPreflightLifecycleDependencies {
   createPreflight?: (
     input: KnowledgeProductionPreflightComposerInput
   ) => KnowledgePluginProductionPreflightPort;
+  /**
+   * Resolves a V4 configured-model generation and its Keychain credential.
+   *
+   * This edge supersedes `getSettings`/`createPreflight` when present. The
+   * lifecycle retains only its returned secret-free profile source and private
+   * preflight capability.
+   */
+  prepareConfiguredModelPreflight?: (
+    input: Omit<PrepareKnowledgeConfiguredModelPreflightInput, "modelManagement">
+  ) => Promise<PreparedKnowledgeConfiguredModelPreflight>;
 }
 
 /** Configured preflight admission retained only by the current lifecycle generation. */
@@ -102,8 +116,7 @@ const WORKFLOW_LEASE_CONSTRUCTOR_TOKEN = Symbol(
   "KnowledgePluginProductionWorkflowLease.constructor"
 );
 
-// Capturing the frozen base method prevents a subclass override from replacing WeakMap authority.
-// eslint-disable-next-line @typescript-eslint/unbound-method
+// eslint-disable-next-line @typescript-eslint/unbound-method -- Capture the frozen base method so a subclass cannot replace WeakMap authority.
 const PROJECT_PROFILE_SOURCE_RESOLVE = ProjectKnowledgePipelineProfileSource.prototype.resolve;
 
 /** Module-private state held only by authentic workflow leases. */
@@ -702,8 +715,20 @@ export class KnowledgePluginProductionPreflightLifecycle {
       };
     }
 
-    const settings = this.dependencies.getSettings();
-    this.assertCurrent(generation, signal);
+    const prepareConfiguredModelPreflight = this.dependencies.prepareConfiguredModelPreflight;
+    let legacySettings: KnowledgeProductionPreflightSettingsInput | undefined;
+    if (!prepareConfiguredModelPreflight) {
+      const getSettings = this.dependencies.getSettings;
+      if (!getSettings) {
+        return {
+          kind: "invalid",
+          diagnosticCodes: ["production_preflight_input_invalid"],
+        };
+      }
+      legacySettings = getSettings();
+      this.assertCurrent(generation, signal);
+    }
+
     const resources = this.dependencies.createResources();
     this.assertCurrent(generation, signal);
     const projects = Object.freeze(
@@ -715,18 +740,98 @@ export class KnowledgePluginProductionPreflightLifecycle {
         })
       )
     );
-    let profileSource: ProjectKnowledgePipelineProfileSource;
+    const configuredProjects = Object.freeze(
+      projectRecords.map(({ project }) =>
+        Object.freeze({
+          id: project.id,
+          modelSelection: project.projectModelKey,
+          modelConfigs: project.modelConfigs,
+        })
+      )
+    );
     let parsers: readonly KnowledgeByteParser[];
     let owners: readonly ConfiguredProjectKnowledgeBundle[];
-    let workflowLease: KnowledgePluginProductionWorkflowLease | undefined;
     try {
       parsers = snapshotParsers(resources.parsers);
-      profileSource = new ProjectKnowledgePipelineProfileSource(
-        projects,
-        settings,
-        resources.profileOptions
-      );
       owners = snapshotOwners(result.bundles);
+      this.assertCurrent(generation, signal);
+    } catch {
+      this.assertCurrent(generation, signal);
+      return {
+        kind: "invalid",
+        diagnosticCodes: ["production_preflight_input_invalid"],
+      };
+    }
+
+    let profileSource: ProjectKnowledgePipelineProfileSource;
+    let candidate: KnowledgePluginProductionPreflightPort;
+    if (prepareConfiguredModelPreflight) {
+      let prepared: PreparedKnowledgeConfiguredModelPreflight;
+      try {
+        prepared = await prepareConfiguredModelPreflight({
+          owners,
+          projects: configuredProjects,
+          profileOptions: resources.profileOptions,
+          fetchPort: this.dependencies.fetchPort,
+          signal,
+        });
+      } catch {
+        this.assertCurrent(generation, signal);
+        return {
+          kind: "invalid",
+          diagnosticCodes: ["production_preflight_input_invalid"],
+        };
+      }
+      try {
+        this.assertCurrent(generation, signal);
+      } catch (error) {
+        if (prepared.kind === "ready") prepared.preflight.close();
+        throw error;
+      }
+      if (prepared.kind === "diagnostic") {
+        return {
+          kind: "invalid",
+          diagnosticCodes: [`production_preflight_${prepared.code}`],
+        };
+      }
+      profileSource = prepared.profileSource;
+      candidate = prepared.preflight;
+    } else {
+      try {
+        const settings = legacySettings;
+        if (!settings) throw new TypeError("Knowledge preflight settings are unavailable");
+        profileSource = new ProjectKnowledgePipelineProfileSource(
+          projects,
+          settings,
+          resources.profileOptions
+        );
+        const input: KnowledgeProductionPreflightComposerInput = {
+          owners,
+          projects,
+          settings,
+          profileOptions: resources.profileOptions,
+          profileSource,
+          fetchPort: this.dependencies.fetchPort,
+        };
+        candidate = this.dependencies.createPreflight
+          ? this.dependencies.createPreflight(input)
+          : new KnowledgeProductionPreflightComposer(input);
+      } catch (error) {
+        this.assertCurrent(generation, signal);
+        const profileCode = ProjectKnowledgePipelineProfileError.inspect(error);
+        return {
+          kind: "invalid",
+          diagnosticCodes: [
+            profileCode
+              ? `production_preflight_profile_${profileCode}`
+              : "production_preflight_input_invalid",
+          ],
+        };
+      }
+    }
+
+    let workflowLease: KnowledgePluginProductionWorkflowLease | undefined;
+    try {
       workflowLease = createWorkflowLease(
         owners,
         parsers,
@@ -735,9 +840,12 @@ export class KnowledgePluginProductionPreflightLifecycle {
       );
       this.assertCurrent(generation, signal);
     } catch (error) {
-      if (workflowLease) {
-        closeWorkflowLease(workflowLease);
+      try {
+        candidate.close();
+      } catch {
+        // A failed lease install cannot make a discarded preflight observable.
       }
+      if (workflowLease) closeWorkflowLease(workflowLease);
       this.assertCurrent(generation, signal);
       const profileCode = ProjectKnowledgePipelineProfileError.inspect(error);
       return {
@@ -748,36 +856,6 @@ export class KnowledgePluginProductionPreflightLifecycle {
             : "production_preflight_input_invalid",
         ],
       };
-    }
-
-    const createPreflight = this.dependencies.createPreflight;
-    let candidate: KnowledgePluginProductionPreflightPort;
-    try {
-      const input: KnowledgeProductionPreflightComposerInput = {
-        owners,
-        projects,
-        settings,
-        profileOptions: resources.profileOptions,
-        profileSource,
-        fetchPort: this.dependencies.fetchPort,
-      };
-      candidate = createPreflight
-        ? createPreflight(input)
-        : new KnowledgeProductionPreflightComposer(input);
-    } catch {
-      closeWorkflowLease(workflowLease);
-      this.assertCurrent(generation, signal);
-      return {
-        kind: "invalid",
-        diagnosticCodes: ["production_preflight_input_invalid"],
-      };
-    }
-
-    try {
-      this.assertCurrent(generation, signal);
-    } catch (error) {
-      this.closeCandidate(candidate, generation, workflowLease);
-      throw error;
     }
 
     let preflight: KnowledgeProductionPreflightResult;

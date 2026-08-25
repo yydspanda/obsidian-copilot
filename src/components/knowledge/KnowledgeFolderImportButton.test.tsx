@@ -55,6 +55,16 @@ describe("KnowledgeFolderImportButton", () => {
     mainDocument.body.appendChild(iframe);
     const popoutDocument = iframe.contentDocument;
     if (!popoutDocument) throw new Error("Expected an iframe document");
+    const popoutWindow = popoutDocument.defaultView;
+    if (!popoutWindow) throw new Error("Expected an iframe window");
+    Object.defineProperty(popoutWindow, "createEl", {
+      configurable: true,
+      value: <K extends keyof HTMLElementTagNameMap>(tag: K) => popoutDocument.createElement(tag),
+    });
+    Object.defineProperty(popoutDocument, "win", {
+      configurable: true,
+      value: popoutWindow,
+    });
     const container = popoutDocument.createElement("div");
     popoutDocument.body.appendChild(container);
     const rendered = render(<KnowledgeFolderImportButton port={createPort()} />, { container });

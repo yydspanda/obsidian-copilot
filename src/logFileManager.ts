@@ -1,14 +1,15 @@
 import { err2String } from "@/errorFormat";
-import { App, TFile, Vault } from "obsidian";
+import { App, TFile } from "obsidian";
 import { ensureFolderExists } from "@/utils";
 import { getSettings } from "@/settings/model";
-import { isSensitiveKey } from "@/encryptionService";
+import { getEffectiveCopilotFolder } from "@/settings/copilotFolder";
+import { isSensitiveKey } from "@/services/settingsSecretTransforms";
 
 type LogLevel = "INFO" | "WARN" | "ERROR";
 
 /**
  * Manages a rolling log file that keeps the last N entries and works on desktop and mobile.
- * - Writes to <vault>/copilot/copilot-log.md
+ * - Writes to <vault>/<copilotFolder>/copilot-log.md
  * - Maintains an in-memory ring buffer of the last 500 entries
  * - Debounced flush to reduce I/O; single-line entries to preserve accurate line limits
  */
@@ -20,6 +21,7 @@ class LogFileManager {
   private buffer: string[] = [];
   private initialized = false;
   private flushing = false;
+  private app: App | null = null;
 
   static getInstance(): LogFileManager {
     if (!LogFileManager.instance) {
@@ -28,8 +30,18 @@ class LogFileManager {
     return LogFileManager.instance;
   }
 
+  /**
+   * Seed the Obsidian app. The logger is a module-level singleton created before
+   * plugin load, so `app` is injected here once during onload (see main.ts)
+   * rather than read from the global.
+   */
+  setApp(app: App): void {
+    this.app = app;
+  }
+
   getLogPath(): string {
-    return "copilot/copilot-log.md"; // under copilot/
+    // Under the configurable copilot root folder.
+    return `${getEffectiveCopilotFolder()}/copilot-log.md`;
   }
 
   /** Ensure the log manager is initialized. Always starts with an empty buffer. */
@@ -111,22 +123,18 @@ class LogFileManager {
     // Intentionally do not flush automatically.
   }
 
-  /**
-   * Flushes the current log snapshot to one explicit Vault owner.
-   *
-   * @param vault - Exact Vault that should receive the log snapshot
-   */
-  async flush(vault: Vault): Promise<void> {
-    const ownerVault = vault;
+  async flush(): Promise<void> {
+    const app = this.app;
+    if (!app?.vault?.adapter) return;
     if (this.flushing) return;
     this.flushing = true;
     try {
       const path = this.getLogPath();
-      const content = this.buffer.join("\n") + (this.buffer.length ? "\n" : "");
       // Only write if a log file already exists.
       // Do not create files or folders implicitly; creation happens in openLogFile().
-      if (await ownerVault.adapter.exists(path)) {
-        await ownerVault.adapter.write(path, content);
+      if (await app.vault.adapter.exists(path)) {
+        const content = this.buffer.join("\n") + (this.buffer.length ? "\n" : "");
+        await app.vault.adapter.write(path, content);
       }
     } catch {
       // swallow write errors; logging should never crash the app
@@ -135,19 +143,15 @@ class LogFileManager {
     }
   }
 
-  /**
-   * Clears the in-memory log and removes the exported file from one explicit Vault owner.
-   *
-   * @param vault - Exact Vault whose exported log file should be removed
-   */
-  async clear(vault: Vault): Promise<void> {
-    const ownerVault = vault;
+  async clear(): Promise<void> {
     this.buffer = [];
+    const app = this.app;
+    if (!app?.vault?.adapter) return;
     try {
       const path = this.getLogPath();
-      if (await ownerVault.adapter.exists(path)) {
+      if (await app.vault.adapter.exists(path)) {
         // Delete the file for a clean slate; openLogFile() will recreate on demand
-        await ownerVault.adapter.remove(path);
+        await app.vault.adapter.remove(path);
       }
     } catch {
       // ignore
@@ -203,14 +207,9 @@ class LogFileManager {
     return value;
   }
 
-  /**
-   * Writes and opens the exported log through one explicit App/Vault/Workspace owner.
-   *
-   * @param ownerApp - Exact App whose Vault receives and whose Workspace opens the log
-   */
-  async openLogFile(ownerApp: App): Promise<void> {
-    const ownerVault = ownerApp.vault;
-    const ownerWorkspace = ownerApp.workspace;
+  async openLogFile(): Promise<void> {
+    const app = this.app;
+    if (!app?.vault?.adapter) return;
     const path = this.getLogPath();
 
     // Snapshot the current buffer
@@ -233,25 +232,25 @@ class LogFileManager {
       const content = bufferSnapshot.join("\n") + (bufferSnapshot.length ? "\n" : "");
       const folder = path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
       if (folder) {
-        await ensureFolderExists(folder, ownerVault);
+        await ensureFolderExists(app.vault, folder);
       }
 
-      const fileExists = await ownerVault.adapter.exists(path);
+      const fileExists = await app.vault.adapter.exists(path);
       if (fileExists) {
-        await ownerVault.adapter.write(path, content);
+        await app.vault.adapter.write(path, content);
       } else {
-        await ownerVault.create(path, content);
+        await app.vault.create(path, content);
       }
     } catch {
       // Swallow write errors; logging should never crash the app
     }
 
     // Original buffer unchanged; open the file
-    const abstract = ownerVault.getAbstractFileByPath(path);
+    const abstract = app.vault.getAbstractFileByPath(path);
     const file = abstract instanceof TFile ? abstract : null;
     try {
       if (file) {
-        const leaf = ownerWorkspace.getLeaf(true);
+        const leaf = app.workspace.getLeaf(true);
         await leaf.openFile(file);
       }
     } catch {

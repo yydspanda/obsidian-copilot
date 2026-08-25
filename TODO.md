@@ -4,6 +4,16 @@
 
 以 Windows 上的 Obsidian Copilot 为唯一首期平台，设计并分阶段实现一套长期个人使用、体验优先的知识操作系统；把助手、笔记和知识引擎连接为可摄入、可审核、可引用、可持续维护的完整闭环。
 
+## Upstream V4 Sync（2026-08-26）
+
+- [x] 抓取并合并 `origin/master` `13aad329`；共 52 个冲突文件，全部完成语义合并且冲突标记清零。
+- [x] 以上游 V4 架构为权威基线，接受其 legacy Project/model/settings 删除；不恢复已移除的旧架构。
+- [x] 将 Knowledge 插件组合抽到新增 `KnowledgePluginIntegration`，使 `main.ts` 相对 upstream 仅保留必要的窄接线（`+57/-7`）。
+- [x] 通过新增 configured-model bridge 接入 V4 model-management/Keychain；精确选择 DeepSeek V4，无 fallback，公开 profile、diagnostic、日志与持久化均不携带密钥。
+- [x] 完成 Zod 4、Diff v8、popout window 与大 data URI 兼容修复；安全边界继续 fail closed。
+- [x] 自动化门禁通过：TypeScript、Prettier、ESLint（仅 upstream SettingsPage 非阻断 warning）、648 suites / 9291 tests、production build、diff check。
+- [ ] 在 Windows Obsidian 真实环境完成本轮 upstream V4 合并验收；重点覆盖 provider/project/settings 换代、插件 unload/reload、Knowledge Studio 主流程与 popout。
+
 ## Completed Tasks ✅
 
 - [x] 阅读并拆解 SOC Agent 原始方案及其产品决策框架。
@@ -187,6 +197,7 @@
 
 ## Architecture Decisions
 
+- Upstream 同步以 `origin/master` 为权威基线，尽量不修改 upstream 既有代码；Personal Knowledge 能力优先通过新增模块、窄 adapter 和稳定扩展接线集成。确需修改 upstream 文件时，只保留实现功能所必需的最小改动，并记录理由与对应回归验证。
 - 新方案以个人知识资产可拥有、可追溯、可迁移为产品边界。
 - 以 `MessageRepository`、`ChatManager`、L1-L5 `PromptContextEnvelope` 和 `ToolRegistry` 为当前架构基线。
 - LangChain 路径按当前已实现能力描述；ACP、显式 Planner 和动态 MCP 接入按演进目标描述。

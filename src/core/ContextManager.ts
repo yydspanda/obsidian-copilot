@@ -18,7 +18,7 @@ import { getSettings } from "@/settings/model";
 import { FileParserManager } from "@/tools/FileParserManager";
 import { ChatMessage, MessageContext } from "@/types/message";
 import { extractNoteFiles, getNotesFromPath, getNotesFromTags } from "@/utils";
-import { TFile, Vault } from "obsidian";
+import { App, TFile, Vault } from "obsidian";
 import { MessageRepository } from "./MessageRepository";
 
 // Lazy-loaded to avoid circular dependency issues in tests
@@ -64,6 +64,7 @@ export class ContextManager {
    * This generates fresh context content from current file states
    */
   async processMessageContext(
+    app: App,
     message: ChatMessage,
     fileParserManager: FileParserManager,
     vault: Vault,
@@ -82,6 +83,7 @@ export class ContextManager {
 
       // 1. Process custom prompts first
       const { processedPrompt: processedUserMessage, includedFiles } = await processPrompt(
+        app,
         processedMessage,
         "",
         vault,
@@ -95,7 +97,7 @@ export class ContextManager {
       const contextUrls = message.context?.urls || [];
       const urlContextAddition =
         chainType === ChainType.COPILOT_PLUS_CHAIN
-          ? await this.mention.processUrlList(contextUrls)
+          ? await this.mention.processUrlList(vault, contextUrls)
           : { urlContext: "", imageUrls: [] };
 
       // 4. Process context notes (L3 - current turn only, excluding files already in L2 or system prompt)
@@ -116,7 +118,6 @@ export class ContextManager {
       // Add active note if requested and not already in L2
       if (
         includeActiveNote &&
-        chainType !== ChainType.PROJECT_CHAIN &&
         activeNote &&
         !processedNotePaths.has(activeNote.path) &&
         !notes.some((note) => note.path === activeNote.path)
@@ -147,7 +148,7 @@ export class ContextManager {
 
       if (contextTags.length > 0) {
         // Get all notes that have any of the specified tags (in frontmatter)
-        const taggedNotes = getNotesFromTags(vault, contextTags);
+        const taggedNotes = getNotesFromTags(app, contextTags);
 
         // Filter out already processed notes to avoid duplication
         const filteredTaggedNotes = taggedNotes.filter(
@@ -229,14 +230,7 @@ export class ContextManager {
       let finalProcessedMessage = processedUserMessage + contextPortion;
 
       // 10. Auto-compact if context exceeds threshold (tokens * 4 = chars estimate)
-      // Projects mode uses a fixed 800k token threshold
-      // TODO(logan): deprecate this threshold when Projects mode is out of alpha
-      const PROJECT_COMPACT_THRESHOLD = 1000000;
-      const tokenThreshold =
-        chainType === ChainType.PROJECT_CHAIN
-          ? PROJECT_COMPACT_THRESHOLD
-          : getSettings().autoCompactThreshold;
-      const charThreshold = tokenThreshold * 4;
+      const charThreshold = getSettings().autoCompactThreshold * 4;
 
       let wasCompacted = false;
       let compactedContextPortion = contextPortion;
@@ -304,6 +298,7 @@ export class ContextManager {
    * This ensures edited messages get fresh context
    */
   async reprocessMessageContext(
+    app: App,
     messageId: string,
     messageRepo: MessageRepository,
     fileParserManager: FileParserManager,
@@ -323,6 +318,7 @@ export class ContextManager {
     logInfo(`[ContextManager] Reprocessing context for message ${messageId}`);
 
     const { processedContent, contextEnvelope } = await this.processMessageContext(
+      app,
       message,
       fileParserManager,
       vault,

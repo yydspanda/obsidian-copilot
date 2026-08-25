@@ -1,169 +1,98 @@
 # Context and Mentions
 
-Copilot uses **context** to give the AI information about your notes, selected text, web content, and more. You can control exactly what context the AI sees using automatic context, @-mentions, and manual commands.
+Context is the material Copilot gives an AI with your request. Choose the shortest lifetime that fits the job:
 
----
+| Context type                     | How long it lasts                                 |
+| -------------------------------- | ------------------------------------------------- |
+| Agent Chat attachment or mention | The next message                                  |
+| Mentioned agent                  | The current multi-agent question                  |
+| Project context                  | Every new chat started in that Project            |
+| Vault or Project `AGENTS.md`     | Every Agent Chat started in that vault or Project |
+| Quick Chat attachment            | The next Quick Chat message                       |
 
-## Automatic Context
+## Add context to Agent Chat
 
-### Active Note
+Select **+** beside the Agent Chat composer to open **Add context**. Depending on what is open, you can add the **Active Note**, other **Notes**, **Folders**, the **Active Web Tab**, other **Web Tabs**, or **Images**. Web tabs come from Copilot's desktop Web Viewer.
 
-By default, the content of your currently open note is automatically included in every message you send. This means you can ask things like:
+You can also add context while typing:
 
-- "Summarize this note"
-- "What are the action items here?"
-- "Add a conclusion section"
+- Type `[[` and select a note to insert `[[Note title]]`.
+- Type `@` to browse the available context categories.
+- Choose a folder to insert its path as `{Folder/path}`.
+- Paste or drag an image into the composer. The selected model must support images.
 
-To disable automatic note context: **Settings → Copilot → Basic → Auto-add active note to context** (toggle off).
+Context badges above the composer show what will be sent with the next message. Select the **x** on a badge to remove it. After the message is sent, one-turn attachments are cleared.
 
-### Active Web Tab (Desktop Only)
+A note mention gives the agent the note's vault path so it can read the current file when needed. A folder mention points to a folder to inspect. It does not paste every file in that folder into the prompt.
 
-If you have the Copilot Web Viewer open alongside your notes, the content of the currently active web tab is automatically included as context (labeled `{activeWebTab}`). This lets you ask the AI to help you work with web content.
+### Active note and selected text
 
-### Selected Text
+A new Agent Chat can start with an **Active Note** badge when that preference is enabled. Remove it when the current note is unrelated. You can add it again on any later turn.
 
-If you highlight text in a note and then type in the chat, the selected text is automatically included as context. This is useful for asking about or transforming a specific part of a note.
+To attach an excerpt from a note:
 
-You can enable/disable automatic selection adding in **Settings → Copilot → Basic → Auto-add selection to context**.
+1. Select the text.
+2. Run **Add selection to chat context** from the command palette.
+3. Review the removable selection badge before sending.
 
-### Images in Markdown
+For text selected in the Web Viewer, run **Add web selection to chat context**. Copilot sends the selected excerpt instead of also attaching the full active web tab.
 
-If your note contains images (e.g., `![[screenshot.png]]`), and you're using a model with **Vision** capability, those images are automatically included in the context. Copilot will pass the image data to the AI so it can see and describe the image.
+## Mention other agents
 
-To control this behavior: **Settings → Copilot → Basic → Pass markdown images to AI**.
+With active Plus access, type `@`, open **Agents**, and select one or more other installed agents. Each mentioned agent receives the same question, that turn's attachments, and a bounded slice of the visible conversation. The current agent summarizes their answers and does not automatically answer separately.
 
----
+Multi-agent answers are designed for read-only research, second opinions, and review, but retrieval Skills can still run trusted scripts under an agent's permissions. They are not a security sandbox. Use a normal single-agent turn when you want files changed. Mentioning only the current agent behaves like a normal turn.
 
-## @-Mentions
+Agent mentions select opencode, Claude, or Codex. They are different from note, folder, and web context mentions. See [Multi-agent answers](agent-mode-and-tools.md#multi-agent-answers) for permissions and model behavior.
 
-Type `@` in the chat input to mention and include specific items as context.
+## Reuse context with Projects
 
-### @note — Include a Specific Note
+For material that should be prepared for more than one chat, create a [Project](projects.md). Add saved context from the **Context** section or tab:
 
-Type `@` followed by the note title to add a note to context:
+- drag in a vault file or folder;
+- add a web page or YouTube URL; or
+- select **Manage Context** to add links, tags, properties, folders, files, and ignored files.
 
-```
-@My Meeting Notes tell me what was decided in this meeting
-```
+Project context is prepared for every new chat in that Project. If preparation is still running when you send a message, Copilot queues the message and starts it when the context is ready.
 
-The note's full content is included in the request.
+Saved context is a focus aid, not a permission boundary. The agent can still inspect other files available through its tools. **Ignore Files** excludes files from prepared Project context but does not block an agent from reading them.
 
-### @folder — Include a Folder of Notes
+One-turn attachments remain one-turn attachments inside a Project. Start a new Project chat after changing saved context or Project instructions when you want the latest version applied.
 
-Type `@` followed by a folder name to include all notes in that folder:
+## Context in Quick Chat
 
-```
-@Projects/ what tasks are still open?
-```
+Quick Chat has a separate composer and context state. It can attach the active note and, on desktop, the active Web Viewer tab. Use **Add context** for a note, folder, web tab, or image. You can also type `[[Note title]]` for a note.
 
-### @tags — Include Notes by Tag
+Quick Chat attachments apply to the next Quick Chat message. They do not become Agent Chat context, Project context, or `AGENTS.md` instructions.
 
-Use `#` after `@` to include all notes with a specific tag:
+## Add sources to Personal Knowledge Studio
 
-```
-@#work/project summarize the status of the work project
-```
+Knowledge sources are durable inputs to a review-gated Wiki workflow; they are not chat attachments. This workflow is currently scoped to Windows and one live Knowledge Bundle with one configured source folder.
 
-### @URL — Include a Web Page
+### Import an external folder
 
-Paste a URL or type `@https://...` to fetch and include a web page's content:
+Open **Knowledge Studio** and choose **Import folder** to take a one-time snapshot of an external folder. Copilot copies supported `.md`, `.markdown`, `.txt`, and `.pdf` files below `<source folder>/<selected root name>/`, preserves nested folders, and registers the Vault copies as managed Knowledge sources. It never changes the external originals or stores their absolute path.
 
-```
-@https://example.com/article summarize this article
-```
+Import is sequential and safe to retry after a partial run. Identical destination bytes are reused; different bytes at the same destination are reported as a conflict and never overwritten. Unsupported files are skipped. Generated Wiki changes still stop at **Activity**, **Review**, and an explicit **Apply**.
 
-URL processing requires Copilot Plus. YouTube URLs are handled specially — Copilot will fetch the video transcript automatically.
+This entry point is folder-only. A URL, browser clipper, or one-off file dragged from Windows Explorer is not a Knowledge import. Use normal chat context for those inputs.
 
-### Tool Mentions
+### Choose chat or Knowledge for a Vault file
 
-These special @-mentions explicitly trigger tools in Copilot Plus mode:
+Dragging a `.md`, `.markdown`, `.txt`, or `.pdf` file from Obsidian's Vault file explorer into chat offers two explicit actions when Knowledge is ready:
 
-| Mention                | What it does                                     |
-| ---------------------- | ------------------------------------------------ |
-| `@vault`               | Search your vault notes for relevant information |
-| `@websearch` or `@web` | Search the internet                              |
-| `@composer`            | Create or edit a note                            |
-| `@memory`              | Access or update your memory                     |
+- **Use in this chat** attaches the existing Vault file for one chat turn and does not register a Knowledge source.
+- **Add to Knowledge** registers a file already inside the active Bundle's source folder and restarts the reviewed Knowledge workflow without attaching it to chat. Registering the same unchanged file again is a no-op.
 
-Example:
+For **Add to Knowledge**, PDFs are parsed locally from the verified Vault bytes into bounded page evidence. It does not use Copilot Plus, Miyo, Brevilabs, a converted Markdown cache, or OCR. Image-only, encrypted, malformed, empty-text, and over-limit PDFs fail closed. An accepted PDF citation opens a page only while the original PDF's exact byte hash still matches. Normal PDF chat attachments keep their existing hosted-conversion behavior.
 
-```
-@vault what did I write about machine learning last month?
-@websearch what are the latest changes to the Python packaging ecosystem?
-```
+Automated coverage and bounded Windows-path checks exist, but the planned real Windows Obsidian acceptance run—including the native folder picker and a non-empty proposal through Review and Apply—is still pending. See [Personal Knowledge Studio](personal-knowledge.md) or the [中文使用手册](knowledge/zh-CN/index.md) for the full workflow and limitations.
 
----
-
-## Adding Context Manually
-
-### Import an External Folder into Knowledge
-
-On Windows, open **Knowledge Studio** and choose **Import folder** to take a one-time snapshot of an external folder. This is separate from Chat context: Copilot copies supported `.md`, `.markdown`, `.txt`, and `.pdf` files into the active Bundle's one configured Knowledge source folder, beneath a folder with the selected root's name. Nested folders are preserved.
-
-Folder import is available only while exactly one Knowledge Bundle with exactly one source folder is live. The external folder is read-only: Copilot does not rename, edit, delete, or remember the external absolute path. The Vault copies are registered as managed Knowledge sources, appear in **Activity**, and any generated Wiki changes still require explicit **Review** and **Apply**.
-
-The import runs one file at a time. An existing destination with identical bytes is reused; different bytes at the same destination are reported as a conflict and are never overwritten. Supported files already completed by a partial run can therefore be retried safely. Unsupported files are skipped, and the Studio reports only aggregate imported, reused, skipped, conflict, and failure counts.
-
-This product path is folder-only. A web-page URL, browser clipper, or one-off file dragged from Windows Explorer is not a Knowledge import entry point; use **Import folder** for external material. `@URL` and PDF Chat attachments keep their existing context-only behavior. The production stable-port path has passed a bounded real-folder Windows run with exact retry, missing-copy repair, unchanged external originals, completed Activity, and a clean console. The native system picker was not physically clicked in that run, and the compiler returned `no_changes`, so a picker interaction and a non-empty proposal taken through explicit Review and Apply remain separate acceptance work.
-
-### Add Selection to Chat Context
-
-Use the command palette: **Add selection to chat context**
-
-Highlights the selected text and adds it to the chat as context without sending a message. Useful when you want to build up context before sending.
-
-### Add Web Selection to Chat Context
-
-Use the command palette: **Add web selection to chat context**
-
-Works similarly but captures selected text from the Web Viewer. Available on desktop only.
-
-### Choose Chat or Knowledge for a Vault source
-
-When you drag a `.md`, `.markdown`, `.txt`, or `.pdf` file from Obsidian's Vault file explorer into Chat, Copilot pauses before changing either Chat or Knowledge and shows two explicit actions:
-
-- **Use in this chat** adds the existing Vault file to the current Chat context. It does not register a Knowledge source or start background ingestion.
-- **Add to Knowledge** registers the existing Vault file as a durable source without adding it to Chat context. After a new registration, the Knowledge workflow restarts and progress appears in Knowledge Studio's **Activity** tab.
-
-**Add to Knowledge** is currently available only on Windows when Knowledge is ready, exactly one Knowledge Bundle is configured, that Bundle has exactly one source folder, and the dropped file already lives inside that folder. Use Knowledge Studio's **Import folder** action for external material. Registering the same Vault file again is an idempotent no-op.
-
-For a PDF, **Add to Knowledge** uses Obsidian's local PDF engine to extract bounded text page by page. The original Vault PDF remains the source of record, so accepted citations can reopen an exact page only while its raw file hash still matches; changing the PDF revokes the old citation until the new bytes complete the normal ingest and review flow. It does not use Copilot Plus, Miyo, Brevilabs, a converted Markdown cache, or OCR. Image-only, encrypted, malformed, empty-text, and over-limit PDFs fail closed. External folders use the same reviewed Knowledge pipeline after **Import folder** creates and registers their Vault copies.
-
-This local parser applies only to **Add to Knowledge**. **Use in this chat** keeps the existing PDF-context behavior described below, including its existing Copilot Plus or configured document-conversion requirements.
-
-### Adding a PDF as Context (Copilot Plus)
-
-Click the **+ Add context** button above the chat input to attach a PDF file. The PDF is converted to text and included as context for your message.
-
-### Adding an Image as Context
-
-Drag an image directly into the chat input box, or click the **image button** in the bottom-right corner of the chat input. The image is sent to the AI if your selected model supports **Vision** capability.
-
----
-
-## Context Indicators
-
-When context items are added to your message, Copilot shows small pills or badges in the chat input area showing what's included (e.g., the note name, a URL, a tag). This helps you confirm exactly what the AI will see.
-
----
-
-## Context Behavior by Mode
-
-| Context Type    | Chat              | Vault QA          | Copilot Plus |
-| --------------- | ----------------- | ----------------- | ------------ |
-| Active note     | Yes (auto)        | Yes (auto)        | Yes (auto)   |
-| Selected text   | Yes (auto)        | Yes (auto)        | Yes (auto)   |
-| @note / @folder | Yes               | Yes               | Yes          |
-| @URL processing | Copilot Plus only | Copilot Plus only | Yes          |
-| @vault search   | Yes (explicit)    | Auto              | Auto         |
-| @websearch      | No                | No                | Yes          |
-| Images (vision) | Yes               | Yes               | Yes          |
-| Active web tab  | Desktop only      | Desktop only      | Desktop only |
-
----
+For vault-wide semantic search and AI history that you own outside the plugin, use [Miyo](vault-search-and-indexing.md). Miyo provides the local-first search path for Copilot V4.
 
 ## Related
 
-- [Chat Interface](chat-interface.md) — How the chat panel works
-- [Agent Mode and Tools](agent-mode-and-tools.md) — More on @vault and @websearch
-- [Vault Search and Indexing](vault-search-and-indexing.md) — How vault search works
+- [Agent Chat](agent-mode-and-tools.md)
+- [Projects](projects.md)
+- [Instructions for Agent Chat and Quick Chat](system-prompts.md)
+- [Quick Chat](chat-interface.md)

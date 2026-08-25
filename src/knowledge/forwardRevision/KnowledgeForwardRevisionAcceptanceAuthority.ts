@@ -30,8 +30,7 @@ export interface KnowledgeForwardRevisionSourceFreshnessBase {
 }
 
 /** Exact latest applied-source completion identity captured at acceptance. */
-export interface KnowledgeForwardRevisionAppliedFreshness
-  extends KnowledgeForwardRevisionSourceFreshnessBase {
+export interface KnowledgeForwardRevisionAppliedFreshness extends KnowledgeForwardRevisionSourceFreshnessBase {
   readonly kind: "applied";
   readonly transactionId: string;
   readonly changeSetId: string;
@@ -41,8 +40,7 @@ export interface KnowledgeForwardRevisionAppliedFreshness
 }
 
 /** Exact latest no-changes source completion identity captured at acceptance. */
-export interface KnowledgeForwardRevisionNoChangesFreshness
-  extends KnowledgeForwardRevisionSourceFreshnessBase {
+export interface KnowledgeForwardRevisionNoChangesFreshness extends KnowledgeForwardRevisionSourceFreshnessBase {
   readonly kind: "no_changes";
   readonly noChangesId: string;
   readonly reason: KnowledgeForwardRevisionNoChangesReason;

@@ -1,13 +1,5 @@
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,8 +12,11 @@ import {
   type KnowledgeChatCapturePort,
   type KnowledgeChatDraftSession,
 } from "@/knowledge/capture/KnowledgeChatCapturePort";
+import { cn } from "@/lib/utils";
+import { X } from "lucide-react";
 import { Notice } from "obsidian";
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface KnowledgeChatDraftDialogProps {
   readonly open: boolean;
@@ -86,6 +81,19 @@ export const KnowledgeChatDraftDialog: React.FC<KnowledgeChatDraftDialogProps> =
     };
   }, []);
 
+  useEffect(() => {
+    if (!open || !container) return;
+    const ownerDocument = container.ownerDocument;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!submitting) onOpenChange(false);
+    };
+    ownerDocument.addEventListener("keydown", handleKeyDown);
+    return () => ownerDocument.removeEventListener("keydown", handleKeyDown);
+  }, [container, onOpenChange, open, submitting]);
+
   const canSubmit =
     !submitting &&
     title.length > 0 &&
@@ -134,32 +142,55 @@ export const KnowledgeChatDraftDialog: React.FC<KnowledgeChatDraftDialogProps> =
     onOpenChange(false);
   };
 
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!submitting) onOpenChange(nextOpen);
+  if (!open || !container) return null;
+
+  return createPortal(
+    <div
+      className={cn(
+        "tw-fixed tw-inset-0 tw-z-modal tw-flex tw-items-center tw-justify-center tw-bg-overlay/50 tw-p-4"
+      )}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !submitting) onOpenChange(false);
       }}
     >
-      <DialogContent
-        container={container}
-        className="tw-max-h-[85vh] tw-overflow-y-auto"
-        onEscapeKeyDown={(event) => {
-          if (submitting) event.preventDefault();
-        }}
-        onPointerDownOutside={(event) => {
-          if (submitting) event.preventDefault();
-        }}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="knowledge-chat-draft-dialog-title"
+        aria-describedby="knowledge-chat-draft-dialog-description"
+        className={cn(
+          "tw-relative tw-grid tw-max-h-[85vh] tw-w-full tw-max-w-lg tw-gap-4 tw-overflow-y-auto tw-rounded-lg tw-border tw-bg-primary tw-p-6 tw-shadow-lg"
+        )}
       >
-        <DialogHeader>
-          <DialogTitle>Create Knowledge Draft</DialogTitle>
-          <DialogDescription>
+        <Button
+          type="button"
+          variant="ghost2"
+          size="icon"
+          aria-label="Close"
+          disabled={submitting}
+          className={cn("tw-absolute tw-right-4 tw-top-4")}
+          onClick={() => onOpenChange(false)}
+        >
+          <X className={cn("tw-size-4")} />
+        </Button>
+
+        <header className={cn("tw-flex tw-flex-col tw-space-y-0.5 tw-text-left")}>
+          <h2
+            id="knowledge-chat-draft-dialog-title"
+            className={cn("tw-m-0 tw-text-lg tw-font-semibold tw-leading-none tw-tracking-tight")}
+          >
+            Create Knowledge Draft
+          </h2>
+          <p
+            id="knowledge-chat-draft-dialog-description"
+            className={cn("tw-m-0 tw-text-sm tw-text-muted")}
+          >
             This is AI-generated text. Edit it, verify it against the original material, and add
             book or page references before creating the Source. It will enter Activity, where
             background compilation may finish as no changes or produce a Review. This action does
             not write Wiki pages. Compilation may use your configured model and incur API cost.
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </header>
 
         <div className="tw-rounded-md tw-border tw-p-3 tw-text-sm">
           <div>
@@ -178,6 +209,7 @@ export const KnowledgeChatDraftDialog: React.FC<KnowledgeChatDraftDialogProps> =
           <Label htmlFor="knowledge-chat-draft-title">Title</Label>
           <Input
             id="knowledge-chat-draft-title"
+            autoFocus
             value={title}
             maxLength={KNOWLEDGE_CHAT_DRAFT_LIMITS.maxTitleCharacters}
             disabled={submitting}
@@ -219,15 +251,18 @@ export const KnowledgeChatDraftDialog: React.FC<KnowledgeChatDraftDialogProps> =
           </div>
         )}
 
-        <DialogFooter>
+        <div
+          className={cn("tw-flex tw-flex-col-reverse sm:tw-flex-row sm:tw-justify-end sm:tw-gap-2")}
+        >
           <Button variant="secondary" onClick={cancel}>
             {submitting ? "Stop creation" : "Cancel"}
           </Button>
           <Button disabled={!canSubmit} onClick={() => void submit()}>
             {submitting ? "Creating source…" : "Create source"}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </div>
+    </div>,
+    container
   );
 };

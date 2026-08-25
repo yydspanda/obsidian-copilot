@@ -119,8 +119,7 @@ export interface SourceNoChangesManifestCommitMarker extends NoChangesManifestCo
 }
 
 /** Durable query-writeback marker published with Queue completion. */
-export interface QueryWritebackNoChangesManifestCommitMarker
-  extends NoChangesManifestCommitMarkerBase {
+export interface QueryWritebackNoChangesManifestCommitMarker extends NoChangesManifestCommitMarkerBase {
   kind: "query_writeback_source_compile";
   sourceOriginDigest: string;
 }

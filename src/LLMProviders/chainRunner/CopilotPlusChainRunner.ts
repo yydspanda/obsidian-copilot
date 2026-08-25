@@ -14,16 +14,16 @@ import {
   MessageContent,
 } from "@/imageProcessing/imageProcessor";
 import { logInfo, logWarn } from "@/logger";
-import { checkIsPlusUser } from "@/plusUtils";
+import { checkIsPaidUser } from "@/plusUtils";
 import { getSettings } from "@/settings/model";
 import { getSystemPromptWithMemory } from "@/system-prompts/systemPromptBuilder";
-import { writeFileTool } from "@/tools/ComposerTools";
+import { createWriteFileTool } from "@/tools/ComposerTools";
 import { ToolManager } from "@/tools/toolManager";
 import { ToolResultFormatter } from "@/tools/ToolResultFormatter";
 import { ToolRegistry } from "@/tools/ToolRegistry";
 import { initializeBuiltinTools } from "@/tools/builtinTools";
-import { localSearchTool, webSearchTool } from "@/tools/SearchTools";
-import { updateMemoryTool } from "@/tools/memoryTools";
+import { createLocalSearchTool, webSearchTool } from "@/tools/SearchTools";
+import { createUpdateMemoryTool } from "@/tools/memoryTools";
 import { extractChatHistory } from "@/utils";
 import { ChatMessage, ResponseMetadata } from "@/types/message";
 import { getApiErrorMessage, getMessageRole, withSuppressedTokenWarnings } from "@/utils";
@@ -65,8 +65,7 @@ import { recordPromptPayload } from "./utils/promptPayloadRecorder";
 import { unescapeXml } from "./utils/xmlParsing";
 import { StructuredTool } from "@langchain/core/tools";
 import { AIMessage, AIMessageChunk } from "@langchain/core/messages";
-import ProjectManager from "@/LLMProviders/projectManager";
-import { isProjectMode } from "@/aiParams";
+import ChainOwner from "@/LLMProviders/chainOwner";
 
 type ToolCallWithExecutor = {
   tool: StructuredTool;
@@ -84,7 +83,7 @@ export class CopilotPlusChainRunner extends BaseChainRunner {
 
     // Initialize tools if not already done
     if (registry.getAllTools().length === 0) {
-      initializeBuiltinTools(this.chainManager.app?.vault);
+      initializeBuiltinTools(this.chainManager.app);
     }
 
     // Get all tools as StructuredTool instances
@@ -274,7 +273,7 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
       const hasLocalSearch = toolCalls.some((tc) => tc.tool.name === "localSearch");
       if (!hasLocalSearch) {
         toolCalls.push({
-          tool: localSearchTool,
+          tool: createLocalSearchTool(this.chainManager.app),
           args: {
             query: cleanQuery,
             salientTerms: context.salientTerms,
@@ -288,7 +287,7 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
     if (message.includes("@websearch") || message.includes("@web")) {
       const hasWebSearch = toolCalls.some((tc) => tc.tool.name === "webSearch");
       if (!hasWebSearch) {
-        const memory = ProjectManager.instance.getCurrentChainManager().memoryManager.getMemory();
+        const memory = ChainOwner.instance.getCurrentChainManager().memoryManager.getMemory();
         const memoryVariables = await memory.loadMemoryVariables({});
         const chatHistory = extractChatHistory(memoryVariables);
 
@@ -307,7 +306,7 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
       const hasUpdateMemory = toolCalls.some((tc) => tc.tool.name === "updateMemory");
       if (!hasUpdateMemory) {
         toolCalls.push({
-          tool: updateMemoryTool,
+          tool: createUpdateMemoryTool(this.chainManager.app),
           args: {
             statement: cleanQuery,
           },
@@ -409,7 +408,10 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
 
       // If we have a source path and access to the app, resolve the wikilink
       if (sourcePath) {
-        const resolvedFile = app.metadataCache.getFirstLinkpathDest(imageName, sourcePath);
+        const resolvedFile = this.chainManager.app.metadataCache.getFirstLinkpathDest(
+          imageName,
+          sourcePath
+        );
 
         if (resolvedFile) {
           // Use the resolved path
@@ -446,7 +448,10 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
 
       // If we have a source path and access to the app, resolve the path
       if (sourcePath) {
-        const resolvedFile = app.metadataCache.getFirstLinkpathDest(cleanPath, sourcePath);
+        const resolvedFile = this.chainManager.app.metadataCache.getFirstLinkpathDest(
+          cleanPath,
+          sourcePath
+        );
 
         if (resolvedFile) {
           // Use the resolved path
@@ -712,7 +717,10 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
       contextEnvelope: userMessage.contextEnvelope,
     });
 
-    const actionStreamer = new ActionBlockStreamer(ToolManager, writeFileTool);
+    const actionStreamer = new ActionBlockStreamer(
+      ToolManager,
+      createWriteFileTool(this.chainManager.app)
+    );
 
     // Wrap the stream call with warning suppression
     const chatStream = await withSuppressedTokenWarnings(() =>
@@ -758,13 +766,13 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
     const thinkStreamer = new ThinkBlockStreamer(updateCurrentAiMessage, excludeThinking);
     let sources: { title: string; path: string; score: number; explanation?: unknown }[] = [];
 
-    const isPlusUser = await checkIsPlusUser({
+    const isPaidUser = await checkIsPaidUser(this.chainManager.app, {
+      trigger: "legacy_chat_turn",
       isCopilotPlus: true,
     });
-    if (!isPlusUser) {
-      await this.handleError(
-        new Error("Invalid license key"),
-        thinkStreamer.processErrorChunk.bind(thinkStreamer) as (message: string) => void
+    if (!isPaidUser) {
+      await this.handleError(new Error("Invalid license key"), (message) =>
+        thinkStreamer.processErrorChunk(message)
       );
       const errorResponse = thinkStreamer.close().content;
 
@@ -859,12 +867,8 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
           logInfo("[CopilotPlus] Executed getTimeRangeMs, result:", timeRange);
         }
 
-        // Filter tool calls: skip getFileTree in project mode, skip getTimeRangeMs if already executed
+        // Filter tool calls: skip getTimeRangeMs if already executed
         const filteredToolCalls = planningResult.toolCalls.filter((tc) => {
-          if (tc.tool.name === "getFileTree" && isProjectMode()) {
-            logInfo("Skipping getFileTree in project mode");
-            return false;
-          }
           if (tc.tool.name === "getTimeRangeMs" && timeRange) {
             logInfo("Skipping getTimeRangeMs - already executed during planning");
             return false;
@@ -938,10 +942,7 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
         logInfo("CopilotPlus stream aborted by user", { reason: abortController.signal.reason });
         // Don't show error message for user-initiated aborts
       } else {
-        await this.handleError(
-          error,
-          thinkStreamer.processErrorChunk.bind(thinkStreamer) as (message: string) => void
-        );
+        await this.handleError(error, (message) => thinkStreamer.processErrorChunk(message));
       }
     }
 

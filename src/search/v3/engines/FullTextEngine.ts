@@ -2,10 +2,10 @@ import { logInfo, logWarn } from "@/logger";
 import { CHUNK_SIZE } from "@/constants";
 import MiniSearch, { SearchResult } from "minisearch";
 import { App, TFile, getAllTags } from "obsidian";
-import { ChunkManager, getSharedChunkManager } from "../chunks";
-import { NoteIdRank } from "../interfaces";
-import { MemoryManager } from "../utils/MemoryManager";
-import { tokenizeMixed } from "../utils/tokenizeMixed";
+import { ChunkManager, getSharedChunkManager } from "@/search/v3/chunks";
+import { NoteIdRank } from "@/search/v3/interfaces";
+import { MemoryManager } from "@/search/v3/utils/MemoryManager";
+import { tokenizeMixed } from "@/search/v3/utils/tokenizeMixed";
 
 /**
  * Full-text search engine using ephemeral MiniSearch index built per-query.

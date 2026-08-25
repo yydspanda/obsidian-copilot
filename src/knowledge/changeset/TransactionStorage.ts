@@ -322,7 +322,7 @@ export function createChangeSetTransactionJournalDigest(
  * @param path - Zod property and array-index path
  * @returns Dotted diagnostic field
  */
-function formatIssuePath(path: (string | number)[]): string {
+function formatIssuePath(path: PropertyKey[]): string {
   return path.map(String).join(".");
 }
 

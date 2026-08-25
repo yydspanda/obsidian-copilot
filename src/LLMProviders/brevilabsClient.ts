@@ -1,11 +1,10 @@
-import { BREVILABS_API_BASE_URL } from "@/constants";
-import { getDecryptedKey } from "@/encryptionService";
+import { BREVILABS_API_BASE_URL, BREVILABS_MODELS_BASE_URL } from "@/constants";
 import { MissingPlusLicenseError } from "@/error";
 import { logInfo } from "@/logger";
-import { turnOffPlus, turnOnPlus } from "@/plusUtils";
+import { applyEntitlement, markPaidPendingEntitlement, turnOffPaid } from "@/plusUtils";
 import { getSettings } from "@/settings/model";
 import { arrayBufferToBase64 } from "@/utils/base64";
-import { requestUrl } from "obsidian";
+import { App, requestUrl } from "obsidian";
 
 /**
  * Build a multipart/form-data body buffer from a FormData instance.
@@ -57,13 +56,34 @@ async function buildMultipartFromFormData(
 }
 
 /**
- * Normalize a requestUrl response into the {data, error} shape used by Brevilabs API methods.
+ * A Brevilabs API answer, normalized. `status` is the HTTP status the server
+ * replied with, or 0 when the request never produced one (transport failure).
+ * It is carried separately from `error` because a server's error *wording* is
+ * free to change while its status code is the contract — classifying on the
+ * message text leaves a caller silently mis-reading responses the day the
+ * server adds so much as a suffix.
+ */
+interface BrevilabsApiResult<T> {
+  data: T | null;
+  error?: Error;
+  status: number;
+  /**
+   * The API's own error body, present only when the server explained the
+   * failure itself. An infrastructure error page (a gateway or WAF 403, an HTML
+   * 502) carries none, which is what lets a caller tell "the API refused this
+   * request" from "the server is having a bad day".
+   */
+  detail?: { reason?: string; error?: string };
+}
+
+/**
+ * Normalize a requestUrl response into the shape used by Brevilabs API methods.
  * Handles the case where `response.json` is a raw string (non-JSON body, e.g. HTML error page).
  */
 function parseBrevilabsResponse<T>(
   response: { status: number; json: unknown },
   endpoint: string
-): { data: T | null; error?: Error } {
+): BrevilabsApiResult<T> {
   let data: unknown = response.json;
   if (typeof data === "string") {
     try {
@@ -77,12 +97,22 @@ function parseBrevilabsResponse<T>(
     if (detail?.reason) {
       const error = new Error(detail.reason);
       if (detail.error) error.name = detail.error;
-      return { data: null, error };
+      return { data: null, error, status: response.status, detail };
     }
-    return { data: null, error: new Error(`HTTP error: ${response.status}`) };
+    return {
+      data: null,
+      error: new Error(`HTTP error: ${response.status}`),
+      status: response.status,
+    };
   }
-  logInfo(`[API ${endpoint} request]:`, data);
-  return { data: data as T };
+  // Redact the signed entitlement JWS so it never lands in the shared
+  // copilot-log.md when a license response is logged.
+  const loggable =
+    data && typeof data === "object" && "entitlement" in data
+      ? { ...(data as Record<string, unknown>), entitlement: "[redacted]" }
+      : data;
+  logInfo(`[API ${endpoint} request]:`, loggable);
+  return { data: data as T, status: response.status };
 }
 
 export interface RerankResponse {
@@ -146,9 +176,58 @@ export interface Twitter4llmResponse {
   elapsed_time_ms: number;
 }
 
+/**
+ * `GET /usage` — the account's plan-cap utilization, for the usage meter.
+ *
+ * A window appears only when the plan caps it, and none appear when the counters
+ * cannot be read, so an absent window means "no meter" rather than "0% used".
+ * `usedPercent` is 0-100 and may exceed 100 while an account is served past its cap
+ * on purchased credit. `resetsAt` is epoch SECONDS.
+ */
+export interface UsageResponse {
+  used?: Record<string, { usedPercent?: number; resetsAt?: number } | null> | null;
+  dashboard_url?: string;
+}
+
+/** One entry of the models host's public `GET /models` listing. */
+export interface BrevilabsModelEntry {
+  id?: string;
+  label?: string;
+  /** Input context window as a display string: `1M`, `256K`. */
+  context_length?: string;
+  /**
+   * Thinking-effort levels this model distinguishes, ascending. Empty means the model
+   * honors none of them. Absent from services older than the field, which is why the
+   * caller must tell absent apart from empty.
+   */
+  reasoning_efforts?: string[];
+}
+
+export interface BrevilabsModelsResponse {
+  data?: BrevilabsModelEntry[];
+}
+
 export interface LicenseResponse {
   is_valid: boolean;
   plan: string;
+  /** Signed entitlement token (JWS). Absent when the server could not issue one. */
+  entitlement?: string;
+}
+
+/** Why the plugin is revalidating a stored license. */
+export type LicenseCheckTrigger =
+  | "startup"
+  | "manual"
+  | "refresh"
+  | "legacy_chat_turn"
+  | "multi_agent_per_turn"
+  | "tool_call"
+  | "model_gate";
+
+/** Product context attached to each license validation request. */
+export interface LicenseCheckContext {
+  trigger: LicenseCheckTrigger;
+  [key: string]: unknown;
 }
 
 export class BrevilabsClient {
@@ -174,13 +253,17 @@ export class BrevilabsClient {
     this.pluginVersion = pluginVersion;
   }
 
+  getPluginVersionHeaders(): Record<string, string> {
+    return { "X-Client-Version": this.pluginVersion };
+  }
+
   private async makeRequest<T>(
     endpoint: string,
     body: Record<string, unknown>,
     method = "POST",
     excludeAuthHeader = false,
     skipLicenseCheck = false
-  ): Promise<{ data: T | null; error?: Error }> {
+  ): Promise<BrevilabsApiResult<T>> {
     if (!skipLicenseCheck) {
       this.checkLicenseKey();
     }
@@ -196,10 +279,10 @@ export class BrevilabsClient {
     }
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "X-Client-Version": this.pluginVersion,
+      ...this.getPluginVersionHeaders(),
     };
     if (!excludeAuthHeader) {
-      headers.Authorization = `Bearer ${await getDecryptedKey(getSettings().plusLicenseKey)}`;
+      headers.Authorization = `Bearer ${getSettings().plusLicenseKey}`;
     }
     const response = await requestUrl({
       url: url.toString(),
@@ -215,7 +298,7 @@ export class BrevilabsClient {
     endpoint: string,
     formData: FormData,
     skipLicenseCheck = false
-  ): Promise<{ data: T | null; error?: Error }> {
+  ): Promise<BrevilabsApiResult<T>> {
     if (!skipLicenseCheck) {
       this.checkLicenseKey();
     }
@@ -234,30 +317,53 @@ export class BrevilabsClient {
         method: "POST",
         headers: {
           "Content-Type": contentType,
-          Authorization: `Bearer ${await getDecryptedKey(getSettings().plusLicenseKey)}`,
-          "X-Client-Version": this.pluginVersion,
+          Authorization: `Bearer ${getSettings().plusLicenseKey}`,
+          ...this.getPluginVersionHeaders(),
         },
         body,
         throw: false,
       });
       return parseBrevilabsResponse<T>(response, `${endpoint} form-data`);
     } catch (error) {
-      return { data: null, error: error instanceof Error ? error : new Error(String(error)) };
+      return {
+        data: null,
+        error: error instanceof Error ? error : new Error(String(error)),
+        status: 0,
+      };
     }
   }
 
   /**
-   * Validate the license key and update the isPlusUser setting.
-   * @param context Optional context object containing the features that the user is using to validate the license key.
+   * Validate the license key and update the entitlement flags (isPaidUser /
+   * isPlusUser). A verified signed entitlement determines strict feature access;
+   * otherwise a confirmed license remains paid while those features stay closed.
+   * @param context Required product context describing why the license key is being validated.
    * @returns true if the license key is valid, false if the license key is invalid, and undefined if
    * unknown error.
    */
   async validateLicenseKey(
-    context?: Record<string, unknown>
+    app: App | undefined,
+    context: LicenseCheckContext
   ): Promise<{ isValid: boolean | undefined; plan?: string }> {
+    // Identity this response will belong to. Validations can overlap (startup,
+    // a send-boundary re-check, the user pasting a different key), and every
+    // branch below mutates global entitlement state, so a response that outlives
+    // the key it was requested for must be discarded rather than applied.
+    const requestedLicenseKey = getSettings().plusLicenseKey;
+
+    // Having no key is not a question for the server. It answers an empty key
+    // with the same 403 refusal it gives a wrong one, so asking would let a
+    // keyless check revoke a user who has simply not entered one yet: the
+    // per-turn and per-model gates below call this without the sign-out that
+    // `checkIsPaidUser` performs when it finds no key.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/307
+    if (!requestedLicenseKey) {
+      return { isValid: false };
+    }
+
     // Build the request body with proper structure
     const requestBody: Record<string, unknown> = {
-      license_key: await getDecryptedKey(getSettings().plusLicenseKey),
+      license_key: requestedLicenseKey,
     };
 
     // Safely spread context if provided, ensuring no conflicts with required fields
@@ -279,7 +385,7 @@ export class BrevilabsClient {
       Object.assign(requestBody, filteredContext);
     }
 
-    const { data, error } = await this.makeRequest<LicenseResponse>(
+    const { data, error, status, detail } = await this.makeRequest<LicenseResponse>(
       "/license",
       requestBody,
       "POST",
@@ -287,15 +393,42 @@ export class BrevilabsClient {
       true
     );
 
-    if (error) {
-      if (error.message === "Invalid license key") {
-        turnOffPlus();
-        return { isValid: false };
-      }
-      // Do nothing if the error is not about the invalid license key
+    // The key changed under us while this was in flight, so this answer is about
+    // a license the user no longer has. Applying it would let a slow response for
+    // an eligible key land after a downgraded key's, restoring revoked features
+    // (and the token that carries them) for the rest of that token's lifetime.
+    if (getSettings().plusLicenseKey !== requestedLicenseKey) {
       return { isValid: undefined };
     }
-    turnOnPlus();
+
+    if (error) {
+      // Revoke only on the API's own refusal of this key: a 403 the server
+      // explained in its own error body. Its reason text names the key's prefix
+      // ("Invalid license key (prefix: abc...)"), so matching that verbatim let
+      // a refusal read as an unreachable server, and the fallback below then
+      // handed the refused key the previous key's still-live entitlement.
+      //
+      // A 403 carrying no such body is infrastructure rather than a verdict on
+      // the key. A gateway or WAF answering 403 would otherwise revoke every
+      // paying user who happened to check in during the outage.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/307
+      if (status === 403 && detail) {
+        turnOffPaid(app);
+        return { isValid: false };
+      }
+      // Anything else is unknown, not a refusal: leave the entitlement alone.
+      return { isValid: undefined };
+    }
+    if (data?.entitlement) {
+      // An unverifiable token is not an authoritative negative, but it cannot
+      // grant strict features until its claims can be trusted.
+      const verified = await applyEntitlement(data.entitlement);
+      if (!verified) {
+        markPaidPendingEntitlement();
+      }
+    } else {
+      markPaidPendingEntitlement();
+    }
     return { isValid: true, plan: data?.plan };
   }
 
@@ -313,6 +446,68 @@ export class BrevilabsClient {
     }
 
     return data;
+  }
+
+  /**
+   * Read the account's 5-hour and weekly cap utilization.
+   *
+   * Talks to the MODELS host, not the tools/license API the rest of this client uses.
+   * The caps are enforced by the model proxy on the request path, so their read side
+   * lives beside them; `api.brevilabs.com` has no such route and answers 404.
+   *
+   * Returns null instead of throwing: this feeds a meter, and a meter that cannot be
+   * drawn is not an error worth interrupting anyone over. The endpoint is read-only and
+   * consumes no quota, so it is safe to poll.
+   */
+  async getUsage(): Promise<UsageResponse | null> {
+    const licenseKey = getSettings().plusLicenseKey;
+    if (!licenseKey) return null;
+
+    try {
+      const response = await requestUrl({
+        url: `${BREVILABS_MODELS_BASE_URL}/usage`,
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${licenseKey}`,
+          ...this.getPluginVersionHeaders(),
+        },
+        throw: false,
+      });
+      if (response.status !== 200) {
+        logInfo(`[BrevilabsClient] usage read returned ${response.status}; no cap meters`);
+        return null;
+      }
+      return response.json as UsageResponse;
+    } catch (error) {
+      logInfo("[BrevilabsClient] usage read failed; no cap meters", error);
+      return null;
+    }
+  }
+
+  /**
+   * The models host's public catalog. Unauthenticated, and the only place the context
+   * window of a Copilot Plus model is published, so the usage meter can size its ring.
+   *
+   * Returns null rather than throwing, for the same reason as {@link getUsage}: this
+   * feeds a gauge, and a gauge that cannot be drawn is not an error worth raising.
+   */
+  async getModels(): Promise<BrevilabsModelsResponse | null> {
+    try {
+      const response = await requestUrl({
+        url: `${BREVILABS_MODELS_BASE_URL}/models`,
+        method: "GET",
+        headers: this.getPluginVersionHeaders(),
+        throw: false,
+      });
+      if (response.status !== 200) {
+        logInfo(`[BrevilabsClient] models read returned ${response.status}`);
+        return null;
+      }
+      return response.json as BrevilabsModelsResponse;
+    } catch (error) {
+      logInfo("[BrevilabsClient] models read failed", error);
+      return null;
+    }
   }
 
   async url4llm(url: string): Promise<Url4llmResponse> {

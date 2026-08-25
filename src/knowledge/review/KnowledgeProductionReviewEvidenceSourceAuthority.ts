@@ -62,9 +62,7 @@ function isIdentifier(value: unknown): value is string {
  * Every invocation re-proves the exact Bundle Manifest/schema/profile generation, then
  * requires a unique Manifest source and an identical retained watch-plan path and key.
  */
-export class KnowledgeProductionReviewEvidenceSourceAuthority
-  implements KnowledgeReviewEvidenceSourceAuthorityPort
-{
+export class KnowledgeProductionReviewEvidenceSourceAuthority implements KnowledgeReviewEvidenceSourceAuthorityPort {
   /** Captures one exact workflow plan and Bundle owner. */
   constructor(input: KnowledgeProductionReviewEvidenceSourceAuthorityInput) {
     if (

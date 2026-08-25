@@ -1,13 +1,11 @@
+import { BottomLoadingIndicator } from "@/components/chat-components/BottomLoadingIndicator";
 import ChatSingleMessage from "@/components/chat-components/ChatSingleMessage";
-import { RelevantNotes } from "@/components/chat-components/RelevantNotes";
-import { SuggestedPrompts } from "@/components/chat-components/SuggestedPrompts";
 import { USER_SENDER } from "@/constants";
 import { useChatScrolling } from "@/hooks/useChatScrolling";
-import { useSettingsValue } from "@/settings/model";
 import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
 import { ChatMessage } from "@/types/message";
 import { App } from "obsidian";
-import React, { memo, useEffect, useState } from "react";
+import React, { memo } from "react";
 
 interface ChatMessagesProps {
   chatHistory: ChatMessage[];
@@ -20,9 +18,20 @@ interface ChatMessagesProps {
   onRegenerate: (messageIndex: number) => void;
   onEdit: (messageIndex: number, newMessage: string) => void;
   onDelete: (messageIndex: number) => void;
-  onReplaceChat: (prompt: string) => void;
-  showHelperComponents: boolean;
   knowledgeChatCapturePort: KnowledgeChatCapturePort;
+}
+
+/**
+ * Whether the chat view has nothing to show: no visible message and no
+ * in-flight AI response. `ChatMessages` swaps to its suggested-prompts branch
+ * on exactly this condition and `Chat` gates the Agent mode banner on it, so
+ * the two surfaces cannot drift apart over what counts as an empty chat.
+ *
+ * @param chatHistory Messages for the active chat, including ones flagged invisible.
+ * @param currentAiMessage Text streaming in from the AI right now, empty when nothing is streaming.
+ */
+export function isChatEmpty(chatHistory: ChatMessage[], currentAiMessage: string): boolean {
+  return !chatHistory.some((message) => message.isVisible) && !currentAiMessage;
 }
 
 const ChatMessages = memo(
@@ -36,54 +45,26 @@ const ChatMessages = memo(
     onRegenerate,
     onEdit,
     onDelete,
-    onReplaceChat,
-    showHelperComponents = true,
     knowledgeChatCapturePort,
   }: ChatMessagesProps) => {
-    const [loadingDots, setLoadingDots] = useState("");
-
-    const settings = useSettingsValue();
-
     // Chat scrolling behavior
     const { containerMinHeight, scrollContainerCallbackRef, getMessageKey } = useChatScrolling({
       chatHistory,
     });
 
-    useEffect(() => {
-      let intervalId: number;
-      if (loading) {
-        intervalId = window.setInterval(() => {
-          setLoadingDots((dots) => (dots.length < 6 ? dots + "." : ""));
-        }, 200);
-      } else {
-        // eslint-disable-next-line @eslint-react/hooks-extra/no-direct-set-state-in-use-effect
-        setLoadingDots("");
-      }
-      return () => window.clearInterval(intervalId);
-    }, [loading]);
-
-    if (!chatHistory.filter((message) => message.isVisible).length && !currentAiMessage) {
+    if (isChatEmpty(chatHistory, currentAiMessage)) {
+      // Height comes from the content, not the container: `Chat` centers the
+      // Agent Chat banner in the space this branch leaves free, so filling the
+      // column here would push that banner back to the top.
       return (
-        <div className="tw-flex tw-size-full tw-flex-col tw-gap-2 tw-overflow-y-auto">
-          {showHelperComponents && settings.showRelevantNotes && (
-            <RelevantNotes defaultOpen={true} key="relevant-notes-before-chat" />
-          )}
-          {showHelperComponents && settings.showSuggestedPrompts && (
-            <SuggestedPrompts onClick={onReplaceChat} />
-          )}
+        <div className="tw-flex tw-w-full tw-flex-col tw-gap-2">
+          {loading && <BottomLoadingIndicator label={loadingMessage} />}
         </div>
       );
     }
 
-    const getLoadingMessage = () => {
-      return loadingMessage ? `${loadingMessage} ${loadingDots}` : loadingDots;
-    };
-
     return (
       <div className="tw-flex tw-h-full tw-flex-1 tw-flex-col tw-overflow-hidden">
-        {showHelperComponents && settings.showRelevantNotes && (
-          <RelevantNotes className="tw-mb-4" defaultOpen={false} key="relevant-notes-in-chat" />
-        )}
         <div
           ref={scrollContainerCallbackRef}
           data-testid="chat-messages"
@@ -118,7 +99,7 @@ const ChatMessages = memo(
               )
             );
           })}
-          {(currentAiMessage || loading) && (
+          {currentAiMessage ? (
             <div
               className="tw-w-full"
               style={{
@@ -130,7 +111,7 @@ const ChatMessages = memo(
                 message={{
                   id: streamingMessageId ?? undefined,
                   sender: "AI",
-                  message: currentAiMessage || getLoadingMessage(),
+                  message: currentAiMessage,
                   isVisible: true,
                   timestamp: null,
                 }}
@@ -140,7 +121,16 @@ const ChatMessages = memo(
                 knowledgeChatCapturePort={knowledgeChatCapturePort}
               />
             </div>
-          )}
+          ) : loading ? (
+            <div
+              className="tw-w-full"
+              style={{
+                minHeight: `${containerMinHeight}px`,
+              }}
+            >
+              <BottomLoadingIndicator label={loadingMessage} />
+            </div>
+          ) : null}
         </div>
       </div>
     );

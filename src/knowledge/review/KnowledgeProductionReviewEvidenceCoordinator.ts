@@ -176,9 +176,7 @@ function snapshotSourcePath(value: unknown): string | undefined {
  * This coordinator has no model, network, Queue mutation, Review mutation, or Vault-write
  * dependency. Paths and actionable locators remain private behind the opaque Studio port.
  */
-export class KnowledgeProductionReviewEvidenceCoordinator
-  implements KnowledgeStudioReviewEvidencePort
-{
+export class KnowledgeProductionReviewEvidenceCoordinator implements KnowledgeStudioReviewEvidencePort {
   /** Captures one exact Runtime, workflow authority, and Obsidian navigation generation. */
   constructor(input: KnowledgeProductionReviewEvidenceCoordinatorInput) {
     if (

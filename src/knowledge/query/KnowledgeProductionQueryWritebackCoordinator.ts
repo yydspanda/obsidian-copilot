@@ -180,9 +180,7 @@ function assertRegisteredQuerySource(
  * and Apply processing. Creating the source before registration makes interruption
  * safe: a retry converges through `already_after` and exact Manifest replay.
  */
-export class KnowledgeProductionQueryWritebackCoordinator
-  implements KnowledgeQueryWritebackSubmissionPort
-{
+export class KnowledgeProductionQueryWritebackCoordinator implements KnowledgeQueryWritebackSubmissionPort {
   private readonly owners: readonly Readonly<KnowledgeProductionQueryWritebackOwner>[];
   private readonly compareAndSwap: Pick<KnowledgeFileStore, "compareAndSwap">["compareAndSwap"];
   private readonly registerSource: KnowledgeSourceRegistrationCore["register"];

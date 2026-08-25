@@ -1,14 +1,15 @@
-import { TFile, Vault } from "obsidian";
+import { App, TFile, Vault } from "obsidian";
 import {
   ensurePromptFrontmatter,
   getPromptFilePath,
+  getPromptFilePathInFolder,
   getSystemPromptsFolder,
   loadAllSystemPrompts,
 } from "@/system-prompts/systemPromptUtils";
 import { UserSystemPrompt } from "@/system-prompts/type";
 import { logError, logInfo, logWarn } from "@/logger";
 import { getSettings, updateSetting } from "@/settings/model";
-import { ConfirmModal } from "@/components/modals/ConfirmModal";
+import type { StartupMigrationItem } from "@/services/startupMigration";
 import { ensureFolderExists, stripFrontmatter } from "@/utils";
 
 /**
@@ -58,7 +59,7 @@ async function saveFailedMigrationToUnsupported(
 ): Promise<string> {
   const folder = getSystemPromptsFolder();
   const unsupportedFolder = `${folder}/unsupported`;
-  await ensureFolderExists(unsupportedFolder);
+  await ensureFolderExists(vault, unsupportedFolder);
 
   // Generate unique filename to avoid conflicts
   const baseName = "Migrated System Prompt (Failed Verification)";
@@ -124,7 +125,7 @@ async function verifyMigratedContent(
 
 /**
  * Migrate the legacy userSystemPrompt from settings to a file
- * Automatically migrates and shows a notification modal to inform the user
+ * Automatically migrates and returns a result for the startup migration summary.
  *
  * Safety guarantees:
  * 1. If target file exists, generates a unique name (never overwrites)
@@ -133,14 +134,17 @@ async function verifyMigratedContent(
  * 4. Only clears userSystemPrompt after successfully saving to file system (normal or unsupported)
  * 5. If all save attempts fail, preserves userSystemPrompt for data safety
  */
-export async function migrateSystemPromptsFromSettings(vault: Vault): Promise<void> {
+export async function migrateSystemPromptsFromSettings(
+  app: App
+): Promise<StartupMigrationItem | null> {
+  const vault = app.vault;
   const settings = getSettings();
   const legacyPrompt = settings.userSystemPrompt;
 
   // Skip if empty or already migrated
   if (!legacyPrompt || legacyPrompt.trim().length === 0) {
     logInfo("No legacy userSystemPrompt to migrate");
-    return;
+    return null;
   }
 
   try {
@@ -148,12 +152,13 @@ export async function migrateSystemPromptsFromSettings(vault: Vault): Promise<vo
 
     // Ensure the system prompts folder exists (creates nested folders recursively)
     const folder = getSystemPromptsFolder();
-    await ensureFolderExists(folder);
+    await ensureFolderExists(vault, folder);
 
     // Generate a unique name if default name already exists
     // Reason: Prevents data loss when file exists with different content
     const promptName = generateUniquePromptName(MIGRATED_PROMPT_NAME, vault);
-    const filePath = getPromptFilePath(promptName);
+    // Same folder that was just ensured, not a fresh lookup.
+    const filePath = getPromptFilePathInFolder(promptName, folder);
 
     if (promptName !== MIGRATED_PROMPT_NAME) {
       logInfo(`Default name already exists, using unique name: "${promptName}"`);
@@ -179,19 +184,19 @@ export async function migrateSystemPromptsFromSettings(vault: Vault): Promise<vo
       throw new Error("File not found after creation");
     }
 
-    await ensurePromptFrontmatter(file, newPrompt);
+    await ensurePromptFrontmatter(app, file, newPrompt);
 
     // Step 3: Write-then-verify - read back and confirm content matches
     // Reason: Ensures data was actually persisted before marking migration complete
     const verificationPassed = await verifyMigratedContent(vault, file, legacyPrompt);
 
     if (verificationPassed) {
-      // ✅ Verification succeeded - set as default and show success
+      // ✅ Verification succeeded - set as default
       updateSetting("defaultSystemPromptTitle", promptName);
 
       // Best-effort: Try to reload prompts, but don't fail migration if reload fails
       try {
-        await loadAllSystemPrompts();
+        await loadAllSystemPrompts(app);
       } catch (loadError) {
         logWarn("Failed to reload prompts after migration:", loadError);
       }
@@ -200,14 +205,13 @@ export async function migrateSystemPromptsFromSettings(vault: Vault): Promise<vo
       updateSetting("userSystemPrompt", "");
       logInfo("Cleared legacy userSystemPrompt field");
 
-      new ConfirmModal(
-        app,
-        () => {},
-        `We have upgraded your system prompt to the new file-based format. It is now stored as "${promptName}" in ${folder}.\n\nYou can now:\n• Edit your system prompt directly in the file\n• Create multiple system prompts\n• Manage prompts through the settings UI\n\nYour migrated prompt has been set as the default system prompt.`,
-        "🚀 System Prompt Upgraded",
-        "OK",
-        ""
-      ).open();
+      return {
+        id: "system-prompt",
+        title: "System prompt",
+        status: "success",
+        summary: `Migrated "${promptName}" and set it as the default system prompt.`,
+        details: [`Stored in ${filePath}.`],
+      };
     } else {
       // ❌ Verification failed - save to unsupported folder and notify user
       const unsupportedPath = await saveFailedMigrationToUnsupported(
@@ -218,7 +222,7 @@ export async function migrateSystemPromptsFromSettings(vault: Vault): Promise<vo
 
       // Best-effort: Try to reload prompts, but don't fail if reload fails
       try {
-        await loadAllSystemPrompts();
+        await loadAllSystemPrompts(app);
       } catch (loadError) {
         logWarn("Failed to reload prompts after failed migration:", loadError);
       }
@@ -227,23 +231,15 @@ export async function migrateSystemPromptsFromSettings(vault: Vault): Promise<vo
       updateSetting("userSystemPrompt", "");
       logInfo("Cleared legacy userSystemPrompt field (saved to unsupported)");
 
-      new ConfirmModal(
-        app,
-        () => {},
-        `⚠️ System Prompt Migration Issue
-
-Your system prompt was migrated but verification failed. Your data has been saved to:
-
-${unsupportedPath}
-
-To recover:
-1. Open the file and review the content
-2. Move it to ${folder}
-3. The prompt will be available immediately`,
-        "Migration Verification Failed",
-        "OK",
-        ""
-      ).open();
+      return {
+        id: "system-prompt",
+        title: "System prompt",
+        status: "action-required",
+        summary: "The prompt was preserved, but its migrated content could not be verified.",
+        details: [
+          `Review ${unsupportedPath}, then move it to ${folder} to make the prompt available.`,
+        ],
+      };
     }
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -262,45 +258,30 @@ To recover:
       updateSetting("userSystemPrompt", "");
       logInfo("Cleared legacy userSystemPrompt field (saved to unsupported after error)");
 
-      new ConfirmModal(
-        app,
-        () => {},
-        `⚠️ System Prompt Migration Failed
-
-An error occurred during migration. Your data has been saved to:
-
-${unsupportedPath}
-
-To recover:
-1. Open the file and review the content
-2. Move it to ${getSystemPromptsFolder()}
-3. The prompt will be available immediately`,
-        "Migration Failed",
-        "OK",
-        ""
-      ).open();
+      return {
+        id: "system-prompt",
+        title: "System prompt",
+        status: "action-required",
+        summary: "The prompt migration failed, but the original content was preserved.",
+        details: [
+          `Review ${unsupportedPath}, then move it to ${getSystemPromptsFolder()} to make the prompt available.`,
+        ],
+      };
     } catch (saveError) {
       // Even saving to unsupported failed - DO NOT clear userSystemPrompt (preserve data)
       logError("Failed to save to unsupported folder:", saveError);
       logWarn("Preserving userSystemPrompt in settings for manual recovery");
 
-      new ConfirmModal(
-        app,
-        () => {},
-        `Failed to migrate system prompt: ${errorMessage}
-
-Unable to save to file system. Your system prompt is still in settings and will continue to work.
-
-Please check:
-- Folder permissions for ${getSystemPromptsFolder()}
-- Available disk space
-- Vault is accessible
-
-You can retry by reloading the plugin.`,
-        "Migration Failed - Data Preserved",
-        "OK",
-        ""
-      ).open();
+      return {
+        id: "system-prompt",
+        title: "System prompt",
+        status: "error",
+        summary: "The prompt could not be migrated. It remains in settings and will be retried.",
+        details: [
+          errorMessage,
+          `Check folder permissions and available disk space for ${getSystemPromptsFolder()}.`,
+        ],
+      };
     }
   }
 }

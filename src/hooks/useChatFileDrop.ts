@@ -19,7 +19,7 @@ export interface UseChatFileDropProps {
   /** Callback to add images */
   onAddImage: (files: File[]) => void;
   /** Callback for parser-supported Vault files requiring an explicit use-versus-capture choice */
-  onKnowledgeFileDrop: (files: TFile[]) => void;
+  onKnowledgeFileDrop?: (files: TFile[]) => void;
   /** Reference to the container element for drag-and-drop */
   containerRef: RefObject<HTMLElement>;
 }
@@ -89,6 +89,15 @@ function parseObsidianUris(app: App, uriString: string): TFile[] {
 }
 
 /**
+ * Return a browser/Anthropic-compatible MIME type for vault image files.
+ */
+function getImageMimeType(extension: string): string {
+  const normalized = extension.toLowerCase();
+  if (normalized === "jpg") return "image/jpeg";
+  return `image/${normalized}`;
+}
+
+/**
  * Custom hook to handle drag-and-drop of files into the chat.
  * Supports:
  * - Dropping files from Obsidian nav bar (md, pdf, canvas, images)
@@ -118,6 +127,16 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
      * Handle dragover event to show visual feedback
      */
     const handleDragOver = (e: DragEvent) => {
+      // An inner element can own its own drop semantics (e.g. the project
+      // context section persists an inclusion instead of attaching to the
+      // draft). Yield there: clear our overlay and let the zone's handlers
+      // run. Registered in the CAPTURE phase below, since such zones
+      // stopPropagation() in the bubble phase and we'd never see the event.
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target?.closest("[data-copilot-drop-zone]")) {
+        setIsDragActive(false);
+        return;
+      }
       e.preventDefault();
       if (e.dataTransfer) {
         e.dataTransfer.dropEffect = "copy";
@@ -159,6 +178,11 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
      */
     const handleDrop = async (e: DragEvent) => {
       if (!e.dataTransfer) return;
+      // Symmetric with the dragover yield: a drop inside a marked inner zone
+      // belongs to that zone — never also attach it to the draft, even if the
+      // zone's own handler forgot to stopPropagation().
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target?.closest("[data-copilot-drop-zone]")) return;
       e.preventDefault();
 
       // Clear drag state
@@ -223,10 +247,10 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
             const arrayBuffer = await app.vault.readBinary(file);
             const blob = new Blob([arrayBuffer]);
             const imageFile = new File([blob], file.name, {
-              type: `image/${file.extension}`,
+              type: getImageMimeType(file.extension),
             });
             onAddImage([imageFile]);
-          } else if (isKnowledgeChatCapturePath(file.path)) {
+          } else if (onKnowledgeFileDrop && isKnowledgeChatCapturePath(file.path)) {
             // Do not mutate Chat or Knowledge state before the user chooses.
             knowledgeFiles.push(file);
           } else if (isAllowedFileForNoteContext(file)) {
@@ -248,7 +272,7 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
           }
         }
         if (knowledgeFiles.length > 0) {
-          onKnowledgeFileDrop(knowledgeFiles);
+          onKnowledgeFileDrop?.(knowledgeFiles);
         }
       } else if (fileItems.length > 0) {
         // Process external file drops (images only)
@@ -271,16 +295,30 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
       void handleDrop(e);
     };
 
-    // Attach event listeners
-    container.addEventListener("dragover", handleDragOver);
+    // Always clear our overlay on ANY drop, even one that lands in an inner
+    // drop zone. Such a zone stops propagation in the BUBBLE phase, so the
+    // bubble-phase handleDrop above never runs to clear `isDragActive` — leaving
+    // a stuck overlay after a drop that grazed the outer area first. This
+    // capture-phase listener fires before the zone's stopPropagation, so the
+    // overlay always clears. State cleanup only — it never preventDefaults or
+    // handles the drop, so the bubble handler still owns draft injection.
+    const handleDropCaptureCleanup = () => setIsDragActive(false);
+
+    // Attach event listeners. dragover uses the capture phase so the
+    // inner-zone yield above runs even when a nested drop zone stops
+    // propagation in the bubble phase; drop stays on bubble so a zone's
+    // stopPropagation() keeps its drop from also landing in the draft.
+    container.addEventListener("dragover", handleDragOver, true);
     container.addEventListener("dragleave", handleDragLeave);
     container.addEventListener("drop", handleDropEvent);
+    container.addEventListener("drop", handleDropCaptureCleanup, true);
 
     // Cleanup
     return () => {
-      container.removeEventListener("dragover", handleDragOver);
+      container.removeEventListener("dragover", handleDragOver, true);
       container.removeEventListener("dragleave", handleDragLeave);
       container.removeEventListener("drop", handleDropEvent);
+      container.removeEventListener("drop", handleDropCaptureCleanup, true);
     };
   }, [
     app,

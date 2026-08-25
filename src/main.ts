@@ -1,125 +1,50 @@
+import type { AgentSessionManager } from "@/agentMode";
+// Deep import (not the barrel): these run on the load path for every
+// platform, and the barrel pulls Node-only modules that crash mobile.
+import { isNativeChatId, parseNativeChatId } from "@/utils/nativeChatId";
 import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
-import ProjectManager from "@/LLMProviders/projectManager";
-import {
-  CustomModel,
-  getChainType,
-  getCurrentProject,
-  getModelKey,
-  setSelectedTextContexts,
-  getSelectedTextContexts,
-  subscribeToChainTypeChange,
-  subscribeToModelKeyChange,
-  subscribeToProjectChange,
-} from "@/aiParams";
+import ChainOwner from "@/LLMProviders/chainOwner";
+import { CustomModel, setSelectedTextContexts, getSelectedTextContexts } from "@/aiParams";
 import { NoteSelectedTextContext, SelectedTextContext } from "@/types/message";
 import { registerCommands } from "@/commands";
 import CopilotView from "@/components/CopilotView";
+import RelevantNotesView from "@/components/RelevantNotesView";
 import { APPLY_VIEW_TYPE, ApplyView } from "@/components/composer/ApplyView";
-import { KNOWLEDGE_STUDIO_VIEW_TYPE, KnowledgeStudioView } from "@/components/KnowledgeStudioView";
-import { KnowledgeAppliedWikiInspectorModal } from "@/components/knowledge/KnowledgeAppliedWikiInspectorModal";
+import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { LoadChatHistoryModal } from "@/components/modals/LoadChatHistoryModal";
 
-import { registerContextMenu } from "@/commands/contextMenu";
-import { checkKnowledgeWikiInspectionCommand } from "@/commands/knowledgeWikiCommand";
-import { registerKnowledgeSourceMenu } from "@/commands/knowledgeSourceMenu";
-import { registerKnowledgeWikiMenu } from "@/commands/knowledgeWikiMenu";
+import { registerContextMenu, registerSymposiumFileMenu } from "@/commands/contextMenu";
 import { CustomCommandRegister } from "@/commands/customCommandRegister";
-import { migrateCommands, suggestDefaultCommands } from "@/commands/migrator";
+import { migrateCommands } from "@/commands/migrator";
 import { migrateSystemPromptsFromSettings } from "@/system-prompts/migration";
 import { SystemPromptRegister } from "@/system-prompts/systemPromptRegister";
 import { ProjectRegister } from "@/projects/projectRegister";
-import { ABORT_REASON, CHAT_VIEWTYPE, DEFAULT_OPEN_AREA, EVENT_NAMES } from "@/constants";
+import {
+  ABORT_REASON,
+  AGENT_CHAT_MODE,
+  CHAT_AGENT_VIEWTYPE,
+  CHAT_VIEWTYPE,
+  COPILOT_AGENT_ICON_ID,
+  COPILOT_AGENT_ICON_SVG,
+  DEFAULT_OPEN_AREA,
+  EVENT_NAMES,
+  RELEVANT_NOTES_VIEWTYPE,
+} from "@/constants";
 import { ChatManager } from "@/core/ChatManager";
 import { MessageRepository } from "@/core/MessageRepository";
-import { DelegatingKnowledgeChatCapturePort } from "@/knowledge/capture/DelegatingKnowledgeChatCapturePort";
-import { DelegatingKnowledgeFolderImportPort } from "@/knowledge/capture/DelegatingKnowledgeFolderImportPort";
 import type { KnowledgeChatCapturePort } from "@/knowledge/capture/KnowledgeChatCapturePort";
-import { KnowledgeChatCaptureGenerationLease } from "@/knowledge/capture/KnowledgeChatCaptureGenerationLease";
-import { KnowledgeFolderImportGenerationLease } from "@/knowledge/capture/KnowledgeFolderImportGenerationLease";
-import { DelegatingKnowledgeAppliedWikiPageInspectorPort } from "@/knowledge/wiki/DelegatingKnowledgeAppliedWikiPageInspectorPort";
-import { KnowledgeAppliedWikiPageInspectorGenerationLease } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorGenerationLease";
-import type { KnowledgeAppliedWikiPageInspectionRequest } from "@/knowledge/wiki/KnowledgeAppliedWikiPageInspectorPort";
-import { KnowledgeAppliedWikiPathIndex } from "@/knowledge/wiki/KnowledgeAppliedWikiPathIndex";
-import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
-import { KnowledgeKnownAppliedWikiOutputsGenerationLease } from "@/knowledge/wiki/KnowledgeKnownAppliedWikiOutputsGenerationLease";
-import { DelegatingKnowledgeForwardRevisionProposalActionPort } from "@/knowledge/forwardRevision/DelegatingKnowledgeForwardRevisionProposalActionPort";
-import { KnowledgeForwardRevisionProposalActionGenerationLease } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionGenerationLease";
-import { ObsidianKnowledgeFolderImportFileStore } from "@/knowledge/capture/ObsidianKnowledgeFolderImportFileStore";
-import {
-  KnowledgeProductionChatCaptureCoordinator,
-  ObsidianKnowledgeVaultSourcePresence,
-} from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
-import { KnowledgeProductionFolderImportCoordinator } from "@/knowledge/capture/KnowledgeProductionFolderImportCoordinator";
-import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
-import {
-  KnowledgeSourcePathIndex,
-  type KnowledgeSourcePathIndexLease,
-} from "@/knowledge/sourceLifecycle/KnowledgeSourcePathIndex";
-import { createKnowledgeSourceIssueNotificationSink } from "@/knowledge/sourceLifecycle/KnowledgeSourceIssueNotificationSink";
-import { KnowledgeProductionSourceLifecycleCoordinator } from "@/knowledge/sourceLifecycle/KnowledgeProductionSourceLifecycleCoordinator";
-import type {
-  KnowledgeSourceLifecyclePort,
-  KnowledgeSourceRetirementRequest,
-} from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
-import { type KnowledgeChatModelReadiness } from "@/knowledge/setup/KnowledgeChatModelReadiness";
-import { composeKnowledgeChatModelReadiness } from "@/knowledge/setup/KnowledgeChatModelReadinessComposition";
-import { KnowledgeSetupNavigation } from "@/knowledge/setup/KnowledgeSetupNavigation";
-import {
-  createKnowledgeSetupUnloadedProjection,
-  projectKnowledgeSetupReadiness,
-} from "@/knowledge/setup/KnowledgeSetupReadiness";
-import { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
-import { subscribeKnowledgeSetupSelectionChanges } from "@/knowledge/setup/KnowledgeSetupSelectionSubscription";
-import { publishKnowledgeSetupThenStudioAuthority } from "@/knowledge/setup/KnowledgeSetupStartupPublication";
-import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
-import { KnowledgePluginLayoutCoordinator } from "@/knowledge/startup/KnowledgePluginLayoutCoordinator";
-import {
-  KnowledgePluginProductionPreflightLifecycle,
-  type KnowledgePluginProductionPreflightAdmission,
-} from "@/knowledge/startup/KnowledgePluginProductionPreflightLifecycle";
-import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
-import { createKnowledgeProductionWorkflowExecutionPairing } from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
-import {
-  awaitKnowledgeProductionDrain,
-  retainKnowledgeProductionDrain,
-} from "@/knowledge/startup/KnowledgeProductionDrainRegistry";
-import { KnowledgeProductionRecoveryComposer } from "@/knowledge/startup/KnowledgeProductionRecoveryComposer";
-import { KnowledgeProductionRecoveryActionCoordinator } from "@/knowledge/startup/KnowledgeProductionRecoveryActionCoordinator";
-import { KnowledgeProductionObservationComposer } from "@/knowledge/startup/KnowledgeProductionObservationComposer";
-import { tryPublishKnowledgeAppliedWikiPageInspectorGeneration } from "@/knowledge/startup/KnowledgeAppliedWikiPageInspectorPublication";
-import { createSourceObservationPreReleaseResult } from "@/knowledge/startup/KnowledgeSourceObservationPreRelease";
-import type { KnowledgeProductionWorkerScheduler } from "@/knowledge/startup/KnowledgeProductionWorkerController";
-import { KnowledgePluginProductionRecoveryPort } from "@/knowledge/startup/KnowledgePluginProductionRecoveryPort";
-import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
-import {
-  KnowledgeRuntimeManifestStorage,
-  type KnowledgeRuntimeStore,
-} from "@/knowledge/runtime/KnowledgeRuntimeStore";
-import { initializeKnowledgeRuntimeForCurrentGeneration } from "@/knowledge/startup/KnowledgeRuntimeFoundationInitializer";
-import {
-  KnowledgePluginStartupBarrier,
-  type KnowledgePluginBundleConfigLoadResult,
-  type KnowledgePluginObservationStartupPort,
-  type KnowledgePluginRecoveryStartupPort,
-  type KnowledgePluginStartupState,
-} from "@/knowledge/startup/KnowledgePluginStartupBarrier";
-import { KnowledgeStudioStartupAvailabilityAdapter } from "@/knowledge/startup/KnowledgeStudioStartupAvailabilityAdapter";
-import {
-  hasExactKnowledgeBundleSequence,
-  KnowledgeStudioReadGenerationLease,
-} from "@/knowledge/startup/KnowledgeStudioReadGenerationLease";
-import { DelegatingKnowledgeStudioPort } from "@/knowledge/ui/DelegatingKnowledgeStudioPort";
-import { KnowledgeStudioRecoveryOnlyAdapter } from "@/knowledge/ui/KnowledgeStudioRecoveryOnlyAdapter";
-import { KnowledgeStudioSourceLifecycleOnlyAdapter } from "@/knowledge/ui/KnowledgeStudioSourceLifecycleOnlyAdapter";
-import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
-import {
-  captureKnowledgeStudioPresentationHint,
-  planKnowledgeStudioPresentationNavigation,
-  type KnowledgeStudioPresentationHint,
-} from "@/knowledge/ui/KnowledgeStudioWindowNavigation";
+import { KnowledgePluginIntegration } from "@/knowledge/integration/KnowledgePluginIntegration";
+import type { KnowledgeStudioPresentationHint } from "@/knowledge/ui/KnowledgeStudioWindowNavigation";
 import { logError, logInfo, logWarn } from "@/logger";
 import { logFileManager } from "@/logFileManager";
+import {
+  createModelManagement,
+  plusSyncNeeded,
+  syncCopilotPlusProvider,
+  type ModelManagementApi,
+} from "@/modelManagement";
 import { KeychainService } from "@/services/keychainService";
+import { backupLegacyCredentials } from "@/services/legacyCredentialBackup";
 import {
   persistSettings,
   loadSettingsWithKeychain,
@@ -127,26 +52,39 @@ import {
   resetPersistenceState,
 } from "@/services/settingsPersistence";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
-import { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioController";
-import { isKnowledgeStudioPlatformSupported } from "@/knowledge/ui/platform";
-import { getCachedProjectRecords, subscribeToProjectRecords } from "@/projects/state";
 import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/promptPayloadRecorder";
-import { checkIsPlusUser, refreshSelfHostModeValidation } from "@/plusUtils";
+import {
+  checkIsPaidUser,
+  ENTITLEMENT_REFRESH_INTERVAL_MS,
+  verifyCachedEntitlement,
+} from "@/plusUtils";
 import {
   getWebViewerService,
   startActiveWebTabTracking,
 } from "@/services/webViewerService/webViewerServiceSingleton";
 import { WebSelectionTracker } from "@/services/webViewerService/webViewerServiceSelection";
 import VectorStoreManager from "@/search/vectorStoreManager";
+import { runSettingsMigrations } from "@/settings/migrations";
 import { CopilotSettingTab } from "@/settings/SettingsPage";
 import {
+  type CopilotSettings,
   getModelKeyFromModel,
   getSettings,
   setSettings,
   subscribeToSettingsChange,
+  updateSetting,
 } from "@/settings/model";
-import { ChainType } from "@/chainType";
-import { ChatUIState } from "@/state/ChatUIState";
+import { didMiyoSyncedRootsChange, shouldSurfaceMiyoResync } from "@/miyo/miyoUtils";
+import { type MiyoMutationSession, resetMiyoMutations } from "@/miyo/miyoResync";
+import { ensureCopilotSubfolders, getEffectiveConversationsFolder } from "@/settings/copilotFolder";
+import { buildUpgradeRelocationEntries } from "@/settings/upgradeNotice";
+import { dehydrateDeviceProfile, hydrateDeviceProfile } from "@/settings/deviceProfiles";
+import { getDeviceId } from "@/utils/deviceId";
+import { isDesktopRuntime } from "@/utils/desktopRuntime";
+import { installRendererEventsShim } from "@/utils/rendererEventsShim";
+import { ContextProcessor } from "@/contextProcessor";
+import { CustomCommandManager } from "@/commands/customCommandManager";
+import { ChatManagerChatUIState } from "@/state/ChatUIState";
 import { VaultDataManager } from "@/state/vaultDataAtoms";
 import { FileParserManager } from "@/tools/FileParserManager";
 import { initializeBuiltinTools } from "@/tools/builtinTools";
@@ -157,174 +95,117 @@ import {
   SelectionHighlight,
 } from "@/editor";
 import {
+  addIcon,
   Editor,
+  FileSystemAdapter,
   MarkdownView,
   Menu,
   Notice,
-  Platform,
   Plugin,
   TFile,
+  ViewCreator,
   WorkspaceLeaf,
 } from "obsidian";
+import {
+  formatStartupMigrationSummary,
+  runStartupMigrationSummary,
+  shouldClearCredentialRecovery,
+  shouldClearFolderRelocation,
+  type StartupMigrationItem,
+  type StartupMigrationTask,
+} from "@/services/startupMigration";
 import { ChatHistoryItem } from "@/components/chat-components/ChatHistoryPopover";
 import {
-  extractChatDate,
   extractChatLastAccessedAtMs,
-  extractChatTitle,
+  fileToHistoryItem,
   filterChatHistoryFiles,
 } from "@/utils/chatHistoryUtils";
 import { RecentUsageManager } from "@/utils/recentUsageManager";
 import {
   listMarkdownFiles,
   patchFrontmatter,
+  readFrontmatterViaAdapter,
   resolveFileByPath,
   trashFile,
 } from "@/utils/vaultAdapterUtils";
 import { v4 as uuidv4 } from "uuid";
+import {
+  createSymposiumAgentBridge,
+  type SymposiumAgentBridge,
+  SymposiumPublisher,
+} from "@/symposium/SymposiumPublisher";
+import {
+  createSelfHostWebSearchAgentBridge,
+  type SelfHostWebSearchAgentBridge,
+} from "@/LLMProviders/selfHostServices";
 
 // Removed unused FileTrackingState interface
 
-/** Throws before an obsolete or unloaded knowledge startup generation can continue. */
-function throwIfKnowledgeStartupStopped(signal: AbortSignal, lifecycleClosed: boolean): void {
-  if (signal.aborted || lifecycleClosed) {
-    throw new DOMException("The operation was aborted", "AbortError");
-  }
-}
-
-/** Captures one renderer window's native fetch capability with a stable receiver. */
-function captureKnowledgeRendererFetchPort(): KnowledgeDeepSeekFetchPort | undefined {
-  const rendererWindow: Window = activeWindow;
-  const rendererFetchValue: unknown = Reflect.get(rendererWindow, "fetch");
-  if (typeof rendererFetchValue !== "function") {
-    return undefined;
-  }
-  const rendererFetch = rendererFetchValue as (
-    this: Window,
-    url: string,
-    init: RequestInit
-  ) => Promise<Response>;
-  return async (url, init): Promise<Response> => {
-    const pendingResponse: unknown = Reflect.apply(rendererFetch, rendererWindow, [url, init]);
-    return (await pendingResponse) as Response;
-  };
-}
-
-/** Captures one exact renderer timer realm for a plugin-owned worker generation. */
-function createKnowledgeWorkerScheduler(win: Window): KnowledgeProductionWorkerScheduler {
-  return Object.freeze({
-    now: () => Date.now(),
-    schedule: (callback: () => void, delayMs: number) => win.setTimeout(callback, delayMs),
-    cancel: (handle: unknown) => {
-      if (typeof handle === "number") {
-        win.clearTimeout(handle);
-      }
-    },
-  });
-}
-
-const {
-  runtimeClaim: knowledgeProductionRuntimeExecutionClaim,
-  preflightClaim: knowledgeProductionPreflightExecutionClaim,
-} = createKnowledgeProductionWorkflowExecutionPairing();
-
 export default class CopilotPlugin extends Plugin {
   // Plugin components
-  projectManager: ProjectManager;
+  chainOwner: ChainOwner;
   brevilabsClient: BrevilabsClient;
   userMessageHistory: string[] = [];
   vectorStoreManager: VectorStoreManager;
+  private vaultDataManager?: VaultDataManager;
   fileParserManager: FileParserManager;
   customCommandRegister: CustomCommandRegister;
   systemPromptRegister: SystemPromptRegister;
   projectRegister: ProjectRegister;
   settingsUnsubscriber?: () => void;
-  chatUIState: ChatUIState;
+  chatUIState: ChatManagerChatUIState;
+  agentSessionManager?: AgentSessionManager;
+  private CopilotAgentView?: typeof import("@/agentMode").CopilotAgentView;
+  private PlanPreviewView?: typeof import("@/agentMode").PlanPreviewView;
+  private planPreviewViewType?: typeof import("@/agentMode").PLAN_PREVIEW_VIEW_TYPE;
+  private agentModelDiscoveryUnsubscriber?: () => void;
+  modelManagement!: ModelManagementApi;
+  /** Frozen path-only facade available to Agent Mode's Obsidian CLI bridge. */
+  symposiumAgentBridge?: Readonly<SymposiumAgentBridge>;
+  /** Provider-credential-free channel available to the managed Agent Chat search skill. */
+  selfHostWebSearchAgentBridge?: Readonly<SelfHostWebSearchAgentBridge>;
+  // Proof of THIS lifecycle for anything that enqueues a Miyo folder mutation.
+  // Assigned in `onload` right after the queue reset, and read by the settings
+  // UI rather than captured there: settings tabs mount lazily (`TabContent`
+  // renders nothing until selected), so a tab first opened after a reload would
+  // capture the incoming lifecycle while still holding the outgoing vault's
+  // `app`. The plugin instance is one-per-lifecycle by construction, so it is
+  // the honest place for this.
+  //
+  // Assign it exactly once and never recompute it per read: the Miyo tab uses it
+  // as an effect dependency, so a getter that captured on every access would
+  // hand React a new object each render and spin that effect forever.
+  miyoMutationSession!: MiyoMutationSession;
+  private ribbonIconEl?: HTMLElement;
   userMemoryManager: UserMemoryManager;
   quickAskController: QuickAskController;
   chatSelectionHighlightController: ChatSelectionHighlightController;
+  // Most-recently-focused chat view, used to route "add … to chat context"
+  // commands when both chat views are open. Defaults to legacy so a
+  // never-focused-a-chat state is harmless.
+  private lastActiveChatViewType: typeof CHAT_VIEWTYPE | typeof CHAT_AGENT_VIEWTYPE = CHAT_VIEWTYPE;
   private selectionDebounceTimer?: number;
   private selectionChangeHandler?: () => void;
   private selectionListenerDocument?: Document;
   private lastSelectionSignature?: string;
   private webSelectionTracker?: WebSelectionTracker;
-  private vaultDataManager?: VaultDataManager;
-  private knowledgeRuntime?: KnowledgeRuntimeStore;
-  private knowledgeProductionRecovery?: KnowledgeProductionRecoveryComposer;
-  private knowledgeProductionObservation?: KnowledgePluginObservationStartupPort;
-  private knowledgeProductionRelease?: KnowledgeProductionRecoveryComposer;
-  private knowledgeProjectRecordsUnsubscriber?: () => void;
-  private knowledgeSetupSelectionUnsubscriber?: () => void;
-  private readonly knowledgeRendererFetchPort = captureKnowledgeRendererFetchPort();
-  private readonly knowledgeProductionPreflightLifecycle =
-    new KnowledgePluginProductionPreflightLifecycle({
-      executionPreflightClaim: knowledgeProductionPreflightExecutionClaim,
-      getProjectRecords: () => getCachedProjectRecords(),
-      getSettings: () => getSettings(),
-      fetchPort: this.knowledgeRendererFetchPort,
-      createResources: () => createKnowledgeProductionPipelineResources(),
-    });
-  private readonly knowledgeStudioPort = new DelegatingKnowledgeStudioPort();
-  private readonly knowledgeChatCapturePort = new DelegatingKnowledgeChatCapturePort();
-  private readonly knowledgeFolderImportPort = new DelegatingKnowledgeFolderImportPort();
-  private readonly knowledgeSourcePathIndex = new KnowledgeSourcePathIndex();
-  private readonly knowledgeAppliedWikiPageInspectorPort =
-    new DelegatingKnowledgeAppliedWikiPageInspectorPort();
-  private readonly knowledgeKnownAppliedWikiOutputsPort =
-    new DelegatingKnowledgeKnownAppliedWikiOutputsPort();
-  private readonly knowledgeForwardRevisionProposalActionPort =
-    new DelegatingKnowledgeForwardRevisionProposalActionPort();
-  private readonly knowledgeAppliedWikiPathIndex = new KnowledgeAppliedWikiPathIndex();
-  private readonly knowledgeAppliedWikiInspectorModals =
-    new Set<KnowledgeAppliedWikiInspectorModal>();
-  private readonly knowledgeSourceIssueNotificationSink =
-    createKnowledgeSourceIssueNotificationSink((message) => {
-      if (this.knowledgeLifecycleClosed) return;
-      new Notice(message);
-    });
-  private readonly knowledgeStudioSessionStore = new KnowledgeStudioSessionStore();
-  private knowledgeSetupStartupState: KnowledgePluginStartupState = Object.freeze({
-    generation: 0,
-    status: "waiting_for_layout",
-  });
-  private readonly knowledgeSetupReadinessStore = new KnowledgeSetupReadinessStore(
-    projectKnowledgeSetupReadiness(this.knowledgeSetupStartupState, {
-      projectCount: 0,
-      chatModel: Object.freeze({ reason: "missing" }),
-    })
-  );
-  private readonly knowledgeSetupNavigation = new KnowledgeSetupNavigation({
-    getProjectRecords: () => getCachedProjectRecords(),
-    getCurrentProjectId: () => getCurrentProject()?.id,
-    openCopilotSettings: () => this.openCopilotSettingsForKnowledgeSetup(),
-    openVaultFile: (path) => this.openKnowledgeSetupVaultFile(path),
-    openChat: () => {
-      if (!this.knowledgeLifecycleClosed) return this.activateView();
-    },
-    refreshDisplayedStatus: () => this.refreshKnowledgeSetupReadiness(),
-    notify: (message) => {
-      if (!this.knowledgeLifecycleClosed) new Notice(message);
-    },
-  });
-  private readonly knowledgeStudioStartupAvailability =
-    new KnowledgeStudioStartupAvailabilityAdapter(
-      this.knowledgeStudioPort,
-      this.knowledgeStudioSessionStore
-    );
-  private knowledgeLifecycleClosed = false;
-  private knowledgeRuntimeStartupGeneration = 0;
-  private projectsInitialization?: Promise<void>;
-  private readonly knowledgeLayoutCoordinator = new KnowledgePluginLayoutCoordinator({
-    ensureInitialized: () => this.ensureProjectsInitializedAfterLayout(),
-  });
+  private knowledgeIntegration!: KnowledgePluginIntegration;
+  private projectsInitialization?: Promise<StartupMigrationItem | null>;
   private readonly chatHistoryLastAccessedAtManager = new RecentUsageManager<string>();
+  private startupMigrationItems: StartupMigrationItem[] = [];
 
   /** Returns the stable least-authority Add-to-Knowledge command surface for Chat views. */
   getKnowledgeChatCapturePort(): KnowledgeChatCapturePort {
-    return this.knowledgeChatCapturePort;
+    return this.knowledgeIntegration.getChatCapturePort();
   }
 
   async onload(): Promise<void> {
-    this.knowledgeLifecycleClosed = false;
+    // Patch Node's `events.setMaxListeners` so the Claude Agent SDK's call with
+    // a web-realm AbortSignal stops throwing in Electron's renderer. No-ops on
+    // mobile (no node:events / no SDK). Must run before any Agent Mode session;
+    // doing it here (not as a module-load side effect) keeps mobile from
+    // evaluating `node:events` at import and crashing the whole plugin.
+    installRendererEventsShim();
     // Reason: clear stale module-level persistence state + KeychainService
     // singleton left over from a previous plugin lifecycle in the same
     // process (disable→enable, dev hot reload, "Open another vault" without
@@ -334,11 +215,46 @@ export default class CopilotPlugin extends Plugin {
     // AFTER the next onload has already initialized — and would then null
     // out the new instance, breaking saves until another full reload.
     resetPersistenceState();
+    // Also reset here, not only in `onunload`: a crash or a hard kill never runs
+    // unload at all, and the module would then start this lifecycle holding the
+    // previous one's queue. Bumping twice is harmless — no task exists yet.
+    // The reset hands back this lifecycle's session; producers read it off the
+    // plugin rather than obtaining one themselves, which is what keeps a stale
+    // settings tree from vouching for the lifecycle it outlived.
+    this.miyoMutationSession = resetMiyoMutations();
     KeychainService.resetInstance();
     KeychainService.getInstance(this.app);
     await this.loadSettings();
+    this.modelManagement = createModelManagement({
+      app: this.app,
+    });
+    this.knowledgeIntegration = new KnowledgePluginIntegration({
+      plugin: this,
+      modelManagement: this.modelManagement,
+      ensureProjectsInitialized: () => this.ensureProjectsInitializedAfterLayout(),
+      getCurrentProjectId: () => this.agentSessionManager?.getActiveProjectId(),
+      subscribeCurrentProjectChange: (listener) =>
+        this.agentSessionManager?.subscribe(listener) ?? (() => {}),
+      openChat: () => this.activateView(),
+    });
+    // Register/unregister the Copilot Plus provider (and its models) to match
+    // Plus state, so Plus models surface in the chat + opencode pickers. The
+    // license key is already hydrated from Keychain by the settings boundary.
+    // Idempotent, so the redundant initial call below + per-change calls are
+    // safe. Serialized through `plusSyncChain` so a fast
+    // sign-out→sign-in (each its own settings change) settles in issue order,
+    // not in whichever overlapping reconcile happens to finish last.
+    let plusSyncChain: Promise<void> = Promise.resolve();
+    const syncPlus = (isPaidUser: boolean | undefined, licenseKey: string): void => {
+      plusSyncChain = plusSyncChain.then(() =>
+        syncCopilotPlusProvider(this.modelManagement, !!isPaidUser, licenseKey)
+      );
+    };
+    // Initial reconcile: an already-signed-in user's `isPaidUser` is restored
+    // from disk without firing the subscription, so register on load.
+    syncPlus(getSettings().isPaidUser, getSettings().plusLicenseKey);
     this.settingsUnsubscriber = subscribeToSettingsChange((prev, next) => {
-      this.invalidateKnowledgeProductionGeneration();
+      this.knowledgeIntegration.onSettingsChanged();
       void (async () => {
         try {
           await persistSettings(next, (data) => this.saveData(data), prev);
@@ -352,45 +268,107 @@ export default class CopilotPlugin extends Plugin {
           logError("Failed to persist settings.", error);
           new Notice("Copilot failed to save settings. Check logs and try again.");
         }
-        registerCommands(this, prev, next);
+        // Sign-in / sign-out (isPaidUser flip) or key rotation while signed in.
+        if (plusSyncNeeded(prev, next)) {
+          syncPlus(next.isPaidUser, next.plusLicenseKey);
+        }
       })();
     });
+    // One-time settings migrations. Runs after the persist subscriber is wired
+    // (so every mutation is saved) and after createModelManagement, and before
+    // agent/model-discovery init below — so migrated BYOK providers are present
+    // when OpenCode first enumerates models. Awaited for deterministic ordering;
+    // it's a fast, one-time, no-op for already-migrated/fresh vaults.
+    await runSettingsMigrations(this.modelManagement);
+    const isLegacyUpgrade = getSettings().upgradedToV8FromLegacy;
     this.addSettingTab(new CopilotSettingTab(this.app, this));
-    this.knowledgeSetupSelectionUnsubscriber = subscribeKnowledgeSetupSelectionChanges({
-      subscribeModelKey: subscribeToModelKeyChange,
-      subscribeChainType: subscribeToChainTypeChange,
-      subscribeProject: subscribeToProjectChange,
-      refresh: () => this.refreshKnowledgeSetupReadiness(),
-    });
 
     // Core plugin initialization
 
-    // Initialize built-in tools with vault access
-    initializeBuiltinTools(this.app.vault);
+    // Initialize built-in tools with app access
+    initializeBuiltinTools(this.app);
+
+    // Seed the ContextProcessor singleton with `app` before anything reaches
+    // for it via the no-arg getInstance().
+    ContextProcessor.getInstance(this.app);
+    CustomCommandManager.getInstance(this.app);
+    logFileManager.setApp(this.app);
 
     // Initialize BrevilabsClient
     this.brevilabsClient = BrevilabsClient.getInstance();
     this.brevilabsClient.setPluginVersion(this.manifest.version);
-    void checkIsPlusUser();
-    void refreshSelfHostModeValidation();
+    // Re-verify the cached entitlement token offline so the strict Plus and
+    // self-host gates fail closed against an edited data.json until the
+    // signature re-proves itself. The network re-validation below overrides
+    // with the server's token.
+    void verifyCachedEntitlement();
+    if (!isLegacyUpgrade) void checkIsPaidUser(this.app, { trigger: "startup" });
+    // Entitlement tokens expire (~14 days), and the gates honor that expiry even
+    // mid-session. Without a refresh, an Obsidian window left open past `exp`
+    // loses self-host — which silently reroutes web search and document parsing
+    // through the cloud — despite the user being online and still entitled.
+    // Each /license call mints a fresh token, so re-validating daily keeps an
+    // online session current; offline users still lapse at `exp`, as intended.
+    this.registerInterval(
+      window.setInterval(
+        () => void checkIsPaidUser(this.app, { trigger: "refresh" }),
+        ENTITLEMENT_REFRESH_INTERVAL_MS
+      )
+    );
 
-    // Retire the previous plugin's subscriber before replacing project state.
-    // Otherwise owner reset notifications can start a stale autosave through
-    // the old plugin during an overlapping hot reload.
-    ProjectManager.retireActive();
+    // Initialize the owner of the shared Quick Chat chain
+    this.chainOwner = ChainOwner.getInstance(this.app, this.modelManagement);
 
-    // Start the project-file lifecycle before the new ProjectManager subscribes
-    // so stale scans cannot publish into the new plugin lifecycle.
-    this.projectRegister = new ProjectRegister(this.app);
-    this.knowledgeProjectRecordsUnsubscriber = subscribeToProjectRecords(() => {
-      this.invalidateKnowledgeProductionGeneration();
+    // Must precede Agent Chat: startup model discovery may spawn OpenCode.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/165
+    const selfHostWebSearchAgentBridge = createSelfHostWebSearchAgentBridge();
+    this.selfHostWebSearchAgentBridge = selfHostWebSearchAgentBridge;
+    this.register(() => {
+      selfHostWebSearchAgentBridge.dispose();
+      if (this.selfHostWebSearchAgentBridge === selfHostWebSearchAgentBridge) {
+        this.selfHostWebSearchAgentBridge = undefined;
+      }
     });
 
-    // Initialize ProjectManager after the new project state owner is active.
-    this.projectManager = ProjectManager.getInstance(this.app, this);
+    // Initialize Agent Mode coordinator (desktop only — ACP needs subprocess
+    // support). Gate on `isDesktopRuntime()`, not `Platform.isDesktopApp`:
+    // under `app.emulateMobile(true)` the latter stays true while Node is stubbed,
+    // so importing the `@/agentMode` barrel there would crash the plugin at load.
+    if (isDesktopRuntime()) {
+      const {
+        CopilotAgentView,
+        PlanPreviewView,
+        PLAN_PREVIEW_VIEW_TYPE,
+        acpFrameSink,
+        createAgentSessionManager,
+        setFrameSinkVaultBasePath,
+      } = await import("@/agentMode");
+      const { wireAgentModelDiscovery } = await import("@/agentMode/agentModelDiscovery");
+      this.CopilotAgentView = CopilotAgentView;
+      this.PlanPreviewView = PlanPreviewView;
+      this.planPreviewViewType = PLAN_PREVIEW_VIEW_TYPE;
+
+      // Seed the frame-log sink with the vault base path (desktop FileSystemAdapter only).
+      const adapter = this.app.vault.adapter;
+      setFrameSinkVaultBasePath(
+        adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null
+      );
+      // A log left permissive by an older build is only reachable here when
+      // frame logging is switched off, because nothing else would read it
+      // again. https://github.com/logancyang/obsidian-copilot-preview/issues/250
+      void acpFrameSink.narrowLegacyLogs();
+
+      this.agentSessionManager = createAgentSessionManager(this.app, this);
+      // Enroll agent-reported models on probe settle, even when the settings
+      // tab is closed. See `agentModelDiscovery.ts`.
+      this.agentModelDiscoveryUnsubscriber = wireAgentModelDiscovery(
+        this,
+        this.agentSessionManager
+      );
+    }
 
     // Always construct VectorStoreManager; it internally no-ops when semantic search is disabled
-    this.vectorStoreManager = VectorStoreManager.getInstance();
+    this.vectorStoreManager = VectorStoreManager.getInstance(this.app);
 
     // Initialize VaultDataManager for centralized vault data (notes, folders, tags)
     // Note: VaultDataManager tracks ALL data; hooks filter based on parameters
@@ -402,9 +380,9 @@ export default class CopilotPlugin extends Plugin {
 
     // Initialize ChatUIState with new architecture
     const messageRepo = new MessageRepository();
-    const chainManager = this.projectManager.getCurrentChainManager();
+    const chainManager = this.chainOwner.getCurrentChainManager();
     const chatManager = new ChatManager(messageRepo, chainManager, this.fileParserManager, this);
-    this.chatUIState = new ChatUIState(chatManager);
+    this.chatUIState = new ChatManagerChatUIState(chatManager);
 
     // Initialize UserMemoryManager
     this.userMemoryManager = new UserMemoryManager(this.app);
@@ -422,7 +400,7 @@ export default class CopilotPlugin extends Plugin {
     // Single source of truth for Active Web Tab ({activeWebTab}) state
     // Preserves activeWebTab when switching to Chat view
     // Only run on desktop - Web Viewer is not available on mobile
-    if (Platform.isDesktopApp) {
+    if (isDesktopRuntime()) {
       const { activeLeafRef, layoutRef } = startActiveWebTabTracking(this.app, {
         preserveOnViewTypes: [CHAT_VIEWTYPE],
       });
@@ -430,93 +408,64 @@ export default class CopilotPlugin extends Plugin {
       this.registerEvent(layoutRef);
     }
 
-    this.registerView(CHAT_VIEWTYPE, (leaf: WorkspaceLeaf) => new CopilotView(leaf, this));
-    this.registerView(APPLY_VIEW_TYPE, (leaf: WorkspaceLeaf) => new ApplyView(leaf));
+    // Register the custom Agent Mode icon before any view/ribbon/command references it.
+    addIcon(COPILOT_AGENT_ICON_ID, COPILOT_AGENT_ICON_SVG);
 
-    this.customCommandRegister = new CustomCommandRegister(this, this.app.vault);
-    this.systemPromptRegister = new SystemPromptRegister(this, this.app.vault);
-
-    this.app.workspace.onLayoutReady(() => {
-      if (this.knowledgeLifecycleClosed) {
-        return;
-      }
-      // Reason: projects must initialize after vault file tree is indexed (onLayoutReady),
-      // not in onload(). Otherwise getAbstractFileByPath() returns null for non-hidden
-      // folders and the adapter fallback creates synthetic TFiles that crash vault.read().
-      // The coordinator keeps this ordinary feature independent from Knowledge Runtime I/O.
-      this.knowledgeLayoutCoordinator.onLayoutReady();
-
-      // Initialize custom commands
-      void this.customCommandRegister
-        .initialize()
-        .then(migrateCommands)
-        .then(suggestDefaultCommands);
-
-      // Initialize system prompts (independent from custom commands)
-      void this.systemPromptRegister
-        .initialize()
-        .then(() => migrateSystemPromptsFromSettings(this.app.vault));
-    });
-
-    if (isKnowledgeStudioPlatformSupported()) {
-      void this.initializeKnowledgeStartupPrerequisites();
-      this.registerView(KNOWLEDGE_STUDIO_VIEW_TYPE, (leaf: WorkspaceLeaf) => {
-        const port = this.knowledgeStudioPort;
-        const controller = new KnowledgeStudioController(port, port, port, port, port, port);
-        return new KnowledgeStudioView(
-          leaf,
-          controller,
-          this.knowledgeStudioSessionStore,
-          this.knowledgeFolderImportPort,
-          this.knowledgeSetupReadinessStore,
-          this.knowledgeSetupNavigation
-        );
-      });
-      this.addRibbonIcon("library-big", "Open Knowledge Studio", () => {
-        void this.activateKnowledgeStudio();
-      });
+    this.safeRegisterView(CHAT_VIEWTYPE, (leaf: WorkspaceLeaf) => new CopilotView(leaf, this));
+    this.safeRegisterView(APPLY_VIEW_TYPE, (leaf: WorkspaceLeaf) => new ApplyView(leaf));
+    this.safeRegisterView(
+      RELEVANT_NOTES_VIEWTYPE,
+      (leaf: WorkspaceLeaf) => new RelevantNotesView(leaf, this)
+    );
+    if (
+      isDesktopRuntime() &&
+      this.CopilotAgentView &&
+      this.PlanPreviewView &&
+      this.planPreviewViewType
+    ) {
+      const AgentView = this.CopilotAgentView;
+      const PreviewView = this.PlanPreviewView;
+      this.safeRegisterView(
+        CHAT_AGENT_VIEWTYPE,
+        (leaf: WorkspaceLeaf) => new AgentView(leaf, this)
+      );
+      this.safeRegisterView(
+        this.planPreviewViewType,
+        (leaf: WorkspaceLeaf) => new PreviewView(leaf)
+      );
     }
-    this.addCommand({
-      id: "open-knowledge-studio",
-      name: "Open Knowledge Studio",
-      callback: () => void this.activateKnowledgeStudio(),
-    });
-    this.addCommand({
-      id: "inspect-applied-knowledge-page",
-      name: "Inspect applied Knowledge page",
-      editorCheckCallback: (checking, _editor, context) =>
-        checkKnowledgeWikiInspectionCommand(checking, context.file, {
-          index: this.knowledgeAppliedWikiPathIndex,
-          openInspector: (request) => this.openKnowledgeAppliedWikiInspector(request),
-        }),
-    });
 
     this.initActiveLeafChangeHandler();
 
-    this.addRibbonIcon("message-square", "Open Copilot Chat", (evt: MouseEvent) => {
-      void this.activateView();
-    });
+    const agentReady = this.canUseAgentView();
+    this.ribbonIconEl = this.addRibbonIcon(
+      agentReady ? COPILOT_AGENT_ICON_ID : "message-square",
+      agentReady ? "Open Copilot Agent Chat" : "Open Copilot Chat",
+      () => (this.canUseAgentView() ? this.activateAgentView() : this.activateView())
+    );
 
-    registerCommands(this, undefined, getSettings());
+    const symposiumPublisher = new SymposiumPublisher(this.app);
+    const symposiumAgentBridge = createSymposiumAgentBridge(symposiumPublisher);
+    this.symposiumAgentBridge = symposiumAgentBridge;
+    const publishFile = (file: TFile): void => {
+      void symposiumPublisher
+        .open(file)
+        .catch((error) => logError("Failed to open Symposium publishing.", error));
+    };
+    this.register(() => {
+      symposiumPublisher.dispose();
+      if (this.symposiumAgentBridge === symposiumAgentBridge) {
+        this.symposiumAgentBridge = undefined;
+      }
+    });
+    registerCommands(this, publishFile);
+    registerSymposiumFileMenu(this, publishFile);
 
     // Tool initialization is now handled automatically in CopilotPlusChainRunner and AutonomousAgentChainRunner
 
     this.registerEvent(
-      this.app.workspace.on("editor-menu", (menu: Menu) => {
-        registerContextMenu(menu, this.app);
-      })
-    );
-
-    this.registerEvent(
-      this.app.workspace.on("file-menu", (menu, file) => {
-        registerKnowledgeSourceMenu(menu, file, {
-          index: this.knowledgeSourcePathIndex,
-          openKnowledgeStudio: () => void this.activateKnowledgeStudio(),
-        });
-        registerKnowledgeWikiMenu(menu, file, {
-          index: this.knowledgeAppliedWikiPathIndex,
-          openInspector: (request) => this.openKnowledgeAppliedWikiInspector(request),
-        });
+      this.app.workspace.on("editor-menu", (menu: Menu, _editor, info) => {
+        registerContextMenu(menu, this.app, info.file, publishFile);
       })
     );
 
@@ -525,23 +474,26 @@ export default class CopilotPlugin extends Plugin {
         // Delegate to chat selection highlight controller
         this.chatSelectionHighlightController.handleActiveLeafChange(leaf ?? null);
 
-        if (leaf && leaf.view instanceof MarkdownView) {
-          const file = leaf.view.file;
-          if (file) {
-            // Note: File tracking and real-time reindexing removed for simplicity
-            // Semantic search indexes are rebuilt manually or on startup as needed
-            const activeCopilotView = this.app.workspace
-              .getLeavesOfType(CHAT_VIEWTYPE)
-              .find((leaf) => leaf.view instanceof CopilotView)?.view as CopilotView;
-
-            if (activeCopilotView) {
-              const event = new CustomEvent(EVENT_NAMES.ACTIVE_LEAF_CHANGE);
-              activeCopilotView.eventTarget.dispatchEvent(event);
-            }
-          }
+        const activeViewType = leaf?.getViewState().type;
+        if (activeViewType === CHAT_VIEWTYPE || activeViewType === CHAT_AGENT_VIEWTYPE) {
+          this.lastActiveChatViewType = activeViewType;
         }
       })
     );
+
+    this.customCommandRegister = new CustomCommandRegister(this, this.app);
+    this.systemPromptRegister = new SystemPromptRegister(this, this.app);
+    this.projectRegister = new ProjectRegister(this.app);
+    this.knowledgeIntegration.load();
+
+    this.app.workspace.onLayoutReady(() => {
+      // Migration sources initialize independently, but presentation waits until
+      // all of them settle so an upgrade produces one complete summary.
+      void this.runStartupMigrations(isLegacyUpgrade).catch((error) => {
+        logError("Failed to finish startup migrations", error);
+        new Notice("Copilot could not finish startup migration. Reload Obsidian to retry.");
+      });
+    });
 
     // Initialize automatic selection handler
     this.initSelectionHandler();
@@ -550,876 +502,8 @@ export default class CopilotPlugin extends Plugin {
     this.initWebSelectionWatcher();
   }
 
-  /**
-   * Initializes the singleton Windows durable state foundation while keeping
-   * the user surface fail-closed until parser/compiler/startup coordination is
-   * complete.
-   */
-  private async initializeKnowledgeRuntimeFoundation(): Promise<void> {
-    const generation = ++this.knowledgeRuntimeStartupGeneration;
-    const pluginDirectory = this.manifest.dir;
-    if (!pluginDirectory) {
-      logWarn("Knowledge runtime foundation is unavailable: plugin directory is missing.");
-      return;
-    }
-    try {
-      const runtime = await initializeKnowledgeRuntimeForCurrentGeneration(
-        async () => {
-          const [{ KnowledgeRuntimeStore }, { ObsidianAtomicRuntimeFile }] = await Promise.all([
-            import("@/knowledge/runtime/KnowledgeRuntimeStore"),
-            import("@/knowledge/runtime/ObsidianAtomicRuntimeFile"),
-          ]);
-          return { KnowledgeRuntimeStore, ObsidianAtomicRuntimeFile };
-        },
-        () =>
-          !this.knowledgeLifecycleClosed && generation === this.knowledgeRuntimeStartupGeneration,
-        ({ KnowledgeRuntimeStore, ObsidianAtomicRuntimeFile }) => {
-          const runtimeFile = new ObsidianAtomicRuntimeFile(
-            this.app.vault.adapter,
-            `${pluginDirectory}/knowledge-runtime-v1.json`
-          );
-          return new KnowledgeRuntimeStore(runtimeFile, {
-            productionExecutionClaim: knowledgeProductionRuntimeExecutionClaim,
-          });
-        },
-        async (candidate) => candidate.initialize()
-      );
-      if (!runtime) {
-        return;
-      }
-      this.knowledgeRuntime = runtime;
-    } catch (error) {
-      if (this.knowledgeLifecycleClosed || generation !== this.knowledgeRuntimeStartupGeneration) {
-        return;
-      }
-      this.knowledgeRuntime = undefined;
-      logWarn(
-        "Knowledge runtime foundation initialization failed.",
-        error instanceof Error ? error.name : "unknown_error"
-      );
-    }
-  }
-
-  /**
-   * Initializes optional Runtime I/O without blocking normal plugin or Projects startup.
-   *
-   * Layout readiness and Runtime completion may arrive in either order. The
-   * coordinator starts the fail-closed barrier exactly once after both exist.
-   */
-  private async initializeKnowledgeStartupPrerequisites(): Promise<void> {
-    await this.initializeKnowledgeRuntimeFoundation();
-    if (this.knowledgeLifecycleClosed) {
-      return;
-    }
-    const barrier = this.initializeKnowledgeStartupBarrier();
-    this.knowledgeLayoutCoordinator.attachBarrier(barrier);
-  }
-
-  /**
-   * Projects the exact ordinary Chat selection into a secret-free local status.
-   *
-   * Credential material is inspected only for one unambiguous selected model
-   * and immediately reduced to a boolean. No provider, model instance, or
-   * network operation is created by this check.
-   */
-  private projectKnowledgeChatReadiness(): KnowledgeChatModelReadiness {
-    const settings = getSettings();
-    const projectMode = getChainType() === ChainType.PROJECT_CHAIN;
-    const project = getCurrentProject();
-    return composeKnowledgeChatModelReadiness({
-      mode: projectMode ? "project" : "default",
-      defaultModelKey: getModelKey(),
-      projectModelKey: project?.projectModelKey,
-      activeModels: settings.activeModels,
-      credentialSettings: settings,
-    });
-  }
-
-  /** Publishes one typed startup observation and the independent local Chat lane. */
-  private publishKnowledgeSetupReadiness(state: KnowledgePluginStartupState): void {
-    if (this.knowledgeLifecycleClosed) return;
-    this.knowledgeSetupStartupState = state;
-    this.knowledgeSetupReadinessStore.publishStartup(state, {
-      projectCount: getCachedProjectRecords().length,
-      chatModel: this.projectKnowledgeChatReadiness(),
-    });
-  }
-
-  /** Reprojects current local state without rebuilding a workflow or contacting a provider. */
-  private refreshKnowledgeSetupReadiness(): void {
-    if (this.knowledgeLifecycleClosed) return;
-    this.publishKnowledgeSetupReadiness(this.knowledgeSetupStartupState);
-  }
-
-  /** Opens the existing Copilot settings page without changing a setting. */
-  private openCopilotSettingsForKnowledgeSetup(): void {
-    if (this.knowledgeLifecycleClosed) return;
-    try {
-      const settingsApp = this.app as unknown as {
-        setting?: { openTabById?: (id: string) => { display?: () => void } | undefined };
-      };
-      const tab = settingsApp.setting?.openTabById?.("copilot");
-      if (!tab || typeof tab.display !== "function") {
-        throw new TypeError("Copilot settings are unavailable");
-      }
-      tab.display();
-    } catch {
-      if (!this.knowledgeLifecycleClosed) {
-        new Notice("Copilot settings could not be opened. Use Obsidian Settings → Copilot.");
-      }
-    }
-  }
-
-  /** Opens one currently re-proved Vault file for setup inspection. */
-  private async openKnowledgeSetupVaultFile(path: string): Promise<void> {
-    if (this.knowledgeLifecycleClosed || typeof path !== "string" || path.trim().length === 0) {
-      return;
-    }
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile) || file.path !== path) {
-      new Notice("That setup file is not available at its current Vault path.");
-      return;
-    }
-    try {
-      await this.app.workspace.getLeaf(true).openFile(file);
-    } catch {
-      if (!this.knowledgeLifecycleClosed) {
-        new Notice("That setup file could not be opened. No file was changed.");
-      }
-    }
-  }
-
-  /**
-   * Creates the plugin-level fail-closed barrier over Runtime, Projects, and Bundle config.
-   *
-   * The barrier composes the recovery-only Gate and, after a fresh
-   * observation/release proof, may start the background Compiler→Review worker
-   * and publish its same-generation Activity/Review adapter. Exact Activity
-   * commands, Review decisions, explicit reviewed Apply, and eligible
-   * no-journal recovery decisions are exposed through separate narrow owners.
-   * Query remains unavailable.
-   */
-  private initializeKnowledgeStartupBarrier(): KnowledgePluginStartupBarrier {
-    const barrier = new KnowledgePluginStartupBarrier({
-      runtime: {
-        isAvailable: () => !this.knowledgeLifecycleClosed && this.knowledgeRuntime !== undefined,
-      },
-      projects: {
-        initialize: async (signal) => {
-          throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-          await this.ensureProjectsInitializedAfterLayout();
-          throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-        },
-      },
-      bundleConfig: {
-        load: async (signal) => this.loadKnowledgeBundleStartupConfig(signal),
-      },
-      studio: {
-        setUnavailable: (state) => {
-          if (this.knowledgeLifecycleClosed) {
-            return;
-          }
-          publishKnowledgeSetupThenStudioAuthority(
-            state,
-            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
-            (nextState) => this.knowledgeStudioStartupAvailability.setUnavailable(nextState)
-          );
-        },
-        setReadReady: (state) => {
-          if (this.knowledgeLifecycleClosed) {
-            return;
-          }
-          publishKnowledgeSetupThenStudioAuthority(
-            state,
-            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
-            (nextState) => this.knowledgeStudioStartupAvailability.setReadReady(nextState)
-          );
-        },
-        setRecoveryReady: (state) => {
-          if (this.knowledgeLifecycleClosed) {
-            return;
-          }
-          publishKnowledgeSetupThenStudioAuthority(
-            state,
-            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
-            (nextState) => this.knowledgeStudioStartupAvailability.setRecoveryReady(nextState)
-          );
-        },
-        setSourceRecoveryReady: (state) => {
-          if (this.knowledgeLifecycleClosed) {
-            return;
-          }
-          publishKnowledgeSetupThenStudioAuthority(
-            state,
-            (nextState) => this.publishKnowledgeSetupReadiness(nextState),
-            (nextState) => this.knowledgeStudioStartupAvailability.setSourceRecoveryReady(nextState)
-          );
-        },
-      },
-    });
-    return barrier;
-  }
-
-  /**
-   * Loads and strictly validates every project-owned Bundle after project initialization.
-   *
-   * @param signal - Current startup generation cancellation
-   * @returns Safe aggregate containing no raw invalid configuration
-   */
-  private async loadKnowledgeBundleStartupConfig(
-    signal: AbortSignal
-  ): Promise<KnowledgePluginBundleConfigLoadResult> {
-    throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-    this.closeKnowledgeProductionRecovery();
-    this.closeKnowledgeProductionObservation();
-    await awaitKnowledgeProductionDrain(this.app.vault, signal);
-    throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-    const result = await this.knowledgeProductionPreflightLifecycle.load(signal);
-    throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-    if (result.kind !== "configured") {
-      return result;
-    }
-    this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(result.admission);
-    const runtime = this.knowledgeRuntime;
-    if (!runtime) {
-      throw new DOMException("The operation was aborted", "AbortError");
-    }
-    const observationCandidate = new KnowledgeProductionObservationComposer({
-      app: this.app,
-      runtime,
-      workflowLease: result.admission.workflowLease,
-      workflowCompositionClaim: result.admission.workflowCompositionClaim,
-      notificationSink: this.knowledgeSourceIssueNotificationSink,
-    });
-    let recovery: KnowledgePluginRecoveryStartupPort | undefined;
-    try {
-      const forwardRevisionApplyRecovery =
-        observationCandidate.createForwardRevisionApplyRecoveryRunner();
-      recovery = this.createKnowledgeProductionRecoveryPort(
-        result.admission,
-        signal,
-        forwardRevisionApplyRecovery
-      );
-      const observation = this.createKnowledgeProductionObservationPort(
-        result.admission,
-        signal,
-        observationCandidate
-      );
-      return { kind: "configured", bundleIds: result.bundleIds, recovery, observation };
-    } catch (error) {
-      recovery?.close();
-      observationCandidate.close();
-      throw error;
-    }
-  }
-
-  /**
-   * Creates one one-shot recovery port over the exact preflight admission.
-   *
-   * The resulting Gate may only converge already-durable recovery evidence.
-   * Its staged Studio adapter can explicitly continue or abandon an exact
-   * recovery item, but it has no startup Release, watcher, worker, or model.
-   *
-   * @param admission - Current generation's strict Bundle owners
-   * @param startupSignal - Outer startup generation cancellation
-   * @param forwardRevisionApplyRecovery - Genuine pre-Gate commit-wins recovery runner
-   * @returns One-shot recovery capability consumed and closed by the startup barrier
-   */
-  private createKnowledgeProductionRecoveryPort(
-    admission: KnowledgePluginProductionPreflightAdmission,
-    startupSignal: AbortSignal,
-    forwardRevisionApplyRecovery: ReturnType<
-      KnowledgeProductionObservationComposer["createForwardRevisionApplyRecoveryRunner"]
-    >
-  ): KnowledgePluginRecoveryStartupPort {
-    const runtime = this.knowledgeRuntime;
-    if (!runtime) {
-      throw new DOMException("The operation was aborted", "AbortError");
-    }
-    const candidate = new KnowledgeProductionRecoveryComposer({
-      runtime,
-      vault: this.app.vault,
-      bundles: admission.owners.map(({ config }) => config),
-      forwardRevisionApplyRecovery,
-    });
-    this.knowledgeProductionRecovery = candidate;
-    try {
-      throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
-      this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-      const assertCurrent = (): void =>
-        this.assertCurrentKnowledgeRecovery(candidate, admission, runtime);
-      const recoveryActions = new KnowledgeProductionRecoveryActionCoordinator({
-        app: this.app,
-        runtime,
-        workflowLease: admission.workflowLease,
-        assertCurrent,
-        onGenerationRefreshRequired: () =>
-          this.deferKnowledgeProductionGenerationInvalidation(assertCurrent),
-      });
-      const recoveryAdapter = new KnowledgeStudioRecoveryOnlyAdapter({
-        composer: candidate,
-        bundleIds: admission.owners.map(({ config }) => config.id),
-        actions: {
-          continue: (bundleId, recoveryId, expectedRuntimeRevision, signal) =>
-            this.retainKnowledgeProductionRecoveryAction(
-              recoveryActions.continue(bundleId, recoveryId, expectedRuntimeRevision, signal)
-            ),
-          abandon: (bundleId, recoveryId, expectedRuntimeRevision, signal) =>
-            this.retainKnowledgeProductionRecoveryAction(
-              recoveryActions.abandon(bundleId, recoveryId, expectedRuntimeRevision, signal)
-            ),
-        },
-        assertCurrent,
-        onRecoveryStateChanged: () =>
-          this.deferKnowledgeProductionGenerationInvalidation(assertCurrent),
-      });
-      this.knowledgeStudioPort.replaceDelegate(recoveryAdapter);
-    } catch (error) {
-      candidate.close();
-      if (this.knowledgeProductionRecovery === candidate) {
-        this.knowledgeProductionRecovery = undefined;
-      }
-      throw error;
-    }
-    return new KnowledgePluginProductionRecoveryPort({
-      composer: candidate,
-      assertCurrent: () => this.assertCurrentKnowledgeRecovery(candidate, admission, runtime),
-      onClose: () => {
-        if (this.knowledgeProductionRecovery === candidate) {
-          this.knowledgeProductionRecovery = undefined;
-        }
-      },
-    });
-  }
-
-  /** Opens and lifecycle-tracks one value-only applied-Wiki inspection Modal. */
-  private openKnowledgeAppliedWikiInspector(
-    request: Readonly<KnowledgeAppliedWikiPageInspectionRequest>
-  ): void {
-    if (this.knowledgeLifecycleClosed) return;
-    let modal: KnowledgeAppliedWikiInspectorModal | undefined;
-    try {
-      const proposalAction = this.knowledgeForwardRevisionProposalActionPort.isAvailable()
-        ? this.knowledgeForwardRevisionProposalActionPort
-        : undefined;
-      modal = new KnowledgeAppliedWikiInspectorModal(
-        this.app,
-        request,
-        this.knowledgeAppliedWikiPageInspectorPort,
-        (closedModal) => this.knowledgeAppliedWikiInspectorModals.delete(closedModal),
-        this.knowledgeKnownAppliedWikiOutputsPort,
-        proposalAction,
-        (reviewRef) => {
-          if (
-            this.knowledgeLifecycleClosed ||
-            !modal ||
-            !this.knowledgeAppliedWikiInspectorModals.has(modal)
-          ) {
-            return;
-          }
-          const presentationHint = captureKnowledgeStudioPresentationHint(modal.contentEl);
-          modal.close();
-          void this.activateKnowledgeStudio("review", reviewRef, presentationHint);
-        }
-      );
-      this.knowledgeAppliedWikiInspectorModals.add(modal);
-      modal.open();
-    } catch {
-      if (modal) {
-        this.knowledgeAppliedWikiInspectorModals.delete(modal);
-        try {
-          modal.close();
-        } catch {
-          // A partially opened presentation retains no production authority.
-        }
-      }
-    }
-  }
-
-  /** Synchronously closes every active applied-Wiki inspector presentation. */
-  private closeKnowledgeAppliedWikiInspectorModals(): void {
-    const modals = [...this.knowledgeAppliedWikiInspectorModals];
-    this.knowledgeAppliedWikiInspectorModals.clear();
-    for (const modal of modals) {
-      try {
-        modal.close();
-      } catch {
-        // The stable delegate is revoked separately, so presentation cleanup is best-effort.
-      }
-    }
-  }
-
-  /**
-   * Creates the long-lived observation port bound to the exact preflight generation.
-   *
-   * @param admission - Current generation's strict Bundle owners
-   * @param startupSignal - Outer startup generation cancellation
-   * @param candidate - Already-composed owner of the paired startup recovery runner
-   * @returns Observation startup boundary retained after recovery is clear
-   */
-  private createKnowledgeProductionObservationPort(
-    admission: KnowledgePluginProductionPreflightAdmission,
-    startupSignal: AbortSignal,
-    candidate: KnowledgeProductionObservationComposer
-  ): KnowledgePluginObservationStartupPort {
-    const runtime = this.knowledgeRuntime;
-    if (!runtime) {
-      throw new DOMException("The operation was aborted", "AbortError");
-    }
-    const releaseComposer = new KnowledgeProductionRecoveryComposer({
-      runtime,
-      vault: this.app.vault,
-      bundles: admission.owners.map(({ config }) => config),
-    });
-    let released = false;
-    let releaseState: "held" | "releasing" | "released" | "closed" = "held";
-    let workerController:
-      | ReturnType<KnowledgeProductionObservationComposer["createCompileReviewWorkerController"]>
-      | undefined;
-    let studioReadGeneration: KnowledgeStudioReadGenerationLease | undefined;
-    let preReleaseStudioGeneration: KnowledgeStudioReadGenerationLease | undefined;
-    let captureGeneration: KnowledgeChatCaptureGenerationLease | undefined;
-    let folderImportGeneration: KnowledgeFolderImportGenerationLease | undefined;
-    let appliedWikiInspectorGeneration:
-      | KnowledgeAppliedWikiPageInspectorGenerationLease
-      | undefined;
-    let knownAppliedWikiOutputsGeneration:
-      | KnowledgeKnownAppliedWikiOutputsGenerationLease
-      | undefined;
-    let forwardRevisionProposalActionGeneration:
-      | KnowledgeForwardRevisionProposalActionGenerationLease
-      | undefined;
-    let sourcePathIndexLease: Readonly<KnowledgeSourcePathIndexLease> | undefined;
-    try {
-      throwIfKnowledgeStartupStopped(startupSignal, this.knowledgeLifecycleClosed);
-      this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-    } catch (error) {
-      candidate.close();
-      releaseComposer.close();
-      throw error;
-    }
-    const port: KnowledgePluginObservationStartupPort = {
-      start: async (signal) => {
-        const result = await candidate.start(signal);
-        const bundleId = admission.owners[0]?.config.id;
-        if (
-          !bundleId ||
-          admission.owners.length !== 1 ||
-          result.kind !== "blocked" ||
-          result.blockerKinds.length !== 1 ||
-          result.blockerKinds[0] !== "source_observation_pending"
-        ) {
-          return result;
-        }
-        const issues = candidate.getSourceIssues();
-        const sourceRecoveryResult = createSourceObservationPreReleaseResult(
-          result,
-          admission.owners.map(({ config }) => config.id),
-          issues
-        );
-        if (!sourceRecoveryResult) {
-          return result;
-        }
-        const assertPreReleaseCurrent = (): void => {
-          if (
-            releaseState !== "held" ||
-            this.knowledgeLifecycleClosed ||
-            this.knowledgeRuntime !== runtime ||
-            this.knowledgeProductionObservation !== port
-          ) {
-            throw new DOMException("The operation was aborted", "AbortError");
-          }
-          this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-          candidate.getSourceIssues();
-        };
-        const coordinator = new KnowledgeProductionSourceLifecycleCoordinator({
-          runtime,
-          getSourceIssues: () => candidate.getSourceIssues(),
-          assertCurrent: assertPreReleaseCurrent,
-          onGenerationRefreshRequired: () =>
-            this.deferKnowledgeProductionGenerationInvalidation(assertPreReleaseCurrent),
-        });
-        const retainLifecycleAction = <T>(operation: Promise<T>): Promise<T> => {
-          retainKnowledgeProductionDrain(
-            this.app.vault,
-            operation.then(
-              () => undefined,
-              () => undefined
-            )
-          );
-          return operation;
-        };
-        const sourceLifecycle: KnowledgeSourceLifecyclePort = Object.freeze({
-          loadSources: (nextBundleId: string, nextSignal: AbortSignal) =>
-            coordinator.loadSources(nextBundleId, nextSignal),
-          checkAgain: (nextBundleId: string, sourceId: string, nextSignal: AbortSignal) =>
-            retainLifecycleAction(coordinator.checkAgain(nextBundleId, sourceId, nextSignal)),
-          retireSource: (
-            nextBundleId: string,
-            request: Readonly<KnowledgeSourceRetirementRequest>,
-            nextSignal: AbortSignal
-          ) => retainLifecycleAction(coordinator.retireSource(nextBundleId, request, nextSignal)),
-        });
-        const adapter = new KnowledgeStudioSourceLifecycleOnlyAdapter({
-          bundleId,
-          sourceLifecycle,
-          assertCurrent: assertPreReleaseCurrent,
-        });
-        preReleaseStudioGeneration = new KnowledgeStudioReadGenerationLease({
-          delegate: adapter,
-          subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
-          replaceDelegate: (delegate) => this.knowledgeStudioPort.replaceDelegate(delegate),
-          setUnavailable: () => {
-            if (this.knowledgeLifecycleClosed) return;
-            this.knowledgeStudioStartupAvailability.setUnavailable({
-              generation: 0,
-              status: "waiting_for_layout",
-            });
-          },
-          assertCurrent: assertPreReleaseCurrent,
-        });
-        return sourceRecoveryResult;
-      },
-      release: async (signal) => {
-        if (releaseState !== "held") {
-          throw new DOMException("The operation was aborted", "AbortError");
-        }
-        releaseState = "releasing";
-        try {
-          const reproof = await candidate.reprove(signal);
-          if (reproof.kind !== "observation_reproved") {
-            throw new DOMException("The operation was aborted", "AbortError");
-          }
-          candidate.assertHealthy();
-          const result = await releaseComposer.releaseFresh(() => {
-            throwIfKnowledgeStartupStopped(signal, this.knowledgeLifecycleClosed);
-            this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-            candidate.assertHealthy();
-          });
-          if (
-            result.kind === "released" &&
-            hasExactKnowledgeBundleSequence(
-              result.bundleIds,
-              admission.owners.map(({ config }) => config.id)
-            )
-          ) {
-            preReleaseStudioGeneration?.close();
-            preReleaseStudioGeneration = undefined;
-            released = true;
-            const assertCurrent = (): void => {
-              if (
-                !released ||
-                this.knowledgeLifecycleClosed ||
-                this.knowledgeRuntime !== runtime ||
-                this.knowledgeProductionObservation !== port
-              ) {
-                throw new DOMException("The operation was aborted", "AbortError");
-              }
-              this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-              candidate.assertHealthy();
-            };
-            const scheduler = createKnowledgeWorkerScheduler(this.app.workspace.containerEl.win);
-            const deferGenerationRefresh = (): void =>
-              this.deferKnowledgeProductionGenerationInvalidation(() => {
-                if (
-                  this.knowledgeLifecycleClosed ||
-                  this.knowledgeRuntime !== runtime ||
-                  this.knowledgeProductionObservation !== port
-                ) {
-                  throw new DOMException("The operation was aborted", "AbortError");
-                }
-                this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-              });
-            workerController = candidate.createCompileReviewWorkerController(
-              admission.modelRouteLease,
-              () => {
-                if (!released || this.knowledgeLifecycleClosed) return false;
-                try {
-                  assertCurrent();
-                  return true;
-                } catch {
-                  return false;
-                }
-              },
-              scheduler,
-              deferGenerationRefresh
-            );
-            appliedWikiInspectorGeneration =
-              await tryPublishKnowledgeAppliedWikiPageInspectorGeneration({
-                signal,
-                createDelegate: () => candidate.createAppliedWikiPageInspectorCoordinator(),
-                subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
-                replaceDelegate: (delegate) =>
-                  this.knowledgeAppliedWikiPageInspectorPort.replaceDelegate(delegate),
-                revokeDelegate: (delegate) =>
-                  this.knowledgeAppliedWikiPageInspectorPort.revokeDelegate(delegate),
-                installPathIndex: (rows) => this.knowledgeAppliedWikiPathIndex.install(rows),
-                revokePathIndex: (lease) => this.knowledgeAppliedWikiPathIndex.revoke(lease),
-                assertCurrent,
-                closePresentations: () => this.closeKnowledgeAppliedWikiInspectorModals(),
-              });
-            try {
-              const delegate = candidate.createKnownAppliedWikiOutputsCoordinator();
-              knownAppliedWikiOutputsGeneration =
-                new KnowledgeKnownAppliedWikiOutputsGenerationLease({
-                  delegate,
-                  subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
-                  replaceDelegate: (next) =>
-                    this.knowledgeKnownAppliedWikiOutputsPort.replaceDelegate(next),
-                  revokeDelegate: (next) =>
-                    this.knowledgeKnownAppliedWikiOutputsPort.revokeDelegate(next),
-                  assertCurrent,
-                });
-              try {
-                if (admission.owners.length !== 1) throw new TypeError();
-                const proposalAction = candidate.createForwardRevisionProposalActionAdapter(
-                  this.knowledgeKnownAppliedWikiOutputsPort,
-                  delegate,
-                  (drain) => retainKnowledgeProductionDrain(this.app.vault, drain)
-                );
-                forwardRevisionProposalActionGeneration =
-                  new KnowledgeForwardRevisionProposalActionGenerationLease({
-                    delegate: proposalAction,
-                    subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
-                    replaceDelegate: (next) =>
-                      this.knowledgeForwardRevisionProposalActionPort.replaceDelegate(next),
-                    revokeDelegate: (next) =>
-                      this.knowledgeForwardRevisionProposalActionPort.revokeDelegate(next),
-                    assertCurrent,
-                  });
-              } catch {
-                this.knowledgeForwardRevisionProposalActionPort.setUnavailable();
-              }
-            } catch {
-              this.knowledgeKnownAppliedWikiOutputsPort.setUnavailable();
-              this.knowledgeForwardRevisionProposalActionPort.setUnavailable();
-            }
-            const studioAdapter = candidate.createKnowledgeStudioRuntimeReadAdapter(
-              admission.modelRouteLease,
-              (drain) => retainKnowledgeProductionDrain(this.app.vault, drain),
-              () =>
-                this.deferKnowledgeProductionGenerationInvalidation(() => {
-                  if (
-                    this.knowledgeLifecycleClosed ||
-                    this.knowledgeRuntime !== runtime ||
-                    this.knowledgeProductionObservation !== port
-                  ) {
-                    throw new DOMException("The operation was aborted", "AbortError");
-                  }
-                  this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-                  candidate.assertHealthy();
-                })
-            );
-            studioReadGeneration = new KnowledgeStudioReadGenerationLease({
-              delegate: studioAdapter,
-              subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
-              replaceDelegate: (delegate) => this.knowledgeStudioPort.replaceDelegate(delegate),
-              setUnavailable: () => {
-                if (this.knowledgeLifecycleClosed) return;
-                this.knowledgeStudioStartupAvailability.setUnavailable({
-                  generation: 0,
-                  status: "waiting_for_layout",
-                });
-              },
-              assertCurrent: () => candidate.assertHealthy(),
-            });
-            const registration = new KnowledgeSourceRegistrationCore(
-              new SourceManifestRepository(new KnowledgeRuntimeManifestStorage(runtime)),
-              { assertCurrent }
-            );
-            const nextCaptureDelegate = new KnowledgeProductionChatCaptureCoordinator({
-              owners: admission.owners,
-              parserProfiles: admission.workflowLease
-                .getParsers()
-                .map((parser) => parser.getProfile()),
-              sourcePresence: new ObsidianKnowledgeVaultSourcePresence(this.app.vault),
-              registration,
-              createFileStore: (sourceRoot) =>
-                new ObsidianKnowledgeFolderImportFileStore(this.app.vault.adapter, sourceRoot, {
-                  assertCurrent,
-                }),
-              assertCurrent,
-              onGenerationRefreshRequired: () =>
-                this.deferKnowledgeProductionGenerationInvalidation(assertCurrent),
-              retainDrain: (drain) => retainKnowledgeProductionDrain(this.app.vault, drain),
-            });
-            captureGeneration = new KnowledgeChatCaptureGenerationLease({
-              delegate: nextCaptureDelegate,
-              subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
-              replaceDelegate: (delegate) =>
-                this.knowledgeChatCapturePort.replaceDelegate(delegate),
-              revokeDelegate: (delegate) => this.knowledgeChatCapturePort.revokeDelegate(delegate),
-              assertCurrent,
-            });
-            const nextFolderImportDelegate = new KnowledgeProductionFolderImportCoordinator({
-              owners: admission.owners,
-              parserProfiles: admission.workflowLease
-                .getParsers()
-                .map((parser) => parser.getProfile()),
-              registration,
-              createFileStore: (sourceRoot) =>
-                new ObsidianKnowledgeFolderImportFileStore(this.app.vault.adapter, sourceRoot, {
-                  assertCurrent,
-                }),
-              assertCurrent,
-              onGenerationRefreshRequired: deferGenerationRefresh,
-            });
-            folderImportGeneration = new KnowledgeFolderImportGenerationLease({
-              delegate: nextFolderImportDelegate,
-              subscribeInvalidation: (listener) => candidate.subscribeClose(listener),
-              replaceDelegate: (delegate) =>
-                this.knowledgeFolderImportPort.replaceDelegate(delegate),
-              revokeDelegate: (delegate) => this.knowledgeFolderImportPort.revokeDelegate(delegate),
-              assertCurrent,
-            });
-            sourcePathIndexLease = this.knowledgeSourcePathIndex.install(
-              candidate.getRegisteredSourcePaths()
-            );
-            retainKnowledgeProductionDrain(this.app.vault, workerController.whenSettled());
-            workerController.start();
-            studioReadGeneration.assertCurrent();
-            releaseState = "released";
-          } else {
-            releaseState = "closed";
-          }
-          return result;
-        } catch (error) {
-          releaseState = "closed";
-          released = false;
-          captureGeneration?.close();
-          captureGeneration = undefined;
-          folderImportGeneration?.close();
-          folderImportGeneration = undefined;
-          appliedWikiInspectorGeneration?.close();
-          appliedWikiInspectorGeneration = undefined;
-          forwardRevisionProposalActionGeneration?.close();
-          forwardRevisionProposalActionGeneration = undefined;
-          knownAppliedWikiOutputsGeneration?.close();
-          knownAppliedWikiOutputsGeneration = undefined;
-          this.closeKnowledgeAppliedWikiInspectorModals();
-          if (sourcePathIndexLease) {
-            this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
-            sourcePathIndexLease = undefined;
-          }
-          studioReadGeneration?.close();
-          studioReadGeneration = undefined;
-          preReleaseStudioGeneration?.close();
-          preReleaseStudioGeneration = undefined;
-          workerController?.close();
-          throw error;
-        }
-      },
-      close: () => {
-        releaseState = "closed";
-        released = false;
-        captureGeneration?.close();
-        captureGeneration = undefined;
-        folderImportGeneration?.close();
-        folderImportGeneration = undefined;
-        appliedWikiInspectorGeneration?.close();
-        appliedWikiInspectorGeneration = undefined;
-        forwardRevisionProposalActionGeneration?.close();
-        forwardRevisionProposalActionGeneration = undefined;
-        knownAppliedWikiOutputsGeneration?.close();
-        knownAppliedWikiOutputsGeneration = undefined;
-        this.closeKnowledgeAppliedWikiInspectorModals();
-        if (sourcePathIndexLease) {
-          this.knowledgeSourcePathIndex.revoke(sourcePathIndexLease);
-          sourcePathIndexLease = undefined;
-        }
-        studioReadGeneration?.close();
-        studioReadGeneration = undefined;
-        preReleaseStudioGeneration?.close();
-        preReleaseStudioGeneration = undefined;
-        workerController?.close();
-        workerController = undefined;
-        candidate.close();
-        releaseComposer.close();
-        if (this.knowledgeProductionObservation === port) {
-          this.knowledgeProductionObservation = undefined;
-        }
-        if (this.knowledgeProductionRelease === releaseComposer) {
-          this.knowledgeProductionRelease = undefined;
-        }
-      },
-    };
-    this.knowledgeProductionObservation = port;
-    this.knowledgeProductionRelease = releaseComposer;
-    return port;
-  }
-
-  /** Requires a recovery candidate to retain exact plugin and preflight ownership. */
-  private assertCurrentKnowledgeRecovery(
-    candidate: KnowledgeProductionRecoveryComposer,
-    admission: KnowledgePluginProductionPreflightAdmission,
-    runtime: KnowledgeRuntimeStore
-  ): void {
-    if (
-      this.knowledgeLifecycleClosed ||
-      this.knowledgeRuntime !== runtime ||
-      this.knowledgeProductionRecovery !== candidate
-    ) {
-      throw new DOMException("The operation was aborted", "AbortError");
-    }
-    this.knowledgeProductionPreflightLifecycle.assertCurrentAdmission(admission);
-  }
-
-  /** Synchronously invalidates and replaces the full production generation. */
-  private invalidateKnowledgeProductionGeneration(): void {
-    this.closeKnowledgeProductionObservation();
-    this.closeKnowledgeProductionRecovery();
-    this.knowledgeProductionPreflightLifecycle.invalidate();
-    if (!this.knowledgeLifecycleClosed) {
-      this.knowledgeLayoutCoordinator.attachBarrier(this.initializeKnowledgeStartupBarrier());
-    }
-  }
-
-  /** Defers a full workflow rebuild until the current command promise can settle. */
-  private deferKnowledgeProductionGenerationInvalidation(assertCurrent: () => void): void {
-    const win = this.app.workspace.containerEl.win;
-    win.setTimeout(() => {
-      if (this.knowledgeLifecycleClosed) return;
-      try {
-        assertCurrent();
-      } catch {
-        return;
-      }
-      this.invalidateKnowledgeProductionGeneration();
-    }, 0);
-  }
-
-  /** Retains one recovery action until every durable effect and confirmation has settled. */
-  private retainKnowledgeProductionRecoveryAction<T>(operation: Promise<T>): Promise<T> {
-    retainKnowledgeProductionDrain(
-      this.app.vault,
-      operation.then(() => undefined)
-    );
-    return operation;
-  }
-
-  /** Synchronously closes the current recovery-only composer, if any. */
-  private closeKnowledgeProductionRecovery(): void {
-    this.knowledgeProductionRecovery?.close();
-    this.knowledgeProductionRecovery = undefined;
-  }
-
-  /** Synchronously closes the current observation session, if any. */
-  private closeKnowledgeProductionObservation(): void {
-    this.knowledgeProductionObservation?.close();
-    this.knowledgeProductionObservation = undefined;
-    this.knowledgeProductionRelease?.close();
-    this.knowledgeProductionRelease = undefined;
-  }
-
-  /**
-   * Starts ordinary Projects independently from optional Knowledge Runtime readiness.
-   *
-   * Concurrent callers share one attempt. A failed attempt is cleared for an
-   * explicit retry, while a successful attempt remains an idempotent readiness proof.
-   *
-   * @returns Shared Project initialization attempt
-   */
-  private ensureProjectsInitializedAfterLayout(): Promise<void> {
+  /** Shares one layout-ready Projects initialization across migrations and Knowledge startup. */
+  private ensureProjectsInitializedAfterLayout(): Promise<StartupMigrationItem | null> {
     if (this.projectsInitialization) {
       return this.projectsInitialization;
     }
@@ -1428,59 +512,206 @@ export default class CopilotPlugin extends Plugin {
       if (this.projectsInitialization === initialization) {
         this.projectsInitialization = undefined;
       }
-      if (!this.knowledgeLifecycleClosed) {
-        logError("[Projects] ProjectRegister initialization failed", error);
-        new Notice("Failed to load projects. Check logs for details.");
-      }
       throw error;
     });
     this.projectsInitialization = initialization;
     return initialization;
   }
 
-  async onunload() {
-    // Fail-close synchronously before the first await so no old startup
-    // continuation can publish or initialize services during persistence flush.
-    this.knowledgeLifecycleClosed = true;
-    this.closeKnowledgeAppliedWikiInspectorModals();
-    try {
-      this.knowledgeSetupReadinessStore.publish(createKnowledgeSetupUnloadedProjection());
-    } catch {
-      // The lifecycle is already closed; a stale/disposed presentation store cannot reopen it.
-    }
-    this.knowledgeSetupSelectionUnsubscriber?.();
-    this.knowledgeSetupSelectionUnsubscriber = undefined;
-    this.knowledgeSetupReadinessStore.dispose();
-    this.knowledgeRuntimeStartupGeneration += 1;
-    this.closeKnowledgeProductionObservation();
-    this.closeKnowledgeProductionRecovery();
-    this.knowledgeProductionPreflightLifecycle.close();
-    this.knowledgeLayoutCoordinator.close();
-    this.knowledgeStudioSessionStore.dispose();
-    this.knowledgeStudioPort.dispose();
-    this.knowledgeChatCapturePort.dispose();
-    this.knowledgeFolderImportPort.dispose();
-    this.knowledgeSourcePathIndex.clear();
-    this.knowledgeAppliedWikiPageInspectorPort.dispose();
-    this.knowledgeForwardRevisionProposalActionPort.dispose();
-    this.knowledgeKnownAppliedWikiOutputsPort.dispose();
-    this.knowledgeAppliedWikiPathIndex.dispose();
-    this.knowledgeProjectRecordsUnsubscriber?.();
-    this.knowledgeProjectRecordsUnsubscriber = undefined;
-    // Unsubscribe ProjectManager before releasing project state. Reversing
-    // this order can notify an unloading manager and start a stale switch.
-    this.projectManager?.onunload();
-    this.projectRegister?.cleanup();
-    this.customCommandRegister?.cleanup();
-    this.systemPromptRegister?.cleanup();
-    this.settingsUnsubscriber?.();
-    this.settingsUnsubscriber = undefined;
+  /** Collect one-time manual folder moves without opening a separate modal. */
+  private async collectLegacyUpgradeRelocation(): Promise<StartupMigrationItem | null> {
+    if (!getSettings().upgradedToV8FromLegacy) return null;
 
-    // Retire the exact Vault data owner before the first await. A stale unload
-    // continuation must never resolve a global singleton and clean up a newer
-    // plugin lifecycle.
+    const entries = buildUpgradeRelocationEntries(getSettings());
+    if (entries.length > 0) {
+      // Pre-create destinations, while leaving user files untouched as before.
+      await ensureCopilotSubfolders(this.app.vault, getSettings());
+    }
+    if (entries.length === 0) {
+      updateSetting("upgradedToV8FromLegacy", false);
+      return null;
+    }
+    return {
+      id: "folders",
+      title: "Copilot folders",
+      status: "action-required",
+      summary: "Copilot now keeps its files under one folder. Existing files were not moved.",
+      details: entries.map(
+        ({ label, oldPath, newPath }) => `${label}: move ${oldPath} to ${newPath}.`
+      ),
+    };
+  }
+
+  /** Run all layout-dependent migration work before presenting one summary. */
+  private async runStartupMigrations(isLegacyUpgrade: boolean): Promise<void> {
+    const initialSettings = getSettings();
+    const needsLicenseReentry =
+      isLegacyUpgrade && initialSettings.isPaidUser === true && !initialSettings.plusLicenseKey;
+    const task = (
+      result: Promise<StartupMigrationItem | null>,
+      failure: StartupMigrationItem,
+      notice?: string
+    ): StartupMigrationTask => {
+      return {
+        result,
+        failure: isLegacyUpgrade ? failure : null,
+        onFailure: (error) => {
+          logError(`${failure.title} startup migration failed`, error);
+          if (!isLegacyUpgrade && notice) new Notice(notice);
+        },
+      };
+    };
+
+    const projectTask = task(
+      this.ensureProjectsInitializedAfterLayout(),
+      {
+        id: "projects",
+        title: "Projects",
+        status: "error",
+        summary: "Projects could not be loaded or migrated. Reload Obsidian to retry.",
+      },
+      "Failed to load projects. Check console for details."
+    );
+    const commandsTask = task(
+      this.customCommandRegister.initialize().then(() => migrateCommands(this.app)),
+      {
+        id: "custom-commands",
+        title: "Custom commands",
+        status: "error",
+        summary: "Custom commands could not be loaded or migrated. Reload Obsidian to retry.",
+      }
+    );
+    const promptsTask = task(
+      this.systemPromptRegister.initialize().then(() => migrateSystemPromptsFromSettings(this.app)),
+      {
+        id: "system-prompt",
+        title: "System prompt",
+        status: "error",
+        summary: "System prompts could not be loaded or migrated. Reload Obsidian to retry.",
+      }
+    );
+    const relocationTask = task(this.collectLegacyUpgradeRelocation(), {
+      id: "folders",
+      title: "Copilot folders",
+      status: "error",
+      summary: "Folder destinations could not be prepared. Reload Obsidian to retry.",
+    });
+    const license: StartupMigrationItem | null = needsLicenseReentry
+      ? {
+          id: "copilot-license",
+          title: "Copilot license",
+          status: "action-required",
+          summary: "Copilot could not restore the previous paid status after the upgrade.",
+          details: ["Re-enter the license key in Copilot Settings to restore paid features."],
+        }
+      : null;
+    if (isLegacyUpgrade) {
+      void checkIsPaidUser(needsLicenseReentry ? undefined : this.app, { trigger: "startup" });
+    }
+
+    await runStartupMigrationSummary({
+      initialItems: this.startupMigrationItems,
+      tasks: [projectTask, commandsTask, promptsTask, relocationTask],
+      afterTasks: () => {
+        const startupSettings = getSettings();
+        if (
+          !didMiyoSyncedRootsChange(startupSettings) ||
+          !shouldSurfaceMiyoResync(this.app, startupSettings)
+        ) {
+          return [license];
+        }
+        if (!isLegacyUpgrade) {
+          new Notice("Miyo search needs a resync — open the Miyo settings tab.", 8000);
+          return [license];
+        }
+        return [
+          license,
+          {
+            id: "miyo",
+            title: "Miyo search",
+            status: "action-required",
+            summary: "Miyo search needs a resync after the Copilot folder update.",
+            details: ["Open the Miyo settings tab to resync."],
+          },
+        ];
+      },
+      present: (items) => {
+        new ConfirmModal(
+          this.app,
+          () => {},
+          formatStartupMigrationSummary(items),
+          "Copilot upgrade summary",
+          "Done",
+          ""
+        ).open();
+      },
+      acknowledge: (items) => {
+        this.startupMigrationItems = [];
+        const pendingCredentialRecovery = getSettings()._pendingCredentialRecovery;
+        if (
+          shouldClearCredentialRecovery(
+            items,
+            pendingCredentialRecovery?.deviceId,
+            getDeviceId(this.app)
+          )
+        ) {
+          updateSetting("_pendingCredentialRecovery", undefined);
+        }
+        if (shouldClearFolderRelocation(items)) {
+          updateSetting("upgradedToV8FromLegacy", false);
+        }
+      },
+    });
+  }
+
+  /**
+   * Register a view, tolerating a type that is already registered. Obsidian
+   * throws "Attempting to register an existing view type" when a prior plugin
+   * lifecycle left a stale registration behind (e.g. an `onunload` that threw
+   * before its teardown completed). Swallowing here keeps one stale view type
+   * from aborting the rest of `onload` and leaving a half-initialized plugin
+   * that then crashes on `onunload`. The null-safe `onunload` below is the
+   * primary fix that prevents the stale state; this is defense-in-depth.
+   */
+  private safeRegisterView(type: string, viewCreator: ViewCreator): void {
+    try {
+      this.registerView(type, viewCreator);
+    } catch (error) {
+      logWarn(`Copilot: view type "${type}" already registered; skipping re-registration.`, error);
+    }
+  }
+
+  onunload(): void {
+    // Obsidian never awaits onunload, so the async tail of teardown is
+    // fire-and-forget by nature; declaring onunload void makes that explicit.
+    // teardown() is invoked synchronously, so everything above its first
+    // `await` still runs before this call returns, and a failure partway
+    // through is logged instead of becoming an unhandled rejection.
+    this.teardown().catch((error) => {
+      logError("Copilot: plugin teardown failed during unload:", error);
+    });
+  }
+
+  private async teardown(): Promise<void> {
+    // End the Miyo mutation lifecycle HERE, as the first statement: everything
+    // above the first `await` runs before the next `onload()` can possibly
+    // start, so this carries none of the late-continuation risk that keeps
+    // `resetPersistenceState()` at load time. Doing it at unload is what makes
+    // the boundary real — waiting for the next load would leave a task from
+    // this vault free to write settings and issue DELETE/POST during an unload
+    // that is never followed by a re-enable, or while another vault is opening.
+    resetMiyoMutations();
+    this.knowledgeIntegration?.close();
     this.vaultDataManager?.cleanup();
     this.vaultDataManager = undefined;
+
+    // Best-effort flush of pending keychain/data.json writes.
+    // Reason: Obsidian does not await teardown, but awaiting here keeps the
+    // remaining steps ordered after the flush, consistent with the log flush
+    // below. (The KeychainService singleton and the persistence module's own
+    // state reset at the START of the next onload — see the comment there for
+    // the late-write race that motivated it.)
+    await flushPersistence();
 
     // Clear all persistent selection highlights before unload
     // This prevents "stuck" highlights after hot reload (dev environment)
@@ -1488,6 +719,28 @@ export default class CopilotPlugin extends Plugin {
 
     // Cleanup chat selection highlight controller
     this.chatSelectionHighlightController?.cleanup();
+
+    this.agentModelDiscoveryUnsubscriber?.();
+    await this.agentSessionManager?.shutdown();
+
+    // Optional-chained because `onload` assigns these late: if it threw before
+    // reaching their construction, the fields are undefined at unload time and
+    // an unguarded `.cleanup()` would throw `Cannot read properties of
+    // undefined`, aborting the rest of teardown.
+    this.customCommandRegister?.cleanup();
+    this.systemPromptRegister?.cleanup();
+    this.projectRegister?.cleanup();
+    this.settingsUnsubscriber?.();
+
+    // Tear down skills vault watchers + debounce timers. Gate matches onload so
+    // we never import the `@/agentMode` barrel on a Node-less runtime (mobile /
+    // emulateMobile), which would crash during unload.
+    if (isDesktopRuntime()) {
+      const { SkillManager } = await import("@/agentMode");
+      if (SkillManager.hasInstance()) {
+        SkillManager.getInstance().dispose();
+      }
+    }
 
     // Cleanup selection handler
     this.cleanupSelectionHandler();
@@ -1502,17 +755,11 @@ export default class CopilotPlugin extends Plugin {
       // Ignore errors if service not available
     }
 
-    logInfo("Copilot plugin unloaded");
+    this.modelManagement?.dispose();
 
-    // Best-effort flush of pending keychain/data.json writes.
-    // Reason: onunload() is void in Obsidian's type system, but awaiting here
-    // is no worse than fire-and-forget, and consistent with the log flush below.
-    // (Module-level state + KeychainService singleton reset happen at the
-    // START of the next onload, not here — see comment in onload above for
-    // the late-write race that motivated the move.)
-    // Start the log flush with this plugin's captured Vault before yielding.
-    // Its adapter can never switch to a newer global App/Vault mid-flight.
-    await Promise.all([flushPersistence(), logFileManager.flush(this.app.vault)]);
+    // Best-effort flush of log file
+    await logFileManager.flush();
+    logInfo("Copilot plugin unloaded");
   }
 
   /**
@@ -1579,14 +826,21 @@ export default class CopilotPlugin extends Plugin {
     void this.processText(editor, eventType, eventSubtype);
   }
 
-  emitChatIsVisible() {
-    const activeCopilotView = this.app.workspace
-      .getLeavesOfType(CHAT_VIEWTYPE)
-      .find((leaf) => leaf.view instanceof CopilotView)?.view as CopilotView;
+  emitChatIsVisible(viewType: typeof CHAT_VIEWTYPE | typeof CHAT_AGENT_VIEWTYPE = CHAT_VIEWTYPE) {
+    // Both chat views expose a `ChatViewEventTarget`; the React tree focuses the
+    // composer in response (CopilotView via Chat.tsx, CopilotAgentView via
+    // useChatInputAutoFocus). The instanceof guard skips deferred (unloaded)
+    // leaves, whose placeholder view has no eventTarget.
+    const view = this.app.workspace
+      .getLeavesOfType(viewType)
+      .map((leaf) => leaf.view)
+      .find(
+        (v): v is CopilotView | InstanceType<NonNullable<typeof this.CopilotAgentView>> =>
+          v instanceof CopilotView || this.isCopilotAgentView(v)
+      );
 
-    if (activeCopilotView) {
-      const event = new CustomEvent(EVENT_NAMES.CHAT_IS_VISIBLE);
-      activeCopilotView.eventTarget.dispatchEvent(event);
+    if (view) {
+      view.eventTarget.dispatchEvent(new CustomEvent(EVENT_NAMES.CHAT_IS_VISIBLE));
     }
   }
 
@@ -1596,8 +850,9 @@ export default class CopilotPlugin extends Plugin {
         if (!leaf) {
           return;
         }
-        if (leaf.getViewState().type === CHAT_VIEWTYPE) {
-          this.emitChatIsVisible();
+        const activeViewType = leaf.getViewState().type;
+        if (activeViewType === CHAT_VIEWTYPE || activeViewType === CHAT_AGENT_VIEWTYPE) {
+          this.emitChatIsVisible(activeViewType);
         }
       })
     );
@@ -1747,7 +1002,7 @@ export default class CopilotPlugin extends Plugin {
    */
   initWebSelectionWatcher() {
     // Only run on desktop
-    if (!Platform.isDesktopApp) {
+    if (!isDesktopRuntime()) {
       return;
     }
 
@@ -1822,102 +1077,59 @@ export default class CopilotPlugin extends Plugin {
   }
 
   async activateView(): Promise<void> {
-    const leaves = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE);
-    if (leaves.length === 0) {
-      if (getSettings().defaultOpenArea === DEFAULT_OPEN_AREA.VIEW) {
-        await this.app.workspace.getRightLeaf(false).setViewState({
-          type: CHAT_VIEWTYPE,
-          active: true,
-        });
-      } else {
-        await this.app.workspace.getLeaf(true).setViewState({
-          type: CHAT_VIEWTYPE,
-          active: true,
-        });
-      }
-    } else {
-      this.app.workspace.revealLeaf(leaves[0]);
-    }
+    await this.openOrRevealView(CHAT_VIEWTYPE);
     // Small delay to ensure React component is ready to receive the focus event
     window.setTimeout(() => {
       this.emitChatIsVisible();
     }, 50);
   }
 
-  /**
-   * Opens the Windows-only personal Knowledge Studio workspace.
-   *
-   * @param initialTab - Optional first Studio tab to select
-   * @param forwardRevisionReviewRef - Optional opaque forward Review row to focus
-   * @param presentationHint - Non-authoritative renderer realm that initiated navigation
-   */
+  /** Opens Knowledge Studio and optionally focuses one published Forward Review row. */
   async activateKnowledgeStudio(
     initialTab?: "review",
     forwardRevisionReviewRef?: string,
     presentationHint?: Readonly<KnowledgeStudioPresentationHint>
   ): Promise<void> {
-    if (!isKnowledgeStudioPlatformSupported()) {
-      new Notice("Knowledge Studio is currently available only in Obsidian Desktop on Windows.");
-      return;
-    }
+    await this.knowledgeIntegration.activateKnowledgeStudio(
+      initialTab,
+      forwardRevisionReviewRef,
+      presentationHint
+    );
+  }
 
-    const leaves = this.app.workspace.getLeavesOfType(KNOWLEDGE_STUDIO_VIEW_TYPE);
-    if (presentationHint) {
-      const allLeaves: WorkspaceLeaf[] = [];
-      this.app.workspace.iterateAllLeaves((leaf) => allLeaves.push(leaf));
-      const plan = planKnowledgeStudioPresentationNavigation(leaves, allLeaves, presentationHint);
-      if (plan.kind === "existing") {
-        this.app.workspace.revealLeaf(plan.leaf);
-        if (initialTab === "review" && plan.leaf.view instanceof KnowledgeStudioView) {
-          if (forwardRevisionReviewRef) {
-            plan.leaf.view.focusPublishedForwardRevision(forwardRevisionReviewRef);
-          } else {
-            plan.leaf.view.selectReviewTab();
-          }
-        }
-        return;
-      }
-      if (plan.kind === "create_adjacent") {
-        const leaf = this.app.workspace.createLeafBySplit(plan.anchor);
-        await leaf.setViewState({
-          type: KNOWLEDGE_STUDIO_VIEW_TYPE,
-          active: true,
-        });
-        this.app.workspace.revealLeaf(leaf);
-        if (initialTab === "review" && leaf.view instanceof KnowledgeStudioView) {
-          if (forwardRevisionReviewRef) {
-            leaf.view.focusPublishedForwardRevision(forwardRevisionReviewRef);
-          } else {
-            leaf.view.selectReviewTab();
-          }
-        }
-        return;
-      }
-    }
+  /**
+   * Which chat view "add … to chat" actions should target:
+   *   - both chat views open → the one focused most recently (`lastActiveChatViewType`)
+   *   - exactly one open      → that one
+   *   - none open             → the agent chat when usable, else the legacy chat
+   */
+  private pickContextChatViewType(): typeof CHAT_VIEWTYPE | typeof CHAT_AGENT_VIEWTYPE {
+    const agentUsable = this.canUseAgentView();
+    const agentOpen =
+      agentUsable && this.app.workspace.getLeavesOfType(CHAT_AGENT_VIEWTYPE).length > 0;
+    const legacyOpen = this.app.workspace.getLeavesOfType(CHAT_VIEWTYPE).length > 0;
 
-    if (leaves.length > 0) {
-      this.app.workspace.revealLeaf(leaves[0]);
-      if (initialTab === "review" && leaves[0].view instanceof KnowledgeStudioView) {
-        if (forwardRevisionReviewRef) {
-          leaves[0].view.focusPublishedForwardRevision(forwardRevisionReviewRef);
-        } else {
-          leaves[0].view.selectReviewTab();
-        }
-      }
-      return;
+    let useAgent: boolean;
+    if (agentOpen && legacyOpen) {
+      useAgent = this.lastActiveChatViewType === CHAT_AGENT_VIEWTYPE;
+    } else if (agentOpen || legacyOpen) {
+      useAgent = agentOpen;
+    } else {
+      useAgent = agentUsable;
     }
+    return useAgent ? CHAT_AGENT_VIEWTYPE : CHAT_VIEWTYPE;
+  }
 
-    const leaf = this.app.workspace.getLeaf(true);
-    await leaf.setViewState({
-      type: KNOWLEDGE_STUDIO_VIEW_TYPE,
-      active: true,
-    });
-    if (initialTab === "review" && leaf.view instanceof KnowledgeStudioView) {
-      if (forwardRevisionReviewRef) {
-        leaf.view.focusPublishedForwardRevision(forwardRevisionReviewRef);
-      } else {
-        leaf.view.selectReviewTab();
-      }
+  /**
+   * The "add … to chat context" commands write into a shared atom that both chat
+   * views render, so this only picks which chat to bring into focus (see
+   * `pickContextChatViewType`).
+   */
+  async activateChatViewForContext(): Promise<void> {
+    if (this.pickContextChatViewType() === CHAT_AGENT_VIEWTYPE) {
+      await this.activateAgentView();
+    } else {
+      await this.activateView();
     }
   }
 
@@ -1925,10 +1137,158 @@ export default class CopilotPlugin extends Plugin {
     this.app.workspace.detachLeavesOfType(CHAT_VIEWTYPE);
   }
 
+  toggleAgentView() {
+    if (!this.requireAgentView()) return;
+    const leaves = this.app.workspace.getLeavesOfType(CHAT_AGENT_VIEWTYPE);
+    if (leaves.length > 0) {
+      void this.deactivateAgentView();
+    } else {
+      void this.activateAgentView();
+    }
+  }
+
+  async activateAgentView(): Promise<WorkspaceLeaf | null> {
+    if (!this.requireAgentView()) return null;
+    const leaf = await this.openOrRevealView(CHAT_AGENT_VIEWTYPE);
+    // Focus the composer on open. Latching the request on the view's event bus
+    // (rather than a setTimeout) means a freshly-opened view drains it once its
+    // React tree mounts and an already-open view focuses immediately — no
+    // mount-timing guess. Also covers the already-open-and-active case, where
+    // revealLeaf fires no active-leaf-change to drive focus.
+    const view = leaf?.view;
+    if (this.isCopilotAgentView(view)) {
+      view.eventTarget.queueVisible();
+    }
+    return leaf;
+  }
+
+  async deactivateAgentView() {
+    this.app.workspace.detachLeavesOfType(CHAT_AGENT_VIEWTYPE);
+  }
+
+  async activateRelevantNotesView(): Promise<WorkspaceLeaf | null> {
+    return this.openOrRevealView(RELEVANT_NOTES_VIEWTYPE);
+  }
+
+  /**
+   * Insert text (a `[[wikilink]]` from the Relevant Notes pane) into the chat view
+   * the user last focused (see `pickContextChatViewType`), opening that view if none
+   * is open. Routes via the target view's `eventTarget`, the same seam
+   * `processText`/`emitChatIsVisible` use, so the standalone pane never needs the
+   * chat's Lexical editor directly.
+   */
+  async insertTextIntoActiveChat(text: string): Promise<void> {
+    const viewType = this.pickContextChatViewType();
+    let leaf = this.app.workspace.getLeavesOfType(viewType)[0] ?? null;
+    if (!leaf) {
+      if (viewType === CHAT_AGENT_VIEWTYPE) {
+        await this.activateAgentView();
+      } else {
+        await this.activateView();
+      }
+      leaf = this.app.workspace.getLeavesOfType(viewType)[0] ?? null;
+    }
+    if (!leaf) return;
+
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    // The bus latches the text if the view's React tree hasn't mounted its
+    // listener yet, so a freshly-opened view drains it on mount — delivery no
+    // longer depends on guessing how long mounting takes.
+    if (view instanceof CopilotView || this.isCopilotAgentView(view)) {
+      view.eventTarget.queueInsertText(text);
+    }
+  }
+
+  async newAgentChat(): Promise<void> {
+    const manager = this.requireAgentView();
+    if (!manager) return;
+    await this.activateAgentView();
+    try {
+      await manager.createSession();
+    } catch (error) {
+      logWarn("[CopilotPlugin] Failed to create agent session", error);
+      new Notice("Failed to create agent session. Check Copilot logs.");
+    }
+  }
+
+  private async openOrRevealView(viewType: string): Promise<WorkspaceLeaf | null> {
+    const leaves = this.app.workspace.getLeavesOfType(viewType);
+    if (leaves.length > 0) {
+      this.app.workspace.revealLeaf(leaves[0]);
+      return leaves[0];
+    }
+    const leaf =
+      getSettings().defaultOpenArea === DEFAULT_OPEN_AREA.VIEW
+        ? this.app.workspace.getRightLeaf(false)
+        : this.app.workspace.getLeaf(true);
+    if (!leaf) return null;
+    await leaf.setViewState({ type: viewType, active: true });
+    return leaf;
+  }
+
+  private requireAgentView(): AgentSessionManager | null {
+    if (!isDesktopRuntime()) {
+      new Notice("Agent Chat is not available on mobile.");
+      return null;
+    }
+    if (!this.agentSessionManager) {
+      new Notice("Agent Chat is not initialized.");
+      return null;
+    }
+    return this.agentSessionManager;
+  }
+
+  private canUseAgentView(): boolean {
+    return !!this.agentSessionManager && isDesktopRuntime();
+  }
+
+  private isCopilotAgentView(
+    view: unknown
+  ): view is InstanceType<NonNullable<typeof this.CopilotAgentView>> {
+    const AgentView = this.CopilotAgentView;
+    return !!AgentView && view instanceof AgentView;
+  }
+
   async loadSettings() {
     const rawData = (await this.loadData()) as unknown;
-    const settings = await loadSettingsWithKeychain(rawData, (d) => this.saveData(d));
-    setSettings(settings);
+    // The keychain bootstrap may persist a sparse snapshot of the raw on-disk
+    // data (vaultId backfill) before settings are hydrated. That snapshot is
+    // already in dehydrated, on-disk shape, so it must bypass the
+    // `dehydrateDeviceProfile` override below via `super.saveData` — routing it
+    // through `this.saveData` would read the absent flat fields as "cleared"
+    // and delete this device's `deviceProfiles` segment (GitHub #2539).
+    const settings = await loadSettingsWithKeychain(
+      this.app,
+      rawData,
+      (d) => super.saveData(d),
+      (raw) =>
+        backupLegacyCredentials(raw, this.manifest.dir ?? "", {
+          exists: (path) => this.app.vault.adapter.exists(path),
+          write: (path, contents) => this.app.vault.adapter.write(path, contents),
+          rename: (from, to) => this.app.vault.adapter.rename(from, to),
+        }),
+      (item) => this.startupMigrationItems.push(item)
+    );
+    // Mirror this device's `agentMode.deviceProfiles` segment into the flat
+    // agent fields the rest of the code reads (GitHub #2539). `saveData` below
+    // performs the inverse on the way out.
+    setSettings(hydrateDeviceProfile(settings, getDeviceId(this.app)));
+  }
+
+  /**
+   * Move device-specific agent fields into `agentMode.deviceProfiles[deviceId]`
+   * and strip the global flat copies before writing, so a synced `data.json`
+   * never carries one device's binary paths as a global value (GitHub #2539).
+   *
+   * Overriding here is the single choke point for every persisted write of the
+   * hydrated in-memory settings — the settings subscriber and the keychain
+   * transactions all route through `this.saveData`. The one deliberate
+   * exception is the load-time keychain bootstrap, which persists a raw on-disk
+   * snapshot via `super.saveData` (see `loadSettings`) so it isn't dehydrated.
+   */
+  async saveData(data: unknown): Promise<void> {
+    return super.saveData(dehydrateDeviceProfile(data as CopilotSettings, getDeviceId(this.app)));
   }
 
   mergeActiveModels(
@@ -1967,42 +1327,24 @@ export default class CopilotPlugin extends Plugin {
       this.app,
       chatFiles,
       this.chatHistoryLastAccessedAtManager,
-      this.loadChatHistory.bind(this) as (file: TFile) => void
+      (file) => void this.loadChatHistory(file)
     ).open();
   }
 
   async getChatHistoryFiles(): Promise<TFile[]> {
-    const folderFiles = await listMarkdownFiles(this.app, getSettings().defaultSaveFolder);
+    const folderFiles = await listMarkdownFiles(this.app, getEffectiveConversationsFolder());
     if (folderFiles.length === 0) return [];
-
-    const currentProject = getCurrentProject();
 
     // Reason: pass all files to filterChatHistoryFiles which checks frontmatter projectId.
     // A prefix prefilter would miss renamed or legacy files that still have correct frontmatter.
-    return filterChatHistoryFiles(this.app, folderFiles, currentProject?.id);
+    return filterChatHistoryFiles(this.app, folderFiles);
   }
 
   async getChatHistoryItems(): Promise<ChatHistoryItem[]> {
     const files = await this.getChatHistoryFiles();
-    return files.map((file) => {
-      const createdAt = extractChatDate(file);
-      const persistedLastAccessedAtMs = extractChatLastAccessedAtMs(file);
-
-      // Use effective last used time (prefers in-memory value for immediate UI updates)
-      const effectiveLastAccessedAtMs =
-        this.chatHistoryLastAccessedAtManager.getEffectiveLastUsedAt(
-          file.path,
-          persistedLastAccessedAtMs ?? createdAt.getTime()
-        );
-      const lastAccessedAt = new Date(effectiveLastAccessedAtMs);
-
-      return {
-        id: file.path,
-        title: extractChatTitle(file),
-        createdAt,
-        lastAccessedAt,
-      };
-    });
+    return files.map((file) =>
+      fileToHistoryItem(this.app, file, this.chatHistoryLastAccessedAtManager)
+    );
   }
 
   /**
@@ -2017,7 +1359,7 @@ export default class CopilotPlugin extends Plugin {
       this.chatHistoryLastAccessedAtManager.touch(file.path);
 
       // Check if we should persist to disk (throttled)
-      const persistedLastAccessedAtMs = extractChatLastAccessedAtMs(file);
+      const persistedLastAccessedAtMs = extractChatLastAccessedAtMs(this.app, file);
       const timestampToPersist = this.chatHistoryLastAccessedAtManager.shouldPersist(
         file.path,
         persistedLastAccessedAtMs
@@ -2095,15 +1437,77 @@ export default class CopilotPlugin extends Plugin {
   }
 
   async loadChatById(fileId: string): Promise<void> {
+    if (isNativeChatId(fileId)) {
+      await this.loadNativeAgentChat(fileId);
+      return;
+    }
     const file = await resolveFileByPath(this.app, fileId);
-    if (file) {
-      await this.loadChatHistory(file);
-    } else {
-      throw new Error("Chat file not found.");
+    if (!file) throw new Error("Chat file not found.");
+
+    // Hidden-folder notes (e.g. a dot-folder save location) aren't indexed by
+    // metadataCache, so fall back to an adapter read before deciding this
+    // isn't an agent chat — otherwise a hidden agent note that Recent Chats
+    // surfaces would misroute to the legacy chat loader instead of resuming
+    // the agent session.
+    const cachedMode = this.app.metadataCache.getFileCache(file)?.frontmatter?.mode;
+    let mode = typeof cachedMode === "string" ? cachedMode : undefined;
+    if (!mode) {
+      try {
+        const fm = await readFrontmatterViaAdapter(this.app, file.path);
+        if (typeof fm?.mode === "string") mode = fm.mode;
+      } catch {
+        // Leave mode undefined; routes to the legacy loader below.
+      }
+    }
+    if (mode === AGENT_CHAT_MODE) {
+      await this.loadAgentChatHistory(file);
+      return;
+    }
+    await this.loadChatHistory(file);
+  }
+
+  /**
+   * Open a chat that lives only in a backend's native session store (recent
+   * chats entry with no markdown note). Resumes through the agent manager;
+   * recency tracking is handled by the session index rather than file
+   * frontmatter.
+   */
+  private async loadNativeAgentChat(chatId: string): Promise<void> {
+    const ref = parseNativeChatId(chatId);
+    if (!ref) throw new Error("Chat not found.");
+    const manager = this.requireAgentView();
+    if (!manager) return;
+    const leaf = await this.activateAgentView();
+    if (!leaf) return;
+
+    await manager.loadNativeSessionFromHistory(ref.backendId, ref.sessionId);
+
+    if (this.isCopilotAgentView(leaf.view)) {
+      leaf.view.updateView();
+    }
+  }
+
+  private async loadAgentChatHistory(file: TFile): Promise<void> {
+    const manager = this.requireAgentView();
+    if (!manager) return;
+    const leaf = await this.activateAgentView();
+    if (!leaf) return;
+
+    await manager.loadSessionFromHistory(file);
+    void this.touchChatHistoryLastAccessedAt(file);
+
+    if (this.isCopilotAgentView(leaf.view)) {
+      leaf.view.updateView();
     }
   }
 
   async openChatSourceFile(fileId: string): Promise<void> {
+    if (isNativeChatId(fileId)) {
+      new Notice(
+        "This chat has no saved note. Turn on Autosave Chat as Markdown to save chats as notes in your vault."
+      );
+      return;
+    }
     const file = this.app.vault.getAbstractFileByPath(fileId);
     if (file instanceof TFile) {
       await this.app.workspace.getLeaf(true).openFile(file);
@@ -2172,13 +1576,13 @@ export default class CopilotPlugin extends Plugin {
 
   async handleNewChat() {
     clearRecordedPromptPayload();
-    await logFileManager.clear(this.app.vault);
+    await logFileManager.clear();
 
     // Analyze chat messages for memory if enabled
     if (getSettings().enableRecentConversations) {
       try {
         // Get the current chat model from the chain manager
-        const chainManager = this.projectManager.getCurrentChainManager();
+        const chainManager = this.chainOwner.getCurrentChainManager();
         const chatModel = chainManager.chatModelManager.getChatModel();
         this.userMemoryManager.addRecentConversation(this.chatUIState.getMessages(), chatModel);
       } catch (error) {

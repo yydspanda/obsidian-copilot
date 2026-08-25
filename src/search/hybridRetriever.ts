@@ -1,14 +1,14 @@
 // DEPRECATED: Legacy hybrid retriever backed by Orama. Replaced by v3 TieredLexicalRetriever + MemoryIndexManager.
 import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
 import EmbeddingManager from "@/LLMProviders/embeddingManager";
-import { logInfo } from "@/logger";
+import { logError, logInfo, logWarn } from "@/logger";
 import VectorStoreManager from "@/search/vectorStoreManager";
 import { getSettings } from "@/settings/model";
 import { extractNoteFiles, withSuppressedTokenWarnings } from "@/utils";
 import { Document } from "@langchain/core/documents";
 import { BaseRetriever } from "@langchain/core/retrievers";
 import { search } from "@orama/orama";
-import { TFile } from "obsidian";
+import { TFile, Vault } from "obsidian";
 
 export class HybridRetriever extends BaseRetriever {
   public lc_namespace = ["hybrid_retriever"];
@@ -22,7 +22,8 @@ export class HybridRetriever extends BaseRetriever {
       textWeight?: number;
       returnAll?: boolean;
       useRerankerThreshold?: number; // reranking API is only called with this set
-    }
+    },
+    private vault: Vault
   ) {
     super();
   }
@@ -31,7 +32,7 @@ export class HybridRetriever extends BaseRetriever {
     // Wrap the entire function in token warning suppression
     return withSuppressedTokenWarnings(async () => {
       // Extract note TFiles wrapped in [[]] from the query
-      const noteFiles = extractNoteFiles(query, app.vault);
+      const noteFiles = extractNoteFiles(query, this.vault);
       // Add note titles to salient terms
       const noteTitles = noteFiles.map((file) => file.basename);
       // Use Set to ensure uniqueness when combining terms
@@ -151,7 +152,7 @@ export class HybridRetriever extends BaseRetriever {
     try {
       queryVector = await this.convertQueryToVector(query);
     } catch (error) {
-      console.error(
+      logError(
         "Error in convertQueryToVector, please ensure your embedding model is working and has an adequate context length:",
         error,
         "\nQuery:",
@@ -220,7 +221,7 @@ export class HybridRetriever extends BaseRetriever {
       logInfo("Daily note date range:", dailyNotes[0], dailyNotes[dailyNotes.length - 1]);
 
       // Perform the first search with title filter
-      const dailyNoteFiles = extractNoteFiles(dailyNotes.join(", "), app.vault);
+      const dailyNoteFiles = extractNoteFiles(dailyNotes.join(", "), this.vault);
       const dailyNoteResults = await this.getExplicitChunks(dailyNoteFiles);
 
       // Set includeInContext to true for all dailyNoteResults
@@ -280,7 +281,7 @@ export class HybridRetriever extends BaseRetriever {
 
     // Add null check and validation for search results
     if (!searchResults || !searchResults.hits) {
-      console.warn("Search results or hits are undefined");
+      logWarn("Search results or hits are undefined");
       return [];
     }
 
@@ -288,12 +289,12 @@ export class HybridRetriever extends BaseRetriever {
     return searchResults.hits
       .map((hit) => {
         if (!hit || !hit.document) {
-          console.warn("Invalid hit or document in search results");
+          logWarn("Invalid hit or document in search results");
           return null;
         }
 
         if (typeof hit.score !== "number" || isNaN(hit.score)) {
-          console.warn("NaN/invalid score detected:", {
+          logWarn("NaN/invalid score detected:", {
             score: hit.score,
             path: hit.document.path,
             title: hit.document.title,

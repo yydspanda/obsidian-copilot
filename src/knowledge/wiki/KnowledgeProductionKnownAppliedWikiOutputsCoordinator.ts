@@ -1383,9 +1383,7 @@ function resolveBinding(
 }
 
 /** Production read-only known-applied-output coordinator. */
-export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator
-  implements KnowledgeKnownAppliedWikiOutputsPort
-{
+export class KnowledgeProductionKnownAppliedWikiOutputsCoordinator implements KnowledgeKnownAppliedWikiOutputsPort {
   /** Captures one exact worker generation and no write/model/network capability. */
   constructor(inputValue: KnowledgeProductionKnownAppliedWikiOutputsCoordinatorInput) {
     const input = snapshotInput(inputValue);

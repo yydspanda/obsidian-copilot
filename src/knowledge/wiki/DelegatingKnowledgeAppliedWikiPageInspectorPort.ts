@@ -60,9 +60,7 @@ interface DelegatingInspectorState {
 const delegatingInspectorStates = new WeakMap<object, DelegatingInspectorState>();
 
 /** Explicit fail-closed delegate used before and between production generations. */
-class UnavailableKnowledgeAppliedWikiPageInspectorPort
-  implements KnowledgeAppliedWikiPageInspectorPort
-{
+class UnavailableKnowledgeAppliedWikiPageInspectorPort implements KnowledgeAppliedWikiPageInspectorPort {
   /** Rejects inspection while no released production generation owns it. */
   async inspectPage(): Promise<Readonly<KnowledgeAppliedWikiPageInspectionSession>> {
     throw new KnowledgeAppliedWikiPageInspectorError("unavailable");
@@ -520,9 +518,7 @@ function requireDelegatingInspectorState(value: unknown): DelegatingInspectorSta
  * Delegate sessions are never exposed. The wrapper snapshots display DTOs and
  * binds their exact identities back to the delegate generation in a WeakMap.
  */
-export class DelegatingKnowledgeAppliedWikiPageInspectorPort
-  implements KnowledgeAppliedWikiPageInspectorPort
-{
+export class DelegatingKnowledgeAppliedWikiPageInspectorPort implements KnowledgeAppliedWikiPageInspectorPort {
   /** Creates a frozen stable wrapper in an explicit unavailable generation. */
   constructor() {
     const unavailable = Object.freeze(new UnavailableKnowledgeAppliedWikiPageInspectorPort());

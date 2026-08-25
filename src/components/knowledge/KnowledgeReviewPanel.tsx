@@ -72,10 +72,12 @@ function hasAtMostPreviewLines(value: string): boolean {
  * @returns Detached diff chunk with explicit flags
  */
 function toDiffChange(part: KnowledgeReviewDiffPart): Change {
+  const lineCount = part.value.split("\n").length - Number(part.value.endsWith("\n"));
   return {
     value: part.value,
     added: part.kind === "added",
     removed: part.kind === "removed",
+    count: Math.max(1, lineCount),
   };
 }
 

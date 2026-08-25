@@ -26,12 +26,11 @@ import type { JsonValue } from "@/knowledge/model/types";
 const MAX_GENERATION_RECORDS = 10_000;
 
 // Capturing the frozen base method prevents an authentic subclass from replacing the WeakMap check.
-// eslint-disable-next-line @typescript-eslint/unbound-method
+// eslint-disable-next-line @typescript-eslint/unbound-method -- capture the frozen base method before any subclass can replace the WeakMap check
 const PROJECT_PROFILE_SOURCE_RESOLVE = ProjectKnowledgePipelineProfileSource.prototype.resolve;
 
 /** Hydrated settings projection consumed by one production Knowledge generation. */
-export interface KnowledgeProductionPreflightSettingsInput
-  extends ProjectKnowledgePipelineSettingsInput {
+export interface KnowledgeProductionPreflightSettingsInput extends ProjectKnowledgePipelineSettingsInput {
   /** Hydrated provider credential used only when the selected model has no credential. */
   deepseekApiKey: unknown;
 }

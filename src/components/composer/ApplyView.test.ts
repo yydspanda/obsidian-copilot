@@ -85,7 +85,7 @@ function createLeaf(): WorkspaceLeaf {
 function createState(resultCallback = jest.fn()): ApplyViewState {
   return {
     path: "Wiki/Test.md",
-    changes: [{ value: "same\n", added: false, removed: false }],
+    changes: [{ value: "same\n", added: false, removed: false, count: 1 }],
     resultCallback,
   };
 }

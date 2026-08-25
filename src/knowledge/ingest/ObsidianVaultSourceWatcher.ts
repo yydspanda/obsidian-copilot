@@ -18,7 +18,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const DEFAULT_STAGE_ATTEMPTS = 2;
 const MAX_PENDING_SOURCE_ISSUE_HINT_BUNDLES = 10_000;
 // Capturing this intrinsic accessor is intentional; Reflect.apply supplies the candidate receiver.
-// eslint-disable-next-line @typescript-eslint/unbound-method
+// eslint-disable-next-line @typescript-eslint/unbound-method -- capture the intrinsic getter for a non-spoofable receiver check
 const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
   "byteLength"

@@ -1,3 +1,4 @@
+import { App } from "obsidian";
 import { CustomCommandManager } from "@/commands/customCommandManager";
 import { getCustomCommandsFolder, validateCommandName } from "@/commands/customCommandUtils";
 import { CustomCommand } from "@/commands/type";
@@ -11,15 +12,14 @@ import {
   DEFAULT_COMMANDS,
 } from "@/commands/constants";
 import { COPILOT_COMMAND_CONTEXT_MENU_ENABLED } from "@/commands/constants";
-import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { getCachedCustomCommands } from "@/commands/state";
-import { logError } from "@/logger";
+import type { StartupMigrationItem } from "@/services/startupMigration";
 
-async function saveUnsupportedCommands(commands: CustomCommand[]) {
+async function saveUnsupportedCommands(app: App, commands: CustomCommand[]) {
   const folderPath = getCustomCommandsFolder();
   const unsupportedFolderPath = `${folderPath}/unsupported`;
   // Ensure nested structure exists regardless of platform
-  await ensureFolderExists(unsupportedFolderPath);
+  await ensureFolderExists(app.vault, unsupportedFolderPath);
   return Promise.all(
     commands.map(async (command) => {
       const filePath = `${unsupportedFolderPath}/${command.title}.md`;
@@ -36,10 +36,10 @@ async function saveUnsupportedCommands(commands: CustomCommand[]) {
 }
 
 /** Migrates the legacy commands in data.json to the new note format. */
-export async function migrateCommands() {
+export async function migrateCommands(app: App): Promise<StartupMigrationItem | null> {
   const legacyCommands = getSettings().inlineEditCommands;
   if (!legacyCommands || legacyCommands.length === 0) {
-    return;
+    return null;
   }
   const commandsToMigrate: CustomCommand[] = [];
   const unsupportedCommands: CustomCommand[] = [];
@@ -76,15 +76,23 @@ export async function migrateCommands() {
     ...commandsToMigrate,
   ]);
 
-  let message = `We have upgraded your commands to the new format. They are now also stored as notes in ${getCustomCommandsFolder()}.`;
+  const details = [`Stored in ${getCustomCommandsFolder()}.`];
   if (unsupportedCommands.length > 0) {
-    await saveUnsupportedCommands(unsupportedCommands);
-    message += `\n\nWe found ${unsupportedCommands.length} unsupported commands. They are saved in ${getCustomCommandsFolder()}/unsupported. To fix them, please resolve the errors and move the note file out of the unsupported folder.`;
+    await saveUnsupportedCommands(app, unsupportedCommands);
+    details.push(
+      `${unsupportedCommands.length} unsupported command${unsupportedCommands.length === 1 ? " was" : "s were"} saved in ${getCustomCommandsFolder()}/unsupported. Resolve the errors, then move each note out of that folder.`
+    );
   }
 
   updateSetting("inlineEditCommands", []);
 
-  new ConfirmModal(app, () => {}, message, "🚀 New Copilot Custom Commands", "OK", "").open();
+  return {
+    id: "custom-commands",
+    title: "Custom commands",
+    status: unsupportedCommands.length > 0 ? "action-required" : "success",
+    summary: `${commandsToMigrate.length} command${commandsToMigrate.length === 1 ? " was" : "s were"} migrated to note files.`,
+    details,
+  };
 }
 
 /** Generates the default commands. */
@@ -95,29 +103,4 @@ export async function generateDefaultCommands(): Promise<void> {
   );
   const newCommands = [...existingCommands, ...defaultCommands];
   await CustomCommandManager.getInstance().updateCommands(newCommands);
-}
-
-/** Suggests the default commands if the user has not created any commands yet. */
-export async function suggestDefaultCommands(): Promise<void> {
-  const suggestedCommand = getSettings().suggestedDefaultCommands;
-  if (suggestedCommand) {
-    // We only show the modal once
-    return;
-  }
-  const existingCommands = getCachedCustomCommands();
-  if (existingCommands.length === 0) {
-    new ConfirmModal(
-      app,
-      () => {
-        void generateDefaultCommands().catch((err) =>
-          logError("generateDefaultCommands failed", err)
-        );
-      },
-      "Would you like to add Copilot recommended commands in your custom prompts folder? These commands will be available through the right-click context menu and slash commands in chat.",
-      "Welcome to Copilot",
-      "Confirm",
-      "Skip"
-    ).open();
-    updateSetting("suggestedDefaultCommands", true);
-  }
 }

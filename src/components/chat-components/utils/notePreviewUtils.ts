@@ -1,17 +1,20 @@
 import { TFile, App } from "obsidian";
-
-// Get app instance
-declare const app: App;
+import { logWarn } from "@/logger";
 
 /**
  * Loads and processes note content for preview display.
  * Handles PDF and canvas files, frontmatter stripping, and content truncation.
  *
+ * @param app - Obsidian `App` instance used to read the file
  * @param file - The file to load content from
  * @param maxLength - Maximum length for truncated content (default: 500)
  * @returns Promise resolving to processed content string
  */
-async function loadNoteContentForPreview(file: TFile, maxLength: number = 500): Promise<string> {
+async function loadNoteContentForPreview(
+  app: App,
+  file: TFile,
+  maxLength: number = 500
+): Promise<string> {
   try {
     // Handle PDF and canvas files - treat as empty content (no preview)
     if (file.extension === "pdf" || file.extension === "canvas") {
@@ -31,7 +34,7 @@ async function loadNoteContentForPreview(file: TFile, maxLength: number = 500): 
 
     return truncatedContent;
   } catch (error) {
-    console.warn("Failed to read note content:", error);
+    logWarn("Failed to read note content:", error);
     return "Failed to load content";
   }
 }
@@ -41,6 +44,8 @@ async function loadNoteContentForPreview(file: TFile, maxLength: number = 500): 
  */
 export class NotePreviewCache {
   private cache = new Map<string, string>();
+
+  constructor(private readonly app: App) {}
 
   /**
    * Gets cached content or loads it if not cached
@@ -54,7 +59,7 @@ export class NotePreviewCache {
       return cached;
     }
 
-    const content = await loadNoteContentForPreview(file, maxLength);
+    const content = await loadNoteContentForPreview(this.app, file, maxLength);
     this.cache.set(file.path, content);
     return content;
   }

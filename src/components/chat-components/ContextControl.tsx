@@ -4,6 +4,9 @@ import { SelectedTextContext, WebTabContext } from "@/types/message";
 import { TFile, TFolder } from "obsidian";
 import { ChatContextMenu } from "./ChatContextMenu";
 
+// Pass-through shell over ChatContextMenu (predates this file's props; kept
+// as-is — inlining it into ChatInput is a standalone refactor, not something
+// to piggyback on feature work).
 interface ChatControlsProps {
   contextNotes: TFile[];
   includeActiveNote: boolean;
@@ -14,13 +17,15 @@ interface ChatControlsProps {
   contextFolders: string[];
   contextWebTabs: WebTabContext[];
   selectedTextContexts?: SelectedTextContext[];
-  showProgressCard: () => void;
   showIndexingCard?: () => void;
   lexicalEditorRef?: React.RefObject<{ focus: () => void }>;
 
   // Unified handlers
-  onAddToContext: (category: string, data: TFile | string | TFolder | WebTabContext) => void;
+  onAddToContext: (category: string, data: TFile | string | TFolder | WebTabContext | null) => void;
   onRemoveFromContext: (category: string, data: string) => void;
+
+  hideAddContextButton?: boolean;
+  isAgentMode?: boolean;
 }
 
 export const ContextControl: React.FC<ChatControlsProps> = ({
@@ -33,11 +38,12 @@ export const ContextControl: React.FC<ChatControlsProps> = ({
   contextFolders,
   contextWebTabs,
   selectedTextContexts,
-  showProgressCard,
   showIndexingCard,
   lexicalEditorRef,
   onAddToContext,
   onRemoveFromContext,
+  hideAddContextButton,
+  isAgentMode,
 }) => {
   const handleRemoveContext = (category: string, data: string) => {
     // Delegate to unified handler
@@ -46,7 +52,7 @@ export const ContextControl: React.FC<ChatControlsProps> = ({
 
   const handleTypeaheadSelect = (
     category: string,
-    data: TFile | string | TFolder | WebTabContext
+    data: TFile | string | TFolder | WebTabContext | null
   ) => {
     // Delegate to unified handler
     onAddToContext(category, data);
@@ -66,10 +72,11 @@ export const ContextControl: React.FC<ChatControlsProps> = ({
       contextFolders={contextFolders}
       contextWebTabs={contextWebTabs}
       selectedTextContexts={selectedTextContexts}
-      showProgressCard={showProgressCard}
       showIndexingCard={showIndexingCard}
       onTypeaheadSelect={handleTypeaheadSelect}
       lexicalEditorRef={lexicalEditorRef}
+      hideAddContextButton={hideAddContextButton}
+      isAgentMode={isAgentMode}
     />
   );
 };
