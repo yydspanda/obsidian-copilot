@@ -1,0 +1,33 @@
+name: Project governance
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-governance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      # The enforced control-plane contract is tracked by:
+      # https://github.com/yydspanda/obsidian-copilot/issues/1
+      - name: Test project governance
+        run: npm run test:project-governance
+
+      - name: Validate live progress and evidence
+        run: npm run progress:check

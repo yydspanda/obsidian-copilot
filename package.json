@@ -25,6 +25,8 @@
     "review:obsidian:styles": "npm run build:tailwind && stylelint 'src/**/*.css' 'dev/gallery/**/*.css' --custom-formatter scripts/stylelint-github-formatter.mjs && stylelint styles.css --config stylelint.packaged.config.mjs --custom-formatter scripts/stylelint-github-formatter.mjs",
     "review:obsidian:audit": "npm audit --omit=dev --audit-level=critical",
     "review:obsidian:fixtures": "node scripts/review-obsidian-fixtures.mjs",
+    "progress:check": "node scripts/validate-project-progress.mjs --tracker TODO.md --roadmap designdocs/PERSONAL_KNOWLEDGE_EXECUTION_PLAN.md --archive-dir designdocs/progress/archive --experiment-dir designdocs/progress/experiments --max-tracker-lines 120 --max-recent-activity 10",
+    "test:project-governance": "node --test scripts/validate-project-progress.test.mjs scripts/check-upstream-drift.test.mjs",
     "lint:dead": "npx --yes knip@5",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write 'src/**/*.{js,ts,tsx,md}'",

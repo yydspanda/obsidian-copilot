@@ -2,13 +2,103 @@
 
 Status: Active
 
-Last updated: 2026-08-06
+Last updated: 2026-08-26
 
 Target platform: Obsidian Desktop on Windows
 
-本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。任务状态以 [`../TODO.md`](../TODO.md) 为准，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
+本计划把 [`PERSONAL_KNOWLEDGE_OS_PRD.md`](./PERSONAL_KNOWLEDGE_OS_PRD.md) 的 Golden Flow 转换为可连续提交、逐步验收的工程路线。下方 Task ID Registry 是 durable task identity 的唯一来源；[`../TODO.md`](../TODO.md) 只保存当前阶段、唯一进行中任务和近期记录，架构契约以 [`PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md`](./PERSONAL_KNOWLEDGE_AGENT_SOLUTION.md) 为准。
 
-Current checkpoint: Commit A–G.1, the production G.2z-d compile/Review/explicit create-update Apply/limited Recovery paths, H.1 scoped retrieval, H.2 grounded answers, and the H.3 production code slices are implemented. G.2z-d, H.1, H.2, the H.3 Save-to-Wiki slice, and the Vault-text Chat chooser have passed bounded code, automated, and Windows interaction gates; H.2 and Save-to-Wiki used real DeepSeek. The plugin performs strict Bundle discovery, zero-network preflight, owner-first recovery, listener-first source observation, fresh Gate/conditional release, exact-byte parsing, isolated two-stage DeepSeek compilation, deterministic candidate validation, and durable Review-before-Queue hand-off. The generation-owned worker is installed by `main.ts` only after release and drains durable Queue work to `awaiting_review`; it still has no Review-decision, fresh transaction, Wiki mutation, recovery-decision, or Query authority. Separate generation-owned Studio boundaries expose exact Activity mutations, Review Reject, explicit reviewed create/update Accept → Queue apply claim → transaction Apply → commit finalization, narrowly proved Recovery actions, and grounded Query over exact accepted/applied Wiki pages. The H.2 answer route is Bundle-scoped and lifecycle-bound but remains separate from the Compiler route and worker. H.3 now connects an explicit Vault-text Chat intent chooser, raw-byte-verified PDF page navigation, and reviewed Save-to-Wiki production writeback. Save first creates and registers a content-addressed managed source, then relies on the real watcher → durable Queue → Compiler `query_writeback` → Review → transaction → Apply chain; it never writes Wiki directly. Save's complete Windows chain and both Chat intents have passed; only the PDF exact-page Windows interaction gate remains pending. PDF/Explorer capture expansion, the PDF ingestion parser, Delete, and every auto-accept/auto-apply policy remain unavailable.
+## Task ID Registry
+
+Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入月度 progress archive；详细历史语境可查阅 [冻结迁移快照](./progress/legacy/TODO-2026-08-26.md)。
+
+### Stage IDs
+
+- Stage ID: `OPS-MAINTENANCE` — repository governance and upstream maintenance.
+- Stage ID: `PK-H3` — bounded Windows acceptance and personal knowledge workflow stabilization.
+- Stage ID: `PK-RELIABILITY` — durable runtime, data-integrity, and scale follow-ups.
+- Stage ID: `PLATFORM-LIFECYCLE` — Vault, Project, provider, and search lifecycle ownership.
+
+### Operations
+
+- Task ID: `OPS-PROGRESS-GOVERNANCE` — keep the live tracker bounded, archive completed work by
+  month, validate task references and experiment evidence in CI.
+- Task ID: `OPS-UPSTREAM-SYNC` — recurring canonical-upstream fetch, semantic merge, regression
+  verification, and ahead/behind reporting.
+
+### Windows acceptance
+
+- Task ID: `PK-H3-UPSTREAM-V4-WIN` — validate provider/project/settings migration, reload/unload,
+  Knowledge Studio, and popout behavior against the merged V4 baseline.
+- Task ID: `PK-H3-FORWARD-REVISION-WIN` — validate Source/Forward origin, supersession, recovery,
+  reload/popout, exact bytes, and final cleanup on the frozen Windows artifact.
+- Task ID: `PK-H3-PDF-PAGE-WIN` — completed bounded Windows validation of exact PDF page
+  navigation, repeated navigation, Unicode/space paths, popout, source drift, and citation
+  revocation; migration evidence remains in the frozen tracker snapshot.
+- Task ID: `PK-FOLDER-PICKER-WIN` — use the physical Windows folder picker and complete a real
+  non-empty Review/Apply flow without replacing conflict targets.
+- Task ID: `PK-GOLDEN-FLOW-WIN` — complete the end-to-end first-use Golden Flow in the Windows test
+  Vault.
+- Task ID: `PK-CONTEXT-MENU-WIN` — verify the native Windows context-menu guidance that synthetic
+  CDP input cannot faithfully exercise.
+- Task ID: `PK-SETUP-READINESS-WIN` — verify no-project, invalid-Bundle, recovery, refreshing, and
+  popout readiness states without corrupting durable state.
+- Task ID: `PK-REVIEW-EVIDENCE-WIN` — verify non-empty Review evidence, exact Markdown/PDF jumps,
+  stale-source handling, Reject, and Validate-and-Apply boundaries.
+- Task ID: `PK-REVIEW-EDIT-WIN` — verify manual Review edits, draft preservation, token drift,
+  tab/popout persistence, and exact final bytes.
+
+### Runtime reliability and scale
+
+- Task ID: `PK-RUNTIME-TERMINAL-COMPACTION` — define atomic terminal Queue/Review/observation
+  compaction while retaining replay floors and non-revival tombstones.
+- Task ID: `PK-RUNTIME-COMPARE-DELETE` — prove safe compare-and-delete before enabling the delete
+  capability.
+- Task ID: `PK-RUNTIME-CAS-WIN` — validate DataAdapter/Vault process serialization, dual-instance
+  races, reload, external edits, and crash behavior on Windows.
+- Task ID: `PK-RUNTIME-DEPENDENCY-READSET` — journal and revalidate schema, link, and source artifact
+  dependencies before write and recovery.
+- Task ID: `PK-RUNTIME-REVISION-BUDGET` — reserve enough outer Runtime revision capacity for a full
+  transaction finalization.
+- Task ID: `PK-RUNTIME-APPLY-E2E` — add one production-shaped non-empty Apply composition fixture
+  covering cold scan, drift repair, shared ownership, and Apply interleaving.
+- Task ID: `PK-PERF-LARGE-VAULT` — bound freshness, target-index, and watcher identity costs for
+  long-lived large Vaults.
+- Task ID: `PK-RUNTIME-CONTENT-ABA` — choose and prove the content-ABA policy for the CAS-to-progress
+  crash window.
+- Task ID: `PK-RUNTIME-JOURNAL-RECOVERY` — add explicit revalidation and safe continuation or
+  termination for journal-backed recovery-required transactions.
+- Task ID: `PK-RUNTIME-ADAPTER-PAYLOAD` — strictly validate and redact file/projection adapter
+  success payloads.
+- Task ID: `PK-FALLBACK-ARTIFACT-ID` — make fallback artifact identity deterministic.
+- Task ID: `PK-FOLDER-IMPORT-RACE` — narrow the remaining Windows namespace/junction race without
+  claiming stronger guarantees than the available path APIs provide.
+- Task ID: `PK-REVIEW-LIMITS` — apply explicit target/change/block/record collection limits at the
+  Review command boundary.
+
+### Platform and conversation lifecycle
+
+- Task ID: `CHAT-TOKEN-BUDGET` — enforce the L1–L5 aggregate token budget at final message
+  assembly.
+- Task ID: `PROJECT-CONTEXT-RECOVERY` — keep reloaded context envelopes and shared memory recovery
+  consistent.
+- Task ID: `PROJECT-SWITCH-AUTHORITY` — revoke stale project-load parsing, cache, and progress
+  continuations after a newer switch.
+- Task ID: `PDF-VAULT-OWNERSHIP` — bind non-Project PDF parsing/cache writes to an explicit Vault
+  owner.
+- Task ID: `SEARCH-VAULT-OWNERSHIP` — bind VectorStoreManager indexing and listeners to an exact
+  App/Vault lifecycle.
+- Task ID: `PROVIDER-INIT-AUTHORITY` — prevent a disposed ChainManager from publishing a provider
+  initialization that finishes late.
+
+Current checkpoint: Commit A–G.1, G.2z-d reviewed Apply/limited Recovery, H.1 scoped retrieval,
+H.2 grounded answers, and the H.3 production slices are implemented. The H.3 bounded Windows
+evidence covers Vault Markdown/text/PDF intent, byte-only PDF ingestion, exact-page navigation,
+Save-to-Wiki, Review/Apply, source drift, reload, and popout. Folder-only **Import folder** is the
+chosen external-material path; its remaining physical-picker and non-empty Review/Apply gates stay
+registered separately. The latest upstream V4 artifact still requires the bounded Windows
+regression tracked by `PK-H3-UPSTREAM-V4-WIN`. Delete and every auto-accept/auto-apply policy remain
+unavailable.
 
 The G.2y Windows acceptance slice passed in an independent Obsidian Vault through durable `awaiting_review`: first Runtime publication, later `DataAdapter.process`, Manifest CAS, source crawl, exact-byte UTF-8 parsing, two successful DeepSeek requests, candidate validation, durable Review/Queue identity, zero-request reload, and disable-time cancellation/retry recovery were observed while Wiki bytes, Manifest success state, and the transaction slot stayed unchanged. G.2z-a/b/c live read and narrow command acceptance also passed there. G.2z-d then completed fresh create, block-selected update, external-edit fail-closed behavior, explicit no-journal Recovery Continue, full finalization, and full-application cold-reload idempotence without hand-editing Runtime. H.1 subsequently completed two real Query form submissions, a current opaque Markdown quote jump with exact editor selection, and a before/after Runtime/Wiki/Source hash equality check. H.2 added real DeepSeek Supported/Partial answers, deterministic Insufficient evidence, Source fact/Inference projection, the same exact citation selection, verified zero-request no-evidence behavior, and reload-time cancellation before transport forwarding. H.3 Save then completed real managed capture, `query_writeback` compilation, explicit Review, recoverable Apply, and Manifest/Queue/ledger finalization while proving zero Wiki writes before Review submission. This remains bounded evidence rather than a claim of general filesystem durability: broader external-editor and dual-instance races, NTFS/OneDrive/junction behavior, and crash and power-loss recovery remain separate gates.
 
@@ -16,7 +106,14 @@ G.2z-a/b established the same-generation read-only Studio baseline after success
 
 G.2z-c upgraded that baseline with a narrow Windows live-command boundary. Pause, Resume, Cancel, and Retry carry the exact Queue revision from the rendered snapshot and never rebase a stale command. Whole-proposal Reject accepts only a complete set of literal `reject` decisions, then updates the pending Review record and exact Queue job/anchor/tombstone together in one Runtime transform. Exact terminal replay and commit-then-throw reread are idempotent; Reject performs zero Wiki writes and does not mutate Manifest, journal, or apply-ledger state. At that checkpoint Accept, mixed/block-level decisions, fresh Apply, recovery commands, and Query remained false and fail-closed. Conditional release preserves an existing user/rate-limit pause while admitting the safely proved live generation; the authoritative startup crawl may still append new same-content source observations by design. `startup_recovery`, `recovery_required`, and `commit_pending_ack` remain unavailable to ordinary Resume.
 
-G.2z-d connects explicit reviewed create/update Accept → exact Queue apply claim → transaction Apply → `ApplyCommitCoordinator` finalization. Acceptance re-observes the rendered targets, reconstructs the selected candidate from opaque decisions, repeats deterministic candidate and transaction validation, and never grants Apply authority to the background worker. The Recovery tab projects one atomic Runtime observation: `accepted_not_started` allows Continue; Core `requires_decision` is projected as UI `decision_required` and allows Continue or Abandon; active, blocked, finalizing, Queue-level, and Vault-global transaction states allow only recheck. There is no generic rollback, no automatic Apply, and delete remains disabled. Its bounded Windows acceptance has passed. H.1 projects current applied provenance atomically, revalidates exact Wiki hashes, searches only that in-memory corpus, and opens hash-verified Markdown locators through opaque references; its bounded Windows interaction acceptance has also passed. H.2 re-proves exact Markdown source excerpts, permits only request-local evidence IDs, makes at most one non-streaming answer request, and rechecks complete Wiki/source provenance plus every used locator before publishing; its real DeepSeek Windows interaction acceptance has passed. H.3 can now open an already-issued PDF locator only after exact `.pdf` raw-byte SHA-256 reproof, using Obsidian's public canonical page subpath; the exact-page Windows interaction run remains pending and no PDF parser has entered production ingestion. H.3 Save-to-Wiki re-proves the eligible answer and citations, creates an exact managed Markdown capture, registers its `managed_copy` Manifest origin, and leaves the real watcher/Queue/Compiler to produce a `query_writeback` Review proposal. Only explicit acceptance may run the existing transaction and Apply it; Save never writes Wiki directly. The complete capture-through-Apply Windows run has passed, including one journal roll-forward after a deliberately missing test parent directory was added. Production now checks adapters that require an existing create parent before durable acceptance and again before transaction entry, so this condition blocks without accepting Review or creating a journal. Verification details are recorded in [`../TODO.md`](../TODO.md). No source code from the audited external candidates has been copied; attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+G.2z-d connects explicit reviewed create/update Accept → exact Queue apply claim → transaction Apply
+→ `ApplyCommitCoordinator` finalization. H.1 and H.2 keep retrieval and grounded answers bounded to
+current applied provenance. H.3 adds byte-only PDF ingestion and raw-byte-verified page navigation;
+its main-window/popout exact-page run, drift rejection, and reference revocation passed bounded
+Windows validation before this tracker migration. Save-to-Wiki still has no direct Wiki write
+authority: it creates a managed source and relies on watcher → Queue → Compiler `query_writeback` →
+Review → transaction → Apply. No source code from the audited external candidates has been copied;
+attribution status is recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -43,19 +140,23 @@ Windows Explorer / Vault source
 4. 复用当前 Search v3、ApplyView、Chat 文件拖入和进度 UI，不建立重复基础设施。
 5. 外部代码先进入归属台账，再按 Copy / Port / Reference 实施。
 
-## 2. Roadmap: Now / Next / Later
+## 2. Historical Delivery Sequencing
 
-| Stage | Initiative                     | Desired outcome                          | Exit metric                             | Effort |
-| ----- | ------------------------------ | ---------------------------------------- | --------------------------------------- | ------ |
-| Now   | Slice 1A — Knowledge contracts | 所有后续模块共享稳定、可验证的数据语义   | 契约和 Windows fixtures 全部通过        | S      |
-| Now   | Slice 1B — Queue and recovery  | 任务可见、可暂停、可恢复，不重复调用模型 | 重启/失败/重复来源状态测试通过          | M      |
-| Now   | Slice 1C — Golden Flow         | 一个真实来源成为可引用、可复用的 Wiki    | 端到端 Windows fixture 和实机流程通过   | L      |
-| Next  | Daily Knowledge Studio         | 用户每天可管理来源、审核、活动和健康状态 | 完成一周真实 Vault 使用且无人工修库     | L      |
-| Next  | Retrieval and maintenance      | 新知识能稳定找回，陈旧和冲突可处理       | citation、reuse、lint 基准达到 PRD 门槛 | M      |
-| Later | Graph exploration              | 图谱改善检索和知识缺口发现，而非只做展示 | 图增强任务集优于无图基线                | L      |
-| Later | Temporal/Graphiti projection   | 历史状态和多跳关系确实需要外部投影       | 达到 PRD 中 Graphiti 接入门槛           | L      |
+This table preserves the plan's initial sequencing context; it is not the current status authority.
+The Task ID Registry above defines durable scope, while [`../TODO.md`](../TODO.md) identifies the
+single current stage and in-progress task.
 
-`Now` 是当前提交序列；`Next` 只有在 Golden Flow 被真实使用后才锁定细节；`Later` 是带门槛的探索，不是承诺。
+| Historical slice | Initiative                     | Desired outcome                          | Exit metric                             | Effort |
+| ---------------- | ------------------------------ | ---------------------------------------- | --------------------------------------- | ------ |
+| Initial          | Slice 1A — Knowledge contracts | 所有后续模块共享稳定、可验证的数据语义   | 契约和 Windows fixtures 全部通过        | S      |
+| Initial          | Slice 1B — Queue and recovery  | 任务可见、可暂停、可恢复，不重复调用模型 | 重启/失败/重复来源状态测试通过          | M      |
+| Initial          | Slice 1C — Golden Flow         | 一个真实来源成为可引用、可复用的 Wiki    | 端到端 Windows fixture 和实机流程通过   | L      |
+| Follow-up        | Daily Knowledge Studio         | 用户每天可管理来源、审核、活动和健康状态 | 完成一周真实 Vault 使用且无人工修库     | L      |
+| Follow-up        | Retrieval and maintenance      | 新知识能稳定找回，陈旧和冲突可处理       | citation、reuse、lint 基准达到 PRD 门槛 | M      |
+| Exploratory      | Graph exploration              | 图谱改善检索和知识缺口发现，而非只做展示 | 图增强任务集优于无图基线                | L      |
+| Exploratory      | Temporal/Graphiti projection   | 历史状态和多跳关系确实需要外部投影       | 达到 PRD 中 Graphiti 接入门槛           | L      |
+
+`Initial`、`Follow-up` 和 `Exploratory` 只描述最初的交付顺序，不表示当前执行状态或承诺。
 
 ## 3. NOW — Commit-by-commit Execution
 
@@ -287,12 +388,16 @@ Verified in automated code-level tests:
 Remaining exit gates:
 
 - Windows bounded acceptance 已验证首次发布、后续 `DataAdapter.process`、Manifest CAS、插件重载和 compile cancellation/retry，以及 fresh `Vault.process` Wiki create/update、单次外部编辑 fail-closed、no-journal Continue 与冷重载幂等；仍须验证双实例竞争、NTFS/OneDrive/junction 和 crash/power-loss 行为，自动化和这次受控验收都不能替代这些结论。
-- startup Review reconciliation、Manifest target read-set、exact `ApplyCommitManifestPort` ledger、commit-boundary Queue/Review/high-watermark 原子复证、no-journal classify/continue/abandon 及其受限 Studio commands、生产 Project Bundle 配置源、外层 plugin Barrier/recovery-only Gate、observation startup Core、同代 workflow lease、production worker、Studio read surface、Activity commands、Review Reject、显式 reviewed create/update Accept/fresh Apply、H.1 scoped Query/Markdown citation jump，以及 H.2 grounded answer 已完成代码、自动化与相应 bounded Windows 接线验收。H.3 PDF page jump、Chat chooser 和 Save-to-Wiki production writeback 已完成代码与自动化；Save 的 managed capture → Manifest → watcher/Queue → Compiler `query_writeback` → Review → transaction → Apply/Recovery Windows 全链及 Chat 两种 intent 已通过，只剩 PDF exact-page Windows 交互未验收。history compaction/size threshold、safe compare-and-delete 与 PDF ingestion 仍未完成。
+- Startup recovery、Review/Apply、H.1 scoped Query、H.2 grounded answers，以及 H.3 PDF
+  ingestion/page navigation、Chat chooser 和 Save-to-Wiki 均已有代码、自动化与相应 bounded
+  Windows evidence。Remaining gates are the registered reliability/scale work, physical folder-picker
+  acceptance, production-shaped non-empty Review/Apply, safe compare-and-delete, and broader
+  filesystem/crash behavior.
 - [x] 在 ready delegate 前完成 Projects lifecycle ownership：ProjectManager 在 state reset 前同步退役；ProjectFileManager、ProjectContextCache、FileCache、ProjectLoadTracker、VaultDataManager 与 project-mode parser 显式捕获 App/Vault；统一 prepared-scan CAS、folder generation、opaque owner/lease 和 lifecycle guard 阻止旧 scan、旧 event/CRUD continuation、旧 cleanup 与 pending-write ABA 发布到新 snapshot。
 - 当前单 envelope 有 O(size) 写放大和共享故障域；长期使用前必须通过 size/latency benchmark 决定 archive 与分片。
 - 完成这些门槛前，不把基础代码称为可用 Golden Flow 或 production-ready durable adapter。
 
-### Commit G.2 — Runtime Coordination and Recovery ← In progress
+### Commit G.2 — Runtime Coordination and Recovery ← Implemented; follow-ups are registered above
 
 Scope:
 
@@ -343,7 +448,10 @@ Exit criteria:
 - DeepSeek Compiler 与 answer route 只能从同一 settings/preflight generation 取得 exact selected profile 与 credential，使用 lifecycle-bound native fetch。两者只共享受审 HTTP mechanics；prompt、request authority、schema 与 lifecycle port 必须独立。Answer route 每次 exactly-one non-streaming request，无 retry/fallback/repair。Official endpoint/model、prompt/profile digest、request/response/token cap 任一不匹配都必须在结果发布或 Wiki write 前 fail closed。`safeFetch`、`requestUrl`、ChatModelManager 和 SDK retry 不进入该调用链。
 - 生产 watcher 的一次观察必须把预先分配的 revision 与随后读取的 source hash/pipeline 通过专用 hand-off 绑定后才能 enqueue；不能只信任 generic Queue snapshot 中自报的 payload。重启时只有 exact-byte revalidated bound observation 可原样重放；allocated/hash drift 只有在新 crawl capture 成功时才由更高 revision 收敛，否则 final reconciliation 继续阻塞。
 - `observed_clear` 只用于恢复 UI 的乐观展示；conditional release Core 已在 shared envelope 内按 Runtime/Review/Queue revision、无 active journal/marker/apply claim/failed applying 与 accepted terminal evidence 原子复证。现有外层 plugin Barrier 已在 Runtime/Projects/config/preflight 后 owner-first 运行 recovery-only Gate，并在 observation convergence 后调用同代 reproof、fresh Gate 与 conditional release，再安装 worker和 Studio delegate。已有 user/rate-limit pause 可在不改写该 Queue control 的情况下完成这一代 admission；authoritative crawl 仍会为当前来源追加新的 durable observation revision，但不会自动 Resume 或成为 Accept/Apply authority。`startup_recovery`、`recovery_required` 和 `commit_pending_ack` 只能走各自恢复协议。
-- `Markdown → queue → compile → durable review → live Studio + exact Activity/literal Reject → reviewed create/update Apply` 已有代码级能力和 Windows bounded evidence：compile-to-Review、G.2z-a/b 只读交互、G.2z-c Pause/Resume/whole-proposal Reject，以及 G.2z-d fresh create、block-selected update、external-edit fail-closed、no-journal Continue、finalization 和 cold reload 均已在独立测试 Vault 验收。Cancel/Retry 的合法、stale 与不确定提交路径由真实 Queue adapter 自动化覆盖；测试 Vault 当时没有 eligible durable fixture，因此没有手工改写 Runtime 冒充实机成功。H.1 scoped Query/Markdown citation jump 与 H.2 grounded answers 也已完成代码、自动化和 Windows bounded evidence。H.3 PDF page jump 已完成 raw-byte hash reproof、public link adapter、UI 和自动化，Windows exact-page evidence 尚未记录。H.3 Save-to-Wiki 已完成 production managed capture、Manifest registration、`query_writeback` operation binding 与 Review/transaction/Apply 链路自动化，并已通过真实 Windows capture-through-Apply/Recovery/finalization；它没有直接 Wiki 写权。Delete 与 PDF/binary ingestion parser 保持后续能力。
+- `Markdown/PDF → queue → compile → durable review → explicit Apply` 已有代码级能力和 bounded
+  Windows evidence。H.1/H.2 retrieval and grounded answers、H.3 PDF exact-page navigation、
+  Save-to-Wiki 与 Vault-source Chat intent 均已通过对应门禁；Save 仍无直接 Wiki 写权，Delete
+  仍保持 unavailable。
 - 没有 journal/ledger/read-set 证据的状态只能进入人工恢复，不会自动调用模型或写 Wiki。
 
 ### Commit H — Chat Entry, Query, and Citation Jump
@@ -358,12 +466,14 @@ Scope:
 - [x] H.2 production route/lifecycle/UI：同代 preflight lease 提供独立 Bundle answer port；每次最多一次非流式 DeepSeek JSON 请求，无 Compiler stage、fallback、repair 或内部 retry。模型后复读完整 Wiki/source provenance并复证实际使用 citation；route close 主动 abort。Studio 显示 Supported/Partial/Insufficient 与 Source fact/Inference，仍无写权限。
 - [x] H.2 Windows Obsidian + real DeepSeek acceptance：真实表单、真实 answer request、Supported/Partial/Insufficient、Source fact/Inference、opaque citation jump、reload/换代取消、无证据零请求与查询前后零写入均通过；显式 refresh 撤销由 H.1 实机与 H.2 自动化覆盖。
 - [x] H.3a：从 Obsidian Vault 拖入 `.md/.markdown/.txt` 时增加 `Use in this chat` / `Add to Knowledge` intent card；前者只进入当前 Chat context，后者只在 Windows live generation、唯一 Bundle/root、exact file 已位于 root 且唯一 parser owner 时幂等注册 Manifest，并请求 fresh generation 让 Activity 接管。选择前零状态变化，Add 不隐式进入 Chat。
-- [ ] H.3：把相同显式分流扩展到 PDF 与 Windows Explorer 外部文档；不能把 external `File` 猜成 Vault path，也不能在 Knowledge PDF parser 接入前承诺 durable PDF capture。
+- H.3 产品决策：Windows Explorer 单文件 capture 不作为独立入口；外部 Markdown、text 与 PDF
+  统一使用 folder-only **Import folder**，避免猜测 Vault identity，并保留显式 Review/Apply 边界。
 - [x] H.3：增加 `Save to Wiki`。它只接受用户标题，在重证当前 Supported/Partial 答案、applied-Wiki snapshot 与已用 citation 后生成 content-addressed managed Markdown capture，以 exact `managed_copy` origin 注册 Manifest，并由真实 watcher → durable Queue → Compiler `query_writeback` → Review → transaction → Apply 写回。Save 不接受 UI 指定 Wiki path/Markdown，不直接写 Wiki，不伪造 queued receipt，也不绕过显式审核。
 - [x] H.3：接通 PDF page jump 代码与 UI：opaque current-query ref 解析后只接受 positive safe-integer page、exact `.pdf` TFile 和匹配 locator 的 raw-byte SHA-256；打开前后用 captured Vault `readBinary` 复证，并只调用 captured Workspace 的 canonical `sourcePath#page=N` `openLinkText`。不访问 private PDF view/DOM/eState，不扩大 Query 写权限，也不把导航等同于 PDF ingestion/H.2 evidence。
 - [x] H.3：在 Windows Obsidian 1.13.4 实机完成 Save managed capture → Manifest → watcher/Queue → Compiler `query_writeback` → Review → transaction → Apply/Recovery 的完整链路；证明 Save/Review 提交前不直接写 Wiki、既有页面零误写、最终 hash/Manifest/Queue/ledger/journal identity 一致且 clean console。
 - [x] H.3：在 Windows Obsidian 1.13.4 实机验证 Chat `Use in this chat` / `Add to Knowledge` 分流、选择前零副作用、Manifest/Queue/Activity 持久注册、重复 Add 幂等和 Cancel/Resume 清理。
-- [ ] H.3：在 Windows Obsidian 1.13.4 实机验证 PDF exact page、重复跳页、中文/空格路径、主窗口/popout、source drift 与引用撤销。
+- Historical completion: `PK-H3-PDF-PAGE-WIN` — Windows Obsidian 1.13.4 已验证 PDF exact
+  page、重复跳页、中文/空格路径、主窗口/popout、source drift 与引用撤销；完整证据保存在冻结迁移快照。
 
 Exit criteria:
 
@@ -373,7 +483,7 @@ Exit criteria:
 - H.1 查询不得读取 current applied provenance 之外的 Vault 页面，且任一 Runtime/Vault/generation 漂移都必须撤销结果和 citation capability。
 - H.2 Wiki context 不可引用，所有 claim evidence id 必须来自本次 exact source-excerpt allowlist；request digest、模型后完整 applied provenance 与 used-source locator 全部复证后才可发布。无合格 source evidence 必须零网络，所有 Query 均零 Runtime/Wiki 写入。
 
-### Commit I — Windows End-to-end Validation ← In progress
+### Commit I — Windows End-to-end Validation ← Bounded gates implemented; remaining gates are registered above
 
 Scope:
 
@@ -388,7 +498,8 @@ Scope:
 - [x] 完成 H.2 grounded-answer Windows 实机验收；覆盖真实 DeepSeek、fact/inference/insufficient、opaque citation、取消/换代、无证据零请求与查询前后零写入。
 - [x] 完成 H.3 Save managed capture → `query_writeback` Review/Apply/Recovery/finalization 的 Windows 端到端实机验收。
 - [x] 完成 H.3 Vault-text Chat chooser 的 Windows 交互验收。
-- [ ] 完成 H.3 PDF exact-page 的 Windows 交互验收。
+- H.3 PDF exact-page Windows 交互已在 tracker 迁移前完成；当前 upstream V4 回归范围由
+  `PK-H3-UPSTREAM-V4-WIN` 统一跟踪。
 - 剩余 dual-instance/filesystem/crash 验收随后完成。
 
 Exit criteria:
