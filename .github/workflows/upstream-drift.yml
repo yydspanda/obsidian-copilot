@@ -40,7 +40,7 @@ jobs:
           node-version: 22.x
 
       - name: Test drift policy
-        run: node --test --test-isolation=none scripts/check-upstream-drift.test.mjs
+        run: node --test scripts/check-upstream-drift.test.mjs
 
       - name: Compare tracked branches with canonical upstream
         env:
