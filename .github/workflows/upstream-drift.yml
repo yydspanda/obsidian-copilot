@@ -1,0 +1,127 @@
+name: Upstream drift
+
+on:
+  push:
+    branches:
+      - master
+      - knowledge-h3-personal-flow
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: true
+
+env:
+  CANONICAL_UPSTREAM_URL: https://github.com/logancyang/obsidian-copilot.git
+  CANONICAL_UPSTREAM_BRANCH: master
+  TRACKED_BRANCHES: master knowledge-h3-personal-flow
+  MAX_BEHIND: "10"
+  MAX_MISSING_AGE_DAYS: "7"
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out workflow source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Test drift policy
+        run: node --test --test-isolation=none scripts/check-upstream-drift.test.mjs
+
+      - name: Compare tracked branches with canonical upstream
+        env:
+          DOWNSTREAM_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+
+          fetch_with_retry() {
+            local repository_url="$1"
+            local refspec="$2"
+            local attempt
+            for attempt in 1 2 3; do
+              if git fetch --no-tags --force "$repository_url" "$refspec"; then
+                return 0
+              fi
+              echo "Fetch attempt $attempt failed for $refspec" >&2
+            done
+            return 1
+          }
+
+          upstream_ref="refs/remotes/tracked-upstream/${CANONICAL_UPSTREAM_BRANCH}"
+          fetch_with_retry \
+            "$CANONICAL_UPSTREAM_URL" \
+            "+refs/heads/${CANONICAL_UPSTREAM_BRANCH}:${upstream_ref}"
+          upstream_sha="$(git rev-parse "$upstream_ref")"
+          now_epoch="$(date +%s)"
+          status=0
+
+          {
+            echo "## Canonical upstream drift"
+            echo
+            echo "| Branch | Downstream SHA | Upstream SHA | Ahead | Behind | Status |"
+            echo "| --- | --- | --- | ---: | ---: | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for branch in $TRACKED_BRANCHES; do
+            downstream_ref="refs/remotes/tracked-downstream/${branch}"
+            if ! fetch_with_retry \
+              "$DOWNSTREAM_URL" \
+              "+refs/heads/${branch}:${downstream_ref}"; then
+              echo "::error title=Upstream drift::Could not fetch downstream branch ${branch}"
+              status=1
+              continue
+            fi
+
+            if ! git merge-base "$downstream_ref" "$upstream_ref" >/dev/null; then
+              echo "::error title=Upstream drift::Branch ${branch} has no common ancestor with canonical upstream"
+              status=1
+              continue
+            fi
+
+            read -r ahead behind < <(
+              git rev-list --left-right --count "${downstream_ref}...${upstream_ref}"
+            )
+            oldest_missing_epoch=0
+            if [ "$behind" -gt 0 ]; then
+              mapfile -t missing_commits < <(
+                git rev-list --reverse "${downstream_ref}..${upstream_ref}"
+              )
+              if [ "${#missing_commits[@]}" -eq 0 ]; then
+                echo "::error title=Upstream drift::Could not identify the oldest missing commit for ${branch}"
+                status=1
+                continue
+              fi
+              oldest_missing_epoch="$(git show -s --format=%ct "${missing_commits[0]}")"
+            fi
+
+            # The warning/failure policy is tracked by:
+            # https://github.com/yydspanda/obsidian-copilot/issues/1
+            if ! node scripts/check-upstream-drift.mjs \
+              --branch "$branch" \
+              --ahead "$ahead" \
+              --behind "$behind" \
+              --upstream-sha "$upstream_sha" \
+              --downstream-sha "$(git rev-parse "$downstream_ref")" \
+              --oldest-missing-epoch "$oldest_missing_epoch" \
+              --now-epoch "$now_epoch" \
+              --max-behind "$MAX_BEHIND" \
+              --max-age-days "$MAX_MISSING_AGE_DAYS"; then
+              status=1
+            fi
+          done
+
+          exit "$status"
