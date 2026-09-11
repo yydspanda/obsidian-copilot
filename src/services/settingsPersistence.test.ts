@@ -9,7 +9,6 @@ if (typeof window.structuredClone === "undefined") {
 function makeSettings(overrides: Partial<CopilotSettings> = {}): CopilotSettings {
   return {
     activeModels: [],
-    activeEmbeddingModels: [],
     openAIApiKey: "",
     ...overrides,
   } as unknown as CopilotSettings;
@@ -151,7 +150,6 @@ describe("settingsPersistence", () => {
           _keychainOnly: false,
           openAIApiKey: "enc_desk_legacy",
           activeModels: [{ name: "custom", provider: "openai", apiKey: "plaintext-disk-key" }],
-          activeEmbeddingModels: [],
         },
         saveData,
         backedUp
@@ -420,6 +418,18 @@ describe("settingsPersistence", () => {
   });
 
   describe("persistSettings()", () => {
+    it("round-trips the startup notice marker independently of the Agent Home dismissal", async () => {
+      const { module } = await loadModule();
+      let stored = makeSettings({ lastDismissedVersion: "4.0.9", lastShownStartupVersion: null });
+      const saveData = jest.fn(async (data: CopilotSettings) => {
+        stored = data;
+      });
+      await module.persistSettings({ ...stored, lastShownStartupVersion: "4.1.0" }, saveData);
+      module.resetPersistenceState();
+      const loaded = await module.loadSettingsWithKeychain(APP, stored, saveData, backedUp);
+      expect(loaded.lastShownStartupVersion).toBe("4.1.0");
+      expect(loaded.lastDismissedVersion).toBe("4.0.9");
+    });
     it("tombstones cleared credentials and never writes them to data.json", async () => {
       const { module, keychain } = await loadModule({
         persistSecrets: jest.fn().mockReturnValue({

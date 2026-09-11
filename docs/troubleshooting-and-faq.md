@@ -7,8 +7,8 @@ Start in **Settings → Copilot → Basic → Agents** and check the status besi
 ### opencode shows “Not set up” or “Error”
 
 1. Open **Basic → Agents → opencode**.
-2. Choose **Download opencode**. If it fails, choose **Try again** and read the displayed error.
-3. If opencode is already installed, choose **I already have it**. If detection misses it, open **Configure → My own binary**, enter its absolute path, and choose **Apply**.
+2. Open **Configure → Managed by Copilot** and select **Download & install**. If it fails, read the displayed error and retry.
+3. If opencode is already installed, open **Configure → My own binary** and select **Auto-detect**. If detection misses it, enter its absolute path and choose **Apply**.
 
 Use **Configure → Managed by Copilot** to reinstall or uninstall it. Setup is complete at **Ready**.
 
@@ -22,12 +22,14 @@ Copilot uses your Claude Code login; there is no API key to paste here.
 
 ### Codex is installed, but Copilot cannot find it
 
-Copilot connects through `codex-acp`, not the `codex` executable alone.
+Copilot connects through `codex-acp`, not the `codex` executable alone. Manual installations require adapter version 0.0.45 or newer. This is the minimum supported version; the managed download is pinned to 1.10.0 in this Copilot release.
 
 1. Open **Basic → Agents → Codex → Configure**.
-2. Run the displayed install command. On macOS and Linux: `npm install -g @agentclientprotocol/codex-acp`.
-3. Choose **Auto-detect**, or enter the absolute path to `codex-acp` and choose **Apply**.
-4. Run `codex login` in a terminal if Codex is not authenticated.
+2. Choose **Download & install** under **Managed by Copilot**. If this first installation fails, read the error in Configure, fix the reported problem, then choose **Download & install** again. Failed updates of an already-managed adapter show the same error and **Retry** action in Settings and Agent Chat.
+3. For an adapter you manage yourself, choose **My own binary**, then **Auto-detect** or enter the absolute path to `codex-acp` on macOS/Linux or its `dist\index.js` on Windows. Copilot does not update custom binaries.
+4. Click **Sign in** and finish authentication in your browser. If it does not open, click **Open sign-in page**. Cancel or retry if needed. Managed Codex includes its runtime; Node.js and npm are not required.
+
+You can also choose **Sign in to Codex** on the Agent Chat status card. For terminal login, run your configured adapter with `cli login` using the same `CODEX_HOME` as Copilot.
 
 See [Getting Started](getting-started.md) for the complete setup flow and [Windows setup for Agent Chat](agent-mode-windows-setup.md) for Windows-specific commands.
 
@@ -83,10 +85,9 @@ Learn more in [Skills across agents](agent-mode-and-tools.md#skills-across-agent
 
 Open **Settings → Copilot → Miyo**.
 
-- **Miyo isn't running:** open Miyo, then choose **Retry connection**.
+- **Miyo isn't running:** open Miyo, then choose **Retry** beside **Disconnect**.
 - **Register this vault with Miyo:** choose **Register & connect** on the same computer. For a remote connection or mobile device, register the vault in Miyo first, then retry.
 - **Chat sources are not set up:** this belongs to the separate **Search chat** row and does not block Agent Chat vault search. Configure chat sources only if you want ChatGPT or Claude history search.
-- If excluded folders no longer match the Copilot folder, choose **Resync Miyo**. For a remote connection, remove and re-add the vault in Miyo.
 
 Connection alone does not enable Agent Chat search. Under **Powered by Miyo**, turn on **Semantic search**. Copilot installs `miyo-search` for opencode, Claude, and Codex. If Copilot reports a same-name collision, rename or remove the existing Skill and try again.
 

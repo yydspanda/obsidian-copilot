@@ -6,12 +6,12 @@ Agent Chat runs in the Obsidian desktop app. On Windows, start with **opencode**
 
 1. Open [**Settings → Copilot → Basic → Agents**](settings.md#basic).
 2. Open the **opencode** tab.
-3. Select **Download opencode**. Copilot downloads and manages the Windows executable outside your vault.
+3. Open **Configure**, choose **Managed by Copilot**, then select **Download & install**. Copilot downloads and manages the Windows executable outside your vault.
 4. When the status shows **Ready**, choose a **Default model** and set **Default backend** to **opencode**.
 
 The managed installation does not require a PowerShell command or PATH changes.
 
-If opencode is already installed, select **I already have it**. Copilot checks common Windows locations. If it cannot find your copy, open **Configure**, choose **My own binary**, then select **Auto-detect** or enter the absolute path to `opencode.exe` and select **Apply**.
+If opencode is already installed, open **Configure**, choose **My own binary**, then select **Auto-detect** or enter the absolute path to `opencode.exe` and select **Apply**.
 
 If Copilot reports that your opencode version is unsupported, update opencode and run detection again.
 
@@ -35,19 +35,14 @@ Copilot uses Claude Code's credentials. Do not add an Anthropic API key to this 
 
 ## 3. Connect Codex
 
-The Codex backend needs both the Codex CLI and the native `codex-acp.exe` adapter.
+For manual installations, the Codex backend needs `@agentclientprotocol/codex-acp` 0.0.45 or newer. This is the minimum supported adapter version; managed downloads are pinned to 1.10.0 in this Copilot release and use Windows `tar.exe` to extract ZIP files. See [Codex installation details](agent-mode-and-tools.md#codex). The package includes a compatible Codex CLI; the older `@zed-industries/codex-acp` adapter is not supported.
 
 1. Open **Settings → Copilot → Basic → Agents → Codex** and select **Configure**.
-2. Copy the current **Install it** command from the dialog and run it in PowerShell. The installer sets up the Codex CLI, starts login, downloads the matching Windows adapter, and copies the adapter path.
-3. Return to **Configure Codex** and select **Auto-detect** under **codex-acp binary**.
-4. If detection fails, enter the copied absolute path to `codex-acp.exe` and select **Apply**.
-5. If login did not finish, run:
+2. Under **Managed by Copilot**, choose **Download & install**. Copilot downloads a verified native adapter and its Codex runtime. You do not need Node.js or npm.
+3. Click **Sign in** and complete authentication in your browser. If the browser does not open, click **Open sign-in page**. Return to Obsidian to see the signed-in status.
+4. To use your own supported adapter, choose **My own binary** and Auto-detect it or enter its path. Copilot keeps your binary and credentials when you uninstall managed downloads.
 
-```powershell
-codex login
-```
-
-Configure the path to `codex-acp.exe`, not `codex.exe` or a `.cmd` launcher. Copilot uses the Codex CLI login. Leave **Environment variables** empty unless you intentionally need an override.
+You can also choose **Sign in to Codex** on the Agent Chat status card. For terminal login, run your configured adapter with `cli login` using the same `CODEX_HOME` as Copilot.
 
 ## Share Skills across agents
 

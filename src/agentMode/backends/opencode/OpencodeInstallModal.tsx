@@ -12,8 +12,7 @@ import {
 } from "@/agentMode/backends/opencode/OpencodeBinaryManager";
 import type { OpencodeBinaryManager } from "@/agentMode/backends/opencode/OpencodeBinaryManager";
 import { detectOpencodeCliPath } from "@/agentMode/backends/opencode/descriptor";
-import { CONFIG_MODAL_CLASS } from "@/agentMode/backends/shared/ui/ConfigDialogShell";
-import { ReactModal } from "@/components/modals/ReactModal";
+import { FullBleedReactModal } from "@/components/modals/ReactModal";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { formatBinaryPathForDisplay } from "@/utils/binaryPath";
 import { formatBytes } from "@/utils/formatBytes";
@@ -86,9 +85,8 @@ export const OpencodeConfigContainer: React.FC<{
     opencode?.binarySource ?? "managed"
   );
 
-  // Read from the manager rather than kept here: the dialog is one of several
-  // surfaces that can start an install, and closing it must not cancel a run
-  // the inline settings row is also showing. Cancel is now explicit only.
+  // The manager owns progress so closing and reopening the dialog preserves
+  // an active download. Only the explicit Cancel action stops it.
   const runtime = React.useSyncExternalStore(
     manager.subscribeRuntimeState,
     manager.getRuntimeState,
@@ -103,21 +101,8 @@ export const OpencodeConfigContainer: React.FC<{
    * that outcome as true as it was, and the strip is the only place it is shown.
    */
   const forgetUpgradeOutcome = React.useCallback(() => setUpgradeRun({ kind: "idle" }), []);
-  // DESIGN NOTE — `detecting` and `busy` deliberately map to idle, not to
-  // `running`. `running` is the shape this dialog uses for a cancellable
-  // download: it replaces the whole managed section with a progress bar and a
-  // Cancel. None of the operations behind those two kinds takes a signal
-  // (their `runExclusive` bodies declare no parameter), so Cancel would be a
-  // control that does nothing. The real harm in the
-  // reported case was a Download click that reported nothing; that is fixed
-  // where it happens, by surfacing `OperationInFlightError` below, instead of
-  // by borrowing a state whose meaning does not fit.
-  // If a future review flags this again, point them at this note.
-  // Mirrors the manager unconditionally. An earlier attempt let a local
-  // `upgradeRun` suppress this so a managed upgrade would not draw two progress
-  // bars — but a dialog-local value vetoing a shared run produced four defects
-  // in as many review rounds, including hiding an install started from another
-  // surface. Showing one run twice is a cosmetic cost; hiding it is not.
+  // Only installs support cancellation; other manager operations must not show
+  // a Cancel button. Shared progress stays visible regardless of local outcomes.
   const installRun: OpencodeRunState =
     runtime.kind === "installing"
       ? runningState(runtime.progress)
@@ -266,14 +251,14 @@ export const OpencodeConfigContainer: React.FC<{
 };
 
 /** Configure dialog for the opencode backend. Opened via `descriptor.openInstallUI`. */
-export class OpencodeInstallModal extends ReactModal {
+export class OpencodeInstallModal extends FullBleedReactModal {
   constructor(
     app: App,
     private readonly manager: OpencodeBinaryManager,
     private readonly hostInfo: { platform: string; arch: string }
   ) {
     // No native title: ConfigDialogShell draws its own heading beside the badge.
-    super(app, undefined, CONFIG_MODAL_CLASS);
+    super(app);
   }
 
   protected renderContent(close: () => void): React.ReactElement {

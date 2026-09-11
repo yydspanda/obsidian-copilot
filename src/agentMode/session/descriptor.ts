@@ -7,6 +7,7 @@ import type {
   BackendConfigOption,
   BackendId,
   BackendProcess,
+  BackendState,
   EffortOption,
   EnabledModelEntry,
   ModelSelection,
@@ -17,6 +18,16 @@ import type {
   RawModeState,
   SessionId,
 } from "./types";
+
+/**
+ * The model-selection operations shared by visible chats and ephemeral fan-out
+ * sessions. Backend descriptors own selection policy; callers own state storage.
+ */
+export interface ModelSelectionSession {
+  getState(): BackendState | null;
+  applyModelWireId(wireId: string): Promise<void>;
+  setConfigOption(configId: string, value: string): Promise<void>;
+}
 
 /** UI-facing install/setup state for a backend. */
 export type InstallState =
@@ -32,6 +43,18 @@ export type InstallState =
     }
   | { kind: "error"; message: string };
 
+export type ManagedInstallActionState =
+  | { kind: "idle" }
+  | { kind: "running"; label: string; percent?: number }
+  | { kind: "error"; message: string };
+
+/** Backend-owned install lifecycle shared by Agent Chat and Settings. */
+export interface ManagedInstallAction {
+  getState(plugin: CopilotPlugin): ManagedInstallActionState;
+  subscribe(plugin: CopilotPlugin, onChange: () => void): () => void;
+  run(plugin: CopilotPlugin): Promise<void>;
+}
+
 /** Sign-in state for backends that authenticate via a CLI / external account. */
 export interface BackendAuthStatus {
   signedIn: boolean;
@@ -41,6 +64,8 @@ export interface BackendAuthStatus {
 
 /** Progress callbacks for an interactive sign-in flow. */
 export interface BackendSignInHandlers {
+  /** Cancellation belongs to the surface that starts browser sign-in. */
+  signal?: AbortSignal;
   /** The OAuth URL to surface as a clickable browser-open fallback. */
   onUrl?: (url: string) => void;
   /** Per-line progress from the sign-in subprocess. */
@@ -62,10 +87,19 @@ export interface ApplySelectionContext {
  * surface a "Sign in" CTA without knowing the backend's auth mechanism.
  */
 export interface BackendAuth {
+  /** Stable opaque identity for the configured account/profile; never expose credentials.
+   * @param settings - Current settings that select the backend and its authentication environment.
+   */
+  getProbeKey?(settings: CopilotSettings): string;
   /** Probe current sign-in state (may spawn the CLI). */
   getStatus(settings: CopilotSettings): Promise<BackendAuthStatus>;
   /** Run the interactive sign-in flow; resolves with the post-login state. */
   signIn(settings: CopilotSettings, handlers?: BackendSignInHandlers): Promise<BackendAuthStatus>;
+  /** Sign out of the configured profile and return its resulting authentication state. */
+  signOut?(
+    settings: CopilotSettings,
+    options?: { signal?: AbortSignal }
+  ): Promise<BackendAuthStatus>;
 }
 
 /**
@@ -216,24 +250,8 @@ export interface BackendDescriptor {
   /** Open backend-specific install/setup modal. */
   openInstallUI(plugin: CopilotPlugin): void;
 
-  /**
-   * Optional: actions rendered inline in the settings row while this backend is
-   * absent, in place of the generic Configure button. Backends the plugin can
-   * install itself own their whole first-run path (download, progress, cancel,
-   * adopting an existing binary), so the user never has to open a dialog to get
-   * started. Backends that only document an external install omit it and keep
-   * the Configure button.
-   */
-  AbsentInstallActions?: React.ComponentType<{ plugin: CopilotPlugin }>;
-
-  /**
-   * Optional: upgrade the installed binary in place (managed reinstall, or the
-   * CLI's own `upgrade`). Resolves when done. Changing the persisted version
-   * restarts the backend via the `subscribeInstallState` subscription, so the
-   * next session boots on the new binary. Throws with a readable message on
-   * failure; callers surface progress/errors.
-   */
-  upgrade?(plugin: CopilotPlugin): Promise<void>;
+  /** User-triggered install/update lifecycle for Copilot-managed binaries. */
+  managedInstall?: ManagedInstallAction;
 
   /**
    * Optional: sign-in capability for backends gated on an external account
@@ -310,22 +328,18 @@ export interface BackendDescriptor {
   readonly showModelDescriptions?: boolean;
 
   /**
-   * Apply a (baseModelId, effort) selection to a live session. The descriptor
-   * decides whether effort travels in the wire model id (suffix-style
-   * backends: codex, opencode) or via a separate `setConfigOption` call
-   * (descriptor-style: Claude SDK).
+   * Apply a model and resolved effort using this backend's protocol.
+   * Used by visible chats and ephemeral fan-out sessions alike.
    *
-   * `effort: null` means "default" — descriptor-style backends typically
-   * no-op the effort dispatch on null (no "clear to default" config call
-   * exists); suffix-style backends encode the null and re-emit the bare
-   * model id.
+   * Resolve missing or invalid effort to the lowest supported level. Models
+   * without an effort control omit effort; null is not a selectable default.
    *
    * Implementations are expected to swallow `MethodUnsupportedError` from
    * the underlying `session.setConfigOption` call (the backend may simply
    * lack the capability) and propagate everything else.
    */
   applySelection(
-    session: AgentSession,
+    session: ModelSelectionSession,
     selection: ModelSelection,
     context?: ApplySelectionContext
   ): Promise<void>;

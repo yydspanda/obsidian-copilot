@@ -12,7 +12,6 @@ import {
   getSystemExcludedFolders,
   isInternalExcludedPath,
   parsePropertyPattern,
-  previewPatternValue,
   shouldIndexFile,
 } from "./searchUtils";
 
@@ -425,32 +424,6 @@ describe("searchUtils", () => {
     });
   });
 
-  describe("previewPatternValue", () => {
-    it("should correctly preview a single pattern", () => {
-      const value = "folder1";
-      expect(previewPatternValue(value)).toBe("folder1");
-    });
-
-    it("should correctly preview multiple patterns", () => {
-      const value = "folder1,folder2,folder3";
-      expect(previewPatternValue(value)).toBe("folder1, folder2, folder3");
-    });
-
-    it("should handle encoded patterns", () => {
-      const value = "folder%201,folder%202,folder%203";
-      expect(previewPatternValue(value)).toBe("folder 1, folder 2, folder 3");
-    });
-
-    it("should handle empty string", () => {
-      expect(previewPatternValue("")).toBe("");
-    });
-
-    it("should handle patterns with spaces and special characters", () => {
-      const value = "folder%20with%20spaces,special%23chars,%23tag";
-      expect(previewPatternValue(value)).toBe("folder with spaces, special#chars, #tag");
-    });
-  });
-
   describe("createPatternSettingsValue", () => {
     it("should create settings value from single category", () => {
       const result = createPatternSettingsValue({
@@ -738,6 +711,45 @@ describe("searchUtils", () => {
       const filter = createCopilotPatternFilter(window.app);
       // Segment boundary: "mycopilot/" is not the "copilot" root.
       expect(filter("mycopilot/note.md")).toBe(true);
+    });
+
+    it("applies path-only QA rules when a current-vault path is unresolved (https://github.com/Brevilabs/obsidian-copilot-private/issues/284)", () => {
+      (settingsModel.getSettings as jest.Mock).mockReturnValue({
+        qaInclusions: "notes,[[Pinned]]",
+        qaExclusions: "private,*.tmp,[[Secret]]",
+        copilotFolder: "copilot",
+        copilotRootHistory: ["copilot"],
+      });
+      mockGetAbstractFileByPath.mockReturnValue(null);
+
+      const filter = createCopilotPatternFilter(window.app);
+
+      expect(filter("notes/idea.md")).toBe(true);
+      expect(filter("archive/Pinned.md")).toBe(true);
+      expect(filter("private/idea.md")).toBe(false);
+      expect(filter("notes/draft.tmp")).toBe(false);
+      expect(filter("notes/Secret.md")).toBe(false);
+      expect(filter("archive/other.md")).toBe(false);
+    });
+
+    it("fails closed when unresolved paths require metadata QA rules (https://github.com/Brevilabs/obsidian-copilot-private/issues/284)", () => {
+      mockGetAbstractFileByPath.mockReturnValue(null);
+
+      (settingsModel.getSettings as jest.Mock).mockReturnValue({
+        qaInclusions: "#published",
+        qaExclusions: "",
+        copilotFolder: "copilot",
+        copilotRootHistory: ["copilot"],
+      });
+      expect(createCopilotPatternFilter(window.app)("notes/unknown.md")).toBe(false);
+
+      (settingsModel.getSettings as jest.Mock).mockReturnValue({
+        qaInclusions: "",
+        qaExclusions: "[private:true]",
+        copilotFolder: "copilot",
+        copilotRootHistory: ["copilot"],
+      });
+      expect(createCopilotPatternFilter(window.app)("notes/unknown.md")).toBe(false);
     });
 
     it("excludes differently-cased instruction files where the filesystem is case-insensitive", () => {

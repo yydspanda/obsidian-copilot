@@ -1,3 +1,4 @@
+import { waitFor } from "@testing-library/react";
 jest.mock("obsidian", () => ({
   // pickMatchingAsset is pure; FileSystemAdapter and requestUrl are
   // referenced by the manager class but not by these tests.
@@ -68,7 +69,6 @@ import {
   legacyVaultDataDir,
   opencodeManagedDataDir,
   OpencodeBinaryManager,
-  OpencodeNotFoundError,
   OperationInFlightError,
   parseVersionFromStdout,
   pickMatchingAsset,
@@ -409,9 +409,11 @@ describe("OpencodeBinaryManager.setCustomBinaryPath", () => {
   beforeEach(async () => {
     settingsMock.__reset({});
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "opencode-custom-"));
+    jest.mocked(os.homedir).mockReturnValue(tmpDir);
   });
 
   afterEach(async () => {
+    jest.mocked(os.homedir).mockReset();
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -452,6 +454,19 @@ describe("OpencodeBinaryManager.setCustomBinaryPath", () => {
     });
   });
 
+  it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 selects a custom executable and removes managed and legacy downloads", async () => {
+    const vaultBase = path.join(tmpDir, "vault");
+    const mgr = new OpencodeBinaryManager(vaultPlugin(vaultBase));
+    const legacy = legacyVaultDataDir(vaultBase, CONFIG_DIR, "copilot-test");
+    fs.mkdirSync(mgr.getDataDir(), { recursive: true });
+    fs.mkdirSync(legacy, { recursive: true });
+    await mgr.setCustomBinaryPath(process.execPath);
+    expect(fs.existsSync(mgr.getDataDir())).toBe(false);
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(fs.existsSync(process.execPath)).toBe(true);
+    expect(settingsMock.__get().binarySource).toBe("custom");
+  });
+
   it("accepting a real binary captures version from --version and tags source as custom", async () => {
     // Use the running node binary as a stand-in: it exists, is executable,
     // and `--version` exits 0 — the same shape verifyOpencodeBinary expects.
@@ -475,6 +490,42 @@ describe("OpencodeBinaryManager.upgradeCustomBinary", () => {
   afterEach(async () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
+
+  it.each(["upgrade", "--version"])(
+    "https://github.com/Brevilabs/obsidian-copilot-private/issues/368 cancels during %s without publishing settings or Retry",
+    async (phase) => {
+      if (process.platform === "win32") return;
+      const file = path.join(tmpDir, "opencode");
+      const marker = path.join(tmpDir, "started");
+      await fs.promises.writeFile(
+        file,
+        `#!${process.execPath}
+if (process.argv[2] === ${JSON.stringify(phase)}) {
+  require("fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid));
+  setTimeout(() => process.stdout.write("99.0.0"), ${phase === "upgrade" ? 30000 : 250});
+}
+`
+      );
+      await fs.promises.chmod(file, 0o755);
+      const initial = { binaryPath: file, binaryVersion: "1.0.0", binarySource: "custom" as const };
+      settingsMock.__reset(initial);
+      const manager = new OpencodeBinaryManager(fakePlugin);
+      const operation = manager.upgradeCustomBinary();
+      const rejected = expect(operation).rejects.toMatchObject({ name: "AbortError" });
+      try {
+        await waitFor(() => expect(fs.existsSync(marker)).toBe(true));
+        const pid = Number(await fs.promises.readFile(marker, "utf8"));
+        manager.cancelCurrentOperation();
+        await rejected;
+        await waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+        expect(settingsMock.__get()).toEqual(initial);
+        expect(manager.getRuntimeState()).toEqual({ kind: "idle" });
+      } finally {
+        manager.cancelCurrentOperation();
+        await operation.catch(() => undefined);
+      }
+    }
+  );
 
   it("rejects when opencode upgrade exits successfully but leaves an outdated binary", async () => {
     if (process.platform === "win32") return;
@@ -643,7 +694,16 @@ describe("OpencodeBinaryManager.uninstall / downloadsSize", () => {
 });
 
 describe("OpencodeBinaryManager.runtimeState", () => {
-  beforeEach(() => settingsMock.__reset({}));
+  let home: string;
+  beforeEach(() => {
+    settingsMock.__reset({});
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-runtime-test-"));
+    jest.mocked(os.homedir).mockReturnValue(home);
+  });
+  afterEach(() => {
+    jest.mocked(os.homedir).mockReset();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
 
   it("starts idle and hands every subscriber the same snapshot object", () => {
     const mgr = new OpencodeBinaryManager(fakePlugin);
@@ -672,6 +732,7 @@ describe("OpencodeBinaryManager.runtimeState", () => {
     // Durable rather than announced: whichever surface mounts next renders it.
     expect(mgr.getRuntimeState()).toEqual({
       kind: "error",
+      operation: "configure",
       message: expect.stringContaining("No file at"),
     });
   });
@@ -694,7 +755,9 @@ describe("OpencodeBinaryManager.runtimeState", () => {
 
     // Both writers persist binaryPath/binarySource, so letting them overlap is
     // what lets whichever settles last name a source the user did not choose.
-    await expect(mgr.adoptExistingBinary()).rejects.toBeInstanceOf(OperationInFlightError);
+    await expect(mgr.setCustomBinaryPath(process.execPath)).rejects.toBeInstanceOf(
+      OperationInFlightError
+    );
 
     await first;
     expect(settingsMock.__get().binaryPath).toBe(process.execPath);
@@ -708,24 +771,9 @@ describe("OpencodeBinaryManager.runtimeState", () => {
     await expect(mgr.setCustomBinaryPath(process.execPath)).resolves.toBeUndefined();
   });
 
-  it("leaves a fruitless detect in the error state rather than back at idle", async () => {
-    const mgr = new OpencodeBinaryManager(fakePlugin);
-
-    await expect(mgr.adoptExistingBinary()).rejects.toBeInstanceOf(OpencodeNotFoundError);
-
-    // Resolving would settle the store back to idle, and the settings row only
-    // offers Configure — the one way to name a binary the search cannot see —
-    // while an error is showing.
-    expect(mgr.getRuntimeState()).toEqual({
-      kind: "error",
-      message: expect.stringContaining("Couldn't find opencode"),
-    });
-    expect(mgr.isBusy()).toBe(false);
-  });
-
   it("drops a settled error when a new plugin lifecycle starts", async () => {
     const mgr = new OpencodeBinaryManager(fakePlugin);
-    await expect(mgr.adoptExistingBinary()).rejects.toBeInstanceOf(OpencodeNotFoundError);
+    await expect(mgr.setCustomBinaryPath("/definitely/not/here")).rejects.toThrow();
 
     mgr.forgetSettledError();
 

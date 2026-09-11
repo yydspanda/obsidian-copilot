@@ -1,39 +1,25 @@
-import { OpencodeAbsentInstallActions } from "@/agentMode/backends/opencode/OpencodeInlineInstall";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { BackendAuthStatus } from "@/agentMode/session/types";
+const mockAuthStatuses: Record<string, BackendAuthStatus | null> = {};
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
+import { setSettings } from "@/settings/model";
+import { playNotificationSound } from "@/utils/notificationSound";
 import { AgentSettings } from "./AgentSettings";
 
 jest.mock("@/logger", () => ({ logInfo: jest.fn(), logWarn: jest.fn(), logError: jest.fn() }));
 
-// The inline install row is rendered for real (it is the panel's absent-state
-// branch and the first thing a new user touches), so the binary manager behind
-// it is the only thing stubbed.
-const install = jest.fn();
-// The inline row subscribes to the manager's runtime store, so the stub has to
-// expose it with stable identities — an inline arrow per call would make
-// `useSyncExternalStore` resubscribe on every commit.
-const opencodeRuntimeListeners = new Set<() => void>();
-// One frozen snapshot, not a fresh object per call: `useSyncExternalStore`
-// compares by identity, so returning a new literal each time re-renders forever.
-const IDLE_RUNTIME = Object.freeze({ kind: "idle" as const });
-const opencodeManagerStub = {
-  install,
-  adoptExistingBinary: jest.fn().mockResolvedValue("/usr/local/bin/opencode"),
-  cancelCurrentOperation: jest.fn(),
-  subscribeRuntimeState: (onChange: () => void) => {
-    opencodeRuntimeListeners.add(onChange);
-    return () => opencodeRuntimeListeners.delete(onChange);
-  },
-  getRuntimeState: () => IDLE_RUNTIME,
-};
-jest.mock("@/agentMode/backends/opencode/descriptor", () => ({
-  getOpencodeBinaryManager: () => opencodeManagerStub,
-  detectOpencodeCliPath: jest.fn(),
-  OpencodeBackendDescriptor: { openInstallUI: jest.fn() },
-}));
+jest.mock("@/utils/notificationSound", () => {
+  const actual = jest.requireActual<object>("@/utils/notificationSound");
+  return { ...actual, playNotificationSound: jest.fn() };
+});
 
 let mockSettings: {
-  agentMode: { activeBackend: string; backends: Record<string, unknown> };
+  agentMode: {
+    activeBackend: string;
+    backends: Record<string, unknown>;
+    notificationSound: boolean;
+    notificationSoundId: string;
+  };
   enableSelfHostMode: boolean;
 };
 jest.mock("@/settings/model", () => ({
@@ -57,6 +43,8 @@ const installStates: Record<string, { kind: string; [key: string]: unknown }> = 
   claude: { kind: "ready", source: "custom" },
   codex: { kind: "ready", source: "custom" },
 };
+const managedInstallStates: Record<string, { kind: string; [key: string]: unknown }> = {};
+const runManagedInstall = jest.fn().mockResolvedValue(undefined);
 
 /** Binary path each backend reports as resolved; absent means "not installed". */
 let resolvedPaths: Record<string, string | null> = {};
@@ -79,14 +67,21 @@ function makeDescriptor(id: string, displayName: string, selfHostable = false) {
     id,
     displayName,
     selfHostable,
+    auth: id === "opencode" ? undefined : {},
     Icon,
     getInstallState: () => installStates[id],
     getResolvedBinaryPath: () => resolvedPaths[id] ?? null,
     openInstallUI: jest.fn(),
     SettingsPanel: () => <div data-testid={`panel-${id}`}>settings panel</div>,
-    // Only a backend the plugin can install itself ships inline actions; the
-    // panel's absent-state branch keys off that.
-    ...(id === "opencode" ? { AbsentInstallActions: OpencodeAbsentInstallActions } : {}),
+    ...(id === "codex"
+      ? {
+          managedInstall: {
+            getState: () => managedInstallStates.codex ?? { kind: "idle" },
+            subscribe: () => () => {},
+            run: runManagedInstall,
+          },
+        }
+      : {}),
   };
 }
 
@@ -100,6 +95,13 @@ const mockGetCachedModelCatalog = jest.fn();
 const mockPreloadModels = jest.fn();
 
 jest.mock("@/agentMode", () => ({
+  // eslint-disable-next-line @eslint-react/hooks-extra/no-unnecessary-use-prefix -- mocks the actual hook export
+  useBackendAuthState: (descriptor: { id: string }) => ({
+    status: mockAuthStatuses[descriptor.id],
+  }),
+  AgentBackendHeader: jest.requireActual<
+    typeof import("@/agentMode/backends/shared/ui/AgentBackendHeader")
+  >("@/agentMode/backends/shared/ui/AgentBackendHeader").AgentBackendHeader,
   backendDisplayOrder: () => DESCRIPTORS,
   backendNeedsSelfHostWarning: (
     descriptor: { selfHostable?: boolean },
@@ -117,6 +119,9 @@ jest.mock("@/agentMode", () => ({
     const read = () => descriptor.getInstallState();
     return React.useSyncExternalStore(subscribe, read, read);
   },
+  // eslint-disable-next-line @eslint-react/hooks-extra/no-unnecessary-use-prefix -- mocks the real hook export
+  useManagedInstallActionState: (descriptor: { id: string }) =>
+    managedInstallStates[descriptor.id] ?? { kind: "idle" },
   AgentDefaultModelSetting: ({ descriptor }: { descriptor: { id: string } }) => (
     <div data-testid={`default-model-${descriptor.id}`}>default model</div>
   ),
@@ -146,18 +151,46 @@ jest.mock("./ConfiguredModelEnableList", () => ({
 describe("AgentSettings", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    install.mockResolvedValue({ version: "1.2.3", path: MANAGED_BINARY_PATH });
+    mockAuthStatuses.claude = { signedIn: true };
+    mockAuthStatuses.codex = { signedIn: true };
     mockSettings = {
-      agentMode: { activeBackend: "opencode", backends: {} },
+      agentMode: {
+        activeBackend: "opencode",
+        backends: {},
+        notificationSound: true,
+        notificationSoundId: "piano",
+      },
       enableSelfHostMode: false,
     };
+    (setSettings as jest.Mock).mockClear();
+    (playNotificationSound as jest.Mock).mockClear();
     installStates.opencode = { kind: "ready", source: "managed" };
     installStates.claude = { kind: "ready", source: "custom" };
     installStates.codex = { kind: "ready", source: "custom" };
+    delete managedInstallStates.codex;
+    runManagedInstall.mockReset().mockResolvedValue(undefined);
     mockGetCachedModelCatalog.mockReset().mockReturnValue({ availableModels: [] });
     mockPreloadModels.mockReset().mockResolvedValue(undefined);
     resolvedPaths = {};
   });
+
+  it.each(["claude", "codex"])(
+    "https://github.com/Brevilabs/obsidian-copilot-private/issues/379 reflects %s account readiness in the settings header",
+    (id) => {
+      mockSettings.agentMode.activeBackend = id;
+      mockAuthStatuses[id] = { signedIn: false };
+      const view = render(<AgentSettings />);
+      fireEvent.click(screen.getByRole("tab", { name: id === "claude" ? "Claude" : "Codex" }));
+      expect(screen.getByText("Sign in required")).toBeTruthy();
+      expect(screen.queryByText("Ready")).toBeNull();
+      mockAuthStatuses[id] = null;
+      view.rerender(<AgentSettings />);
+      expect(screen.getByText("Checking sign-in…")).toBeTruthy();
+      mockAuthStatuses[id] = { signedIn: true };
+      view.rerender(<AgentSettings />);
+      expect(screen.getByText("Ready")).toBeTruthy();
+    }
+  );
 
   it("skips model preload when the shared catalog is already available", async () => {
     render(<AgentSettings />);
@@ -191,6 +224,42 @@ describe("AgentSettings", () => {
     const tablist = screen.getByRole("tablist");
     expect(within(tablist).queryByText("Default backend")).toBeNull();
     expect(screen.getByText("Default backend")).not.toBeNull();
+  });
+
+  it("mutes the chime when the notification sound switch is turned off", () => {
+    render(<AgentSettings />);
+    const toggle = screen.getByRole("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+
+    const applyUpdate = (setSettings as jest.Mock).mock.calls[0][0] as (
+      current: typeof mockSettings
+    ) => { agentMode: typeof mockSettings.agentMode };
+    expect(applyUpdate(mockSettings)).toEqual({
+      agentMode: { ...mockSettings.agentMode, notificationSound: false },
+    });
+  });
+
+  it("plays a sound as soon as one is picked, and remembers the pick", () => {
+    render(<AgentSettings />);
+
+    fireEvent.change(screen.getByDisplayValue("Piano key"), { target: { value: "doorbell" } });
+
+    const applyUpdate = (setSettings as jest.Mock).mock.calls[0][0] as (
+      current: typeof mockSettings
+    ) => { agentMode: typeof mockSettings.agentMode };
+    expect(applyUpdate(mockSettings).agentMode.notificationSoundId).toBe("doorbell");
+    expect(playNotificationSound).toHaveBeenCalledWith("doorbell");
+  });
+
+  it("hides the sound picker while the notification sound is off", () => {
+    mockSettings.agentMode.notificationSound = false;
+
+    render(<AgentSettings />);
+
+    expect(screen.queryByText("Sound")).toBeNull();
+    expect(screen.getByText("Notification")).not.toBeNull();
   });
 
   it("shows the first backend's content by default and the default-model picker above the model list", () => {
@@ -249,51 +318,58 @@ describe("AgentSettings", () => {
     expect(screen.getByText("Cloud service.")).toBeTruthy();
   });
 
-  it("replaces Configure with the backend's inline install actions while it is absent", () => {
+  it.each(DESCRIPTORS)(
+    "opens $displayName configuration while the binary is absent",
+    (descriptor) => {
+      installStates[descriptor.id] = { kind: "absent" };
+      render(<AgentSettings />);
+      fireEvent.click(screen.getByRole("tab", { name: descriptor.displayName }));
+      fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+      expect(descriptor.openInstallUI).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("Recommended")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Download opencode" })).toBeNull();
+    }
+  );
+
+  it("shows the resolved binary when configuration finishes installing OpenCode", async () => {
     installStates.opencode = { kind: "absent" };
     render(<AgentSettings />);
-    expect(screen.getByRole("button", { name: "Download opencode" })).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Configure" })).toBeNull();
-    expect(screen.getByText("Recommended")).not.toBeNull();
-    expect(screen.getByText(/add providers on the BYOK tab/)).not.toBeNull();
-  });
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    expect(DESCRIPTORS[0].openInstallUI).toHaveBeenCalledTimes(1);
 
-  it("keeps the Configure button for an absent backend that ships no inline actions", () => {
-    installStates.claude = { kind: "absent" };
-    render(<AgentSettings />);
-    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
-    expect(screen.getByRole("button", { name: "Configure" })).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Download opencode" })).toBeNull();
-    // The BYOK hint would be wrong advice for a backend with its own account.
-    expect(screen.queryByText("Recommended")).toBeNull();
-    expect(screen.queryByText(/add providers on the BYOK tab/)).toBeNull();
-  });
-
-  it("drops the inline install actions once the backend reports ready", () => {
-    render(<AgentSettings />);
-    expect(screen.queryByRole("button", { name: "Download opencode" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Configure" })).not.toBeNull();
-  });
-
-  it("turns the absent row into the ready row when a first inline install lands", async () => {
-    installStates.opencode = { kind: "absent" };
-    install.mockImplementation(async () => {
-      // What the manager does on success: persist the binary it just installed,
-      // which is what the panel computes its install state from.
+    act(() => {
       installStates.opencode = { kind: "ready", source: "managed" };
       resolvedPaths.opencode = MANAGED_BINARY_PATH;
       publishInstallState();
-      return { version: "1.2.3", path: MANAGED_BINARY_PATH };
     });
-    render(<AgentSettings />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Download opencode" }));
-
-    // The whole point of the inline row: the user never leaves the Basic tab and
-    // never opens the Configure dialog to get from "not installed" to usable.
     expect(await screen.findByText("Ready")).not.toBeNull();
     expect(screen.getByText(MANAGED_BINARY_PATH)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Configure" })).not.toBeNull();
-    expect(screen.queryByRole("button", { name: "Download opencode" })).toBeNull();
+  });
+
+  it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 shares managed update progress and Retry in settings", () => {
+    installStates.codex = {
+      kind: "incompatible",
+      source: "managed",
+      currentVersion: "1.9.0",
+      minVersion: "1.10.0",
+      message: "Codex adapter 1.9.0 does not match this Copilot release (1.10.0).",
+    };
+    const view = render(<AgentSettings />);
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
+    expect(runManagedInstall).toHaveBeenCalledTimes(1);
+
+    managedInstallStates.codex = { kind: "running", label: "Installing… 30%" };
+    view.rerender(<AgentSettings />);
+    expect(screen.getByText("Installing… 30%")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Upgrading…" }).hasAttribute("disabled")).toBe(true);
+
+    managedInstallStates.codex = { kind: "error", message: "npm unavailable" };
+    view.rerender(<AgentSettings />);
+    expect(screen.getByText("npm unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(runManagedInstall).toHaveBeenCalledTimes(2);
   });
 });

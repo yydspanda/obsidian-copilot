@@ -205,9 +205,63 @@ describe("sanitizeSettings - agentMode shape migration", () => {
       activeBackend: "opencode",
       backends: {},
       debugFullFrames: true,
+      notificationSound: true,
+      notificationSoundId: "piano",
       welcomeDismissed: false,
       skills: { folder: "copilot/skills" },
     });
+  });
+
+  it("defaults notificationSound to on so an unattended turn still calls the user back", () => {
+    expect(DEFAULT_SETTINGS.agentMode.notificationSound).toBe(true);
+    const sanitized = sanitizeSettings({
+      ...DEFAULT_SETTINGS,
+      agentMode: {
+        byok: {},
+        activeBackend: "opencode",
+        backends: {},
+      },
+    } as unknown as CopilotSettings);
+    expect(sanitized.agentMode.notificationSound).toBe(true);
+  });
+
+  it("keeps a chosen notification sound and drops one no longer in the catalog (https://github.com/logancyang/obsidian-copilot/issues/2987)", () => {
+    const chosen = sanitizeSettings({
+      ...DEFAULT_SETTINGS,
+      agentMode: {
+        byok: {},
+        activeBackend: "opencode",
+        backends: {},
+        notificationSoundId: "doorbell",
+      },
+    } as unknown as CopilotSettings);
+    expect(chosen.agentMode.notificationSoundId).toBe("doorbell");
+
+    const removed = sanitizeSettings({
+      ...DEFAULT_SETTINGS,
+      agentMode: {
+        byok: {},
+        activeBackend: "opencode",
+        backends: {},
+        notificationSoundId: "removed-sound",
+      },
+    } as unknown as CopilotSettings);
+    expect(removed.agentMode.notificationSoundId).toBe(
+      DEFAULT_SETTINGS.agentMode.notificationSoundId
+    );
+  });
+
+  it("preserves an explicit notificationSound=false (a user who muted it stays muted)", () => {
+    const sanitized = sanitizeSettings({
+      ...DEFAULT_SETTINGS,
+      agentMode: {
+        byok: {},
+        activeBackend: "opencode",
+        backends: {},
+        notificationSound: false,
+      },
+    } as unknown as CopilotSettings);
+    expect(sanitized.agentMode.notificationSound).toBe(false);
   });
 
   it("defaults debugFullFrames to on for new installs", () => {
@@ -419,26 +473,6 @@ describe("sanitizeSettings - legacy Miyo settings cleanup", () => {
 
     expect("miyoRemoteVaultPath" in sanitizedRecord).toBe(false);
     expect("enableMiyoSearch" in sanitizedRecord).toBe(false);
-  });
-
-  it("defaults a missing or malformed miyoSyncedExclusions to an empty receipt", () => {
-    const withoutReceipt = {
-      ...DEFAULT_SETTINGS,
-      miyoSyncedExclusions: undefined,
-    } as unknown as CopilotSettings;
-    expect(sanitizeSettings(withoutReceipt).miyoSyncedExclusions).toBe("");
-
-    const malformed = {
-      ...DEFAULT_SETTINGS,
-      miyoSyncedExclusions: 42,
-    } as unknown as CopilotSettings;
-    expect(sanitizeSettings(malformed).miyoSyncedExclusions).toBe("");
-
-    const preserved = {
-      ...DEFAULT_SETTINGS,
-      miyoSyncedExclusions: '{"device":"d","roots":[]}',
-    };
-    expect(sanitizeSettings(preserved).miyoSyncedExclusions).toBe('{"device":"d","roots":[]}');
   });
 
   it("assigns a userId while stripping obsolete Miyo keys", () => {
@@ -665,6 +699,23 @@ describe("sanitizeSettings - docProcessorBackend (v6 field)", () => {
 
 describe("model", () => {
   describe("sanitizeSettings()", () => {
+    it("defaults the startup notice marker without inheriting the Agent Home dismissal", () => {
+      const persisted = { ...DEFAULT_SETTINGS, lastDismissedVersion: "4.1.0" };
+      delete (persisted as Partial<CopilotSettings>).lastShownStartupVersion;
+      const loaded = sanitizeSettings(persisted);
+      expect(loaded.lastShownStartupVersion).toBeNull();
+      expect(loaded.lastDismissedVersion).toBe("4.1.0");
+    });
+
+    it("preserves distinct startup notice and Agent Home dismissal versions", () => {
+      const loaded = sanitizeSettings({
+        ...DEFAULT_SETTINGS,
+        lastDismissedVersion: "4.0.9",
+        lastShownStartupVersion: "4.1.0",
+      });
+      expect(loaded.lastShownStartupVersion).toBe("4.1.0");
+      expect(loaded.lastDismissedVersion).toBe("4.0.9");
+    });
     it.each(["parallel", "exa"] as const)(
       "preserves the %s self-host search provider (https://github.com/Brevilabs/obsidian-copilot-private/issues/285)",
       (provider) => {
@@ -684,6 +735,24 @@ describe("model", () => {
       } as unknown as CopilotSettings);
 
       expect(sanitized.selfHostSearchProvider).toBe("firecrawl");
+    });
+
+    it("turns live Relevant Notes updates on for settings written before the field existed (https://github.com/Brevilabs/obsidian-copilot-private/issues/362)", () => {
+      const withoutField = { ...DEFAULT_SETTINGS } as unknown as Record<string, unknown>;
+      delete withoutField.relevantNotesLiveUpdate;
+
+      const sanitized = sanitizeSettings(withoutField as unknown as CopilotSettings);
+
+      expect(sanitized.relevantNotesLiveUpdate).toBe(true);
+    });
+
+    it("preserves a persisted choice to switch live Relevant Notes updates off (https://github.com/Brevilabs/obsidian-copilot-private/issues/362)", () => {
+      const sanitized = sanitizeSettings({
+        ...DEFAULT_SETTINGS,
+        relevantNotesLiveUpdate: false,
+      });
+
+      expect(sanitized.relevantNotesLiveUpdate).toBe(false);
     });
 
     it("drops a persisted global output cap so it cannot truncate answers again (https://github.com/logancyang/obsidian-copilot-preview/issues/312)", () => {
@@ -1095,7 +1164,6 @@ describe("model", () => {
         azureOpenAIApiInstanceName: "my-instance",
         azureOpenAIApiDeploymentName: "chat-deploy",
         azureOpenAIApiVersion: "2025-01-01-preview",
-        azureOpenAIApiEmbeddingDeploymentName: "embed-deploy",
       };
       settingsStore.set(settingsAtom, { ...DEFAULT_SETTINGS, ...vendorConfig });
 

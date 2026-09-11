@@ -1,5 +1,5 @@
+import { resolveEffort } from "@/lib/model-effort";
 import { OpencodeInstallModal } from "@/agentMode/backends/opencode/OpencodeInstallModal";
-import { OpencodeAbsentInstallActions } from "@/agentMode/backends/opencode/OpencodeInlineInstall";
 import OpencodeLogo from "@/agentMode/backends/opencode/logo.svg";
 import type CopilotPlugin from "@/main";
 import { logWarn } from "@/logger";
@@ -23,7 +23,7 @@ import { opencodeEnabledModelEntries, opencodeWireBaseIdFor } from "./opencodeMo
 import { OpencodeSettingsPanel } from "./OpencodeSettingsPanel";
 import { mapNodeArch, mapNodePlatform } from "./platformResolver";
 import { cacheRoot } from "@/context/conversionsLocation";
-import type { AgentSession } from "@/agentMode/session/AgentSession";
+import type { ModelSelectionSession } from "@/agentMode/session/types";
 import { simpleBinaryBackendProcess } from "@/agentMode/backends/shared/simpleBinaryBackend";
 import type {
   EffortOption,
@@ -37,6 +37,8 @@ import type {
 import type { BackendDescriptor, BackendProcess, InstallState } from "@/agentMode/session/types";
 import { EFFORT_LEVELS_ASCENDING } from "@/agentMode/session/types";
 import { findModelEntry } from "@/agentMode/session/translateBackendState";
+import { phaseLabel } from "./installProgress";
+import type { ManagedInstallActionState } from "@/agentMode/session/types";
 
 /** Config option id OpenCode uses to switch the active agent at runtime. */
 const OPENCODE_MODE_CONFIG_OPTION_ID = "mode";
@@ -107,6 +109,28 @@ export function getOpencodeBinaryManager(plugin: CopilotPlugin): OpencodeBinaryM
  */
 export { detectOpencodeCliPath } from "./opencodeCliDetector";
 
+const IDLE_MANAGED_INSTALL_ACTION = Object.freeze({
+  kind: "idle" as const,
+}) satisfies ManagedInstallActionState;
+
+function managedInstallActionState(manager: OpencodeBinaryManager): ManagedInstallActionState {
+  const state = manager.getRuntimeState();
+  if (state.kind === "installing") {
+    return {
+      kind: "running",
+      label: phaseLabel(state.progress),
+    };
+  }
+  // Keep competing setup actions disabled, but only retry failed installs or upgrades.
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/368
+  if (state.kind === "detecting" || state.kind === "busy") {
+    return { kind: "running", label: "Configuring…" };
+  }
+  if (state.kind === "error" && state.operation === "install")
+    return { kind: "error", message: state.message };
+  return IDLE_MANAGED_INSTALL_ACTION;
+}
+
 /**
  * Descriptor for the OpenCode backend. This is the contract `session/` and
  * `ui/` consume — the rest of Agent Mode never imports `OpencodeBackend`,
@@ -170,22 +194,39 @@ export const OpencodeBackendDescriptor: BackendDescriptor = {
     }).open();
   },
 
-  AbsentInstallActions: OpencodeAbsentInstallActions,
+  managedInstall: {
+    getState(plugin: CopilotPlugin): ManagedInstallActionState {
+      return managedInstallActionState(getOpencodeBinaryManager(plugin));
+    },
 
-  async upgrade(plugin: CopilotPlugin): Promise<void> {
-    const manager = getOpencodeBinaryManager(plugin);
-    const state = computeInstallState(getSettings().agentMode?.backends?.opencode);
-    if (state.kind !== "installed") return;
-    if (state.source === "custom") {
-      await manager.upgradeCustomBinary();
-    } else {
-      await manager.upgradeManaged();
-    }
+    subscribe(plugin: CopilotPlugin, onChange: () => void): () => void {
+      return getOpencodeBinaryManager(plugin).subscribeRuntimeState(onChange);
+    },
+
+    async run(plugin: CopilotPlugin): Promise<void> {
+      const manager = getOpencodeBinaryManager(plugin);
+      const state = computeInstallState(getSettings().agentMode?.backends?.opencode);
+      if (state.kind !== "installed") return;
+      if (state.source === "custom") {
+        await manager.upgradeCustomBinary();
+      } else {
+        await manager.upgradeManaged();
+      }
+    },
   },
 
-  async applySelection(session: AgentSession, selection: ModelSelection, context): Promise<void> {
+  async applySelection(
+    session: ModelSelectionSession,
+    selection: ModelSelection,
+    context
+  ): Promise<void> {
     const apply = session.getState()?.model?.apply;
-    if (apply?.kind === "setConfigOption" && apply.effortConfigId) {
+    // A config-option catalog takes bare model ids only. Effort travels through
+    // its own option when the model publishes one and is dropped otherwise; a
+    // saved level the model does not offer must never become a `/<effort>`
+    // suffix, which opencode rejects, and that rejection reverts the whole
+    // seed to the agent's own default model. https://github.com/Brevilabs/obsidian-copilot-private/issues/364
+    if (apply?.kind === "setConfigOption") {
       // The effort option is model-specific, so activate the bare model first
       // and use the option id from the refreshed state.
       const currentBase = context
@@ -196,24 +237,21 @@ export const OpencodeBackendDescriptor: BackendDescriptor = {
           opencodeWire.encode({ baseModelId: selection.baseModelId, effort: null })
         );
       }
-      if (selection.effort !== null) {
-        const refreshed = session.getState()?.model;
-        const refreshedApply = refreshed?.apply;
-        const effortConfigId =
-          refreshedApply?.kind === "setConfigOption" ? refreshedApply.effortConfigId : undefined;
-        // Only write a level the now-active model actually offers. A saved default can
-        // name a level the model has since stopped publishing, and the failed write
-        // takes the whole seeded selection down with it — the session reverts to the
-        // model it had before, not just to the default effort.
-        // https://github.com/logancyang/obsidian-copilot/issues/2917
-        const offered = findModelEntry(refreshed, selection.baseModelId)?.effortOptions;
-        if (effortConfigId && offered?.some((option) => option.value === selection.effort)) {
-          await session.setConfigOption(effortConfigId, selection.effort);
-        }
-      }
+      const refreshed = session.getState()?.model;
+      const refreshedApply = refreshed?.apply;
+      const effortConfigId =
+        refreshedApply?.kind === "setConfigOption" ? refreshedApply.effortConfigId : undefined;
+      const effort = resolveEffort(
+        selection.effort,
+        findModelEntry(refreshed, selection.baseModelId)?.effortOptions
+      );
+      if (effortConfigId && effort !== null) await session.setConfigOption(effortConfigId, effort);
       return;
     }
-    await session.applyModelWireId(opencodeWire.encode(selection));
+    const options = findModelEntry(session.getState()?.model, selection.baseModelId)?.effortOptions;
+    await session.applyModelWireId(
+      opencodeWire.encode({ ...selection, effort: resolveEffort(selection.effort, options) })
+    );
   },
 
   async prefetchEffortCatalog({

@@ -1,26 +1,30 @@
 import {
+  AgentBackendHeader,
   AgentDefaultModelSetting,
   backendDisplayOrder,
   backendNeedsSelfHostWarning,
-  InstallBadge,
   useBackendInstallState,
+  useBackendAuthState,
+  useManagedInstallActionState,
   type BackendDescriptor,
 } from "@/agentMode";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { SettingItem } from "@/components/ui/setting-item";
+import { playNotificationSound } from "@/utils/notificationSound";
+import {
+  NOTIFICATION_SOUND_OPTIONS,
+  isNotificationSoundId,
+} from "@/utils/notificationSoundCatalog";
 import { SettingSection } from "@/components/ui/setting-section";
 import { TabContent, TabItem, type TabItem as TabItemType } from "@/components/ui/setting-tabs";
-import { TruncatedText } from "@/components/TruncatedText";
 import { usePlugin } from "@/contexts/PluginContext";
-import { useChatBackendModelOptions } from "@/hooks/useChatBackendModelOptions";
 import { logError } from "@/logger";
-import { setSettings, updateSetting, useSettingsValue } from "@/settings/model";
+import { setSettings, useSettingsValue } from "@/settings/model";
 import { formatBinaryPathForDisplay } from "@/utils/binaryPath";
 import { AlertTriangle, MessageCircle } from "lucide-react";
 import React from "react";
-import { ChatModelEnableList } from "./ChatModelEnableList";
+import { QuickChatPanel } from "./QuickChatPanel";
 import { ConfiguredModelEnableList } from "./ConfiguredModelEnableList";
+import { AgentNotificationSoundSettings } from "./ui/AgentNotificationSoundSettings";
 
 /** Synthetic sub-tab id for the (non-backend) Quick Chat model curation. */
 const QUICK_CHAT_TAB_ID = "quickchat";
@@ -110,6 +114,21 @@ export const AgentSettings: React.FC = () => {
           }
           options={orderedDescriptors.map((d) => ({ label: d.displayName, value: d.id }))}
         />
+        <AgentNotificationSoundSettings
+          enabled={settings.agentMode.notificationSound}
+          onEnabledChange={(enabled) =>
+            setSettings((cur) => ({ agentMode: { ...cur.agentMode, notificationSound: enabled } }))
+          }
+          onSoundChange={(value) => {
+            if (!isNotificationSoundId(value)) return;
+            setSettings((cur) => ({
+              agentMode: { ...cur.agentMode, notificationSoundId: value },
+            }));
+            playNotificationSound(value);
+          }}
+          soundId={settings.agentMode.notificationSoundId}
+          soundOptions={NOTIFICATION_SOUND_OPTIONS}
+        />
       </SettingSection>
 
       <div className="tw-flex tw-flex-col">
@@ -150,49 +169,6 @@ export const AgentSettings: React.FC = () => {
 };
 
 /**
- * Quick Chat curation panel: which models appear in the (non-agent) chat model
- * picker. Lives under Agents per the model-management design (chat is a
- * first-class curation backend alongside the agents). Models come from the
- * BYOK / Plus registries — chat doesn't own providers.
- */
-const QuickChatPanel: React.FC = () => {
-  const settings = useSettingsValue();
-  const { options: chatModelOptions, resolveSelectionId } = useChatBackendModelOptions();
-  const resolvedDefaultModelId = resolveSelectionId(settings.defaultModelKey);
-  const hasDefault = resolvedDefaultModelId !== undefined;
-
-  return (
-    <SettingSection>
-      <div className="tw-flex tw-min-w-0 tw-flex-col tw-py-4">
-        <span className="tw-text-base tw-font-semibold">Quick Chat models</span>
-        <span className="tw-text-xs tw-text-muted">
-          Models shown in the chat model picker. Add providers on the Models (BYOK) tab.
-        </span>
-      </div>
-      <SettingItem
-        type="select"
-        title="Default model"
-        description="The model new chats start with. Pick from your enabled Quick Chat models."
-        value={resolvedDefaultModelId ?? "Select Model"}
-        onChange={(value) => {
-          if (value === "Select Model") return;
-          updateSetting("defaultModelKey", value);
-        }}
-        options={
-          hasDefault
-            ? chatModelOptions
-            : [{ label: "Select Model", value: "Select Model" }, ...chatModelOptions]
-        }
-        placeholder="Model"
-      />
-      <div className="tw-py-4">
-        <ChatModelEnableList />
-      </div>
-    </SettingSection>
-  );
-};
-
-/**
  * One per-backend panel: install header, then (when ready) the default-model
  * picker above the model enable list, then the binary/auth config. If the
  * backend is installed but no catalog is cached yet, it kicks a probe so
@@ -208,7 +184,18 @@ const BackendPanel: React.FC<{
   const manager = plugin.agentSessionManager;
 
   const installState = useBackendInstallState(descriptor, plugin);
+  const managedInstall = useManagedInstallActionState(descriptor, plugin);
+  const auth = useBackendAuthState(descriptor);
   const resolvedPath = descriptor.getResolvedBinaryPath?.(settings) ?? null;
+  const canUpdate = installState.kind === "incompatible" && descriptor.managedInstall !== undefined;
+  const updating = managedInstall.kind === "running";
+
+  const runManagedInstall = React.useCallback(() => {
+    if (!descriptor.managedInstall || updating) return;
+    descriptor.managedInstall
+      .run(plugin)
+      .catch((error) => logError(`[AgentMode] ${descriptor.id} update failed`, error));
+  }, [descriptor, plugin, updating]);
 
   // Probe when ready but uncached — the load-time preload may have skipped this
   // backend (binary installed after plugin start).
@@ -221,15 +208,7 @@ const BackendPanel: React.FC<{
       .catch((e) => logError(`[AgentMode] preload ${descriptor.id} failed`, e));
   }, [manager, descriptor.id, installState.kind]);
 
-  const Icon = descriptor.Icon;
   const showCloudWarning = backendNeedsSelfHostWarning(descriptor, settings);
-  // Only a backend the plugin can install itself offers inline actions, and
-  // that is also the only kind whose models run on the user's own keys — so the
-  // same condition gates the recommendation and the BYOK hint. A vendor backend
-  // (claude, codex) authenticates against its own subscription, where "add
-  // providers on the BYOK tab" would be wrong advice.
-  const InlineInstall =
-    installState.kind === "absent" ? descriptor.AbsentInstallActions : undefined;
 
   return (
     <div className="tw-space-y-3">
@@ -249,54 +228,17 @@ const BackendPanel: React.FC<{
           come from `SettingItem` / `EnvOverridesSetting` already do. The cloud
           warning stays outside: it qualifies the whole backend, not one row. */}
       <SettingSection>
-        <div className="tw-flex tw-flex-col tw-gap-2 tw-py-4">
-          <div className="tw-flex tw-items-center tw-justify-between tw-gap-2">
-            <div className="tw-flex tw-min-w-0 tw-items-center tw-gap-2">
-              <Icon className="tw-size-4 tw-shrink-0" />
-              <div className="tw-flex tw-min-w-0 tw-flex-col">
-                <div className="tw-flex tw-items-center tw-gap-2">
-                  <span className="tw-text-base tw-font-semibold">{descriptor.displayName}</span>
-                  <InstallBadge state={installState} />
-                  {InlineInstall && (
-                    <Badge variant="accent" className="tw-font-normal">
-                      Recommended
-                    </Badge>
-                  )}
-                </div>
-                {resolvedPath && (
-                  <TruncatedText className="tw-max-w-[90%] tw-font-mono tw-text-xs tw-text-muted">
-                    {formatBinaryPathForDisplay(resolvedPath)}
-                  </TruncatedText>
-                )}
-                {InlineInstall && (
-                  <span className="tw-text-xs tw-text-muted">
-                    Not installed — one download away.
-                  </span>
-                )}
-                {(installState.kind === "incompatible" || installState.kind === "error") && (
-                  <span className="tw-text-xs tw-text-error">{installState.message}</span>
-                )}
-              </div>
-            </div>
-            {InlineInstall ? (
-              <InlineInstall plugin={plugin} />
-            ) : (
-              <Button
-                className="tw-shrink-0"
-                size="default"
-                variant={installState.kind === "ready" ? "secondary" : "default"}
-                onClick={() => descriptor.openInstallUI(plugin)}
-              >
-                Configure
-              </Button>
-            )}
-          </div>
-          {InlineInstall && (
-            <div className="tw-text-xs tw-text-muted">
-              Works with Copilot Plus or your own API keys — add providers on the BYOK tab.
-            </div>
-          )}
-        </div>
+        <AgentBackendHeader
+          displayName={descriptor.displayName}
+          Icon={descriptor.Icon}
+          installState={installState}
+          authStatus={descriptor.auth ? auth.status : undefined}
+          managedInstall={managedInstall}
+          canUpdate={canUpdate}
+          resolvedPath={resolvedPath ? formatBinaryPathForDisplay(resolvedPath) : null}
+          onUpdate={runManagedInstall}
+          onConfigure={() => descriptor.openInstallUI(plugin)}
+        />
 
         {installState.kind === "ready" && manager && (
           <AgentDefaultModelSetting descriptor={descriptor} manager={manager} />

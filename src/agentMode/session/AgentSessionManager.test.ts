@@ -4,10 +4,13 @@
  * session-pool invariants without touching ACP or spawning a child process.
  */
 import { FileSystemAdapter, App, TFile } from "obsidian";
+import { join } from "node:path";
 import { waitFor } from "@testing-library/react";
 import { AgentSession } from "./AgentSession";
 import type { AgentModelPreloader } from "./AgentModelPreloader";
 import { buildNativeChatId } from "@/utils/nativeChatId";
+import { CHAT_AGENT_VIEWTYPE } from "@/constants";
+import { playNotificationSound } from "@/utils/notificationSound";
 import { AgentSessionIndex } from "./AgentSessionIndex";
 import { AgentSessionManager } from "./AgentSessionManager";
 import { ProjectContentTracker } from "@/context/projectContentTracker";
@@ -30,6 +33,7 @@ import {
 import type { ProjectFileRecord } from "@/projects/type";
 import { getProjectContextSignature } from "@/projects/projectContextSignature";
 import { MethodUnsupportedError } from "@/agentMode/session/errors";
+import { buildCodexModeMapping } from "@/agentMode/backends/codex/codexModeMapping";
 import type {
   BackendDescriptor,
   BackendId,
@@ -90,9 +94,20 @@ jest.mock("@/context/projectContextMaterializer", () => {
   };
 });
 
+let mockNotificationSound = true;
+
+jest.mock("@/utils/notificationSound", () => ({
+  playNotificationSound: jest.fn(),
+}));
+
 jest.mock("@/settings/model", () => ({
   getSettings: jest.fn(() => ({
-    agentMode: { activeBackend: "opencode", backends: {} },
+    agentMode: {
+      activeBackend: "opencode",
+      backends: {},
+      notificationSound: mockNotificationSound,
+      notificationSoundId: "piano",
+    },
   })),
   setSettings: jest.fn(),
   subscribeToSettingsChange: jest.fn(
@@ -235,6 +250,55 @@ const sessionCreateSpy = jest.spyOn(AgentSession, "start").mockImplementation((o
   })
 );
 
+type MockAgentChatFocus =
+  | "none"
+  | "inside"
+  | "inside-sidebar"
+  | "outside"
+  | "other-leaf"
+  | "unfocused-window";
+let mockAgentChatFocus: MockAgentChatFocus = "none";
+
+function buildWorkspace(): unknown {
+  const inside = {} as Element;
+  const outside = {} as Element;
+  const ownerDocument = {
+    hasFocus: () => mockAgentChatFocus !== "unfocused-window",
+    get activeElement() {
+      return ["inside", "inside-sidebar", "unfocused-window"].includes(mockAgentChatFocus)
+        ? inside
+        : outside;
+    },
+  } as Document;
+  const containerEl = {
+    doc: ownerDocument,
+    ownerDocument,
+    contains: (element: Element | null) => element === inside,
+  } as HTMLElement;
+  const chatLeaf = {
+    view: {
+      containerEl,
+      getViewType: () => CHAT_AGENT_VIEWTYPE,
+    },
+  };
+  const otherLeaf = {
+    view: {
+      containerEl: { ownerDocument } as HTMLElement,
+      getViewType: () => "markdown",
+    },
+  };
+  return {
+    getMostRecentLeaf: jest.fn(() => {
+      if (mockAgentChatFocus === "none") return null;
+      if (["inside-sidebar", "other-leaf"].includes(mockAgentChatFocus)) return otherLeaf;
+      return chatLeaf;
+    }),
+    getLeavesOfType: jest.fn((viewType: string) =>
+      viewType === CHAT_AGENT_VIEWTYPE ? [chatLeaf] : []
+    ),
+  };
+}
+
 function buildApp(basePath = "/vault"): App {
   const adapter = new (FileSystemAdapter as unknown as new (basePath: string) => unknown)(basePath);
   // The ProjectContentTracker registers vault AND metadata-cache event listeners
@@ -256,6 +320,7 @@ function buildApp(basePath = "/vault"): App {
   return {
     vault: { adapter, ...events, ...vaultFiles },
     metadataCache: { ...events },
+    workspace: buildWorkspace(),
   } as unknown as App;
 }
 
@@ -316,6 +381,9 @@ function buildManager(
 
 beforeEach(() => {
   mockBackendIsRunning = true;
+  mockNotificationSound = true;
+  mockAgentChatFocus = "none";
+  (playNotificationSound as jest.Mock).mockClear();
   mockBackendStart.mockClear();
   mockBackendShutdown.mockClear();
   mockSetPermissionPrompter.mockClear();
@@ -330,101 +398,232 @@ beforeEach(() => {
   settingsChangeCallbacks.clear();
 });
 
-describe("AgentSessionManager.createSession", () => {
-  it("creates a session and sets it as the active one", async () => {
-    const mgr = buildManager();
-    const session = await mgr.createSession();
-    expect(mgr.getSessions()).toEqual([session]);
-    expect(mgr.getActiveSession()).toBe(session);
-    expect(mgr.getActiveChatUIState()).not.toBeNull();
-    expect(mgr.getChatUIState(session.internalId)).toBe(mgr.getActiveChatUIState());
-  });
+describe("AgentSessionManager", () => {
+  describe("AgentSessionManager", () => {
+    describe("createSession()", () => {
+      it("creates a session and sets it as the active one", async () => {
+        const mgr = buildManager();
+        const session = await mgr.createSession();
+        expect(mgr.getSessions()).toEqual([session]);
+        expect(mgr.getActiveSession()).toBe(session);
+        expect(mgr.getActiveChatUIState()).not.toBeNull();
+        expect(mgr.getChatUIState(session.internalId)).toBe(mgr.getActiveChatUIState());
+      });
 
-  it("creating a second session sets it as active but keeps the first in the pool", async () => {
-    const mgr = buildManager();
-    const a = await mgr.createSession();
-    const b = await mgr.createSession();
-    expect(mgr.getSessions()).toEqual([a, b]);
-    expect(mgr.getActiveSession()).toBe(b);
-  });
+      it("creating a second session sets it as active but keeps the first in the pool", async () => {
+        const mgr = buildManager();
+        const a = await mgr.createSession();
+        const b = await mgr.createSession();
+        expect(mgr.getSessions()).toEqual([a, b]);
+        expect(mgr.getActiveSession()).toBe(b);
+      });
 
-  it("two concurrent createSession calls each spawn their own session", async () => {
-    const mgr = buildManager();
-    const [a, b] = await Promise.all([mgr.createSession(), mgr.createSession()]);
-    expect(a).not.toBe(b);
-    expect(sessionCreateSpy).toHaveBeenCalledTimes(2);
-    expect(mgr.getSessions()).toHaveLength(2);
-  });
+      it("two concurrent createSession calls each spawn their own session", async () => {
+        const mgr = buildManager();
+        const [a, b] = await Promise.all([mgr.createSession(), mgr.createSession()]);
+        expect(a).not.toBe(b);
+        expect(sessionCreateSpy).toHaveBeenCalledTimes(2);
+        expect(mgr.getSessions()).toHaveLength(2);
+      });
 
-  it("only spawns the backend once across multiple createSession calls", async () => {
-    const mgr = buildManager();
-    await mgr.createSession();
-    await mgr.createSession();
-    await mgr.createSession();
-    expect(mockBackendStart).toHaveBeenCalledTimes(1);
-  });
+      it("only spawns the backend once across multiple createSession calls", async () => {
+        const mgr = buildManager();
+        await mgr.createSession();
+        await mgr.createSession();
+        await mgr.createSession();
+        expect(mockBackendStart).toHaveBeenCalledTimes(1);
+      });
 
-  it("leaves the seed unset when a catalog exists but no explicit default is stored", async () => {
-    const mgr = buildManager({
-      getCachedModelCatalog: jest.fn(() => modelCatalog("catalog-first")),
+      it("leaves the seed unset when a catalog exists but no explicit default is stored", async () => {
+        const mgr = buildManager({
+          getCachedModelCatalog: jest.fn(() => modelCatalog("catalog-first")),
+        });
+
+        await mgr.createSession();
+        expect(sessionCreateSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ defaultModelSelection: undefined })
+        );
+      });
+
+      it("leaves the seed unset when no default is stored and no catalog is probed", async () => {
+        // With nothing baked we have no native id to target, so the seed stays
+        // undefined and the session inherits the backend's own native behavior.
+        const mgr = buildManager();
+        await mgr.createSession();
+        expect(sessionCreateSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ defaultModelSelection: undefined })
+        );
+      });
+
+      it("a concurrent create that succeeds does not wipe a sibling create's lastError", async () => {
+        const mgr = buildManager();
+        // First call fails. Second call starts before first settles, so the
+        // pre-fix code would have cleared `lastError` at the second call's start
+        // and the failure surfaced by the first would be lost.
+        sessionCreateSpy
+          .mockImplementationOnce((opts) =>
+            makeMockSession({
+              internalId: opts.internalId,
+              backendId: opts.backendId,
+              // Failing session: ready rejects after a microtask. The second
+              // create's ready resolves immediately; with concurrent flushing,
+              // we still want the first failure to win in lastError.
+              ready: (async () => {
+                await Promise.resolve();
+                await Promise.resolve();
+                throw new Error("boom");
+              })(),
+            })
+          )
+          .mockImplementationOnce((opts) =>
+            makeMockSession({
+              internalId: opts.internalId,
+              backendSessionId: "backend-ok",
+              backendId: opts.backendId,
+            })
+          );
+
+        const failingSession = await mgr.createSession();
+        const succeedingSession = await mgr.createSession();
+        // Drain the ready continuations so lastError is populated.
+        await failingSession.ready.catch(() => undefined);
+        await succeedingSession.ready;
+        // Allow the manager's `.finally` continuation to run.
+        await Promise.resolve();
+        // Several microtasks: session creation awaits the scope's instruction ensure before the
+        // failing spawn settles.
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+
+        expect(mgr.getLastError()).toMatch(/boom/);
+      });
     });
 
-    await mgr.createSession();
-    expect(sessionCreateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultModelSelection: undefined })
-    );
-  });
+    describe("createGlobalSessionWithDraft()", () => {
+      it("binds an unsent draft to the new logical composer and consumes it once for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", async () => {
+        const mgr = buildManager();
 
-  it("leaves the seed unset when no default is stored and no catalog is probed", async () => {
-    // With nothing baked we have no native id to target, so the seed stays
-    // undefined and the session inherits the backend's own native behavior.
-    const mgr = buildManager();
-    await mgr.createSession();
-    expect(sessionCreateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultModelSelection: undefined })
-    );
-  });
+        const session = await mgr.createGlobalSessionWithDraft("Review this repair");
 
-  it("a concurrent create that succeeds does not wipe a sibling create's lastError", async () => {
-    const mgr = buildManager();
-    // First call fails. Second call starts before first settles, so the
-    // pre-fix code would have cleared `lastError` at the second call's start
-    // and the failure surfaced by the first would be lost.
-    sessionCreateSpy
-      .mockImplementationOnce((opts) =>
-        makeMockSession({
-          internalId: opts.internalId,
-          backendId: opts.backendId,
-          // Failing session: ready rejects after a microtask. The second
-          // create's ready resolves immediately; with concurrent flushing,
-          // we still want the first failure to win in lastError.
-          ready: (async () => {
-            await Promise.resolve();
-            await Promise.resolve();
-            throw new Error("boom");
-          })(),
-        })
-      )
-      .mockImplementationOnce((opts) =>
-        makeMockSession({
-          internalId: opts.internalId,
-          backendSessionId: "backend-ok",
-          backendId: opts.backendId,
-        })
-      );
+        expect(mgr.getActiveSession()).toBe(session);
+        expect(mgr.consumeInitialDraft(session.chatInputId)).toBe("Review this repair");
+        expect(mgr.consumeInitialDraft(session.chatInputId)).toBeUndefined();
+      });
 
-    const failingSession = await mgr.createSession();
-    const succeedingSession = await mgr.createSession();
-    // Drain the ready continuations so lastError is populated.
-    await failingSession.ready.catch(() => undefined);
-    await succeedingSession.ready;
-    // Allow the manager's `.finally` continuation to run.
-    await Promise.resolve();
-    // Several microtasks: session creation awaits the scope's instruction ensure before the
-    // failing spawn settles.
-    for (let i = 0; i < 10; i++) await Promise.resolve();
+      it("switches directly to the requested scope without spawning an extra blank session for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", async () => {
+        const projectId = "project-with-no-global-session";
+        const recordSpy = jest
+          .spyOn(projectsState, "getCachedProjectRecordById")
+          .mockImplementation((id: string) =>
+            id === projectId
+              ? ({
+                  filePath: "Projects/project-with-no-global-session/project.md",
+                  project: { id: projectId },
+                } as unknown as ReturnType<typeof projectsState.getCachedProjectRecordById>)
+              : undefined
+          );
+        try {
+          const mgr = buildManager();
+          await mgr.createSession(undefined, projectId);
 
-    expect(mgr.getLastError()).toMatch(/boom/);
+          const session = await mgr.createGlobalSessionWithDraft("Review this repair");
+
+          expect(mgr.getSessions()).toHaveLength(2);
+          expect(
+            mgr.getSessions().filter((candidate) => candidate.projectId === GLOBAL_SCOPE)
+          ).toEqual([session]);
+          expect(mgr.getActiveSession()).toBe(session);
+        } finally {
+          recordSpy.mockRestore();
+        }
+      });
+
+      it("drops the initial draft when the session closes before the composer consumes it for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", async () => {
+        const mgr = buildManager();
+        const session = await mgr.createGlobalSessionWithDraft("Review this repair");
+
+        await mgr.closeSession(session.internalId);
+
+        expect(mgr.consumeInitialDraft(session.chatInputId)).toBeUndefined();
+      });
+
+      it("drops the initial draft when session creation fails for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", async () => {
+        const projectId = "project-before-failed-draft";
+        const recordSpy = jest
+          .spyOn(projectsState, "getCachedProjectRecordById")
+          .mockImplementation((id: string) =>
+            id === projectId
+              ? ({
+                  filePath: "Projects/project-before-failed-draft/project.md",
+                  project: { id: projectId },
+                } as unknown as ReturnType<typeof projectsState.getCachedProjectRecordById>)
+              : undefined
+          );
+        try {
+          const mgr = buildManager();
+          await mgr.enterProject(projectId);
+          const previousSession = mgr.getActiveSession();
+          expect(previousSession).not.toBeNull();
+          let failedChatInputId: string | undefined;
+          sessionCreateSpy.mockImplementationOnce((opts) => {
+            failedChatInputId = opts.chatInputId;
+            throw new Error("session creation failed");
+          });
+
+          await expect(mgr.createGlobalSessionWithDraft("Review this repair")).rejects.toThrow(
+            "session creation failed"
+          );
+
+          expect(failedChatInputId).toBeDefined();
+          expect(mgr.consumeInitialDraft(failedChatInputId as string)).toBeUndefined();
+          expect(mgr.getActiveSession()).toBe(previousSession);
+        } finally {
+          recordSpy.mockRestore();
+        }
+      });
+
+      it("does not roll back across newer ABA scope navigation for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", async () => {
+        const recordSpy = jest
+          .spyOn(projectsState, "getCachedProjectRecordById")
+          .mockImplementation((id: string) =>
+            ["project-a", "project-b"].includes(id)
+              ? ({
+                  filePath: `Projects/${id}/project.md`,
+                  project: { id },
+                } as unknown as ReturnType<typeof projectsState.getCachedProjectRecordById>)
+              : undefined
+          );
+        try {
+          const mgr = buildManager();
+          const globalSession = await mgr.createSession(undefined, GLOBAL_SCOPE);
+          const projectBSession = await mgr.createSession(undefined, "project-b");
+          const projectASession = await mgr.createSession(undefined, "project-a");
+          mgr.setActiveSession(projectASession.internalId);
+
+          let releaseInstructionEnsure: (() => void) | undefined;
+          ensureAgentsFileForDiscoverySpy.mockImplementationOnce(
+            () =>
+              new Promise<void>((resolve) => {
+                releaseInstructionEnsure = resolve;
+              })
+          );
+          sessionCreateSpy.mockImplementationOnce(() => {
+            throw new Error("session creation failed");
+          });
+
+          const pendingDraft = mgr.createGlobalSessionWithDraft("Review this repair");
+          await waitFor(() => expect(releaseInstructionEnsure).toBeDefined());
+          mgr.setActiveSession(projectBSession.internalId);
+          mgr.setActiveSession(globalSession.internalId);
+          releaseInstructionEnsure?.();
+
+          await expect(pendingDraft).rejects.toThrow("session creation failed");
+          expect(mgr.getActiveProjectId()).toBe(GLOBAL_SCOPE);
+          expect(mgr.getActiveSession()).toBe(globalSession);
+        } finally {
+          recordSpy.mockRestore();
+        }
+      });
+    });
   });
 });
 
@@ -1059,18 +1258,20 @@ describe("AgentSessionManager attention tracking", () => {
     expect(b.getNeedsAttention()).toBe(true);
   });
 
-  it("flags a backgrounded session that pauses for permission", async () => {
+  it("flags a backgrounded session when it starts awaiting permission (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
     const mgr = buildManager();
     const a = await mgr.createSession();
     const b = await mgr.createSession();
     mgr.setActiveSession(a.internalId);
     const bHandle = getSessionTestHandle(b);
+
     bHandle.setStatus("running");
     bHandle.setStatus("awaiting_permission");
+
     expect(b.getNeedsAttention()).toBe(true);
   });
 
-  it("does not flag the active session", async () => {
+  it("does not flag the active session even when its chat is not focused (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
     const mgr = buildManager();
     const a = await mgr.createSession();
     expect(mgr.getActiveSession()).toBe(a);
@@ -1078,6 +1279,123 @@ describe("AgentSessionManager attention tracking", () => {
     aHandle.setStatus("running");
     aHandle.setStatus("idle");
     expect(a.getNeedsAttention()).toBe(false);
+  });
+
+  it("chimes when a turn ends (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
+    const mgr = buildManager();
+    const a = await mgr.createSession();
+    expect(mgr.getActiveSession()).toBe(a);
+    const aHandle = getSessionTestHandle(a);
+
+    aHandle.setStatus("running");
+    aHandle.setStatus("idle");
+
+    expect(playNotificationSound).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["the most recent Agent Chat", "inside"],
+    ["a sidebar Agent Chat whose leaf is not most recent", "inside-sidebar"],
+  ] as const)(
+    "stays silent when focus is inside %s (https://github.com/logancyang/obsidian-copilot/issues/2987)",
+    async (_label, focus) => {
+      mockAgentChatFocus = focus;
+      const mgr = buildManager();
+      const session = await mgr.createSession();
+      const handle = getSessionTestHandle(session);
+
+      handle.setStatus("running");
+      handle.setStatus("idle");
+
+      expect(playNotificationSound).not.toHaveBeenCalled();
+      expect(session.getNeedsAttention()).toBe(false);
+    }
+  );
+
+  it.each([
+    ["a modal outside the chat has focus", "outside"],
+    ["another workspace leaf has focus", "other-leaf"],
+    ["the Obsidian window is unfocused", "unfocused-window"],
+  ] as const)(
+    "chimes when %s (https://github.com/logancyang/obsidian-copilot/issues/2987)",
+    async (_label, focus) => {
+      mockAgentChatFocus = focus;
+      const mgr = buildManager();
+      const session = await mgr.createSession();
+      const handle = getSessionTestHandle(session);
+
+      handle.setStatus("running");
+      handle.setStatus("idle");
+
+      expect(playNotificationSound).toHaveBeenCalledWith("piano");
+      expect(session.getNeedsAttention()).toBe(false);
+    }
+  );
+
+  it("chimes when a session starts awaiting permission (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
+    const mgr = buildManager();
+    const a = await mgr.createSession();
+    const aHandle = getSessionTestHandle(a);
+
+    aHandle.setStatus("running");
+    aHandle.setStatus("awaiting_permission");
+
+    expect(playNotificationSound).toHaveBeenCalledTimes(1);
+    expect(a.getNeedsAttention()).toBe(false);
+  });
+
+  it("stays silent when the focused Agent Chat starts awaiting permission (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
+    mockAgentChatFocus = "inside";
+    const mgr = buildManager();
+    const session = await mgr.createSession();
+    const handle = getSessionTestHandle(session);
+
+    handle.setStatus("running");
+    handle.setStatus("awaiting_permission");
+
+    expect(playNotificationSound).not.toHaveBeenCalled();
+    expect(session.getNeedsAttention()).toBe(false);
+  });
+
+  it("chimes when a backgrounded session finishes (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
+    mockAgentChatFocus = "inside";
+    const mgr = buildManager();
+    const a = await mgr.createSession();
+    const b = await mgr.createSession();
+    mgr.setActiveSession(a.internalId);
+    const bHandle = getSessionTestHandle(b);
+
+    bHandle.setStatus("running");
+    bHandle.setStatus("idle");
+
+    expect(playNotificationSound).toHaveBeenCalledWith("piano");
+    expect(b.getNeedsAttention()).toBe(true);
+  });
+
+  it("stays silent when the notification sound setting is off (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
+    mockNotificationSound = false;
+    const mgr = buildManager();
+    const a = await mgr.createSession();
+    const b = await mgr.createSession();
+    mgr.setActiveSession(a.internalId);
+    const bHandle = getSessionTestHandle(b);
+
+    bHandle.setStatus("running");
+    bHandle.setStatus("idle");
+
+    expect(playNotificationSound).not.toHaveBeenCalled();
+    expect(b.getNeedsAttention()).toBe(true);
+  });
+
+  it("stays silent on the starting → idle transition of a fresh session (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
+    const mgr = buildManager();
+    const a = await mgr.createSession();
+    const aHandle = getSessionTestHandle(a);
+
+    aHandle.setStatus("starting");
+    aHandle.setStatus("idle");
+
+    expect(playNotificationSound).not.toHaveBeenCalled();
   });
 
   it("does not flag the starting → idle transition", async () => {
@@ -1240,7 +1558,7 @@ describe("AgentSessionManager.getAttentionChatIds", () => {
     expect(mgr.getAttentionChatIds().has(nativeId)).toBe(true);
   });
 
-  it("does not include the active session (it never flags attention)", async () => {
+  it("does not include the active session even when its chat is not focused (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
     const mgr = buildManager();
     const a = await mgr.createSession();
     const aHandle = getSessionTestHandle(a);
@@ -1614,6 +1932,23 @@ describe("AgentSessionManager.applyMode", () => {
 
     expect(session.setMode).toHaveBeenCalledWith("cached-auto");
   });
+
+  it("preserves current Codex mode ids without an inventory (https://github.com/logancyang/obsidian-copilot/issues/2916)", async () => {
+    const manager = buildModeManager(buildCodexModeMapping);
+    const session = await manager.createSession("claude");
+
+    for (const [mode, nativeId] of [
+      ["default", "agent"],
+      ["plan", "read-only"],
+      ["auto", "agent-full-access"],
+    ] as const) {
+      await manager.applyMode("claude", mode, { kind: "setMode", nativeId });
+    }
+
+    expect(session.setMode).toHaveBeenNthCalledWith(1, "agent");
+    expect(session.setMode).toHaveBeenNthCalledWith(2, "read-only");
+    expect(session.setMode).toHaveBeenNthCalledWith(3, "agent-full-access");
+  });
 });
 
 describe("AgentSessionManager default-model settings subscription", () => {
@@ -1651,6 +1986,69 @@ describe("AgentSessionManager default-model settings subscription", () => {
       getWarmProcs: jest.fn(() => []),
     };
   }
+
+  it.each([
+    { effort: null, confirmed: "low", expected: "low" },
+    { effort: "removed", confirmed: "low", expected: "low" },
+    { effort: "high", confirmed: "high", expected: undefined },
+    { effort: "removed", confirmed: "high", expected: undefined },
+  ])(
+    "https://github.com/Brevilabs/obsidian-copilot-private/issues/219 repairs saved $effort only when the fallback is confirmed ($confirmed)",
+    async ({ effort, confirmed, expected }) => {
+      const settings = {
+        agentMode: {
+          activeBackend: "opencode",
+          backends: { opencode: { defaultModel: { baseModelId: "opus", effort } } },
+        },
+      };
+      (mockedGetSettings as jest.Mock).mockReturnValue(settings);
+      (mockedSetSettings as jest.Mock).mockClear();
+      const resolved = confirmed;
+      sessionCreateSpy.mockImplementationOnce((opts) => {
+        const session = makeMockSession({ internalId: opts.internalId, backendId: opts.backendId });
+        jest.spyOn(session, "getState").mockReturnValue({
+          model: {
+            current: { baseModelId: "opus", effort: resolved },
+            apply: { kind: "setModel" },
+            availableModels: [
+              {
+                baseModelId: "opus",
+                name: "Opus",
+                provider: null,
+                effortOptions: [
+                  { value: "high", label: "High" },
+                  { value: "low", label: "Low" },
+                ],
+              },
+            ],
+          },
+          mode: null,
+        });
+        return session;
+      });
+      const descriptor = makeApplySelectionDescriptor(jest.fn());
+      const mgr = new AgentSessionManager(
+        buildApp(),
+        buildPlugin() as unknown as ConstructorParameters<typeof AgentSessionManager>[1],
+        {
+          permissionPrompter: jest.fn(),
+          resolveDescriptor: () => descriptor,
+          modelPreloader: makeStubPreloader() as unknown as ConstructorParameters<
+            typeof AgentSessionManager
+          >[2]["modelPreloader"],
+        }
+      );
+      await mgr.createSession();
+      await flushApplyChain();
+      expect(readPersistedDefault(mockedSetSettings as jest.Mock, "opencode")).toEqual(
+        expected === undefined ? undefined : { baseModelId: "opus", effort: expected }
+      );
+      (mockedGetSettings as jest.Mock).mockReturnValue({
+        agentMode: { activeBackend: "opencode", backends: {} },
+      });
+      await mgr.shutdown();
+    }
+  );
 
   it("re-applies a changed default to a live session on that backend", async () => {
     const applySelectionMock = jest.fn(async () => {});
@@ -2596,7 +2994,7 @@ describe("AgentSessionManager chat history aggregation", () => {
     ]);
     try {
       const sessionExistsLocally = jest.fn(
-        async ({ cwd }: { cwd: string }) => cwd === "/vault/Projects/proj-1"
+        async ({ cwd }: { cwd: string }) => cwd === join("/vault", "Projects", "proj-1")
       );
       const { manager } = buildHistoryHarness({
         files: {
@@ -2615,7 +3013,7 @@ describe("AgentSessionManager chat history aggregation", () => {
       expect(titles).toContain("Project chat");
       expect(sessionExistsLocally).toHaveBeenCalledWith({
         sessionId: "proj-sess",
-        cwd: "/vault/Projects/proj-1",
+        cwd: join("/vault", "Projects", "proj-1"),
       });
     } finally {
       projectsState.updateCachedProjectRecords([]);
@@ -2659,7 +3057,7 @@ describe("AgentSessionManager chat history aggregation", () => {
       expect(sessionExistsLocally).toHaveBeenCalledWith({ sessionId: "g-sess", cwd: "/vault" });
       expect(sessionExistsLocally).toHaveBeenCalledWith({
         sessionId: "p-sess",
-        cwd: "/vault/Projects/proj-1",
+        cwd: join("/vault", "Projects", "proj-1"),
       });
     } finally {
       projectsState.updateCachedProjectRecords([]);
@@ -2704,7 +3102,7 @@ describe("AgentSessionManager chat history aggregation", () => {
       expect(titles).not.toContain("Foreign project chat");
       expect(sessionExistsLocally).toHaveBeenCalledWith({
         sessionId: "foreign-proj",
-        cwd: "/vault/Projects/proj-1",
+        cwd: join("/vault", "Projects", "proj-1"),
       });
       // The native twin is tombstoned, same as the global non-resumable path.
       expect(await index.isTombstoned("opencode", "foreign-proj")).toBe(true);

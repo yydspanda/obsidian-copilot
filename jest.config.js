@@ -1,9 +1,10 @@
 module.exports = {
   preset: "ts-jest",
   testEnvironment: "jsdom",
-  roots: ["<rootDir>/src", "<rootDir>/dev"],
+  roots: ["<rootDir>/src", "<rootDir>/dev", "<rootDir>/scripts"],
   transform: {
     "^.+\\.(js|jsx|ts|tsx)$": "ts-jest",
+    "^.+\\.md$": "<rootDir>/jest.textTransform.js",
   },
   moduleNameMapper: {
     "\\.svg$": "<rootDir>/__mocks__/svg.js",
@@ -13,10 +14,6 @@ module.exports = {
     // jsdom; Jest can't parse ESM without extra config, so point at the CJS
     // build it ships under dist/.
     "^yaml$": "<rootDir>/node_modules/yaml/dist/index.js",
-    // @orama/orama resolves to its ESM "browser" entry under jsdom, which Jest
-    // can't parse; point at the CJS build it ships under dist/commonjs/ (same
-    // reason as yaml above).
-    "^@orama/orama$": "<rootDir>/node_modules/@orama/orama/dist/commonjs/index.js",
     // @anthropic-ai/sdk publishes its lib/ entry points through an "exports"
     // wildcard that Jest's resolver does not expand, so @langchain/anthropic's
     // require of one fails to resolve. Point at the CJS build directly.
@@ -27,7 +24,12 @@ module.exports = {
     "^react-resizable-panels$": "<rootDir>/__mocks__/react-resizable-panels.js",
   },
   testRegex: ".*\\.test\\.(jsx?|tsx?)$",
-  moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json", "node"],
+  moduleFileExtensions: ["ts", "tsx", "js", "jsx", "json", "node", "md"],
   testPathIgnorePatterns: ["/node_modules/"],
+  // Markdown shipped by the openartifacts package goes through the text transform above.
+  transformIgnorePatterns: [
+    "[/\\\\]node_modules[/\\\\](?!openartifacts[/\\\\])",
+    "\\.pnp\\.[^\\/]+$",
+  ],
   setupFiles: ["<rootDir>/jest.setup.js"],
 };

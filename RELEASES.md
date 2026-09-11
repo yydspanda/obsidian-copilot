@@ -1,5 +1,144 @@
 # Release Notes
 
+# v4.0.7 - GPT-6 Astra, meet your notes
+
+![GPT-6 Astra galaxy artwork with OpenAI and Copilot logos](https://github.com/user-attachments/assets/b801ff23-cc12-41c3-924e-0b70bec698bc)
+
+GPT-6 Astra is here, and we want you to try it where your ideas already live. To celebrate, we've given Codex in Copilot a major setup upgrade: install it inside Obsidian, sign in through your browser, and choose your model and reasoning effort without a wall of duplicate entries. Bring a question you've been saving, a draft that needs another pass, or a folder of research. See what Astra can do with your notes. (https://developers.openai.com/api/docs/models/gpt-6-astra)
+
+## Install Codex and sign in
+
+Open Codex's **Configure** dialog and choose **Managed by Copilot** to download Codex and its adapter, with no Node.js, npm, or terminal setup required. Click **Sign in** to continue in your browser, or choose **My own binary** to keep using an installation you manage yourself. ([#3125](https://github.com/logancyang/obsidian-copilot/pull/3125), [#3117](https://github.com/logancyang/obsidian-copilot/pull/3117), @zeroliu)
+
+![Configure Codex with Managed by Copilot, Download & install, and sign-in status](https://github.com/user-attachments/assets/6e4d3ba4-4b7a-440d-b7ba-0b828cc0da39)
+
+## Choose your model and how deeply it thinks
+
+Codex now shows one entry per model, with a separate choice of the reasoning efforts your adapter supports. Pick GPT-6 Astra when it's available to your account, choose an effort, and get to work; your saved enabled models and default selection carry forward when you upgrade. ([#2766](https://github.com/logancyang/obsidian-copilot/pull/2766), [#2767](https://github.com/logancyang/obsidian-copilot/pull/2767), @zeroliu)
+
+![Codex model picker with GPT-6 Astra selected and a separate reasoning-effort slider](https://github.com/user-attachments/assets/359b323b-a07e-4b81-ae25-e083ff434b70)
+
+## Publish notes from Agent Chat again
+
+Publishing a note to OpenArtifacts from Agent Chat works again, including on Windows. Ask Claude Code, Codex, or OpenCode to publish a note: the agent writes the page as an HTML file, tells you where it is so you can open it in your browser, and uploads it only after you say so. Nothing else needs to be installed, and notes you shared earlier keep their page and update in place. ([#3157](https://github.com/logancyang/obsidian-copilot/pull/3157), [#3122](https://github.com/logancyang/obsidian-copilot/pull/3122), @logancyang)
+
+## Enhancements
+
+- **Browse all your projects in one place.** Search project names and descriptions inline, then keep scrolling to reach older projects. ([#3119](https://github.com/logancyang/obsidian-copilot/pull/3119), @logancyang)
+- **Keep relevant notes visible while you chat.** The **Open in Separate Pane** button in Relevant Notes opens them in their own view, so you can keep them visible while chatting with the agent. ([#3130](https://github.com/logancyang/obsidian-copilot/pull/3130), @brevilabs-agent-bot[bot])
+
+## Fixes
+
+- **Codex updates preserve running installations.** A replacement is verified before Copilot selects it, and previous downloads remain available to sessions already using them. ([#3126](https://github.com/logancyang/obsidian-copilot/pull/3126), @zeroliu)
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
+# v4.0.6 - Note indexing with Miyo and Relevant Note upgrade
+
+![Relevant Notes in Obsidian, with a separate Powered by Miyo logo below the screenshot](https://github.com/user-attachments/assets/d3086fac-635a-46c5-b12b-bb4b4d4a1830)
+
+Copilot’s note search gets an upgrade with Miyo. **Live** updates in Relevant Notes bring related notes into view as you write, so you can build on ideas from across your vault without stopping to search. ([#3097](https://github.com/logancyang/obsidian-copilot/pull/3097), [#3092](https://github.com/logancyang/obsidian-copilot/pull/3092), [#2991](https://github.com/logancyang/obsidian-copilot/pull/2991), @zeroliu)
+
+[Check out a live demo for the Live updates in Relevant Notes.](https://github.com/user-attachments/assets/eff26bdc-74cb-46fa-a25f-b30139fc9850).
+
+## Enhancements
+
+- **See why a note is missing.** Relevant Notes tells you when Miyo is disconnected and explains why a note is not available for search. ([#2992](https://github.com/logancyang/obsidian-copilot/pull/2992), [#3088](https://github.com/logancyang/obsidian-copilot/pull/3088), @zeroliu)
+
+- **A smaller plugin download.** Copilot 4.0.6 saves about **140 KB** compared with 4.0.5. The retired indexing system is gone, and Copilot cleans up recognized old index files automatically, preserving your notes. ([#3091](https://github.com/logancyang/obsidian-copilot/pull/3091), [#3092](https://github.com/logancyang/obsidian-copilot/pull/3092), [#3094](https://github.com/logancyang/obsidian-copilot/pull/3094), @zeroliu)
+
+## Fixes
+
+- **New opencode chats use your chosen default model.** A leftover thinking-effort setting no longer makes a new chat fall back to a different model. ([#3098](https://github.com/logancyang/obsidian-copilot/pull/3098), @logancyang)
+- **Codex setup uses its bundled login tool.** The setup instructions now use `codex-acp cli login`, fixing the login path for users who installed the adapter without a separate Codex CLI. ([#3081](https://github.com/logancyang/obsidian-copilot/pull/3081), @zeroliu)
+- **Chat prompts respect reduced motion.** When your system requests less animation, the empty composer shows a steady hint instead of rotating suggestions. ([#3079](https://github.com/logancyang/obsidian-copilot/pull/3079), @zeroliu)
+
+## Breaking Changes
+
+- **Keep the folder rules you set in Miyo.** Miyo becomes the source of truth that decides which notes to embed. When adding a new vault, review its folder rules there, since Copilot's old search exclusions are no longer copied into new Miyo connections. ([#3100](https://github.com/logancyang/obsidian-copilot/pull/3100), @zeroliu)
+- **Vault QA has been retired.** Quick chat now only include the free chat and copilot plus mode. ([#3093](https://github.com/logancyang/obsidian-copilot/pull/3093), @zeroliu). We are actively working on a new quick chat mode to level up the experience in the upcoming releases.
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
+# v4.0.5 - See what's new in Copilot without leaving Obsidian
+
+![Copilot's update notice and the release notes dialog inside Obsidian](https://github.com/user-attachments/assets/20bb1f1f-ff8a-47d6-90d2-6eec3a43cfbc)
+
+Copilot now tells you when a newer version is available. Read the full release notes inside Obsidian, then go straight to Community Plugins to update. ([#3007](https://github.com/logancyang/obsidian-copilot/pull/3007), @zeroliu)
+
+## Fix skill warnings with Copilot Agent
+
+![Skill warnings in Copilot settings with the Fix with Agent dialog](https://github.com/user-attachments/assets/8995d171-d751-4da3-9cdf-f07e3dbeddda)
+
+Copilot now catches `SKILL.md` format problems and shows which files need attention and why. With **Fix with Agent**, the Copilot Agent you already use can fix those warnings for you. ([#3037](https://github.com/logancyang/obsidian-copilot/pull/3037), [#3038](https://github.com/logancyang/obsidian-copilot/pull/3038), [#3051](https://github.com/logancyang/obsidian-copilot/pull/3051), @brevilabs-agent-bot)
+
+## Publishing moves to OpenArtifacts
+
+Symposium is now [OpenArtifacts](https://openartifacts.ai). Every new page your agent publishes goes to OpenArtifacts, and the pages you published on Symposium before redirect to their new OpenArtifacts address, so existing links keep working and you can still update or withdraw those pages from the same note. Older Copilot versions can no longer publish, so update to keep publishing. ([#3071](https://github.com/logancyang/obsidian-copilot/pull/3071), @logancyang)
+
+- **Your agent's publishing Skill follows along.** `symposium-publish` becomes `openartifacts-publish` on the next start, keeps the agents you enabled it for, and ships a `research-memo` report theme it applies by default. ([#3071](https://github.com/logancyang/obsidian-copilot/pull/3071), @logancyang)
+- **Publish history moves to `.openartifacts`.** The hidden `.symposium` folder in your vault is renamed once, with its history intact. ([#3071](https://github.com/logancyang/obsidian-copilot/pull/3071), @logancyang)
+
+## ✨ Enhancements
+
+- **Quick Chat now has two clear modes.** Chat (free) answers from context you attach, while Copilot Plus can search your vault with Miyo when it is enabled or keyword search when it is disabled. The retired Vault QA mode now opens as Chat (free), and Free Chat and Copilot Plus remain separate experiences. (@zeroliu)
+- **Old Copilot index files are cleaned up automatically.** Copilot no longer keeps settings or files for its retired local embedding index. On upgrade, it removes only recognized index artifacts and leaves every other vault and Obsidian configuration file alone. (@zeroliu)
+- **Browse all Recent Chats in one place.** The searchable list now loads older chats as you scroll instead of opening a second **View all chats** window. ([#3040](https://github.com/logancyang/obsidian-copilot/issues/3040), [#3041](https://github.com/logancyang/obsidian-copilot/pull/3041), @logancyang)
+- **Questions and permission requests stay in view.** Agent Chat keeps actions above the composer even when you are reading earlier output, and concurrent Claude chats no longer show another session's request. ([#2948](https://github.com/logancyang/obsidian-copilot/issues/2948), [#3067](https://github.com/logancyang/obsidian-copilot/pull/3067), @brevilabs-agent-bot)
+
+## 🛠️ Bug Fixes
+
+- **Stopped turns keep their last usage reading.** A new Agent session starts with an empty context ring instead of a misleading zero, and stopping a later turn no longer erases the last valid reading. ([#2975](https://github.com/logancyang/obsidian-copilot/issues/2975), [#3069](https://github.com/logancyang/obsidian-copilot/pull/3069), @zeroliu)
+- **Agent activity summaries match their details.** Grouped activity now counts every command and edited file, while completed reasoning keeps the same duration shown in the expanded steps. ([#3066](https://github.com/logancyang/obsidian-copilot/pull/3066), @zeroliu)
+- **Codex mode switching works again.** Copilot now uses the current `@agentclientprotocol/codex-acp` adapter and sends the mode names it supports. Users of the old `@zed-industries/codex-acp` package should follow the updated setup instructions and run Auto-detect again. ([#2916](https://github.com/logancyang/obsidian-copilot/issues/2916), [#3016](https://github.com/logancyang/obsidian-copilot/pull/3016), @brevilabs-agent-bot)
+- **Codex no longer shortens your skills.** Copilot now gives Codex a proper context budget, so ordinary skill catalogs load in full instead of being truncated behind a hidden warning. ([#3020](https://github.com/logancyang/obsidian-copilot/pull/3020), @logancyang)
+- **Copilot fits under Obsidian Sync Standard's 5 MB limit again.** The production bundle is back below the per-file limit, and the build now prevents future releases from crossing it. ([#3008](https://github.com/logancyang/obsidian-copilot/pull/3008), [#3070](https://github.com/logancyang/obsidian-copilot/pull/3070), @brevilabs-agent-bot)
+- **Agent Home times stay clear of the scrollbar.** Relative times and hover actions in Recent Chats and Projects are no longer clipped when a shelf scrolls. ([#3017](https://github.com/logancyang/obsidian-copilot/issues/3017), [#3034](https://github.com/logancyang/obsidian-copilot/pull/3034), @logancyang)
+- **Under the hood.** Unused components, exports, and API layers pruned, test infrastructure hardened, and documentation visits are now measured without identifying readers. (@brevilabs-agent-bot, @zeroliu, @logancyang)
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
+# v4.0.4 - A chime when your agent is ready
+
+![Notification and sound settings in Copilot, with Marimba selected](https://github.com/user-attachments/assets/a6d2084e-84cf-4f19-aeea-8fd08decc9e3)
+
+Copilot can now play a short chime when an agent finishes a long-running task, so you can work elsewhere without checking the chat for progress. When you hear it, return to review the result, handle an error, or approve the next tool call. Copilot stays quiet while you are already in that chat, and you can choose **Piano key**, **Marimba**, **Bell**, or **Doorbell**, or turn notifications off in **Settings → Copilot → Basic → Agents**. ([#2988](https://github.com/logancyang/obsidian-copilot/pull/2988), [#2997](https://github.com/logancyang/obsidian-copilot/pull/2997), [#3003](https://github.com/logancyang/obsidian-copilot/pull/3003), @zeroliu)
+
+## ✨ Enhancements
+
+- **Know what to do next in multi-question prompts.** The **Ask Me Questions** card now guides you through each question with a **Next** button, then switches to **Submit** on the final question. ([#2981](https://github.com/logancyang/obsidian-copilot/pull/2981), @zeroliu)
+- **See more chats, projects, and Relevant Notes from Agent Home.** Recent Chats and Projects now show up to ten items, Relevant Notes has more room, and **View all** stays pinned to the bottom only when a list overflows. ([#3005](https://github.com/logancyang/obsidian-copilot/pull/3005), @zeroliu)
+
+## 🛠️ Bug Fixes
+
+- **Custom Commands work again in Quick Chat.** Sending one now expands it to the full saved prompt in your chat history, including any extra instructions you add. ([#2960](https://github.com/logancyang/obsidian-copilot/issues/2960), [#2990](https://github.com/logancyang/obsidian-copilot/pull/2990), @zeroliu)
+
+## ⚠️ Compatibility Notes
+
+- **Agent paths may need to be entered again.** If you migrated from 4.0.0, re-enter them because of the vault storage migration. ([#3002](https://github.com/logancyang/obsidian-copilot/pull/3002), @brevilabs-agent-bot)
+
+## 🧰 Troubleshoot
+
+- If models are missing, navigate to Copilot settings -> Models tab and click "Refresh Built-in Models".
+- Please report any issue you see in the member channel!
+
+---
+
 # Copilot for Obsidian - Release v4.0.3 🛠️
 
 Models on your own API key answer in Quick Chat again, web search runs through the provider you actually picked, and the documentation finally lives somewhere that stays current.
@@ -193,9 +332,9 @@ Prefer zero setup? The new [**Lite**](https://www.obsidiancopilot.com/en/pricing
 
 Ask in half-remembered language and Copilot finds the note by meaning, powered by [Miyo](https://miyo.md/), our local indexing engine. Your index stays on your machine — and with Miyo as your Document Processor, PDFs and EPUBs are parsed locally too, so nothing leaves your computer.
 
-### 🌐 Symposium — agent-first publishing _(Plus and above)_
+### 🌐 OpenArtifacts — agent-first publishing _(Plus and above)_
 
-Right-click any note and publish it as a clean webpage on [Symposium](https://symposium.md/), update it after edits, or withdraw it — all without leaving Obsidian. Or just tell your agent _"publish this note"_: it builds the page and shows you a preview and a confirmation before anything goes public.
+Run **Publish file to OpenArtifacts** from the command palette to publish a note as a clean webpage, update it after edits, or withdraw it — all without leaving Obsidian. Or just tell your agent _"publish this note"_: it builds the page and shows you a preview and a confirmation before anything goes public. Learn more at [OpenArtifacts](https://openartifacts.ai/).
 
 ### And a lot more from the preview cycle
 

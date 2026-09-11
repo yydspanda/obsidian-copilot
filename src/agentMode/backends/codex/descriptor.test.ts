@@ -1,8 +1,385 @@
-import type { PermissionOption } from "@/agentMode/session/types";
-import { CodexBackendDescriptor } from "./descriptor";
+import { codexAuth } from "./codexAuth";
+import type CopilotPlugin from "@/main";
+import { getSettings, setSettings, type CopilotSettings } from "@/settings/model";
+import { detectBinary } from "@/utils/detectBinary";
+import { resolveCodexAcpBinary } from "./codexBinaryResolver";
+import { CODEX_BUNDLE_VERSION } from "./codexArchive";
+import { CodexBackendDescriptor, detectCodexAcpPath, getCodexBinaryManager } from "./descriptor";
+import { isSupportedCodexAcpPath, resolveSupportedCodexAcpPackage } from "./codexVersion";
+
+jest.mock("@/utils/detectBinary", () => ({ detectBinary: jest.fn() }));
+jest.mock("./codexBinaryResolver", () => ({
+  codexAcpSearchDirs: jest.fn(),
+  resolveCodexAcpBinary: jest.fn(),
+}));
+jest.mock("./codexVersion", () => ({
+  ...jest.requireActual("./codexVersion"),
+  isSupportedCodexAcpPath: jest.fn(),
+  resolveSupportedCodexAcpPackage: jest.fn(),
+}));
+
+const mockedDetectBinary = jest.mocked(detectBinary);
+const mockedResolveCodexAcpBinary = jest.mocked(resolveCodexAcpBinary);
+const mockedIsSupportedCodexAcpPath = jest.mocked(isSupportedCodexAcpPath);
+import type { AgentSession } from "@/agentMode/session/AgentSession";
+import { translateBackendState } from "@/agentMode/session/translateBackendState";
+import type {
+  BackendConfigOption,
+  PermissionOption,
+  RawModelState,
+} from "@/agentMode/session/types";
+
+/**
+ * Transcribed from a live `codex-acp@1.1.10` `session/new` reply: one entry per
+ * (base model × effort) pair, addressed as `<base>[<effort>]`, with a different
+ * effort set per model and a blurb describing that one effort.
+ */
+const ADVERTISED_CATALOG: RawModelState = {
+  currentModelId: "gpt-5.6-sol[high]",
+  availableModels: [
+    ...["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => ({
+      modelId: `gpt-5.6-sol[${effort}]`,
+      name: `GPT-5.6-Sol (${effort})`,
+      description: `Latest frontier agentic coding model. Reasoning depth: ${effort}`,
+    })),
+    ...["low", "medium", "high", "xhigh"].map((effort) => ({
+      modelId: `gpt-5.5[${effort}]`,
+      name: `GPT-5.5 (${effort})`,
+      description: `Frontier model for complex coding. Reasoning depth: ${effort}`,
+    })),
+  ],
+};
+
+/** The `category:"model"` option the same reply carries, listing base models only. */
+const ADVERTISED_CONFIG_OPTIONS: BackendConfigOption[] = [
+  {
+    id: "model",
+    type: "select",
+    category: "model",
+    name: "Model",
+    currentValue: "gpt-5.6-sol",
+    options: [
+      {
+        value: "gpt-5.6-sol",
+        name: "GPT-5.6-Sol",
+        description: "Latest frontier agentic coding model.",
+      },
+      { value: "gpt-5.5", name: "GPT-5.5", description: "Frontier model for complex coding." },
+    ],
+  },
+];
+const mockedResolveSupportedPackage = jest.mocked(resolveSupportedCodexAcpPackage);
+
+function settingsWithCodex(codex: Record<string, unknown>): CopilotSettings {
+  return {
+    agentMode: { backends: { codex } },
+  } as unknown as CopilotSettings;
+}
 
 describe("descriptor", () => {
+  describe("detectCodexAcpPath()", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it("https://github.com/logancyang/obsidian-copilot/issues/2916 returns a supported adapter from the known locations", async () => {
+      mockedResolveCodexAcpBinary.mockReturnValue("/known/codex-acp");
+
+      await expect(detectCodexAcpPath()).resolves.toBe("/known/codex-acp");
+      expect(mockedResolveCodexAcpBinary.mock.calls[0]?.[1]).toBe(mockedIsSupportedCodexAcpPath);
+      expect(mockedDetectBinary).not.toHaveBeenCalled();
+    });
+
+    it("https://github.com/logancyang/obsidian-copilot/issues/2916 accepts a supported adapter from a custom directory on PATH", async () => {
+      const customPath = "/custom/npm/bin/codex-acp";
+      mockedResolveCodexAcpBinary.mockReturnValue(null);
+      mockedDetectBinary.mockResolvedValue(customPath);
+      mockedIsSupportedCodexAcpPath.mockImplementation((candidate) => candidate === customPath);
+
+      await expect(detectCodexAcpPath()).resolves.toBe(customPath);
+      expect(mockedIsSupportedCodexAcpPath).toHaveBeenCalledWith(customPath);
+    });
+
+    it("https://github.com/logancyang/obsidian-copilot/issues/2916 rejects an unsupported adapter found on PATH", async () => {
+      mockedResolveCodexAcpBinary.mockReturnValue(null);
+      mockedDetectBinary.mockResolvedValue("/custom/npm/bin/codex-acp");
+      mockedIsSupportedCodexAcpPath.mockReturnValue(false);
+
+      await expect(detectCodexAcpPath()).resolves.toBeNull();
+    });
+  });
+
   describe("CodexBackendDescriptor", () => {
+    describe("wire", () => {
+      it.each([
+        ["gpt-5.6-sol[low]", "gpt-5.6-sol", "low"],
+        ["gpt-5.6-sol[max]", "gpt-5.6-sol", "max"],
+        ["gpt-5.6-sol[ultra]", "gpt-5.6-sol", "ultra"],
+        ["gpt-5.3-codex-spark[xhigh]", "gpt-5.3-codex-spark", "xhigh"],
+      ])(
+        "https://github.com/Brevilabs/obsidian-copilot-private/issues/219 decodes %s into its base model and effort",
+        (wireId, baseModelId, effort) => {
+          expect(CodexBackendDescriptor.wire.decode(wireId)).toEqual({
+            selection: { baseModelId, effort },
+            provider: null,
+          });
+        }
+      );
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 decodes an effort level the plugin has never seen, so a new CLI release needs no change", () => {
+        expect(CodexBackendDescriptor.wire.decode("gpt-6[hyper]").selection).toEqual({
+          baseModelId: "gpt-6",
+          effort: "hyper",
+        });
+      });
+
+      it.each(["gpt-5.6-sol", ""])(
+        "https://github.com/Brevilabs/obsidian-copilot-private/issues/219 reports %p as an effortless base model",
+        (wireId) => {
+          expect(CodexBackendDescriptor.wire.decode(wireId)).toEqual({
+            selection: { baseModelId: wireId, effort: null },
+            provider: null,
+          });
+        }
+      );
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 encodes a selection back into the bracketed form codex accepts", () => {
+        expect(
+          CodexBackendDescriptor.wire.encode({ baseModelId: "gpt-5.6-sol", effort: "ultra" })
+        ).toBe("gpt-5.6-sol[ultra]");
+      });
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 collapses the advertised cross-product into one entry per base model", () => {
+        const state = translateBackendState(
+          { models: ADVERTISED_CATALOG, modes: null, configOptions: null },
+          CodexBackendDescriptor
+        );
+
+        expect(state.model?.availableModels).toEqual([
+          expect.objectContaining({ baseModelId: "gpt-5.6-sol", name: "GPT-5.6-Sol" }),
+          expect.objectContaining({ baseModelId: "gpt-5.5", name: "GPT-5.5" }),
+        ]);
+      });
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 offers each base model only the effort levels the CLI advertises for it", () => {
+        const state = translateBackendState(
+          { models: ADVERTISED_CATALOG, modes: null, configOptions: null },
+          CodexBackendDescriptor
+        );
+        const efforts = (baseModelId: string) =>
+          state.model?.availableModels
+            .find((e) => e.baseModelId === baseModelId)
+            ?.effortOptions.map((o) => o.value);
+
+        expect(efforts("gpt-5.6-sol")).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+        // The same catalog gives gpt-5.5 no `max`/`ultra` — availability is
+        // per-model, never a vocabulary Copilot applies uniformly.
+        expect(efforts("gpt-5.5")).toEqual(["low", "medium", "high", "xhigh"]);
+      });
+
+      it("describes a collapsed row with the base model's blurb, not the first variant's (https://github.com/Brevilabs/obsidian-copilot-private/issues/219)", () => {
+        const state = translateBackendState(
+          { models: ADVERTISED_CATALOG, modes: null, configOptions: ADVERTISED_CONFIG_OPTIONS },
+          CodexBackendDescriptor
+        );
+
+        // The base description must not imply low effort for every variant.
+        expect(
+          state.model?.availableModels.find((e) => e.baseModelId === "gpt-5.6-sol")?.description
+        ).toBe("Latest frontier agentic coding model.");
+      });
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 reports the agent's active model and effort as the current selection", () => {
+        const state = translateBackendState(
+          { models: ADVERTISED_CATALOG, modes: null, configOptions: null },
+          CodexBackendDescriptor
+        );
+
+        expect(state.model?.current).toEqual({ baseModelId: "gpt-5.6-sol", effort: "high" });
+      });
+    });
+
+    describe("applySelection()", () => {
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 sends the bracketed wire id for the chosen effort", async () => {
+        const applyModelWireId = jest.fn();
+        const session = { applyModelWireId, getState: () => null } as unknown as AgentSession;
+
+        await CodexBackendDescriptor.applySelection(session, {
+          baseModelId: "gpt-5.6-sol",
+          effort: "max",
+        });
+
+        expect(applyModelWireId).toHaveBeenCalledWith("gpt-5.6-sol[max]");
+      });
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 preserves the missing-catalog error when no effort can be resolved", async () => {
+        const applyModelWireId = jest.fn();
+        const session = { applyModelWireId, getState: () => null } as unknown as AgentSession;
+        await expect(
+          CodexBackendDescriptor.applySelection(session, {
+            baseModelId: "gpt-5.6-sol",
+            effort: null,
+          })
+        ).rejects.toThrow("Choose an explicit effort");
+        expect(applyModelWireId).not.toHaveBeenCalled();
+      });
+
+      it.each([null, "removed", "high"])(
+        "https://github.com/Brevilabs/obsidian-copilot-private/issues/219 resolves saved effort %p against the live model catalog",
+        async (effort) => {
+          const state = translateBackendState(
+            { models: ADVERTISED_CATALOG, modes: null, configOptions: null },
+            CodexBackendDescriptor
+          );
+          const applyModelWireId = jest.fn();
+          const session = { applyModelWireId, getState: () => state } as unknown as AgentSession;
+          await CodexBackendDescriptor.applySelection(session, {
+            baseModelId: "gpt-5.6-sol",
+            effort,
+          });
+          expect(applyModelWireId).toHaveBeenCalledWith(
+            `gpt-5.6-sol[${effort === "high" ? "high" : "low"}]`
+          );
+        }
+      );
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 retains and applies the only advertised effort", async () => {
+        const state = translateBackendState(
+          {
+            models: {
+              currentModelId: "example[high]",
+              availableModels: [{ modelId: "example[high]", name: "Example (high)" }],
+            },
+            modes: null,
+            configOptions: null,
+          },
+          CodexBackendDescriptor
+        );
+        expect(state.model?.availableModels[0].effortOptions).toEqual([
+          { value: "high", label: "high" },
+        ]);
+        expect(state.model?.current).toEqual({ baseModelId: "example", effort: "high" });
+        const applyModelWireId = jest.fn();
+        await CodexBackendDescriptor.applySelection(
+          { getState: () => state, applyModelWireId } as unknown as AgentSession,
+          state.model!.current
+        );
+        expect(applyModelWireId).toHaveBeenCalledWith("example[high]");
+      });
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/379 exposes the configured Codex browser sign-in capability", () => {
+      expect(CodexBackendDescriptor.auth).toBe(codexAuth);
+    });
+    describe("getInstallState()", () => {
+      it.each([
+        ["legacy path", {}, "1.9.0", { kind: "ready", source: "custom" }],
+        [
+          "managed older bundle",
+          { binarySource: "managed", binaryVersion: "1.9.0-r1" },
+          "1.9.0-r1",
+          { kind: "incompatible", source: "managed" },
+        ],
+        [
+          "custom mismatch",
+          { binarySource: "custom", binaryVersion: "1.9.0" },
+          "1.9.0",
+          { kind: "ready", source: "custom" },
+        ],
+        [
+          "managed packaging mismatch",
+          { binarySource: "managed", binaryVersion: "1.10.0-r2" },
+          "1.10.0-r2",
+          { kind: "incompatible", source: "managed" },
+        ],
+        [
+          "managed pin",
+          { binarySource: "managed", binaryVersion: CODEX_BUNDLE_VERSION },
+          CODEX_BUNDLE_VERSION,
+          { kind: "ready", source: "managed" },
+        ],
+      ])(
+        "https://github.com/Brevilabs/obsidian-copilot-private/issues/379 classifies a supported %s by ownership",
+        (_label, fields, actualVersion, expected) => {
+          mockedResolveSupportedPackage.mockReturnValue({
+            entryPath: "/codex/index.js",
+            version: actualVersion,
+          });
+
+          expect(
+            CodexBackendDescriptor.getInstallState(
+              settingsWithCodex({ binaryPath: "/codex/index.js", ...fields })
+            )
+          ).toMatchObject(expected);
+        }
+      );
+    });
+
+    describe("subscribeInstallState()", () => {
+      it.each(["binaryPath", "binaryVersion", "binarySource"] as const)(
+        "publishes install-state changes when %s changes",
+        (field) => {
+          const original = getSettings().agentMode;
+          const listener = jest.fn();
+          const unsubscribe = CodexBackendDescriptor.subscribeInstallState(
+            {} as CopilotPlugin,
+            listener
+          );
+          try {
+            setSettings((current) => ({
+              agentMode: {
+                ...current.agentMode,
+                backends: {
+                  ...current.agentMode.backends,
+                  codex: { ...current.agentMode.backends?.codex, [field]: "changed" },
+                },
+              },
+            }));
+            expect(listener).toHaveBeenCalledTimes(1);
+          } finally {
+            unsubscribe();
+            setSettings({ agentMode: original });
+          }
+        }
+      );
+    });
+
+    describe("managedInstall.run()", () => {
+      it("routes the backend-neutral managed action to the Codex manager", async () => {
+        const manager = getCodexBinaryManager();
+        const install = jest
+          .spyOn(manager, "install")
+          .mockResolvedValue({ version: "1.10.0", path: "/managed/codex-acp" });
+        const listener = jest.fn();
+        const subscribe = jest.spyOn(manager, "subscribeRuntimeState");
+        try {
+          expect(CodexBackendDescriptor.managedInstall?.getState({} as CopilotPlugin)).toEqual({
+            kind: "idle",
+          });
+          const unsubscribe = CodexBackendDescriptor.managedInstall?.subscribe(
+            {} as CopilotPlugin,
+            listener
+          );
+          await CodexBackendDescriptor.managedInstall?.run({} as CopilotPlugin);
+          expect(subscribe).toHaveBeenCalledWith(listener);
+          expect(install).toHaveBeenCalledTimes(1);
+          unsubscribe?.();
+        } finally {
+          install.mockRestore();
+          subscribe.mockRestore();
+        }
+      });
+    });
+
+    describe("onPluginLoad()", () => {
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 clears the singleton failure for each plugin lifecycle", async () => {
+        const reset = jest.spyOn(getCodexBinaryManager(), "forgetSettledError");
+        await CodexBackendDescriptor.onPluginLoad?.({} as CopilotPlugin);
+        expect(reset).toHaveBeenCalledTimes(1);
+        reset.mockRestore();
+      });
+    });
+
     describe("presentPermissionOption()", () => {
       it.each([
         ["opaque-exec-decision", "acceptWithExecpolicyAmendment"],

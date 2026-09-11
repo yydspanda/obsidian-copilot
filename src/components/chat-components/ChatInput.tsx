@@ -1,3 +1,4 @@
+import { ChatSendButton } from "@/components/ui/ChatSendButton";
 import { useChainType, useModelKey } from "@/aiParams";
 import { Button } from "@/components/ui/button";
 import { ModelSelector, type ModelSelectorEntry } from "@/components/ui/ModelSelector";
@@ -13,7 +14,7 @@ import {
 import { SelectedTextContext, WebTabContext } from "@/types/message";
 import { isAllowedFileForNoteContext } from "@/utils";
 import { getFileIdentityKey } from "@/utils/fileListUtils";
-import { ArrowUp, CornerDownLeft, Square, X } from "lucide-react";
+import { CornerDownLeft, Square, X } from "lucide-react";
 import { App, TFile, TFolder } from "obsidian";
 import React, {
   useCallback,
@@ -62,8 +63,6 @@ export interface ChatInputProps {
   topRightAccessory?: React.ReactNode;
   /** Overrides the default composer placeholder copy. */
   placeholder?: string;
-  /** Forwarded to the editor's placeholder slot — see {@link LexicalEditor}. */
-  placeholderPrompts?: readonly string[];
   inputMessage: string;
   setInputMessage: (message: string) => void;
   handleSendMessage: (metadata?: {
@@ -138,7 +137,6 @@ export interface ChatInputProps {
   };
   selectedTextContexts?: SelectedTextContext[];
   onRemoveSelectedText?: (id: string) => void;
-  showIndexingCard?: () => void;
 
   /**
    * Render slot for the toggle row that sits next to the send button.
@@ -220,7 +218,6 @@ const ChatInput = React.forwardRef<ChatInputHandle, ChatInputProps>(function Cha
   {
     topRightAccessory,
     placeholder = DEFAULT_PLACEHOLDER,
-    placeholderPrompts,
     inputMessage,
     setInputMessage,
     handleSendMessage,
@@ -242,7 +239,6 @@ const ChatInput = React.forwardRef<ChatInputHandle, ChatInputProps>(function Cha
     modePickerOverride,
     selectedTextContexts,
     onRemoveSelectedText,
-    showIndexingCard,
     toolControls,
     onToolPillsChange,
     onTagSelected,
@@ -788,7 +784,6 @@ const ChatInput = React.forwardRef<ChatInputHandle, ChatInputProps>(function Cha
               contextFolders={contextFolders}
               contextWebTabs={mergedContextWebTabs}
               selectedTextContexts={selectedTextContexts}
-              showIndexingCard={showIndexingCard}
               onAddToContext={handleAddToContext}
               onRemoveFromContext={handleRemoveFromContext}
               hideAddContextButton={isAgentMode}
@@ -842,7 +837,6 @@ const ChatInput = React.forwardRef<ChatInputHandle, ChatInputProps>(function Cha
               onImagePaste={onAddImage}
               onTagSelected={onTagSelected}
               placeholder={placeholder}
-              placeholderPrompts={placeholderPrompts}
               isCopilotPlus={isCopilotPlus}
               showTools={showAtMentionTools}
               currentActiveFile={currentActiveNote}
@@ -943,15 +937,11 @@ const ChatInput = React.forwardRef<ChatInputHandle, ChatInputProps>(function Cha
                   <span>save</span>
                 </Button>
               ) : (
-                <Button
-                  size="icon"
-                  className={cn(ACCENT_CIRCLE_BUTTON_CLASS)}
-                  aria-label="Send"
-                  onClick={() => onSendMessage()}
-                  disabled={!inputMessage.trim()}
-                >
-                  <ArrowUp className="tw-size-4" />
-                </Button>
+                <ChatSendButton
+                  inputMessage={inputMessage}
+                  imageCount={selectedImages.length}
+                  onSend={() => onSendMessage()}
+                />
               )}
             </>
           )}

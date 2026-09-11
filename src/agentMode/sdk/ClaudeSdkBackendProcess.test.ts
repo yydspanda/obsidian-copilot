@@ -1,4 +1,9 @@
-import type { HookCallback, ModelInfo, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  CanUseTool,
+  HookCallback,
+  ModelInfo,
+  SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { BackendDescriptor, SessionEvent } from "@/agentMode/session/types";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -104,6 +109,29 @@ function makeQuery(messages: SDKMessage[]) {
     setModel: jest.fn().mockResolvedValue(undefined),
     setPermissionMode: jest.fn().mockResolvedValue(undefined),
   });
+}
+
+function makeControlledQuery() {
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const iter = (async function* () {
+    await finished;
+    yield resultMessage();
+  })();
+  return {
+    query: Object.assign(iter, {
+      interrupt: jest.fn().mockResolvedValue(undefined),
+      setModel: jest.fn().mockResolvedValue(undefined),
+      setPermissionMode: jest.fn().mockResolvedValue(undefined),
+    }),
+    finish,
+  };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
 }
 
 function streamEvent(event: object): SDKMessage {
@@ -551,6 +579,59 @@ describe("ClaudeSdkBackendProcess", () => {
       expect(second.options.sessionId).toBeUndefined();
     });
 
+    it("keeps concurrent query actions bound to their owning sessions after either query finishes for https://github.com/logancyang/obsidian-copilot/issues/2948", async () => {
+      const queryA = makeControlledQuery();
+      const queryB = makeControlledQuery();
+      queryMock.mockReturnValueOnce(queryA.query).mockReturnValueOnce(queryB.query);
+      const proc = new ClaudeSdkBackendProcess({
+        pathToClaudeCodeExecutable: "/usr/local/bin/claude",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        app: { vault: {} } as any,
+        clientVersion: "1.2.3",
+        descriptor: fakeDescriptor(),
+      });
+      const { sessionId: sessionA } = await proc.newSession({ cwd: "/vault/a" });
+      const { sessionId: sessionB } = await proc.newSession({ cwd: "/vault/b" });
+      proc.registerSessionHandler(sessionA, () => {});
+      proc.registerSessionHandler(sessionB, () => {});
+      const permissionPrompter = jest.fn(async () => ({
+        outcome: { outcome: "selected" as const, optionId: "allow_once" },
+      }));
+      const questionPrompter = jest.fn(async () => ({ "Continue?": "Yes" }));
+      proc.setPermissionPrompter(permissionPrompter);
+      proc.setAskUserQuestionPrompter(questionPrompter);
+
+      const turnA = proc.prompt({ sessionId: sessionA, prompt: [{ type: "text", text: "A" }] });
+      const turnB = proc.prompt({ sessionId: sessionB, prompt: [{ type: "text", text: "B" }] });
+      await flushMicrotasks();
+      expect(getPromptQueryCalls()).toHaveLength(2);
+      const [callA, callB] = getPromptQueryCalls().map(
+        (call) => (call[0] as { options: { canUseTool: CanUseTool } }).options.canUseTool
+      );
+
+      await callA("Edit", { file_path: "/vault/a/note.md" }, {
+        signal: new AbortController().signal,
+        toolUseID: "tool-a",
+      } as never);
+      expect(permissionPrompter).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sessionId: sessionA })
+      );
+
+      queryA.finish();
+      await turnA;
+      await callB(
+        "AskUserQuestion",
+        { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] },
+        { signal: new AbortController().signal, toolUseID: "tool-b" } as never
+      );
+      expect(questionPrompter).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sessionId: sessionB, requestId: "tool-b" })
+      );
+
+      queryB.finish();
+      await turnB;
+    });
+
     describe("authentication", () => {
       function makeAuthCheckedProcess(checkAuth: jest.Mock) {
         return new ClaudeSdkBackendProcess({
@@ -763,7 +844,7 @@ describe("ClaudeSdkBackendProcess", () => {
       expect(resp.state.model?.current.baseModelId).toBe("claude-fake-pro");
     });
 
-    it("seeds session.model so prompt() sends options.model", async () => {
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 sends the initialized model and lowest effort on the first prompt", async () => {
       queryMock.mockImplementation(() => makeQuery([resultMessage()]));
       const proc = new ClaudeSdkBackendProcess({
         pathToClaudeCodeExecutable: "/usr/local/bin/claude",
@@ -779,8 +860,9 @@ describe("ClaudeSdkBackendProcess", () => {
 
       const promptCalls = getPromptQueryCalls();
       expect(promptCalls).toHaveLength(1);
-      const call = promptCalls[0][0] as { options: { model?: string } };
+      const call = promptCalls[0][0] as { options: { model?: string; effort?: string } };
       expect(call.options.model).toBe("claude-fake-pro");
+      expect(call.options.effort).toBe("low");
     });
 
     it("setSessionConfigOption('effort', …) clamps + persists the level on the session", async () => {
@@ -931,7 +1013,7 @@ describe("ClaudeSdkBackendProcess", () => {
       expect(probeCall.options.pathToClaudeCodeExecutable).toBe("/usr/local/bin/claude");
       expect(probeCall.options.env?.ANTHROPIC_MODEL).toBe("claude-fable-5");
       // Child env is process.env plus the overrides, not a bare override map.
-      expect(probeCall.options.env?.PATH).toBe(process.env.PATH);
+      expect(probeCall.options.env).toEqual({ ...process.env, ANTHROPIC_MODEL: "claude-fable-5" });
     });
   });
 

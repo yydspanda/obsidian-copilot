@@ -1,3 +1,5 @@
+import { resolveEffort } from "@/lib/model-effort";
+import type { ModelSelectionSession } from "@/agentMode/session/types";
 import { logWarn } from "@/logger";
 import type CopilotPlugin from "@/main";
 import { requireNodeModule } from "@/utils/desktopRuntime";
@@ -13,7 +15,7 @@ import type { AgentSession } from "@/agentMode/session/AgentSession";
 import { MethodUnsupportedError } from "@/agentMode/session/errors";
 import { claudeBinarySearchDirs, resolveClaudeBinary } from "./claudeBinaryResolver";
 import { CLAUDE_INSTALL_COMMAND } from "./cliSetup";
-import { getClaudeAuthStatus, signInToClaude } from "./claudeAuth";
+import { getClaudeAuthStatus, signInToClaude, signOutFromClaude } from "./claudeAuth";
 import { assertClaudeVersionSupported } from "./claudeVersion";
 import { agentOriginEnabledModelEntries } from "@/agentMode/backends/shared/agentEnabledModels";
 import { ClaudeSdkBackendProcess } from "@/agentMode/sdk/ClaudeSdkBackendProcess";
@@ -281,10 +283,33 @@ export const ClaudeBackendDescriptor: ClaudeDescriptor = {
   },
 
   auth: {
+    getProbeKey(settings) {
+      // CLI credentials can come from a profile or an environment-selected provider.
+      // Hash the effective environment so account changes cancel stale authentication
+      // operations without exposing credentials in the shared UI identity.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
+      return requireNodeModule<typeof import("node:crypto")>("crypto")
+        .createHash("sha256")
+        .update(
+          JSON.stringify([
+            resolveClaudeCliPath(settings),
+            Object.entries(claudeChildEnv(settings)).sort(([a], [b]) => a.localeCompare(b)),
+          ])
+        )
+        .digest("hex");
+    },
     async getStatus(settings) {
       const claudePath = resolveClaudeCliPath(settings);
       if (!claudePath) return { signedIn: false };
       const status = await getClaudeAuthStatus(claudePath, claudeChildEnv(settings));
+      return { signedIn: status.loggedIn, label: status.label };
+    },
+    async signOut(settings, options) {
+      const claudePath = resolveClaudeCliPath(settings);
+      // An absent CLI cannot remove credentials from the configured account.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
+      if (!claudePath) throw new Error("Install Claude Code before signing out.");
+      const status = await signOutFromClaude(claudePath, claudeChildEnv(settings), options);
       return { signedIn: status.loggedIn, label: status.label };
     },
     async signIn(settings, handlers) {
@@ -299,7 +324,11 @@ export const ClaudeBackendDescriptor: ClaudeDescriptor = {
     return isClaudePlanModePlanFilePath(absolutePath);
   },
 
-  async applySelection(session: AgentSession, selection: ModelSelection, context): Promise<void> {
+  async applySelection(
+    session: ModelSelectionSession,
+    selection: ModelSelection,
+    context
+  ): Promise<void> {
     // Claude's wire id is just the baseModelId — effort travels through
     // `setConfigOption`, not the model id. Skip the model round-trip when
     // the base hasn't changed, otherwise effort-only ticks would fire a
@@ -310,11 +339,17 @@ export const ClaudeBackendDescriptor: ClaudeDescriptor = {
     if (currentBase !== selection.baseModelId) {
       await session.applyModelWireId(claudeWire.encode(selection));
     }
-    if (selection.effort === null) return;
     const cfgOpt = claudeWire.effortConfigFor?.(selection.baseModelId);
     if (!cfgOpt) return;
+    const options = session
+      .getState()
+      ?.model?.availableModels.find(
+        (model) => model.baseModelId === selection.baseModelId
+      )?.effortOptions;
+    const effort = resolveEffort(selection.effort, options);
+    if (effort === null) return;
     try {
-      await session.setConfigOption(cfgOpt.id, selection.effort);
+      await session.setConfigOption(cfgOpt.id, effort);
     } catch (e) {
       if (!(e instanceof MethodUnsupportedError)) throw e;
     }
@@ -421,18 +456,18 @@ async function replayPersistedEffort(
   session: AgentSession,
   persistedEffort: string | undefined
 ): Promise<void> {
-  if (!persistedEffort) return;
   const tryApply = async (): Promise<boolean> => {
     const state = session.getState();
     const current = state?.model?.current;
     if (!current) return false;
-    if (current.effort === persistedEffort) return true;
     const entry = state?.model?.availableModels.find((e) => e.baseModelId === current.baseModelId);
-    if (!entry?.effortOptions.some((o) => o.value === persistedEffort)) return true;
+    if (!entry) return false;
+    const effort = resolveEffort(persistedEffort ?? current.effort, entry.effortOptions);
+    if (effort === null || current.effort === effort) return true;
     const cfgOpt = ClaudeBackendDescriptor.wire.effortConfigFor?.(current.baseModelId);
     if (!cfgOpt) return true;
     try {
-      await session.setConfigOption(cfgOpt.id, persistedEffort);
+      await session.setConfigOption(cfgOpt.id, effort);
     } catch (e) {
       if (e instanceof MethodUnsupportedError) return true;
       logWarn(`[AgentMode] could not apply default effort ${persistedEffort}`, e);

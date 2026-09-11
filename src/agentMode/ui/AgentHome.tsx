@@ -1,3 +1,4 @@
+import { useChatRelevantNotesContext } from "@/agentMode/ui/hooks/useChatRelevantNotesContext";
 import AgentChatMessages from "@/agentMode/ui/AgentChatMessages";
 import { AgentChatControls } from "@/agentMode/ui/AgentChatControls";
 import { AgentChatInput } from "@/agentMode/ui/AgentChatInput";
@@ -11,6 +12,8 @@ import { AgentProjectHeader } from "@/agentMode/ui/AgentProjectHeader";
 import { ProjectInfoPopover } from "@/agentMode/ui/ProjectInfoPopover";
 import { AgentTabStrip } from "@/agentMode/ui/AgentTabStrip";
 import { AgentWelcomeCard } from "@/agentMode/ui/AgentWelcomeCard";
+import { AgentHomeReleaseUpdate } from "@/components/release-update/AgentHomeReleaseUpdate";
+import { RelevantNotes } from "@/components/chat-components/RelevantNotes";
 import { CopilotBrandIcon } from "@/components/ui/CopilotBrandIcon";
 import { AgentHomeShelf, type AgentHomeShelfSection } from "@/agentMode/ui/AgentHomeShelf";
 import { GlobalRecentChatsSection } from "@/agentMode/ui/GlobalRecentChatsSection";
@@ -379,6 +382,17 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
     liveChatInputIds,
     defaultIncludeActiveNote: settings.autoAddActiveContentToContext === true,
   });
+  const setDraftInput = draft.setInput;
+  useChatRelevantNotesContext(app, rootEl, chatInputId, draft, messages, activeProject);
+
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/166
+  // The manager binds a handoff draft to the new chat input before publishing
+  // that session. Consume it only after this input is live so the text cannot
+  // race into whichever composer was active before the session switch.
+  useEffect(() => {
+    const initialDraft = manager.consumeInitialDraft(chatInputId);
+    if (initialDraft !== undefined) setDraftInput(initialDraft);
+  }, [chatInputId, manager, setDraftInput]);
 
   // Whole chat area is the drop zone (bound to chatContainerRef), so files
   // dropped anywhere — not just on the composer — attach to the active draft.
@@ -472,9 +486,9 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
   //   previous visit (e.g. "New chat" right after a project's first
   //   conversation), so a refresh that finds chats corrects the layout — that
   //   flip lands within the visit's first moments, while the reverse
-  //   (shelf→standalone, e.g. deleting the last chat from the View-all popover
-  //   mid-visit) would yank the card out from under an open popover. The shelf
-  //   just shows the project empty copy until the next visit re-decides.
+  //   (shelf→standalone, e.g. deleting the last chat mid-visit) would yank the
+  //   card out from under the user. The shelf just shows the project empty copy
+  //   until the next visit re-decides.
   //
   // Written during render — the same derive-from-props pattern as the header
   // latch above.
@@ -561,6 +575,7 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
             runningChatIds={runningChatIds}
             attentionChatIds={attentionChatIds}
             projectNamesById={projectNamesById}
+            sortStrategy={settings.chatHistorySortStrategy}
           />
         ),
       },
@@ -574,10 +589,12 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
               icon: <FileSearch className="tw-size-4" />,
               title: "Relevant Notes",
               renderBody: () => (
-                <RelevantNotesShelfPanel
-                  onPopOut={() => void plugin.activateRelevantNotesView()}
-                  onAddToChat={(text) => void plugin.insertTextIntoActiveChat(text)}
-                />
+                <RelevantNotesShelfPanel onPopOut={() => void plugin.activateRelevantNotesView()}>
+                  <RelevantNotes
+                    className={cn("[&>[data-relevant-notes-empty-state]]:tw-py-6")}
+                    onAddToChat={(text) => void plugin.insertTextIntoActiveChat(text)}
+                  />
+                </RelevantNotesShelfPanel>
               ),
             },
           ]),
@@ -616,6 +633,7 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
       attentionChatIds,
       isRelevantNotesPaneOpen,
       plugin,
+      settings.chatHistorySortStrategy,
     ]
   );
 
@@ -648,6 +666,7 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
             onLoadHistory={handleLoadChatHistorySafely}
             runningChatIds={runningChatIds}
             attentionChatIds={attentionChatIds}
+            sortStrategy={settings.chatHistorySortStrategy}
           />
         ),
       },
@@ -674,6 +693,7 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
       handleLoadChatHistorySafely,
       runningChatIds,
       attentionChatIds,
+      settings.chatHistorySortStrategy,
     ]
   );
 
@@ -754,7 +774,6 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
       contextLoadBlocking={contextLoadBlocking}
       disabled={isOrphanedProject}
       contextStatusIndicator={contextStatusIndicator}
-      isLanding={isLanding}
     />
   );
 
@@ -766,7 +785,7 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
   const heroText = showProjectHero ? `Chat in ${projectName}` : greeting;
   const hero = (
     <div className="tw-flex tw-min-w-0 tw-items-center tw-justify-center tw-gap-3">
-      <CopilotBrandIcon className="tw-size-4 tw-shrink-0 tw-text-normal" />
+      <CopilotBrandIcon className="tw-size-6 tw-shrink-0 tw-text-normal" />
       {/* font-[330]: deliberate hero weight, a hair lighter than `font-normal`
           (400) for the airy greeting. The project's named weight tokens have no
           slot between light and normal, so this is an intentional one-off. (The
@@ -777,7 +796,7 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
           full-text tooltip while a short title keeps the icon+text pair
           centered — flex-1 would stretch the text box and break the centering. */}
       <TruncatedText
-        className="tw-min-w-0 tw-text-ui-title tw-font-[330] tw-text-normal"
+        className="tw-min-w-0 tw-text-3xl tw-font-[330] tw-text-normal"
         tooltipContent={heroText}
       >
         {heroText}
@@ -840,6 +859,10 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
         <div ref={chatContainerRef} className="tw-flex tw-size-full tw-flex-col tw-overflow-hidden">
           <div className="tw-h-full">
             <div className="tw-relative tw-flex tw-h-full tw-flex-col">
+              <AgentHomeReleaseUpdate
+                currentVersion={plugin.manifest.version}
+                visible={isLanding && !isProjectLanding}
+              />
               {isDragActive && (
                 // pointer-events-none: this is visual feedback only — if the
                 // overlay caught events, every dragover after the first would
@@ -868,7 +891,7 @@ const AgentHomeInternal: React.FC<AgentHomeProps> = ({
                   composer still being mounted (see runSend's finally). */}
               <div
                 className={
-                  // Landing: overflow-y-auto, not hidden — the h-1/4 spacer +
+                  // Landing: overflow-y-auto, not hidden — the fixed spacer +
                   // flex-1 shelf fill the column exactly when there's room, and on
                   // a pane too short to fit the stack the column scrolls instead of
                   // clipping it out of reach. Conversation: the transcript owns its

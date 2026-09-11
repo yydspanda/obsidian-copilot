@@ -31,6 +31,7 @@ export { default as CopilotAgentView } from "./ui/CopilotAgentView";
 export {
   useActiveBackendDescriptor,
   useBackendInstallState,
+  useManagedInstallActionState,
   useSessionBackendDescriptor,
 } from "./ui/useBackendDescriptor";
 export { useAgentModelPicker } from "./ui/useAgentModelPicker";
@@ -38,7 +39,14 @@ export type { AgentModelPickerOverride } from "./ui/useAgentModelPicker";
 export { useAgentModePicker } from "./ui/useAgentModePicker";
 export type { AgentModePickerOverride } from "./ui/useAgentModePicker";
 export type { AgentSessionManager } from "./session/AgentSessionManager";
-export type { AgentBrand, BackendDescriptor, BackendId, InstallState } from "./session/types";
+export type {
+  AgentBrand,
+  BackendDescriptor,
+  BackendId,
+  InstallState,
+  ManagedInstallAction,
+  ManagedInstallActionState,
+} from "./session/types";
 export { partitionOpencodeOnlyWireIds } from "./backends/opencode/opencodeProbePartition";
 export {
   mapProviderToOpencodeId,
@@ -55,8 +63,8 @@ export type {
   ModelState,
 } from "./session/types";
 export { AgentDefaultModelSetting } from "./ui/AgentDefaultModelSetting";
-export { ModelEnableList } from "./ui/ModelEnableList";
-export type { ModelEnableGroup, ModelEnableRow } from "./ui/ModelEnableList";
+export { ModelEnableList } from "@/components/ui/ModelEnableList";
+export type { ModelEnableGroup, ModelEnableRow } from "@/components/ui/ModelEnableList";
 export { PlanPreviewView, PLAN_PREVIEW_VIEW_TYPE } from "./ui/PlanPreviewView";
 export type { PlanPreviewViewState } from "./ui/PlanPreviewView";
 export { ReportIssueModal } from "./ui/ReportIssueModal";
@@ -466,3 +474,7 @@ export function createAgentSessionManager(app: App, plugin: CopilotPlugin): Agen
   }
   return manager;
 }
+
+export { AgentBackendHeader } from "./backends/shared/ui/AgentBackendHeader";
+
+export { useBackendAuthState } from "./session/useBackendAuthState";

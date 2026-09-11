@@ -111,6 +111,16 @@ const restrictedSourceImports = [
   },
 ];
 
+// Namespace imports let esbuild omit Zod's locale registry; named `z` imports can push the
+// production artifact over Obsidian Sync's limit.
+// https://github.com/Brevilabs/obsidian-copilot-private/issues/94
+const restrictedZodSourceImport = {
+  selector:
+    "ImportDeclaration[source.value='zod'][importKind='value'] ImportSpecifier[imported.name='z'][importKind='value'], ImportDeclaration[source.value='zod/v4'][importKind='value'] ImportSpecifier[imported.name='z'][importKind='value']",
+  message:
+    'Use `import * as z from "zod"` so the production bundle can tree-shake unused Zod locales.',
+};
+
 const restrictedConsoleCalls = [
   {
     selector: "CallExpression[callee.object.name='console'][callee.property.name='log']",
@@ -290,14 +300,14 @@ export default [
   // Tests may import Node directly because they execute under Jest, not Obsidian.
   {
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/**/*.test.{ts,tsx}", "src/**/__mocks__/**", "src/integration_tests/**"],
+    ignores: ["src/**/*.test.{ts,tsx}", "src/**/__mocks__/**"],
     plugins: { copilot: copilotLintPlugin },
     rules: {
       "copilot/no-direct-node-imports": "error",
     },
   },
 
-  // Two AST-level import bans, combined in one block:
+  // Three AST-level import bans, combined in one block:
   //
   // 1. Parent-relative imports (`../foo`, `..`) — use the `@/` path alias
   //    instead. Survives file moves, keeps grep unambiguous, avoids long
@@ -307,7 +317,11 @@ export default [
   //    every standalone React root must go through that helper so descendants
   //    can rely on `useApp()` unconditionally (bug class fixed in PR #2466).
   //
-  // Both selectors must live in the same block: flat config replaces (does
+  // 3. Runtime named `z` imports from Zod — namespace imports allow esbuild to
+  //    omit Zod's locale registry from the production bundle. Tests are exempt
+  //    because they do not ship in main.js.
+  //
+  // All three selectors must live in the same block: flat config replaces (does
   // not merge) rule values when the same rule key appears in multiple
   // matching blocks, so splitting them would silently disable the earlier
   // ban on every file the later block also matches.
@@ -318,7 +332,12 @@ export default [
     files: ["src/**/*.{ts,tsx}"],
     ignores: ["src/utils/react/createPluginRoot.tsx"],
     rules: {
-      "no-restricted-syntax": ["error", ...restrictedSourceImports, ...restrictedConsoleCalls],
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedSourceImports,
+        restrictedZodSourceImport,
+        ...restrictedConsoleCalls,
+      ],
     },
   },
 
@@ -327,14 +346,14 @@ export default [
   {
     files: ["src/utils/react/createPluginRoot.tsx"],
     rules: {
-      "no-restricted-syntax": ["error", ...restrictedConsoleCalls],
+      "no-restricted-syntax": ["error", restrictedZodSourceImport, ...restrictedConsoleCalls],
     },
   },
 
   // Test output is intentionally written to the console. Keep the production
   // import restrictions without applying the logging boundary to test files.
   {
-    files: ["src/**/*.test.{js,jsx,ts,tsx}", "src/integration_tests/**"],
+    files: ["src/**/*.test.{js,jsx,ts,tsx}"],
     rules: {
       "no-restricted-syntax": ["error", ...restrictedSourceImports],
     },
@@ -453,15 +472,6 @@ export default [
     },
   },
 
-  // Integration tests bootstrap jsdom fetch via `node-fetch` polyfill —
-  // allow the otherwise-banned import here only.
-  {
-    files: ["src/integration_tests/**"],
-    rules: {
-      "no-restricted-imports": "off",
-    },
-  },
-
   // Node-context files (build configs, scripts)
   {
     files: [
@@ -493,7 +503,12 @@ export default [
   // CommonJS tools use require() by construction. The renderer patch also
   // runs only from the Node build pipeline despite its historical .js suffix.
   {
-    files: ["**/*.cjs", "scripts/patchRendererUnsafeUnref.js"],
+    files: [
+      "**/*.cjs",
+      "scripts/patchRendererUnsafeUnref.js",
+      "scripts/bundleSizeGuard.js",
+      "scripts/bundleSizeGuard.test.js",
+    ],
     rules: {
       "@typescript-eslint/no-require-imports": "off",
     },

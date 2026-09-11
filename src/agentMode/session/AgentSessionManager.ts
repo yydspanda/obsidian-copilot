@@ -1,3 +1,5 @@
+import type { BackendState } from "@/agentMode/session/types";
+import { resolveEffort } from "@/lib/model-effort";
 import { logError, logInfo, logWarn } from "@/logger";
 import type CopilotPlugin from "@/main";
 import { AgentChatUIState } from "@/agentMode/session/AgentChatUIState";
@@ -37,6 +39,8 @@ import { AgentSession, ATTENTION_TRIGGER_STATUSES, DEFAULT_TITLE_PREFIX } from "
 import type { AgentChatPersistenceManager } from "./AgentChatPersistenceManager";
 import type { AgentModelPreloader } from "./AgentModelPreloader";
 import { buildNativeChatId, parseNativeChatId } from "@/utils/nativeChatId";
+import { CHAT_AGENT_VIEWTYPE } from "@/constants";
+import { playNotificationSound } from "@/utils/notificationSound";
 import type { AgentSessionIndex } from "./AgentSessionIndex";
 import {
   deriveChatTitleFromMessages,
@@ -264,6 +268,10 @@ export class AgentSessionManager {
   // `activeSession.projectId === activeProjectId` (active always belongs to the
   // current scope). `GLOBAL_SCOPE` is the implicit global workspace.
   private activeProjectId: ProjectScopeId = GLOBAL_SCOPE;
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/166
+  // Scope identity alone cannot detect A → B → A navigation while an async
+  // transition is pending, so rollback ownership uses this monotonic version.
+  private scopeSeq = 0;
   // Per-scope most-recently-used session id, so re-entering a scope restores
   // the tab the user last looked at there.
   private readonly lastActiveByScope = new Map<ProjectScopeId, string>();
@@ -317,6 +325,10 @@ export class AgentSessionManager {
   // Serializes replacements for one logical input even after its runtime session id changes.
   // The cursor retains the last successful owner when an individual replacement fails.
   private readonly replacementCursorByChatInputId = new Map<string, Promise<string>>();
+  // New-session drafts are keyed to the logical composer id, not the active
+  // session pointer. This prevents a handoff from landing in the prior chat
+  // while React commits the new active session.
+  private readonly initialDraftByChatInputId = new Map<string, string>();
   // Native session identity is stable across markdown/native history surfaces.
   // Sharing one resume prevents duplicate AgentSessions and backend handlers
   // when the same row is opened again before the first load settles.
@@ -462,7 +474,9 @@ export class AgentSessionManager {
         if (session.getStatus() === "closed") return;
         const target = this.getDefaultSelection(backendId);
         if (!target) return;
-        return descriptor.applySelection(session, target);
+        return descriptor
+          .applySelection(session, target)
+          .then(() => this.repairDefaultEffort(backendId, session.getState()));
       })
       .catch((e) => logWarn(`[AgentMode] re-applying default model for ${backendId} failed`, e))
       .finally(() => {
@@ -494,6 +508,7 @@ export class AgentSessionManager {
       // An absent preference leaves the fan-out sub-session on the model its
       // own session/new reports; catalog ordering carries no default meaning.
       getDefaultSelection: (backendId) => this.getDefaultSelection(backendId),
+      onSelectionApplied: (backendId, state) => this.repairDefaultEffort(backendId, state),
       getDisplayName: (backendId) => this.resolveDescriptor(backendId).displayName,
       // DESIGN NOTE: fan-out sub-sessions intentionally run at the vault root,
       // not the originating session's project folder, and aren't handed the
@@ -1386,6 +1401,7 @@ export class AgentSessionManager {
             );
           }
         }
+        this.repairDefaultEffort(resolvedId, session.getState());
         // Only clear when nothing failed while this session was starting — a concurrent
         // create's failure must stay on the status surface.
         if (this.lastErrorSeq === errorSeqAtStart) {
@@ -1406,6 +1422,29 @@ export class AgentSessionManager {
       .finally(() => this.finishPendingCreate());
 
     return session;
+  }
+
+  /** Create a fresh global session with reviewable, unsent composer text. */
+  async createGlobalSessionWithDraft(initialDraft: string): Promise<AgentSession> {
+    const projectId = GLOBAL_SCOPE;
+    const previousActiveProjectId = this.activeProjectId;
+    const scopeSeq = this.setActiveScope(projectId);
+    const chatInputId = uuidv4();
+    this.initialDraftByChatInputId.set(chatInputId, initialDraft);
+    try {
+      return await this.createSession(undefined, projectId, undefined, chatInputId);
+    } catch (error) {
+      this.initialDraftByChatInputId.delete(chatInputId);
+      this.rollbackOptimisticScopeSwitch(previousActiveProjectId, scopeSeq);
+      throw error;
+    }
+  }
+
+  /** Return and remove the initial draft assigned to one logical composer. */
+  consumeInitialDraft(chatInputId: string): string | undefined {
+    const initialDraft = this.initialDraftByChatInputId.get(chatInputId);
+    this.initialDraftByChatInputId.delete(chatInputId);
+    return initialDraft;
   }
 
   /** Record a failure for the status surface, advancing the failure sequence. */
@@ -1762,8 +1801,7 @@ export class AgentSessionManager {
     // rejected auto-spawn below can restore it (see `spawnEnteredScopeOrRollback`).
     const previousActiveProjectId = this.activeProjectId;
     const previousActiveSessionId = this.activeSessionId;
-    this.parkActiveScope();
-    this.activeProjectId = projectId;
+    const scopeSeq = this.setActiveScope(projectId);
 
     // A project scope opens as a FRESH visit: its prior conversational chats
     // move to chat history (detached from the tab strip — not closed, so a
@@ -1801,9 +1839,9 @@ export class AgentSessionManager {
       this.activeSessionId = null;
       this.notify();
       await this.spawnEnteredScopeOrRollback(
-        projectId,
         previousActiveProjectId,
-        previousActiveSessionId
+        previousActiveSessionId,
+        scopeSeq
       );
       this.touchProjectUsage(projectId);
       return;
@@ -2003,30 +2041,27 @@ export class AgentSessionManager {
    * restoring/spawning a session — used by history load, which creates the
    * specific saved session itself right after.
    */
-  private setActiveScope(projectId: ProjectScopeId): void {
-    if (projectId === this.activeProjectId) return;
+  private setActiveScope(projectId: ProjectScopeId): number {
+    if (projectId === this.activeProjectId) return this.scopeSeq;
     this.parkActiveScope();
     this.activeProjectId = projectId;
+    return ++this.scopeSeq;
   }
 
   /**
-   * Undo the optimistic scope switch a history load performs before it has a
-   * session, when the resume/create that follows rejects. A history load calls
-   * `setActiveScope` to point `activeProjectId` at the chat's scope (so the new
-   * session activates there) while `activeSessionId` still references the
-   * previous scope's session; a failed load would otherwise strand the manager
-   * with `getActiveSession().projectId !== activeProjectId` until the user
-   * manually switches scopes. Only roll back if we're still parked in the scope
-   * we switched to — a concurrent scope switch during the awaited backend spawn
-   * means the user has moved on, and forcing them back would reintroduce the
-   * very race `createSession`'s activation guard already avoids.
+   * Undo a scope switch that precedes a specific session create/resume when that
+   * operation rejects. Only roll back if we're still parked in the attempted
+   * scope — a concurrent scope switch means the user has moved on, and forcing
+   * them back would reintroduce the race `createSession`'s activation guard avoids.
    */
-  private rollbackHistoryLoadScope(
-    attemptedProjectId: ProjectScopeId,
-    previousProjectId: ProjectScopeId
+  private rollbackOptimisticScopeSwitch(
+    previousProjectId: ProjectScopeId,
+    attemptedScopeVersion: number
   ): void {
-    if (this.activeProjectId === attemptedProjectId) {
+    if (this.scopeSeq === attemptedScopeVersion) {
       this.activeProjectId = previousProjectId;
+      this.scopeSeq++;
+      this.notify();
     }
   }
 
@@ -2040,24 +2075,25 @@ export class AgentSessionManager {
    * chat. Restores the previous scope's `activeProjectId` + active-session pointer
    * and re-notifies, then rethrows so the caller still reports the failure.
    *
-   * Guarded on still being parked in the attempted scope: a concurrent
-   * `enterProject` during the awaited spawn means the user moved on, and forcing
-   * them back would clobber that newer switch (mirrors
-   * {@link rollbackHistoryLoadScope}). The detached tabs are intentionally left
+   * Guarded by the attempted switch's version: concurrent navigation during
+   * the awaited spawn means the user moved on, and forcing them back would
+   * clobber that newer switch (mirrors
+   * {@link rollbackOptimisticScopeSwitch}). The detached tabs are intentionally left
    * detached — they belong to the project we failed to enter, are invisible from
    * the restored scope, and a later successful entry re-detaches them anyway as a
    * fresh visit.
    */
   private async spawnEnteredScopeOrRollback(
-    attemptedProjectId: ProjectScopeId,
     previousProjectId: ProjectScopeId,
-    previousActiveSessionId: string | null
+    previousActiveSessionId: string | null,
+    attemptedScopeVersion: number
   ): Promise<void> {
     try {
       await this.getOrCreateActiveSession();
     } catch (err) {
-      if (this.activeProjectId === attemptedProjectId) {
+      if (this.scopeSeq === attemptedScopeVersion) {
         this.activeProjectId = previousProjectId;
+        this.scopeSeq++;
         this.activeSessionId = previousActiveSessionId;
         this.notify();
       }
@@ -2079,6 +2115,25 @@ export class AgentSessionManager {
       | Record<string, { defaultModel?: ModelSelection | null } | undefined>
       | undefined;
     return backends?.[backendId]?.defaultModel ?? null;
+  }
+
+  private repairDefaultEffort(backendId: BackendId, state: BackendState | null): void {
+    const saved = this.getDefaultSelection(backendId);
+    const model = state?.model;
+    if (!saved || model?.current.baseModelId !== saved.baseModelId) return;
+    const options = model.availableModels.find(
+      (entry) => entry.baseModelId === saved.baseModelId
+    )?.effortOptions;
+    const effort = resolveEffort(saved.effort, options);
+    // Repair the durable preference as well as the session so future chats do
+    // not repeatedly request a removed effort. Read the current saved value to
+    // preserve valid settings edits made during startup.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/219
+    if (effort !== saved.effort && effort === model.current.effort) {
+      void this.persistDefaultSelection(backendId, { ...saved, effort }).catch((err) =>
+        logWarn("Failed to save repaired agent effort", err)
+      );
+    }
   }
 
   /** Persist a sticky model preference for `backendId`. Pass `null` to clear. */
@@ -2135,6 +2190,7 @@ export class AgentSessionManager {
       effort: patch.effort !== undefined ? patch.effort : current.effort,
     };
     await descriptor.applySelection(session, resolved);
+    this.repairDefaultEffort(session.backendId, session.getState());
   }
 
   /**
@@ -2444,6 +2500,7 @@ export class AgentSessionManager {
     }
     this.detachAutoSave(id);
     this.sessions.delete(id);
+    this.initialDraftByChatInputId.delete(session.chatInputId);
     this.chatUIStates.delete(id);
     this.landingCaptureSignatures.delete(id);
     this.lastSeenProjectContentEpochBySession.delete(id);
@@ -2480,8 +2537,7 @@ export class AgentSessionManager {
     if (!session) return;
     if (this.activeSessionId === id) return;
     if (session.projectId !== this.activeProjectId) {
-      this.parkActiveScope();
-      this.activeProjectId = session.projectId;
+      this.setActiveScope(session.projectId);
     }
     // Surfacing a session (history open / tab click) re-attaches it to its
     // scope's tab strip if a prior project re-entry had detached it.
@@ -2712,11 +2768,13 @@ export class AgentSessionManager {
       })
     );
     this.sessions.clear();
+    this.initialDraftByChatInputId.clear();
     this.chatUIStates.clear();
     this.landingCaptureSignatures.clear();
     this.lastSeenProjectContentEpochBySession.clear();
     this.activeSessionId = null;
     this.activeProjectId = GLOBAL_SCOPE;
+    this.scopeSeq++;
     this.lastActiveByScope.clear();
     this.detachedFromTabIds.clear();
     this.contextDirtySignatures.clear();
@@ -2791,7 +2849,7 @@ export class AgentSessionManager {
     // would let a scope switch raced in during `loadFile` make rollback restore
     // a stale scope.
     const previousActiveProjectId = this.activeProjectId;
-    this.setActiveScope(projectId);
+    const scopeSeq = this.setActiveScope(projectId);
 
     // Resume or create the saved session. Either await can reject (e.g. a
     // missing backend binary fails to spawn); on failure, undo the scope switch
@@ -2805,7 +2863,7 @@ export class AgentSessionManager {
         : null;
       session = resumed ?? (await this.createSession(loaded.backendId, projectId));
     } catch (err) {
-      this.rollbackHistoryLoadScope(projectId, previousActiveProjectId);
+      this.rollbackOptimisticScopeSwitch(previousActiveProjectId, scopeSeq);
       throw err;
     }
 
@@ -2894,7 +2952,7 @@ export class AgentSessionManager {
     // `getEntry` await — capturing earlier would let a scope switch raced in
     // during the await make rollback restore a stale scope.
     const previousActiveProjectId = this.activeProjectId;
-    this.setActiveScope(projectId);
+    const scopeSeq = this.setActiveScope(projectId);
     // Unlike markdown history there is no fresh-session fallback — a failed
     // resume rejects, so undo the scope switch above before propagating it.
     let session: AgentSession;
@@ -2907,7 +2965,7 @@ export class AgentSessionManager {
       }
       session = resumed;
     } catch (err) {
-      this.rollbackHistoryLoadScope(projectId, previousActiveProjectId);
+      this.rollbackOptimisticScopeSwitch(previousActiveProjectId, scopeSeq);
       throw err;
     }
     // Rebuild the visible transcript for backends that resume without
@@ -3352,11 +3410,9 @@ export class AgentSessionManager {
   }
 
   /**
-   * Watch this session's status transitions and flag `needsAttention` when
-   * it transitions out of `running` into a state that demands the user's
-   * eye (turn ended, errored, or paused for permission) while a *different*
-   * tab is active. The flag is cleared in `setActiveSession` when the user
-   * clicks back to this tab.
+   * Watch this session's status transitions out of `running` into a state
+   * that demands the user's eye (turn ended, errored, or paused for
+   * permission) and raise the applicable attention signals.
    */
   private attachAttentionTracking(session: AgentSession): void {
     let prev = session.getStatus();
@@ -3367,21 +3423,47 @@ export class AgentSessionManager {
         const isRunning = next === "running";
         prev = next;
         void this.flushDeferredBackendRestartIfReady(session.backendId);
-        // Existing attention marking — unchanged semantics: a backgrounded
-        // session that leaves `running` for a status that demands the user's eye.
-        if (
-          wasRunning &&
-          ATTENTION_TRIGGER_STATUSES.has(next) &&
-          this.activeSessionId !== session.internalId
-        ) {
-          session.markNeedsAttention();
-        }
+        // Only a turn that actually ran can newly demand attention.
+        // https://github.com/logancyang/obsidian-copilot/issues/2987
+        const wantsUser = wasRunning && ATTENTION_TRIGGER_STATUSES.has(next);
+        if (wantsUser) this.signalSessionNeedsAttention(session);
         // Re-render recent-list rows when this session's running membership
         // flips, so the row's spinner appears/disappears in step.
         if (wasRunning !== isRunning) this.notify();
       },
     });
     this.getSessionState(session.internalId).attentionUnsub = unsubscribe;
+  }
+
+  /** Whether keyboard focus is currently inside this session's active Agent Chat leaf. */
+  private isSessionFocused(session: AgentSession): boolean {
+    if (this.activeSessionId !== session.internalId) return false;
+    // A sidebar input can own keyboard focus while Obsidian keeps the center
+    // editor as its most recent leaf. https://github.com/logancyang/obsidian-copilot/issues/2987
+    return this.app.workspace.getLeavesOfType(CHAT_AGENT_VIEWTYPE).some((leaf) => {
+      const container = leaf.view.containerEl;
+      const doc = container.doc;
+      const activeElement = doc.activeElement;
+      return doc.hasFocus() && activeElement !== null && container.contains(activeElement);
+    });
+  }
+
+  /** Raise visual attention for background tabs and audible attention outside the active chat. */
+  private signalSessionNeedsAttention(session: AgentSession): void {
+    // The dot identifies a different Agent tab that wants the user; keyboard
+    // focus does not change which tab is selected. https://github.com/logancyang/obsidian-copilot/issues/2987
+    if (this.activeSessionId !== session.internalId) session.markNeedsAttention();
+    // Sound follows real focus so a selected but unattended chat can still
+    // call the user back. https://github.com/logancyang/obsidian-copilot/issues/2987
+    if (this.isSessionFocused(session)) return;
+    this.playConfiguredNotificationSound();
+  }
+
+  /** Play the user's chosen sound when agent notifications are enabled. */
+  private playConfiguredNotificationSound(): void {
+    const { notificationSound, notificationSoundId } = getSettings().agentMode;
+    if (!notificationSound) return;
+    playNotificationSound(notificationSoundId);
   }
 
   /**
@@ -3474,6 +3556,7 @@ export class AgentSessionManager {
       for (const s of dead) {
         this.detachAutoSave(s.internalId);
         this.sessions.delete(s.internalId);
+        this.initialDraftByChatInputId.delete(s.chatInputId);
         this.chatUIStates.delete(s.internalId);
         this.landingCaptureSignatures.delete(s.internalId);
         this.lastSeenProjectContentEpochBySession.delete(s.internalId);
@@ -3502,7 +3585,10 @@ export class AgentSessionManager {
         this.activeSessionId = next?.internalId ?? null;
         // Crash repointing can cross scopes; keep `active.projectId ===
         // activeProjectId` rather than leaving a stale scope behind.
-        if (next) this.activeProjectId = next.projectId;
+        if (next) {
+          this.activeProjectId = next.projectId;
+          this.scopeSeq++;
+        }
       }
       // Surface the crash so the empty-state pill shows it and the
       // router's auto-spawn effect (which bails on lastError) doesn't

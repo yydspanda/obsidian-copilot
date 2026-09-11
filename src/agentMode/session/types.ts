@@ -1,3 +1,4 @@
+import type { EffortOption } from "@/lib/model-effort";
 import type React from "react";
 import type { ModelCapability } from "@/constants";
 import type { FormattedDateTime, MessageContext } from "@/types/message";
@@ -14,6 +15,9 @@ export type {
   BackendDescriptor,
   BackendSignInHandlers,
   InstallState,
+  ManagedInstallAction,
+  ManagedInstallActionState,
+  ModelSelectionSession,
 } from "./descriptor";
 export type { CurrentPlan, PlanDecisionAction, PlanProposalDecision } from "./plan";
 
@@ -88,34 +92,12 @@ export interface ModeOption {
 }
 
 /**
- * One option in the effort picker. `value: null` is the bare/"Default"
- * variant — it always renders as "Default" and selects the unsuffixed
- * modelId (or the bare config-option value, when the backend uses one).
+ * One backend-reported effort option. A null value represents an unset wire
+ * preference; picker catalogs expose concrete levels only.
  */
-export interface EffortOption {
-  value: string | null;
-  label: string;
-}
+export type { EffortOption } from "@/lib/model-effort";
 
-/**
- * Every thinking-effort level our backends speak, ascending — least thinking first.
- *
- * Canonical in two directions. It ranks a reported menu so the picker's slider always
- * runs the same way, and it is the vocabulary a backend checks a level against, so an
- * agent-reported string that is not in here is one we cannot place. Agents report their
- * levels in whatever order they please, and one that ranks them by its own rules will
- * hand back a menu that runs backwards.
- * https://github.com/logancyang/obsidian-copilot/issues/2917
- */
-export const EFFORT_LEVELS_ASCENDING: readonly string[] = [
-  "none",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
+export { EFFORT_LEVELS_ASCENDING } from "@/lib/model-effort";
 
 /**
  * One entry in the picker's deduped catalog. One entry per base model id;
@@ -141,8 +123,8 @@ export interface ModelEntry {
   provider: string | null;
   /**
    * Effort options for this model. Empty array when the model has no
-   * effort dimension (e.g. Claude Haiku, or a suffix-style base with only
-   * one variant). `value: null` entries denote the bare/"Default" variant.
+   * effort dimension (e.g. Claude Haiku). A sole non-null effort is retained
+   * so the model remains addressable. `value: null` denotes the bare/"Default" variant.
    */
   effortOptions: EffortOption[];
 }
@@ -210,7 +192,7 @@ export interface EnabledModelEntry {
  * this backend; round-trips through `wire.encode` for the same backend
  * but is meaningless cross-backend (opencode's includes a `provider/`
  * prefix; codex's doesn't). Always read in the context of its
- * backend's slice. `effort` is `null` for "unset" / "default variant"
+ * backend's slice. `effort` is `null` for missing effort or a model without effort controls
  * — the translator guarantees it matches one of the corresponding
  * `ModelEntry.effortOptions[].value`.
  */
@@ -652,8 +634,8 @@ export type AgentQuestionAnswers = { [questionText: string]: string };
 /**
  * A request from the backend asking the user to answer one or more inline
  * multiple-choice questions (Claude SDK's `AskUserQuestion` tool). Routed
- * through the session-domain ask-question prompter and rendered as an inline
- * card at the tail of the chat — the sibling of `PermissionPrompt`.
+ * through the session-domain ask-question prompter and rendered in the chat's
+ * action rail — the sibling of `PermissionPrompt`.
  * `requestId` reuses the backend's tool-call id so the resolver can pair the
  * answer with the originating call.
  */
@@ -887,6 +869,10 @@ export type AgentMessagePart =
   | {
       kind: "thought";
       text: string;
+      /** Local event time for the first chunk in this reasoning block. */
+      startedAtMs?: number;
+      /** Frozen elapsed time once a later event proves the block ended. */
+      durationMs?: number;
     }
   | {
       // Streamed assistant prose. Each interruption by a tool_call or thought

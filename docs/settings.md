@@ -29,13 +29,15 @@ A Copilot license is optional. You can use Agent Chat with opencode plus BYOK or
 
 ### Agents
 
-This section is desktop-only. The first selector and four inline tabs control what new Agent Chat and Quick Chat sessions can use.
+On desktop, the first selector and four inline tabs control what new Agent Chat and Quick Chat sessions can use. On mobile, **Quick Chat models** appears directly in **Basic**, below the desktop-only agent notice. Its default model, search, and model switches work the same on both platforms.
 
-| Control                            | Default                      | What it does                                                                                                                                                                                                                                                       |
-| ---------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Default backend**                | **opencode**                 | Chooses the agent used when you select **+** for a new session and when Copilot starts a session automatically. Choosing a model from another agent in the Agent Chat model picker also changes this default. Options are **opencode**, **Claude**, and **Codex**. |
-| **opencode / Claude / Codex tabs** | **opencode** tab opens first | Configure each installed agent, its default model and effort, its enabled models, and its process environment.                                                                                                                                                     |
-| **Quick Chat tab**                 | Not applicable               | Curates the separate model list used by Quick Chat and Quick Ask. Claude and Codex account models do not become Quick Chat models.                                                                                                                                 |
+| Control                            | Default                      | What it does                                                                                                                                                                                                                                                                                                     |
+| ---------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Default backend**                | **opencode**                 | Chooses the agent used when you select **+** for a new session and when Copilot starts a session automatically. Choosing a model from another agent in the Agent Chat model picker also changes this default. Options are **opencode**, **Claude**, and **Codex**.                                               |
+| **Notification**                   | **On**                       | Plays a short sound whenever an agent stops and wants you: the turn finished, the turn hit an error, or a tool is waiting for your approval. It stays quiet while focus is inside that Agent Chat, and repeated alerts within one second play only once. Turn it off when you do not want audible notifications. |
+| **Sound**                          | **Piano key**                | Chooses which sound plays: **Piano key**, **Marimba**, **Bell**, or **Doorbell**. Selecting one previews it unless another sound played in the last second. Appears only while **Notification** is on.                                                                                                           |
+| **opencode / Claude / Codex tabs** | **opencode** tab opens first | Configure each installed agent, its default model and effort, its enabled models, and its process environment.                                                                                                                                                                                                   |
+| **Quick Chat tab**                 | Not applicable               | Curates the separate model list used by Quick Chat and Quick Ask. Claude and Codex account models do not become Quick Chat models.                                                                                                                                                                               |
 
 The model controls shared by installed agents behave as follows:
 
@@ -48,20 +50,20 @@ The model controls shared by installed agents behave as follows:
 
 #### opencode
 
-opencode is the recommended backend and the only one Copilot can install for you. It can route Copilot-hosted models, supported BYOK providers, local OpenAI-compatible endpoints, and models reported by opencode.
+Copilot can install and manage opencode for you. It can route Copilot-hosted models, supported BYOK providers, local OpenAI-compatible endpoints, and models reported by opencode.
 
 When opencode is absent:
 
-1. Select **Download opencode** to download Copilot's pinned build. Progress and **Cancel** appear in the row.
-2. If you already installed it, select **I already have it** to search known locations and adopt the binary.
-3. If detection fails, use **Try again** or **Configure** to enter an absolute path.
+1. Open **Configure**, choose **Managed by Copilot**, then select **Download & install** to download Copilot's pinned build. Progress and **Cancel** appear in the dialog.
+2. If you already installed it, choose **My own binary** and select **Auto-detect**.
+3. If detection fails, enter an absolute path and select **Apply**.
 
 The **Configure opencode** dialog has these controls:
 
 | Control                                      | Default                               | What it does                                                                                                                                                                                                                                                      |
 | -------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Managed by Copilot**                       | Selected when no source is configured | Shows the platform, pinned version, and destination. Use **Download & install** for first setup, **Reinstall** to replace the managed copy, and **Uninstall** to remove every Copilot-downloaded opencode binary. Uninstall keeps your custom path and BYOK keys. |
-| **My own binary**                            | Off                                   | Enter an absolute path, then use **Apply**, or select **Auto-detect**. **Clear** forgets the custom path. Applying a path switches the active source without deleting the managed copy.                                                                           |
+| **My own binary**                            | Off                                   | Enter an absolute path, then use **Apply**, or select **Auto-detect**. **Clear** forgets the custom path. Applying a valid path switches the active source and removes unused Copilot-managed downloads.                                                          |
 | **Upgrade to latest / Run opencode upgrade** | Shown when an update is needed        | A managed source downloads the current supported build. A custom source runs opencode's own upgrade command.                                                                                                                                                      |
 
 After installation, choose the **Default model**, **Default effort**, model switches, and optional environment variables such as `XDG_CONFIG_HOME` or `HTTPS_PROXY`. Copilot-hosted models require an eligible Copilot license. BYOK and local models do not.
@@ -89,17 +91,25 @@ The Claude settings card also includes:
 
 #### Codex
 
-Codex uses the `codex-acp` adapter and the login held by the Codex CLI. It does not use an OpenAI API key from the BYOK tab.
+Codex uses the `codex-acp` adapter and the login held by the Codex CLI. It does not use an OpenAI API key from the BYOK tab. Managed downloads are pinned to adapter version **1.10.0** in this Copilot release. **0.0.45** is the minimum supported version for an existing or manually installed adapter. See [Codex installation details](agent-mode-and-tools.md#codex).
 
 Select **Configure** to open these controls:
 
-| Control                                             | Default                                  | What it does                                                                                                                           |
-| --------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **codex-acp binary**                                | Blank until detected or applied          | **Auto-detect** searches known locations and `PATH`. **Apply** validates and saves an absolute `codex-acp` path. **Clear** forgets it. |
-| **Install it**                                      | Not applicable                           | Shows the platform-specific `codex-acp` installation command.                                                                          |
-| **Sign in**                                         | Not applicable                           | Shows `codex login`. Run it outside Copilot; the adapter inherits that login. There is no key field here.                              |
-| **Default model / Default effort / model switches** | Agent defaults; models reported by Codex | Curates the models available to Codex Agent Chat. Billing and limits belong to the OpenAI or ChatGPT account used by the CLI.          |
-| **Environment variables**                           | No rows                                  | Passes values such as `CODEX_HOME` or `OPENAI_BASE_URL` to the adapter.                                                                |
+| Control                                             | Default                                  | What it does                                                                                                                                                                                                                                                        |
+| --------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **My own binary**                                   | Blank until detected or applied          | **Auto-detect** finds a supported `@agentclientprotocol/codex-acp`. **Apply** validates its package and version before saving its path. Copilot does not update it.                                                                                                 |
+| **Managed by Copilot**                              | Selected for a new setup                 | Shows the platform, pinned adapter version, and destination. Use **Download & install**, **Reinstall**, or **Uninstall** to manage Copilot's downloaded copies. Installs show progress and an explicit **Cancel** button. No Node.js or npm installation is needed. |
+| **Sign in**                                         | Not applicable                           | Starts browser sign-in and shows the verified login status. **Open sign-in page** is available if the browser does not open; you can cancel or retry. There is no key field here.                                                                                   |
+| **Default model / Default effort / model switches** | Agent defaults; models reported by Codex | Curates the models available to Codex Agent Chat. Billing and limits belong to the OpenAI or ChatGPT account used by the CLI.                                                                                                                                       |
+| **Environment variables**                           | No rows                                  | Passes values such as `CODEX_HOME` or `OPENAI_BASE_URL` to the adapter.                                                                                                                                                                                             |
+
+You can also choose **Sign in to Codex** on the Agent Chat status card. For terminal login, run your configured adapter with `cli login` using the same `CODEX_HOME` as Copilot.
+
+The Configure dialog uses the same **Managed by Copilot** and **My own binary** tabs as opencode. Switching tabs only changes the controls shown; installing or applying a path changes the active source. **Uninstall** asks for confirmation and keeps your own binary and Codex login.
+
+Codex and Claude share an **Authentication** section. The badge beside its heading shows the current sign-in state. When signed out, choose **Sign in with your browser** or use the displayed terminal command. After signing in, the section shows the account label when the CLI provides one and offers **Sign out** so you can sign in with another account. Sign-out uses the selected CLI profile; environment-provided API keys must be removed from the environment separately.
+
+If a Copilot update pins a different managed adapter, the Codex row shows **Update**. Its progress, failure message, and **Retry** action are shared with the alert in Agent Chat. A custom binary remains usable and is never changed automatically.
 
 See [Agent Chat](agent-mode-and-tools.md) for setup, permissions, projects, multi-agent answers, and normal use.
 
@@ -122,7 +132,7 @@ Quick Ask uses a Quick Chat model. It inherits the Quick Chat choice until you s
 | **Send Shortcut**           | **Enter**        | Chooses **Enter** or **Shift + Enter** to send. If the shortcut does not work, check **Obsidian → Hotkeys** for a conflict.                                                                           |
 | **Copilot folder location** | `copilot`        | Sets the root for conversations, custom prompts, system prompts, skills, and projects. Press Enter or select **Apply** to validate and confirm the change. The folder button reveals the active root. |
 
-Changing the Copilot folder does not move existing files. The old root remains treated as Copilot data, and a new root that already contains notes becomes excluded from Copilot search. Move files yourself after the change. If Miyo is connected, open the Miyo tab and use **Resync Miyo** when prompted.
+Changing the Copilot folder does not move existing files. The old root remains treated as Copilot data, and a new root that already contains notes becomes excluded from Copilot search. Move files yourself after the change. Copilot applies the new root to its own search results immediately. Adjust the registered folder's scope in the Miyo app if you want Miyo and any enabled Relay clients to skip other content.
 
 ### Custom instructions
 
@@ -130,6 +140,8 @@ Changing the Copilot folder does not move existing files. The old root remains t
 | ----------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Custom vault instructions** | Blank `AGENTS.md`                    | Edits the root `AGENTS.md` used by every agent for vault-wide instructions. Text saves automatically after a short delay. **Open AGENTS.md** closes settings and opens the file as a note. Start a new Agent Chat after changing instructions. |
 | **Saved Chat prompt notice**  | Hidden unless old prompt files exist | Points upgrading users to their old system-prompt files so useful instructions can be copied into `AGENTS.md`. It does not migrate or delete those files.                                                                                      |
+
+Empty instruction fields show a fixed example until you type.
 
 See [`AGENTS.md` examples](agents-md-examples.md) and [Projects](projects.md) for project-specific instructions.
 
@@ -181,13 +193,14 @@ Miyo supplies Copilot's current semantic search and selected chat-history search
 
 ### Connection
 
-| Control                                | Default                              | What it does                                                                                                                                                                                                                                                                                    |
-| -------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Miyo → Connect**                     | Disconnected                         | Probes local discovery or the configured remote server. A healthy connection shows **Connected · local** or **Connected · remote**. If an enabled server becomes unreachable, the pill shows **Unavailable**. Select the pill to **Disconnect** and return Copilot to non-Miyo routing.         |
-| **Download**                           | Not applicable                       | Opens [miyo.md](https://www.miyo.md/) when Miyo is not installed.                                                                                                                                                                                                                               |
-| **Connector · Relay → Set up in Miyo** | Status detected from Miyo            | Opens Miyo's Connector setup. Connector can let cloud ChatGPT or Claude clients read and write registered local files. This is a separate, explicit Miyo Relay setup and privacy boundary.                                                                                                      |
-| **Remote Miyo server (advanced)**      | Blank                                | Expand the disclosure and enter a server URL. Blank uses local discovery. The value saves on blur and is used by both Copilot's Miyo connection and the Connector row.                                                                                                                          |
-| **Resync Miyo**                        | Shown only when exclusions are stale | Updates Miyo's excluded folders after the Copilot root or related folder rules change and starts re-indexing when needed. If one-click resync is unavailable, remove and re-add the folder in Miyo. Do this promptly because stale exclusions can expose Copilot chats to Miyo search or Relay. |
+| Control                                | Default                   | What it does                                                                                                                                                                                                                                                                            |
+| -------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Miyo → Connect**                     | Disconnected              | Probes local discovery or the configured remote server. A healthy connection shows **Connected · local** or **Connected · remote**. If an enabled server becomes unreachable, the pill shows **Unavailable**. Select the pill to **Disconnect** and return Copilot to non-Miyo routing. |
+| **Download**                           | Not applicable            | Opens [miyo.md](https://www.miyo.md/) when Miyo is not installed.                                                                                                                                                                                                                       |
+| **Connector · Relay → Set up in Miyo** | Status detected from Miyo | Opens Miyo's Connector setup. Connector can let cloud ChatGPT or Claude clients read and write registered local files. This is a separate, explicit Miyo Relay setup and privacy boundary.                                                                                              |
+| **Remote Miyo server (advanced)**      | Blank                     | Expand the disclosure and enter a server URL. Blank uses local discovery. The value saves on blur and is used by both Copilot's Miyo connection and the Connector row.                                                                                                                  |
+
+When Copilot first registers a vault, it sends its current and historical working folders and Obsidian's ignored paths as the folder's initial Miyo exclusions. Copilot does not overwrite an existing registration or later Miyo edits. It applies its current working-folder history and user-authored inclusion and exclusion rules to the Miyo results it retrieves for chat; Relevant Notes shows what Miyo returns. Manage the registered folder's server-side scope in Miyo; those rules also determine what any enabled Relay client can read.
 
 If Miyo is reachable but the vault is not registered, the connection dialog offers **Register & connect** for a local Miyo. With a remote server or mobile setup, select **Open Miyo**, add the vault there, then **Retry**. Register only folders you intend Miyo and any enabled Relay clients to access.
 
@@ -215,11 +228,13 @@ Copilot discovers skills automatically from:
 
 There is no separate Skills folder setting. Change the root under **Basic → General → Copilot folder location**.
 
+If Copilot finds a `SKILL.md` that it cannot load, a warning dot appears on the Skills tab and the top of that tab shows how many skills are not available to agents. Choose **View details** to see each file's path, its specific error, and the rejected line when available. Long rejected lines stay collapsed until you choose **Show more**. **Fix with Agent** opens a fresh vault-wide Agent chat using your saved default agent and model, with the file diagnostics filled into the composer but not sent; review the request and press Enter when ready. When several skills failed, **Fix All with Agent** prepares one reviewable request for the full list. You can also choose **Open SKILL.md** to edit an indexed file in Obsidian or a hidden agent file in your default editor, while **Reveal in vault** or **Show in folder** locates it. The notice and warning dot disappear after the repaired file loads successfully; returning to Obsidian refreshes files edited externally.
+
 ### Skill list controls
 
 | Control                                       | What it does                                                                                                                                                                                                        |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Search skills**                             | Filters the visible name and description. The adjacent count reports all discovered skills.                                                                                                                         |
+| **Search skills**                             | Filters the visible name and description. The adjacent count reports skills that loaded successfully; files awaiting repair are listed separately above it.                                                         |
 | **opencode, Claude, and Codex icon switches** | Enables or disables the skill for each agent by managing a link in that agent's native skills folder. A project-only or duplicated skill may first require migration into the shared folder.                        |
 | **Edit SKILL.md**                             | Opens the shared skill in Obsidian. A skill under a hidden agent folder opens with the system's default editor.                                                                                                     |
 | **Properties…**                               | Edits structured `SKILL.md` frontmatter.                                                                                                                                                                            |
@@ -264,7 +279,7 @@ Custom commands are reusable prompt files loaded from `<Copilot folder>/copilot-
 | ------------------------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | **Drag handle**          | Saved order                 | Reorders commands. Choose **Manual** if you want drag order to control the slash menu.                                     |
 | **In Menu**              | On for a new command        | Shows the command in the editor right-click menu.                                                                          |
-| **Slash Cmd**            | On for a new command        | Shows the command after `/` in chat. In Agent Chat, the current agent resolves a slash invocation.                         |
+| **Slash Cmd**            | On for a new command        | Shows the command after `/` in Quick Chat and Agent Chat. Sending resolves the command name to its saved prompt.           |
 | **Edit**                 | Not applicable              | Opens the command editor.                                                                                                  |
 | **Duplicate**            | Not applicable              | Creates a uniquely named copy beside the original.                                                                         |
 | **Delete**               | Not applicable              | Permanently removes the command's Markdown file after confirmation.                                                        |
@@ -298,17 +313,16 @@ All controls below the main switch are disabled while Self-Host Mode is off. See
 
 ## Advanced
 
-Advanced contains credential storage, one retiring search switch, and diagnostic controls.
+Advanced contains credential storage and diagnostic controls.
 
 ### Others
 
-| Control                | Default                                           | What it does                                                                                                                                                                                                                                                      |
-| ---------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **API Key Storage**    | **Obsidian Keychain** on Obsidian 1.11.4 or newer | Reports whether secure storage is available and whether this device appears to have keys. Each device has a separate Keychain, so vault sync does not copy credentials. Older Obsidian builds cannot load, save, or delete Keychain entries.                      |
-| **Delete All Keys**    | Not applicable                                    | After confirmation, removes Copilot API and license keys from the Obsidian Keychain, `data.json`, and in-memory settings. You must enter them again. Credential backup files created during a V4 upgrade are left in place for you to review and delete manually. |
-| **Legacy vault index** | Off                                               | Retiring. Copilot V3 semantic search has moved to [Miyo](vault-search-and-indexing.md), powered by [miyo.md](https://www.miyo.md/).                                                                                                                               |
-| **Debug Mode**         | Off                                               | Logs Quick Chat activity to **View → Toggle Developer Tools**. It does not control the separate Agent Chat activity log below.                                                                                                                                    |
-| **Create Log File**    | Not applicable                                    | Flushes, saves, and opens the regular Quick Chat log for troubleshooting. Review it before sharing because diagnostic data can contain conversation content.                                                                                                      |
+| Control             | Default                                           | What it does                                                                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API Key Storage** | **Obsidian Keychain** on Obsidian 1.11.4 or newer | Reports whether secure storage is available and whether this device appears to have keys. Each device has a separate Keychain, so vault sync does not copy credentials. Older Obsidian builds cannot load, save, or delete Keychain entries.                      |
+| **Delete All Keys** | Not applicable                                    | After confirmation, removes Copilot API and license keys from the Obsidian Keychain, `data.json`, and in-memory settings. You must enter them again. Credential backup files created during a V4 upgrade are left in place for you to review and delete manually. |
+| **Debug Mode**      | Off                                               | Logs Quick Chat activity to **View → Toggle Developer Tools**. It does not control the separate Agent Chat activity log below.                                                                                                                                    |
+| **Create Log File** | Not applicable                                    | Flushes, saves, and opens the regular Quick Chat log for troubleshooting. Review it before sharing because diagnostic data can contain conversation content.                                                                                                      |
 
 ### Agent Chat debugging
 

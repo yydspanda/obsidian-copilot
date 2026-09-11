@@ -13,6 +13,28 @@ export type {
 } from "@/miyo/miyoHealth";
 
 /**
+ * Represents an HTTP error returned by Miyo while leaving transport and
+ * endpoint-specific recovery decisions to the caller.
+ */
+export class MiyoRequestError extends Error {
+  public constructor(
+    public readonly status: number,
+    public readonly detail: string,
+    public readonly errorCode?: string
+  ) {
+    // Some Miyo failures have no response body; retaining the prior status-only
+    // message keeps those callers stable while exposing structured fields.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/280
+    super(
+      detail
+        ? `Miyo request failed with status ${status}: ${detail}`
+        : `Miyo request failed with status ${status}`
+    );
+    this.name = "MiyoRequestError";
+  }
+}
+
+/**
  * Indexed file entry returned by Miyo.
  */
 export interface MiyoIndexedFileEntry {
@@ -36,6 +58,7 @@ export interface MiyoIndexedFilesResponse {
  */
 export interface MiyoFolderEntry {
   path: string;
+  exclude_folders?: string[];
   include_patterns?: string[];
   exclude_patterns?: string[];
   recursive?: boolean;
@@ -133,6 +156,25 @@ export interface MiyoSearchResponse {
 /**
  * Minimal result item for related-note queries.
  */
+export interface RelatedContextRequest {
+  folder_name: string;
+  messages?: Array<{ role: "user" | "assistant"; content: string }>;
+  draft?: string;
+  excerpts?: string[];
+  file_paths?: string[];
+  limit?: number;
+  filters?: MiyoSearchFilter[];
+}
+
+export interface RelatedContextResponse {
+  status: "ok" | "no_usable_context";
+  results: Array<{ path: string; score: number }>;
+  count: number;
+  skipped_files: Array<{ path: string; reason: "not_indexed" | "unsupported" | "outside_scope" }>;
+  context_truncated: boolean;
+  execution_time_ms: number;
+}
+
 export interface MiyoRelatedSearchResult {
   path: string;
   score: number;
@@ -143,6 +185,34 @@ export interface MiyoRelatedSearchResult {
  */
 export interface MiyoRelatedSearchResponse {
   results: MiyoRelatedSearchResult[];
+}
+
+export type MiyoFileStatus =
+  | "indexed"
+  | "pending"
+  | "error"
+  | "excluded"
+  | "not_scanned"
+  | "missing";
+
+export type MiyoFileStatusReason =
+  | "exclude_folder"
+  | "exclude_pattern"
+  | "include_folder"
+  | "include_pattern"
+  | "extension"
+  | "hidden";
+
+/**
+ * Miyo's classification of one vault-relative file within a registered folder.
+ */
+export interface MiyoFileStatusResponse {
+  status: MiyoFileStatus;
+  total_chunks?: number;
+  last_indexed_at?: number | null;
+  error_message?: string | null;
+  reason?: MiyoFileStatusReason;
+  rule?: string;
 }
 
 /**
@@ -269,13 +339,11 @@ export class MiyoClient {
   /**
    * Register a folder with Miyo (`POST /v0/folder`).
    *
-   * Like {@link checkFolderRegistration}, this reads the raw status instead of
-   * letting {@link requestJson} throw on non-2xx, so 409 can be recognized as a
-   * success rather than an error:
+   * A conflict is idempotent success only after Miyo confirms the requested
+   * absolute path is registered; overlapping folders and duplicate names fail.
    *
    * - 201 → newly registered; returns the created folder record.
-   * - 409 → already registered; returns `null` (idempotent connect — a success
-   *   with no new record to hand back, and we don't fabricate one).
+   * - 409 → returns `null` only after verification; otherwise throws the conflict.
    * - 400 → validation error; throws with the server's detail so the caller can
    *   fall back to the manual add flow.
    * - anything else → throws with the status/detail.
@@ -290,6 +358,7 @@ export class MiyoClient {
    *   immediately before the request goes out; throw from it to call the
    *   registration off. Exists because resolution and decryption are awaits, so
    *   a caller's earlier check can go stale before anything is sent.
+   *   https://github.com/Brevilabs/obsidian-copilot-private/issues/284
    * @returns The created folder record on 201, or `null` when already registered.
    */
   public async addFolder(
@@ -305,6 +374,7 @@ export class MiyoClient {
       const body = JSON.stringify(request);
       // Last point at which this registration can still be called off: once
       // `requestUrl` has it, Obsidian offers no way to abort.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/284
       beforeRequest?.();
       logInfo("Miyo request:", {
         method: "POST",
@@ -322,18 +392,38 @@ export class MiyoClient {
         body,
         throw: false,
       });
+      // Overlap and duplicate-name conflicts do not register this vault. Ask
+      // Miyo to resolve its absolute path, retaining the POST endpoint and auth.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/402
+      if (response.status === 409) {
+        try {
+          url.searchParams.set("path", request.path);
+          // requestUrl cannot be aborted; a stalled lookup must still release setup
+          // and report the original conflict instead of leaving the modal busy.
+          // https://github.com/Brevilabs/obsidian-copilot-private/issues/402
+          const registration = await withTimeout(
+            async () =>
+              requestUrl({
+                url: url.toString(),
+                method: "GET",
+                headers,
+                throw: false,
+              }),
+            8000,
+            "Miyo folder conflict verification"
+          );
+          if (registration.status === 200) return null;
+        } catch {
+          // A failed lookup must preserve the original registration conflict.
+          // https://github.com/Brevilabs/obsidian-copilot-private/issues/402
+        }
+      }
     } catch (error) {
       // No HTTP response (unresolved base URL, network failure): log and rethrow.
       logWarn(`Miyo add-folder request failed: ${err2String(error)}`);
       throw error;
     }
 
-    // Reason: 409 means the vault is already known to Miyo — the exact state the
-    // connect flow wants, so it's a success, not a failure.
-    if (response.status === 409) {
-      logInfo("Miyo folder already registered; treating as success");
-      return null;
-    }
     if (response.status === 201) {
       return this.parseResponseJson<MiyoFolderEntry>(response.json, response.text);
     }
@@ -349,83 +439,10 @@ export class MiyoClient {
   }
 
   /**
-   * Fetch the Miyo folder entry for a registered folder name.
-   *
-   * @param baseUrl - Miyo base URL.
-   * @param folderName - Vault name registered in Miyo.
-   * @returns Folder entry.
-   */
-  public async getFolder(baseUrl: string, folderName: string): Promise<MiyoFolderEntry> {
-    return this.requestJson<MiyoFolderEntry>(baseUrl, "/v0/folder", {
-      method: "GET",
-      query: { path: folderName },
-    });
-  }
-
-  /**
-   * Remove a folder registration (`DELETE /v0/folder`), which also purges the
-   * folder's indexed documents (verified empirically: a post-delete global
-   * search returns no leftovers).
-   *
-   * 404 is a success: the caller's goal — no registration under that name —
-   * already holds (e.g. a prior resync deleted it but never got to re-add).
-   * The identifier is the record's canonical `path`, which is the folder NAME,
-   * not the absolute path (also verified against a live registration).
-   *
-   * @param folderName - Registered folder name (see getMiyoFolderName).
-   * @param overrideUrl - Explicit base URL (from settings) or empty for discovery.
-   * @param beforeRequest - Invoked once the URL and credentials are resolved and
-   *   immediately before the request goes out; throw from it to call the deletion
-   *   off. Exists because resolution and decryption are awaits, so a caller's
-   *   earlier check can go stale before anything is sent.
-   */
-  public async deleteFolder(
-    folderName: string,
-    overrideUrl?: string,
-    beforeRequest?: () => void
-  ): Promise<void> {
-    const baseUrl = await this.resolveBaseUrl(overrideUrl);
-    const headers = await this.buildHeaders();
-    const url = new URL("/v0/folder", baseUrl);
-    // Last point at which this deletion can still be called off: once
-    // `requestUrl` has it, Obsidian offers no way to abort.
-    beforeRequest?.();
-    logInfo("Miyo request:", {
-      method: "DELETE",
-      url: url.toString(),
-      hasBody: true,
-      hasAuthorizationHeader: Boolean(headers.Authorization),
-    });
-    const response = await requestUrl({
-      url: url.toString(),
-      method: "DELETE",
-      headers,
-      contentType: "application/json",
-      body: JSON.stringify({ path: folderName }),
-      throw: false,
-    });
-    if (response.status === 404) {
-      logInfo("Miyo folder already unregistered; delete is a no-op");
-      return;
-    }
-    if (response.status >= 400) {
-      const detail =
-        this.parseResponseJson<{ detail?: string }>(response.json, response.text)?.detail ||
-        response.text ||
-        "";
-      throw new Error(
-        detail
-          ? `Miyo delete-folder failed with status ${response.status}: ${detail}`
-          : `Miyo delete-folder failed with status ${response.status}`
-      );
-    }
-  }
-
-  /**
    * Determine whether a vault folder is registered with Miyo.
    *
-   * Unlike {@link getFolder} (which throws on any non-2xx), this reads the raw
-   * status so the connect flow can branch cleanly: 200 → registered, 404 →
+   * This reads the raw status so the connect flow can branch cleanly: 200 →
+   * registered, 404 →
    * unregistered, anything else → error. It resolves the base URL itself and
    * only inspects `response.status`, never the body — so a healthy-but-malformed
    * payload can't be misread as "unregistered".
@@ -582,7 +599,7 @@ export class MiyoClient {
    * Execute related-notes search for a source note path.
    *
    * @param baseUrl - Miyo base URL.
-   * @param filePath - Absolute source note path to find related notes for.
+   * @param filePath - Source in Miyo public `FolderName/path/to/file` format.
    * @param options - Optional folder name, result limit, and filters.
    * @returns Search response in the same shape as /v0/search.
    */
@@ -595,6 +612,31 @@ export class MiyoClient {
       filters?: MiyoSearchFilter[];
     }
   ): Promise<MiyoRelatedSearchResponse> {
+    // Old Miyo installations must keep serving note recommendations during client upgrades.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/383
+    if (options?.folderName) {
+      try {
+        const response = await this.recommend(baseUrl, {
+          folder_name: options.folderName,
+          file_paths: [filePath],
+          limit: options.limit ?? 10,
+          filters: options.filters,
+        });
+        // Preserve the existing file-status lookup for a skipped single source.
+        // https://github.com/Brevilabs/obsidian-copilot-private/issues/383
+        if (response.status === "no_usable_context") {
+          throw new MiyoRequestError(404, "No indexed context for source file");
+        }
+        return response;
+      } catch (error) {
+        if (
+          !(error instanceof MiyoRequestError) ||
+          error.status !== 501 ||
+          error.errorCode !== "not_implemented"
+        )
+          throw error;
+      }
+    }
     const payload = {
       file_path: filePath,
       ...(options?.folderName ? { folder_name: options.folderName } : {}),
@@ -604,6 +646,49 @@ export class MiyoClient {
     return this.requestJson<MiyoRelatedSearchResponse>(baseUrl, "/v0/search/related", {
       method: "POST",
       body: payload,
+    });
+  }
+
+  /** Recommend notes from indexed file references and optional text without indexing it.
+   * @param baseUrl - Resolved Miyo endpoint.
+   * @param request - Vault-scoped visible text and indexed file references.
+   */
+  public async recommend(
+    baseUrl: string,
+    request: RelatedContextRequest
+  ): Promise<RelatedContextResponse> {
+    try {
+      return await this.requestJson<RelatedContextResponse>(baseUrl, "/v0/recommend", {
+        method: "POST",
+        body: request,
+        sensitive: true,
+      });
+    } catch (error) {
+      // Gateways may translate an old Miyo's missing route into 404. Confirm Miyo
+      // is reachable before offering compatibility fallback instead of connection recovery.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/383
+      if (
+        error instanceof MiyoRequestError &&
+        error.status === 404 &&
+        (await this.fetchHealth(baseUrl))?.status === "ok"
+      ) {
+        throw new MiyoRequestError(501, "Recommendations are unsupported", "not_implemented");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Classify one file when related search cannot find indexed chunks for it.
+   *
+   * @param baseUrl - Miyo base URL.
+   * @param filePath - File path in Miyo's public `FolderName/path/to/file` format.
+   * @returns Miyo's current file classification and available details.
+   */
+  public async fileStatus(baseUrl: string, filePath: string): Promise<MiyoFileStatusResponse> {
+    return this.requestJson<MiyoFileStatusResponse>(baseUrl, "/v0/folder/file-status", {
+      method: "GET",
+      query: { file_path: filePath },
     });
   }
 
@@ -656,8 +741,9 @@ export class MiyoClient {
     baseUrl: string,
     path: string,
     options: {
-      method: "GET" | "POST" | "DELETE";
+      method: "GET" | "POST";
       body?: unknown;
+      sensitive?: boolean;
       query?: Record<string, string | number | boolean | undefined>;
     }
   ): Promise<T> {
@@ -677,7 +763,9 @@ export class MiyoClient {
       url: url.toString(),
       hasBody: Boolean(body),
       hasAuthorizationHeader: Boolean(headers.Authorization),
-      ...(getSettings().debug && options.method === "POST" ? { postBody: options.body } : {}),
+      ...(getSettings().debug && options.method === "POST" && !options.sensitive
+        ? { postBody: options.body }
+        : {}),
     });
 
     const response = await requestUrl({
@@ -690,20 +778,28 @@ export class MiyoClient {
     });
 
     if (response.status >= 400) {
-      const errorPayload = this.parseResponseJson<{ detail?: string }>(
-        response.json,
-        response.text
-      );
-      const errorText = errorPayload?.detail || response.text || "";
+      const errorPayload = this.parseResponseJson<{
+        detail?: string;
+        error?: string;
+        code?: string;
+      }>(response.json, response.text, options.sensitive);
+      // Never retain server echoes of private conversation content.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/383
+      const errorText = options.sensitive
+        ? "Chat-context retrieval failed"
+        : errorPayload?.detail || response.text || errorPayload?.error || "";
       logWarn(`Miyo request failed (${response.status}): ${errorText}`);
-      throw new Error(
-        errorText
-          ? `Miyo request failed with status ${response.status}: ${errorText}`
-          : `Miyo request failed with status ${response.status}`
+      // Relevant Notes must distinguish an unindexed source from a service
+      // outage without parsing human-readable error messages.
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/280
+      throw new MiyoRequestError(
+        response.status,
+        errorText,
+        errorPayload?.code ?? errorPayload?.error
       );
     }
 
-    const parsed = this.parseResponseJson<T>(response.json, response.text);
+    const parsed = this.parseResponseJson<T>(response.json, response.text, options.sensitive);
     if (getSettings().debug) {
       logInfo(`Miyo request ${options.method} ${url.toString()} succeeded`);
     }
@@ -717,12 +813,16 @@ export class MiyoClient {
    * @param text - Raw response text.
    * @returns Parsed JSON value or empty object.
    */
-  private parseResponseJson<T>(json: unknown, text?: string): T {
+  private parseResponseJson<T>(json: unknown, text?: string, sensitive = false): T {
     if (typeof json === "string") {
       try {
         return JSON.parse(json) as T;
       } catch (error) {
-        logError(`Failed to parse Miyo JSON response: ${err2String(error)}`);
+        logError(
+          sensitive
+            ? "Invalid Miyo chat response"
+            : `Failed to parse Miyo JSON response: ${err2String(error)}`
+        );
         return {} as T;
       }
     }
@@ -733,7 +833,11 @@ export class MiyoClient {
       try {
         return JSON.parse(text) as T;
       } catch (error) {
-        logError(`Failed to parse Miyo text response: ${err2String(error)}`);
+        logError(
+          sensitive
+            ? "Invalid Miyo chat response"
+            : `Failed to parse Miyo text response: ${err2String(error)}`
+        );
         return {} as T;
       }
     }

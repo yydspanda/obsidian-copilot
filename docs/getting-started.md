@@ -17,13 +17,13 @@ Open **Settings → Copilot → Basic** and find **Agents**. For most people, th
 ### Recommended: Download opencode
 
 1. Select the **opencode** tab under **Agents**.
-2. Click **Download opencode**. Copilot downloads the `opencode` binary and manages it for you.
+2. Open **Configure**, choose **Managed by Copilot**, then click **Download & install**. Copilot downloads the `opencode` binary and manages it for you.
 3. Choose how opencode gets models:
    - **Copilot-hosted models:** enter an eligible license under **Copilot License** on the Basic tab. Eligible hosted models then appear in opencode and Quick Chat.
    - **Bring your own key:** open the **BYOK** tab, select **Add a provider**, enter your provider details, and choose models. Copilot stores the key in this device's Obsidian Keychain and enables the selected models for opencode and Quick Chat.
 4. Return to **Basic → Agents → opencode** and choose the default model for new chats.
 
-Already have the `opencode` binary? Click **I already have it**. If detection fails, click **Configure**, choose **My own binary**, and enter its absolute path.
+Already have the `opencode` binary? Open **Configure**, choose **My own binary**, then select **Auto-detect** or enter its absolute path and click **Apply**.
 
 ### Alternative: Link Claude Code
 
@@ -37,20 +37,15 @@ Claude uses the account held by the Claude Code CLI. You do not paste that accou
 
 ### Alternative: Link Codex
 
-Copilot connects to Codex through the `codex-acp` adapter. If you already use Codex:
+Copilot connects to Codex through the `codex-acp` adapter, which includes a compatible Codex CLI:
 
-1. Install the adapter for your platform:
-   - **Windows:** follow [Windows setup for Agent Chat](agent-mode-windows-setup.md#3-connect-codex). Its PowerShell installer downloads the native `codex-acp.exe` that Copilot requires.
-   - **macOS or Linux:** run:
+1. Open **Basic → Agents → Codex → Configure** and choose **Download & install** under **Managed by Copilot**. Copilot installs the adapter version tested with that plugin release with its bundled runtime. You do not need Node.js or npm.
+2. Click **Sign in**, complete authentication in your browser, and return to Obsidian. If the browser does not open, click **Open sign-in page**. You can cancel or retry sign-in.
+3. To use your own adapter instead, choose **My own binary**, then use **Auto-detect** or enter its path. Copilot never updates a custom binary.
 
-     ```bash
-     npm install -g @agentclientprotocol/codex-acp
-     ```
+When a Copilot release requires a newer managed adapter, **Agent Chat** and **Settings** show **Update**. Both use the same operation and keep progress, errors, and **Retry** in sync. You can also choose **Sign in to Codex** on the Agent Chat status card. For terminal login, run your configured adapter with `cli login` using the same `CODEX_HOME` as Copilot.
 
-2. Run `codex login` if the Codex CLI is not already signed in.
-3. Open **Basic → Agents → Codex → Configure**, then use **Auto-detect** or enter the path to `codex-acp.exe` on Windows or `codex-acp` on macOS and Linux.
-
-Codex inherits the Codex CLI's credentials; there is no Codex key to paste into Copilot.
+For manual installations, Copilot requires `@agentclientprotocol/codex-acp` 0.0.45 or newer. This is the minimum supported adapter version; managed downloads are pinned to 1.10.0 in this Copilot release. See [Codex installation details](agent-mode-and-tools.md#codex). The older `@zed-industries/codex-acp` package is not supported. Codex uses the login stored by the bundled Codex CLI; there is no Codex key to paste into Copilot.
 
 ## Start Your First Agent Chat
 

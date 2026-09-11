@@ -1,4 +1,5 @@
-import type { AgentSessionManager } from "@/agentMode";
+import { startReleaseUpdateCheck } from "@/services/releaseUpdateNotice";
+import type { AgentSessionManager, SkillManager } from "@/agentMode";
 // Deep import (not the barrel): these run on the load path for every
 // platform, and the barrel pulls Node-only modules that crash mobile.
 import { isNativeChatId, parseNativeChatId } from "@/utils/nativeChatId";
@@ -13,7 +14,7 @@ import { APPLY_VIEW_TYPE, ApplyView } from "@/components/composer/ApplyView";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { LoadChatHistoryModal } from "@/components/modals/LoadChatHistoryModal";
 
-import { registerContextMenu, registerSymposiumFileMenu } from "@/commands/contextMenu";
+import { registerContextMenu } from "@/commands/contextMenu";
 import { CustomCommandRegister } from "@/commands/customCommandRegister";
 import { migrateCommands } from "@/commands/migrator";
 import { migrateSystemPromptsFromSettings } from "@/system-prompts/migration";
@@ -63,8 +64,11 @@ import {
   startActiveWebTabTracking,
 } from "@/services/webViewerService/webViewerServiceSingleton";
 import { WebSelectionTracker } from "@/services/webViewerService/webViewerServiceSelection";
-import VectorStoreManager from "@/search/vectorStoreManager";
 import { runSettingsMigrations } from "@/settings/migrations";
+import {
+  cleanupLegacyIndexArtifacts,
+  LEGACY_INDEX_CLEANUP_STORAGE_KEY,
+} from "@/settings/migrations/legacyIndexRemovalMigration";
 import { CopilotSettingTab } from "@/settings/SettingsPage";
 import {
   type CopilotSettings,
@@ -74,13 +78,12 @@ import {
   subscribeToSettingsChange,
   updateSetting,
 } from "@/settings/model";
-import { didMiyoSyncedRootsChange, shouldSurfaceMiyoResync } from "@/miyo/miyoUtils";
-import { type MiyoMutationSession, resetMiyoMutations } from "@/miyo/miyoResync";
 import { ensureCopilotSubfolders, getEffectiveConversationsFolder } from "@/settings/copilotFolder";
 import { buildUpgradeRelocationEntries } from "@/settings/upgradeNotice";
 import { dehydrateDeviceProfile, hydrateDeviceProfile } from "@/settings/deviceProfiles";
 import { getDeviceId } from "@/utils/deviceId";
 import { isDesktopRuntime } from "@/utils/desktopRuntime";
+import { disposeNotificationSound } from "@/utils/notificationSound";
 import { installRendererEventsShim } from "@/utils/rendererEventsShim";
 import { ContextProcessor } from "@/contextProcessor";
 import { CustomCommandManager } from "@/commands/customCommandManager";
@@ -129,11 +132,8 @@ import {
   trashFile,
 } from "@/utils/vaultAdapterUtils";
 import { v4 as uuidv4 } from "uuid";
-import {
-  createSymposiumAgentBridge,
-  type SymposiumAgentBridge,
-  SymposiumPublisher,
-} from "@/symposium/SymposiumPublisher";
+import { OpenArtifactsPublisher } from "@/openArtifacts/OpenArtifactsPublisher";
+import { migrateOpenArtifactsFolder } from "@/openArtifacts/openArtifactsLedger";
 import {
   createSelfHostWebSearchAgentBridge,
   type SelfHostWebSearchAgentBridge,
@@ -146,7 +146,6 @@ export default class CopilotPlugin extends Plugin {
   chainOwner: ChainOwner;
   brevilabsClient: BrevilabsClient;
   userMessageHistory: string[] = [];
-  vectorStoreManager: VectorStoreManager;
   private vaultDataManager?: VaultDataManager;
   fileParserManager: FileParserManager;
   customCommandRegister: CustomCommandRegister;
@@ -155,27 +154,14 @@ export default class CopilotPlugin extends Plugin {
   settingsUnsubscriber?: () => void;
   chatUIState: ChatManagerChatUIState;
   agentSessionManager?: AgentSessionManager;
+  skills?: SkillManager;
   private CopilotAgentView?: typeof import("@/agentMode").CopilotAgentView;
   private PlanPreviewView?: typeof import("@/agentMode").PlanPreviewView;
   private planPreviewViewType?: typeof import("@/agentMode").PLAN_PREVIEW_VIEW_TYPE;
   private agentModelDiscoveryUnsubscriber?: () => void;
   modelManagement!: ModelManagementApi;
-  /** Frozen path-only facade available to Agent Mode's Obsidian CLI bridge. */
-  symposiumAgentBridge?: Readonly<SymposiumAgentBridge>;
   /** Provider-credential-free channel available to the managed Agent Chat search skill. */
   selfHostWebSearchAgentBridge?: Readonly<SelfHostWebSearchAgentBridge>;
-  // Proof of THIS lifecycle for anything that enqueues a Miyo folder mutation.
-  // Assigned in `onload` right after the queue reset, and read by the settings
-  // UI rather than captured there: settings tabs mount lazily (`TabContent`
-  // renders nothing until selected), so a tab first opened after a reload would
-  // capture the incoming lifecycle while still holding the outgoing vault's
-  // `app`. The plugin instance is one-per-lifecycle by construction, so it is
-  // the honest place for this.
-  //
-  // Assign it exactly once and never recompute it per read: the Miyo tab uses it
-  // as an effect dependency, so a getter that captured on every access would
-  // hand React a new object each render and spin that effect forever.
-  miyoMutationSession!: MiyoMutationSession;
   private ribbonIconEl?: HTMLElement;
   userMemoryManager: UserMemoryManager;
   quickAskController: QuickAskController;
@@ -193,6 +179,12 @@ export default class CopilotPlugin extends Plugin {
   private projectsInitialization?: Promise<StartupMigrationItem | null>;
   private readonly chatHistoryLastAccessedAtManager = new RecentUsageManager<string>();
   private startupMigrationItems: StartupMigrationItem[] = [];
+  private pluginLifecycleActive = true;
+
+  /** Whether this plugin instance still owns lifecycle-sensitive mutations. */
+  public isPluginLifecycleActive(): boolean {
+    return this.pluginLifecycleActive;
+  }
 
   /** Returns the stable least-authority Add-to-Knowledge command surface for Chat views. */
   getKnowledgeChatCapturePort(): KnowledgeChatCapturePort {
@@ -215,13 +207,6 @@ export default class CopilotPlugin extends Plugin {
     // AFTER the next onload has already initialized — and would then null
     // out the new instance, breaking saves until another full reload.
     resetPersistenceState();
-    // Also reset here, not only in `onunload`: a crash or a hard kill never runs
-    // unload at all, and the module would then start this lifecycle holding the
-    // previous one's queue. Bumping twice is harmless — no task exists yet.
-    // The reset hands back this lifecycle's session; producers read it off the
-    // plugin rather than obtaining one themselves, which is what keeps a stale
-    // settings tree from vouching for the lifecycle it outlived.
-    this.miyoMutationSession = resetMiyoMutations();
     KeychainService.resetInstance();
     KeychainService.getInstance(this.app);
     await this.loadSettings();
@@ -274,12 +259,39 @@ export default class CopilotPlugin extends Plugin {
         }
       })();
     });
+    // Startup notices remember their own last shown release; Agent Home dismissal
+    // is independent. Hydration and the save subscriber must precede this check.
+    this.register(
+      startReleaseUpdateCheck(
+        this.app,
+        this.manifest.version,
+        getSettings().lastShownStartupVersion,
+        (version) => updateSetting("lastShownStartupVersion", version)
+      )
+    );
     // One-time settings migrations. Runs after the persist subscriber is wired
     // (so every mutation is saved) and after createModelManagement, and before
     // agent/model-discovery init below — so migrated BYOK providers are present
     // when OpenCode first enumerates models. Awaited for deterministic ordering;
     // it's a fast, one-time, no-op for already-migrated/fresh vaults.
     await runSettingsMigrations(this.modelManagement);
+    // Remnants of the retired index pipeline live on this device, not in the
+    // synced settings, so they are gated by a device-local marker instead of
+    // `settingsVersion`. Not awaited: nothing below reads its result.
+    // https://github.com/logancyang/obsidian-copilot/pull/3094#discussion_r3926692787
+    void cleanupLegacyIndexArtifacts({
+      adapter: this.app.vault.adapter,
+      configDir: this.app.vault.configDir,
+      hasRun: () => this.app.loadLocalStorage(LEGACY_INDEX_CLEANUP_STORAGE_KEY) === "done",
+      markRun: () => this.app.saveLocalStorage(LEGACY_INDEX_CLEANUP_STORAGE_KEY, "done"),
+      removeRetiredEmbeddingSecrets: () =>
+        KeychainService.getInstance().removeRetiredEmbeddingSecrets(),
+      notifyFailure: (folder) => {
+        new Notice(
+          `Copilot couldn't remove old index files from ${folder}. Remove them manually if you want to reclaim the space.`
+        );
+      },
+    });
     const isLegacyUpgrade = getSettings().upgradedToV8FromLegacy;
     this.addSettingTab(new CopilotSettingTab(this.app, this));
 
@@ -342,6 +354,7 @@ export default class CopilotPlugin extends Plugin {
         acpFrameSink,
         createAgentSessionManager,
         setFrameSinkVaultBasePath,
+        SkillManager,
       } = await import("@/agentMode");
       const { wireAgentModelDiscovery } = await import("@/agentMode/agentModelDiscovery");
       this.CopilotAgentView = CopilotAgentView;
@@ -359,6 +372,7 @@ export default class CopilotPlugin extends Plugin {
       void acpFrameSink.narrowLegacyLogs();
 
       this.agentSessionManager = createAgentSessionManager(this.app, this);
+      this.skills = SkillManager.getInstance();
       // Enroll agent-reported models on probe settle, even when the settings
       // tab is closed. See `agentModelDiscovery.ts`.
       this.agentModelDiscoveryUnsubscriber = wireAgentModelDiscovery(
@@ -366,9 +380,6 @@ export default class CopilotPlugin extends Plugin {
         this.agentSessionManager
       );
     }
-
-    // Always construct VectorStoreManager; it internally no-ops when semantic search is disabled
-    this.vectorStoreManager = VectorStoreManager.getInstance(this.app);
 
     // Initialize VaultDataManager for centralized vault data (notes, folders, tags)
     // Note: VaultDataManager tracks ALL data; hooks filter based on parameters
@@ -444,28 +455,28 @@ export default class CopilotPlugin extends Plugin {
       () => (this.canUseAgentView() ? this.activateAgentView() : this.activateView())
     );
 
-    const symposiumPublisher = new SymposiumPublisher(this.app);
-    const symposiumAgentBridge = createSymposiumAgentBridge(symposiumPublisher);
-    this.symposiumAgentBridge = symposiumAgentBridge;
+    // Awaited so no publish can create .openartifacts before the old folder moves; a
+    // destination that already exists would strand the legacy history for good.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/337
+    try {
+      await migrateOpenArtifactsFolder(this.app.vault);
+    } catch (error) {
+      logError("Failed to move the Symposium publishing folder to .openartifacts.", error);
+    }
+    const openArtifactsPublisher = new OpenArtifactsPublisher(this.app);
     const publishFile = (file: TFile): void => {
-      void symposiumPublisher
+      void openArtifactsPublisher
         .open(file)
-        .catch((error) => logError("Failed to open Symposium publishing.", error));
+        .catch((error) => logError("Failed to open OpenArtifacts publishing.", error));
     };
-    this.register(() => {
-      symposiumPublisher.dispose();
-      if (this.symposiumAgentBridge === symposiumAgentBridge) {
-        this.symposiumAgentBridge = undefined;
-      }
-    });
+    this.register(() => openArtifactsPublisher.dispose());
     registerCommands(this, publishFile);
-    registerSymposiumFileMenu(this, publishFile);
 
     // Tool initialization is now handled automatically in CopilotPlusChainRunner and AutonomousAgentChainRunner
 
     this.registerEvent(
-      this.app.workspace.on("editor-menu", (menu: Menu, _editor, info) => {
-        registerContextMenu(menu, this.app, info.file, publishFile);
+      this.app.workspace.on("editor-menu", (menu: Menu) => {
+        registerContextMenu(menu, this.app);
       })
     );
 
@@ -612,29 +623,7 @@ export default class CopilotPlugin extends Plugin {
     await runStartupMigrationSummary({
       initialItems: this.startupMigrationItems,
       tasks: [projectTask, commandsTask, promptsTask, relocationTask],
-      afterTasks: () => {
-        const startupSettings = getSettings();
-        if (
-          !didMiyoSyncedRootsChange(startupSettings) ||
-          !shouldSurfaceMiyoResync(this.app, startupSettings)
-        ) {
-          return [license];
-        }
-        if (!isLegacyUpgrade) {
-          new Notice("Miyo search needs a resync — open the Miyo settings tab.", 8000);
-          return [license];
-        }
-        return [
-          license,
-          {
-            id: "miyo",
-            title: "Miyo search",
-            status: "action-required",
-            summary: "Miyo search needs a resync after the Copilot folder update.",
-            details: ["Open the Miyo settings tab to resync."],
-          },
-        ];
-      },
+      afterTasks: () => [license],
       present: (items) => {
         new ConfirmModal(
           this.app,
@@ -682,29 +671,29 @@ export default class CopilotPlugin extends Plugin {
   }
 
   onunload(): void {
+    // A settings tree can briefly outlive this plugin instance. Revoke its
+    // mutation rights synchronously so an in-flight registration cannot write
+    // into the next lifecycle after its asynchronous setup finishes.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/284
+    this.pluginLifecycleActive = false;
     // Obsidian never awaits onunload, so the async tail of teardown is
     // fire-and-forget by nature; declaring onunload void makes that explicit.
     // teardown() is invoked synchronously, so everything above its first
     // `await` still runs before this call returns, and a failure partway
     // through is logged instead of becoming an unhandled rejection.
+    // The audio module is shared across hot-reloaded plugin instances, so an
+    // outgoing async teardown must release its context before a successor can
+    // create one. https://github.com/logancyang/obsidian-copilot/issues/2987
+    disposeNotificationSound();
     this.teardown().catch((error) => {
       logError("Copilot: plugin teardown failed during unload:", error);
     });
   }
 
   private async teardown(): Promise<void> {
-    // End the Miyo mutation lifecycle HERE, as the first statement: everything
-    // above the first `await` runs before the next `onload()` can possibly
-    // start, so this carries none of the late-continuation risk that keeps
-    // `resetPersistenceState()` at load time. Doing it at unload is what makes
-    // the boundary real — waiting for the next load would leave a task from
-    // this vault free to write settings and issue DELETE/POST during an unload
-    // that is never followed by a re-enable, or while another vault is opening.
-    resetMiyoMutations();
     this.knowledgeIntegration?.close();
     this.vaultDataManager?.cleanup();
     this.vaultDataManager = undefined;
-
     // Best-effort flush of pending keychain/data.json writes.
     // Reason: Obsidian does not await teardown, but awaiting here keeps the
     // remaining steps ordered after the flush, consistent with the log flush
@@ -1212,6 +1201,22 @@ export default class CopilotPlugin extends Plugin {
     }
   }
 
+  /** Open a fresh global Agent chat with reviewable text left unsent in its composer. */
+  async newAgentChatWithDraft(initialDraft: string): Promise<void> {
+    const manager = this.requireAgentView();
+    if (!manager) return;
+    try {
+      // https://github.com/Brevilabs/obsidian-copilot-private/issues/166
+      // Create the drafted session before mounting the Agent view. A first-time
+      // mount otherwise auto-creates an empty session before this one exists.
+      await manager.createGlobalSessionWithDraft(initialDraft);
+      await this.activateAgentView();
+    } catch (error) {
+      logWarn("[CopilotPlugin] Failed to create agent session with draft", error);
+      new Notice("Failed to create agent session. Check Copilot logs.");
+    }
+  }
+
   private async openOrRevealView(viewType: string): Promise<WorkspaceLeaf | null> {
     const leaves = this.app.workspace.getLeavesOfType(viewType);
     if (leaves.length > 0) {
@@ -1623,52 +1628,5 @@ export default class CopilotPlugin extends Plugin {
   async newChat() {
     // Just delegate to the shared method
     await this.handleNewChat();
-  }
-
-  async customSearchDB(
-    query: string,
-    salientTerms: string[],
-    textWeight: number
-  ): Promise<{ content: string; metadata: Record<string, unknown> }[]> {
-    const settings = getSettings();
-
-    // Run FilterRetriever for guaranteed title/tag matches
-    const { FilterRetriever } = await import("@/search/v3/FilterRetriever");
-    const { mergeFilterAndSearchResults } = await import("@/search/v3/mergeResults");
-    const filterRetriever = new FilterRetriever(this.app, {
-      salientTerms: salientTerms,
-      maxK: 20,
-    });
-    const filterDocs = await filterRetriever.getRelevantDocuments(query);
-
-    // Run main retriever for scored results
-    const retriever = settings.enableSemanticSearchV3
-      ? new (await import("@/search/v3/MergedSemanticRetriever")).MergedSemanticRetriever(
-          this.app,
-          {
-            minSimilarityScore: 0.3,
-            maxK: 20,
-            salientTerms: salientTerms,
-            textWeight: textWeight,
-            returnAll: false,
-          }
-        )
-      : new (await import("@/search/v3/TieredLexicalRetriever")).TieredLexicalRetriever(this.app, {
-          minSimilarityScore: 0.3,
-          maxK: 20,
-          salientTerms: salientTerms,
-          textWeight: textWeight,
-          returnAll: false,
-          useRerankerThreshold: undefined,
-        });
-
-    const searchDocs = await retriever.getRelevantDocuments(query);
-    const { filterResults, searchResults } = mergeFilterAndSearchResults(filterDocs, searchDocs);
-    const allDocs = [...filterResults, ...searchResults];
-
-    return allDocs.map((doc) => ({
-      content: doc.pageContent,
-      metadata: doc.metadata,
-    }));
   }
 }

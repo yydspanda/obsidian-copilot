@@ -20,8 +20,8 @@ A one-agent chat can work without a Copilot license when you bring your own mode
 
 opencode is the most flexible choice because it can use Copilot-hosted, BYOK, and local models.
 
-1. In the **opencode** tab, click **Download opencode** to let Copilot install and manage it.
-2. If you already installed it, click **I already have it**. If detection fails, open **Configure**, choose **My own binary**, then auto-detect it or enter the absolute path.
+1. In the **opencode** tab, open **Configure**, choose **Managed by Copilot**, then click **Download & install**.
+2. If you already installed it, choose **My own binary** in **Configure**, then select **Auto-detect** or enter the absolute path and click **Apply**.
 3. Enable the models you want to see and choose a **Default model**.
 
 There are three ways to provide model access:
@@ -36,28 +36,56 @@ The Claude backend runs through Claude Code on your computer:
 
 1. Open **Basic → Agents → Claude → Configure**.
 2. Select **Auto-detect**, or enter the absolute path to the `claude` executable.
-3. Select **Sign in** if Claude Code is not already authenticated.
+3. Select **Sign in** if Claude Code is not already authenticated, then finish in your browser. If the page does not open, select **Open sign-in page**. You can cancel and try again.
 4. Enable the models you want and choose a default.
+
+Claude Code stores the credentials on your computer. Copilot checks its sign-in status when the login finishes. To run the login command yourself, use **Sign in using a terminal instead**.
 
 Claude models and billing come from your Claude Code account. Models added under **BYOK** do not join the Claude model list.
 
 ### Codex
 
-The Codex backend needs the Codex CLI and its `codex-acp` adapter:
+The Codex backend uses `@agentclientprotocol/codex-acp`, which includes a compatible Codex CLI:
 
-1. Install the Codex CLI and run `codex login`.
-2. Open **Basic → Agents → Codex → Configure**.
-3. Run the adapter installation command shown in the dialog.
-4. Select **Auto-detect**, or enter the absolute path to `codex-acp` and select **Apply**.
+Managed Codex downloads are pinned to `codex-acp` **1.10.0** in this Copilot release. Copilot uses the system `tar -xf` command to unpack the runtime on all supported desktop platforms:
+
+| Platform | Download format | Extraction                                                         |
+| -------- | --------------- | ------------------------------------------------------------------ |
+| Linux    | `.tar.gz`       | System `tar`, compatible with GNU tar.                             |
+| macOS    | `.zip`          | Built-in `tar`, which uses bsdtar and supports ZIP extraction.     |
+| Windows  | `.zip`          | Built-in `tar.exe`, which uses bsdtar and supports ZIP extraction. |
+
+The archive format and extraction command are separate: bsdtar can unpack ZIP files, while GNU tar does not support ZIP. See [bsdtar's supported formats](https://github.com/libarchive/libarchive/blob/master/tar/bsdtar.1) and [Windows tar documentation](https://learn.microsoft.com/en-us/windows/tar/). Windows includes `tar.exe` starting with Windows 10 version 1803. If installation reports that `tar` is missing, install it and retry; on macOS or Windows, use bsdtar so ZIP extraction works.
+
+For an existing or manually installed `@agentclientprotocol/codex-acp` adapter, **0.0.45 is the minimum supported version**, not the managed download version. Both numbers refer to the ACP adapter version; the bundled Codex CLI has its own version.
+
+1. Open **Basic → Agents → Codex → Configure**.
+2. Choose **Download & install** under **Managed by Copilot**. Copilot downloads Codex and its runtime, verifies the download, and keeps your current installation until the replacement is ready. You do not need Node.js or npm.
+3. Click **Sign in**, finish authentication in your browser, and return to Obsidian. If the browser does not open, click **Open sign-in page**. You can cancel or retry sign-in. Existing credentials are reused when you use the same Codex profile.
+4. If you prefer your own adapter, use **My own binary** to Auto-detect it or enter its absolute path. You remain responsible for upgrades to that binary.
 5. Enable the models you want and choose a default.
 
-Copilot uses your existing Codex CLI login. Models added under **BYOK** do not join the Codex model list.
+The **Authentication** section shows your signed-in ChatGPT email and plan when Codex provides them. Select **Sign out** beside the account to switch accounts. API-key authentication and accounts without an email show the signed-in badge without an email. An installed agent shows **Sign in required** until it is authenticated.
+
+You can also choose **Sign in** on the Agent Chat status card. For terminal login, run your configured adapter with `cli login` using the same `CODEX_HOME` as Copilot.
+
+Switching to your own Codex binary removes unused managed downloads. Your custom binary and account credentials remain on your computer. Cancel is available during downloads; configuration changes finish before another action can start.
+
+When the plugin's managed version changes, Agent Chat and Settings show the same **Upgrade** action and shared progress or **Retry** state. The older `@zed-industries/codex-acp` package is not supported. Copilot uses the login stored by the bundled Codex CLI. Models added under **BYOK** do not join the Codex model list.
 
 For Windows-specific installation help, see [Windows setup for Agent Chat](agent-mode-windows-setup.md).
 
 ### Start a chat
 
 Select the **Agent Chat** ribbon icon or run **Open Copilot Agent Chat Window** from the command palette. If the default agent is not ready, Copilot opens **Select your agent**. Configure an agent, choose an installed row, then select **Start chat**.
+
+An empty Agent Chat shows a fixed hint: "Ask anything • @ to add context • / for commands".
+
+Agent Chat groups consecutive tool calls and reasoning into a compact activity row. The row reports the total tool commands, distinct files read or edited, and recorded reasoning time. Open it to inspect every step.
+
+Copilot checks for updates in the background when the plugin loads, including when Obsidian starts. If a newer version is available, a notice offers **View release notes** once per release. This is remembered separately from dismissing the Agent Chat home banner. You can keep using or close Obsidian while the check runs. Copilot reads the version from the published release’s manifest, and Settings and Agent Chat share that check.
+
+Copilot also checks for the latest release whenever you create a new Agent Chat tab with **+**, so you can discover updates without reloading the plugin. When a newer Copilot release is available, the global Agent Chat home shows an update banner along the bottom of the pane. The banner stays above the home tabs when space is tight. Select **See what’s new** to read the release notes, or dismiss the banner for that release. Project homes and active conversations do not show it.
 
 ## Models, effort, and permissions
 
@@ -67,6 +95,7 @@ Each agent has its own model list. The models shown in one agent do not automati
 - Use the controls beside the composer to change the model or effort for the current chat.
 - Before the first message, choosing a model from another installed agent switches the empty chat to that agent. Once a conversation has started, it stays with its agent.
 - **Effort** appears only when the selected agent and model support it. Higher effort can improve difficult reasoning but may take longer and use more of your account allowance.
+- Models with effort controls always use a concrete effort. A supported saved effort is kept; otherwise Copilot chooses the lowest supported effort and updates the saved default. Models without effort controls omit effort. **Agent default** clears the saved model preference; the new session shows the agent's model and its resolved effort.
 
 The permission picker shows only choices supported by the current agent:
 
@@ -80,7 +109,9 @@ opencode supports **Default** and **Auto**. Claude supports **Default**, **Plan*
 
 When an action needs approval, Agent Chat displays a **Permission required** card with the proposed change or tool input. Choose one of the temporary or persistent allow or deny options offered by that agent. Stopping the turn cancels unanswered requests.
 
-When an agent asks a set of questions, answer every question tab before **Submit** becomes available; **Cancel** declines the entire request.
+When an agent asks a set of questions, answer the current tab and select **Next**. On the final tab, **Submit** becomes available after every question has an answer. You can use the tabs to review or skip ahead; **Cancel** declines the entire request.
+
+Permission and question cards stay in a scrolling action area above the message box until you answer them, even while the response continues streaming.
 
 Your vault or project is the agent's working directory, not a security sandbox. Auto or bypass permissions can reach other files and services available to the agent or your account. Use **Default** for unfamiliar work and review persistent permissions carefully.
 
@@ -90,11 +121,16 @@ Agent Chat keeps each conversation separate:
 
 - Select **+** for another session. Each tab keeps its own history, draft, attachments, and queued follow-ups.
 - Select **New Chat** to reset the current tab.
-- Use **Recent Chats** from the Agent Chat home screen, or **Chat History** inside a conversation, to resume saved work.
+- Select **Stop** to cancel the current turn and discard its queued follow-ups.
+- Use **Recent Chats** from the Agent Chat home screen, or **Chat History** inside a conversation, to resume saved work. The **Recent Chats** list can be scrolled or searched.
 - Add the active note, selected text, other notes, folders, a Copilot Web Viewer tab, or supported images. You can also mention a note with `[[Note title]]`.
-- Hover the context ring beside the send controls to see how much of the model's context window is in use. If the connected account reports usage limits, the same panel shows the available limit and reset time.
+- Hover the context ring beside the send controls to see how much of the model's context window is in use. The ring stays empty until the agent reports usage, and a stopped response keeps the last reported reading. If the connected account reports usage limits, the same panel shows the available limit and reset time.
+
+You can send an image without adding text, for example when the agent asks for a screenshot. Choose a model that supports images.
 
 Attachments apply to the next message. For instructions and context that should be reused, create a [Project](projects.md) or add rules to [`AGENTS.md`](system-prompts.md). See [Context and Mentions](context-and-mentions.md) for every context option.
+
+Uploaded images are embedded in saved conversation notes. Copilot stores the image files using your vault attachment setting and reuses them when the conversation is saved again.
 
 Type `/` to insert an enabled Skill or [Copilot command](custom-commands.md). For a quick question or rewrite beside the current selection, use [Quick Ask](custom-commands.md#quick-ask).
 
@@ -108,7 +144,7 @@ Each answer appears in its own tab, with **Summary** first. If one answerer fail
 
 Multi-agent answers are designed for read-only research, not edits. Copilot denies explicit vault edit, delete, and move tools, along with tools it cannot classify. Retrieval Skills can still run their own scripts under the agent's permissions, so multi-agent answers are not a security sandbox. Use only trusted Skills, and use a regular single-agent turn when you want files changed.
 
-The default model and effort saved for each mentioned agent are used for its answer. If an agent is not installed or ready, configure it before adding it to the prompt.
+The default model and effort saved for each mentioned agent are used for its answer. If the summary fails, its tab shows the error and any partial summary; the individual answers remain available. If an agent is not installed or ready, configure it before adding it to the prompt.
 
 ## Skills across agents
 
@@ -120,7 +156,7 @@ Skills are reusable instruction packets built around a `SKILL.md` file. One Skil
 
 Shared Skills live under `<Copilot folder>/skills/`. Copilot links them into the native folders used by each agent: `.opencode/skills/`, `.claude/skills/`, and `.agents/skills/`. Skills already present in those native folders also appear in the settings list.
 
-Custom Skills and built-in Obsidian Skills are free. Active Plus access adds cloud-backed Skills for web research, PDF reading, YouTube transcripts, X posts, and Symposium.
+Custom Skills and built-in Obsidian Skills are free. Active Plus access adds cloud-backed Skills for web research, PDF reading, YouTube transcripts, X posts, and OpenArtifacts.
 
 In Self-Host Mode with OpenCode selected, Agent Chat's built-in web-search Skill uses the search provider selected under **Settings → Copilot → Self-Host**. Provider credentials stay inside Obsidian rather than being passed to OpenCode, and the feature does not require Obsidian's command line interface. Copilot disables OpenCode's native web-search and web-fetch tools so they cannot bypass that route. Full-page web fetching is unavailable through OpenCode in Self-Host Mode because the supported search providers do not share a page-fetch interface; Agent Chat can still use the configured provider's search results.
 
@@ -134,3 +170,19 @@ On Windows, creating the folder links may require **Developer Mode** or administ
 - [Instructions for Agent Chat and Quick Chat](system-prompts.md)
 - [Copilot Commands and Quick Ask](custom-commands.md)
 - [Copilot Plans, Privacy, and Self-Hosting](copilot-plus-and-self-host.md)
+
+### Publishing from Agent Chat
+
+Copilot ships an `openartifacts-publish` skill to Claude Code, Codex, and OpenCode. Publishing needs a Copilot Plus license key in Copilot settings. Copilot passes that key to the agent process, and the skill's bundled wrapper script sends it to `api.openartifacts.ai` over HTTPS. The wrapper needs only the shell tools already on your system: `sh`, `curl`, and `awk` on macOS and Linux, PowerShell on Windows.
+
+Ask the agent to publish a note. It renders the note to HTML, writes the file under `.openartifacts/handoffs/` in your vault, tells you the path, and stops. Open that file in your browser to see the page as it will be uploaded; OpenArtifacts adds its own header and footer bylines when it serves the page. Reply that it should publish, or describe changes and the agent revises the same file and asks again. The agent never publishes in the same turn that produced the HTML.
+
+After publishing, the agent saves the public link in the note's `openartifacts` property, so publishing the note again updates the same page and the regular **Publish file to OpenArtifacts** command recognizes it as published. Notes published under the older `symposium` property keep working and move to `openartifacts` the next time they are published. If a property already holds something other than an OpenArtifacts link, the agent asks before touching it. Ask the agent to withdraw a page to take it down; it confirms first and removes the property afterwards.
+
+Copilot also includes **research-memo** as an optional theme. For a named theme, the skill checks `.openartifacts/themes/<name>.md` in your vault, then `themes/<name>.md` alongside the installed skill. If neither exists, the agent continues with readable defaults. A missing theme never blocks publishing.
+
+### Upgrading an agent
+
+When an installed agent needs a supported version, Basic → Agents and Agent Chat offer **Upgrade** if Copilot can upgrade that installation. Both show the same progress, including upgrades started in Configure. If an upgrade fails, use **Retry**. A failed custom-path selection is reported in Configure and does not turn the upgrade action into a path-validation retry.
+
+Image-only messages appear as "Image attachment" in the queue. Sessions with only images use the same fallback title in tabs and Recent Chats until a text or agent-generated title is available.

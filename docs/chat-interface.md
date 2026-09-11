@@ -8,11 +8,24 @@ On desktop, start with **Agent Chat** for multi-step work, reusable Skills, perm
 
 Run **Open Copilot Chat Window** from the command palette. On mobile, the Copilot ribbon button opens Quick Chat because Agent Chat requires desktop Obsidian.
 
+In a mobile workspace tab, the message box stays above the software keyboard and Obsidian's bottom navigation bar as you open and close the keyboard.
+
+In the phone's right sidebar, the message box sits above the keyboard while typing and above the sidebar controls when the keyboard closes.
+
 ## Choose a model
 
 Use the model picker below the message box. It shows only models enabled under **Settings → Copilot → Basic → Agents → Quick Chat**, including Copilot-hosted and bring-your-own-key models.
 
 The **Default model** in that settings panel controls which model a new Quick Chat starts with. See [Models, Effort, and Permissions](models-and-parameters.md) to manage the list.
+
+## Choose a chat mode
+
+Use the mode picker at the bottom of Quick Chat to choose between two distinct experiences:
+
+- **Chat (free)** answers from the context you attach. It does not search your vault automatically.
+- **Copilot Plus** can use tools, including local search. When Miyo is enabled, local search is semantic; when Miyo is disabled, it uses keyword search. Copilot Plus requires an eligible license.
+
+Vault QA is no longer a separate mode. If it was your saved mode before upgrading, Quick Chat starts in **Chat (free)**. Choose **Copilot Plus** when you want automatic vault retrieval. See [Vault Search and Indexing](vault-search-and-indexing.md).
 
 ## Ask with context
 
@@ -22,6 +35,12 @@ Quick Chat can include the active note, selected text, other notes, folders, and
 - Type `[[Note Title]]` to reference a note directly.
 
 By default, a new chat includes the active note. A text selection takes priority over the full active note. For all supported context types, see [Context and Mentions](context-and-mentions.md).
+
+## Run a saved command
+
+Type `/` and choose a saved command. You can add an instruction after the command name before sending. When you send, Quick Chat replaces `/command-name` with the saved command prompt followed by your extra instruction, matching Agent Chat.
+
+Manage saved commands under **Settings → Copilot → Command**. See [Copilot Commands and Quick Ask](custom-commands.md).
 
 ## Send and manage messages
 
@@ -40,9 +59,11 @@ After a response, the token counter in the top bar shows the context used for th
 
 Use **New Chat** in the top bar or run **New Copilot Quick Chat**. Starting over clears the current messages and resets context to the active note when automatic context is enabled.
 
-Use **Chat History** to search saved conversations, reopen one, rename it, open its Markdown source, or delete it.
+Use **Chat History** to search saved conversations, reopen one, rename it, open its Markdown source, or delete it. Continuing a reopened conversation updates its existing note, including after the note has been renamed or while its source is open.
 
 **Autosave Chat as Markdown** is enabled by default. Copilot saves after each user message and response under `<Copilot folder>/copilot-conversations/`. If autosave is off, use **Save Chat as Note** in the top bar. Change autosave and **Conversation Filename Template** under **Settings → Copilot → Basic → Saving conversations**.
+
+Uploaded images are embedded in saved conversation notes. Copilot stores the image files using your vault attachment setting and reuses them when the conversation is saved again.
 
 ## Chat settings
 

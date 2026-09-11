@@ -17,14 +17,8 @@ export {
   getSystemPromptWithMemory,
 } from "./systemPromptBuilder";
 
-// Manager
-export { SystemPromptManager } from "./systemPromptManager";
-
 // Register
 export { SystemPromptRegister } from "./systemPromptRegister";
-
-// UI Components
-export { SystemPromptAddModal } from "./SystemPromptAddModal";
 
 // Migration
 export { migrateSystemPromptsFromSettings } from "./migration";

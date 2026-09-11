@@ -89,8 +89,8 @@ describe("ConfigDialogShell", () => {
 
       // Padding on the container instead of the bands would inset every
       // divider, leaving a gap at both ends of each hairline. The host modal's
-      // own padding is stripped by CONFIG_MODAL_CLASS, which the host passes as
-      // ReactModal's modalClass.
+      // own padding is stripped by the shared full-bleed class that the host
+      // passes as ReactModal's modalClass.
       const shell = container.firstElementChild as HTMLElement;
       expect(shell.className).not.toMatch(/tw-p[xl]?-/);
       const footer = shell.lastElementChild as HTMLElement;
@@ -112,6 +112,17 @@ describe("ConfigDialogShell", () => {
       expect(band.className).toContain("copilot-divider-t");
       expect(band.className).toContain("tw-p-4");
       expect(band.textContent).toBe("Use your own binarybody");
+    });
+
+    it("places account status beside the section heading: https://github.com/Brevilabs/obsidian-copilot-private/issues/379", () => {
+      render(
+        <ConfigSection title="Authentication" badge={<span>Signed in</span>}>
+          <p>Account controls</p>
+        </ConfigSection>
+      );
+      expect(
+        screen.getByRole("heading", { name: "Authentication" }).parentElement?.textContent
+      ).toBe("AuthenticationSigned in");
     });
 
     it("drops the section heading when no title is given", () => {

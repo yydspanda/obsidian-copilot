@@ -45,10 +45,10 @@ Already pay for Claude or ChatGPT, or already have model API access? You can bri
 
 1. [Install Copilot](https://obsidian.md/plugins?id=copilot) from Obsidian Community Plugins.
 2. Open **Settings → Copilot → Basic → Agents**.
-3. Select **Download opencode**, or connect Claude Code or Codex with **Auto-detect**. Codex requires the `codex-acp` adapter first.
+3. Select **Download opencode**, connect Claude Code with **Auto-detect**, or let Copilot install its tested Codex adapter.
 4. Select the **Agent** ribbon icon, or run **Open Copilot Agent Chat Window**.
 
-The [Getting Started guide](./docs/getting-started.md) covers each setup path, including the Codex adapter commands and manual executable paths.
+The [Getting Started guide](./docs/getting-started.md) covers each setup path, including managed and custom Codex adapters.
 
 ## Built around your vault
 
@@ -149,7 +149,7 @@ Copilot is a product of Brevilabs LLC and is not affiliated with Obsidian. Visit
 - Hosted models and cloud-backed features require network access.
 - **Privacy and data handling:**
   - **Free use:** Messages and note context go to the LLM provider, local endpoint, or CLI agent you configure. Brevilabs does not receive them unless you invoke a Brevilabs-hosted feature.
-  - **Paid hosted services:** Brevilabs's backend and its vetted enterprise model providers process the full request. A Copilot-hosted embedding model receives the note text being indexed. Hosted features also receive the inputs they need, such as search queries, URLs, and files used by Quick Chat tools or Agent project context. The privacy policy says request content is processed transiently, not retained, and not used for training.
+  - **Paid hosted services:** Brevilabs's backend and its vetted enterprise model providers process the full request. Hosted features receive the inputs they need, such as search queries, URLs, and files used by Quick Chat tools or Agent project context. The privacy policy says request content is processed transiently, not retained, and not used for training.
   - **User ID:** Hosted feature requests include a randomly generated UUID for service delivery, license abuse prevention, and rate limiting. It is not used for tracking, profiling, or analytics.
 - See the [privacy policy](https://www.obsidiancopilot.com/en/privacy) for full terms.
 - The Copilot plugin frontend is fully open source. The backend services that support hosted features are closed source and proprietary.

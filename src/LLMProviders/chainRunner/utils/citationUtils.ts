@@ -69,25 +69,6 @@ ${sourceCatalog.join("\n")}
 }
 
 /**
- * Generates citation instructions for QA contexts.
- */
-export function getQACitationInstructions(
-  sourceCatalog: string,
-  enableInlineCitations: boolean = true
-): string {
-  if (!enableInlineCitations) {
-    return "";
-  }
-
-  return `
-
-${CITATION_RULES}
-
-Source Catalog (for reference only):
-${sourceCatalog}`;
-}
-
-/**
  * Short citation format reminder placed near the user query for better model compliance.
  * Reinforces key formatting from CITATION_RULES without duplicating the full ruleset.
  */
@@ -170,17 +151,6 @@ export function hasExistingCitations(response: string | null | undefined): boole
 }
 
 /**
- * Detects if response contains inline citation markers in the body text (like [^1], [^2], etc.).
- * This is different from hasExistingCitations which checks for the Sources section.
- */
-export function hasInlineCitations(response: string | null | undefined): boolean {
-  const content = response || "";
-  // Look for [^digits] patterns in the text (inline citations)
-  // This should match [^1], [^2], etc. used in the body text
-  return /\[\^\d+\]/.test(content);
-}
-
-/**
  * Provides web-search-specific citation instructions using markdown links.
  */
 export function getWebSearchCitationInstructions(enableInlineCitations: boolean = true): string {
@@ -192,6 +162,7 @@ export function getWebSearchCitationInstructions(enableInlineCitations: boolean 
 }
 
 // ===== CITATION PROCESSING UTILITIES =====
+// Deprecated: legacy citation parsing is awaiting removal; retained for existing callers.
 
 interface SourcesSection {
   mainContent: string;

@@ -20,10 +20,6 @@ jest.mock("@/logger", () => ({
   logInfo: jest.fn(),
   logWarn: jest.fn(),
 }));
-jest.mock("@/miyo/miyoResync", () => ({
-  resetMiyoMutations: jest.fn(),
-  startMiyoMutationSession: jest.fn(),
-}));
 jest.mock("@/services/settingsPersistence", () => ({
   flushPersistence: jest.fn().mockResolvedValue(undefined),
   persistSettings: jest.fn(),
@@ -44,6 +40,7 @@ jest.mock("@/services/webViewerService/webViewerServiceSingleton", () => ({
   startActiveWebTabTracking: jest.fn(),
 }));
 jest.mock("@/utils/desktopRuntime", () => ({ isDesktopRuntime: jest.fn(() => false) }));
+jest.mock("@/utils/notificationSound", () => ({ disposeNotificationSound: jest.fn() }));
 const mockSkillManagerDispose = jest.fn();
 const mockSkillManagerHasInstance = jest.fn(() => true);
 jest.mock("@/agentMode", () => ({
@@ -54,11 +51,11 @@ jest.mock("@/agentMode", () => ({
 }));
 
 import CopilotPlugin from "@/main";
-import { logError, logInfo } from "@/logger";
+import { logError, logInfo, logWarn } from "@/logger";
 import { logFileManager } from "@/logFileManager";
-import { resetMiyoMutations } from "@/miyo/miyoResync";
 import { flushPersistence } from "@/services/settingsPersistence";
 import { isDesktopRuntime } from "@/utils/desktopRuntime";
+import { disposeNotificationSound } from "@/utils/notificationSound";
 
 /**
  * Build a plugin instance without running Obsidian's `Plugin` constructor or
@@ -103,6 +100,7 @@ describe("main", () => {
     describe("onunload()", () => {
       beforeEach(() => {
         jest.clearAllMocks();
+        (disposeNotificationSound as jest.Mock).mockReset();
         (flushPersistence as jest.Mock).mockResolvedValue(undefined);
         (logFileManager.flush as jest.Mock).mockResolvedValue(undefined);
         (isDesktopRuntime as jest.Mock).mockReturnValue(false);
@@ -114,7 +112,16 @@ describe("main", () => {
         expect(plugin.onunload()).toBeUndefined();
       });
 
-      it("ends the Miyo mutation lifecycle synchronously, before returning to Obsidian", () => {
+      it("revokes lifecycle-sensitive mutations before returning (https://github.com/Brevilabs/obsidian-copilot-private/issues/284)", () => {
+        const plugin = createPluginUnderTest([]);
+        Object.assign(plugin, { pluginLifecycleActive: true });
+
+        plugin.onunload();
+
+        expect(plugin.isPluginLifecycleActive()).toBe(false);
+      });
+
+      it("flushes persistence synchronously, before returning to Obsidian", () => {
         const calls: string[] = [];
         const plugin = createPluginUnderTest(calls);
 
@@ -122,9 +129,27 @@ describe("main", () => {
 
         // Everything above teardown()'s first `await` must run before the next
         // `onload()` can start, which is what makes the vault boundary real.
-        expect(resetMiyoMutations).toHaveBeenCalledTimes(1);
         expect(flushPersistence).toHaveBeenCalledTimes(1);
         expect(calls).toEqual(["knowledge", "vaultData"]);
+      });
+
+      it("releases audio before asynchronous teardown can overlap a later plugin lifecycle (https://github.com/logancyang/obsidian-copilot/issues/2987)", async () => {
+        const calls: string[] = [];
+        let releasePersistence: () => void = () => undefined;
+        (disposeNotificationSound as jest.Mock).mockImplementation(() => calls.push("audio"));
+        (flushPersistence as jest.Mock).mockImplementation(() => {
+          calls.push("persistence");
+          return new Promise<void>((resolve) => {
+            releasePersistence = resolve;
+          });
+        });
+        const plugin = createPluginUnderTest(calls);
+
+        plugin.onunload();
+
+        expect(calls).toEqual(["audio", "knowledge", "vaultData", "persistence"]);
+        releasePersistence();
+        await flushTeardown();
       });
 
       it("tears down collaborators in order, flushing persistence before session shutdown and the log last", async () => {
@@ -215,6 +240,56 @@ describe("main", () => {
 
         expect(mockSkillManagerDispose).not.toHaveBeenCalled();
         expect(logInfo).toHaveBeenCalledWith("Copilot plugin unloaded");
+      });
+    });
+
+    describe("isPluginLifecycleActive()", () => {
+      it("reports whether this plugin instance owns lifecycle-sensitive mutations", () => {
+        const plugin = createPluginUnderTest([]);
+        Object.assign(plugin, { pluginLifecycleActive: true });
+
+        expect(plugin.isPluginLifecycleActive()).toBe(true);
+      });
+    });
+
+    describe("newAgentChatWithDraft()", () => {
+      beforeEach(() => {
+        jest.clearAllMocks();
+        (isDesktopRuntime as jest.Mock).mockReturnValue(true);
+      });
+
+      it("opens a global Agent session with reviewable text left as a draft for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", async () => {
+        const plugin = createPluginUnderTest([]);
+        const createGlobalSessionWithDraft = jest.fn().mockResolvedValue(undefined);
+        Object.assign(plugin.agentSessionManager as object, {
+          createGlobalSessionWithDraft,
+        });
+        const activateAgentView = jest.spyOn(plugin, "activateAgentView").mockResolvedValue(null);
+
+        await plugin.newAgentChatWithDraft("Repair this skill");
+
+        expect(createGlobalSessionWithDraft).toHaveBeenCalledWith("Repair this skill");
+        expect(activateAgentView).toHaveBeenCalledTimes(1);
+        expect(createGlobalSessionWithDraft.mock.invocationCallOrder[0]).toBeLessThan(
+          activateAgentView.mock.invocationCallOrder[0]
+        );
+      });
+
+      it("surfaces session creation failures without sending or throwing for https://github.com/Brevilabs/obsidian-copilot-private/issues/166", async () => {
+        const plugin = createPluginUnderTest([]);
+        const failure = new Error("create failed");
+        Object.assign(plugin.agentSessionManager as object, {
+          createGlobalSessionWithDraft: jest.fn().mockRejectedValue(failure),
+        });
+        const activateAgentView = jest.spyOn(plugin, "activateAgentView").mockResolvedValue(null);
+
+        await expect(plugin.newAgentChatWithDraft("Repair this skill")).resolves.toBeUndefined();
+
+        expect(logWarn).toHaveBeenCalledWith(
+          "[CopilotPlugin] Failed to create agent session with draft",
+          failure
+        );
+        expect(activateAgentView).not.toHaveBeenCalled();
       });
     });
   });

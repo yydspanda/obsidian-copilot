@@ -1,21 +1,34 @@
-/**
- * What the Configure dialog and the descriptor both need to talk about the
- * Codex CLI: the adapter's binary name, path example, and the two commands that
- * get a machine from "no Codex" to "signed in". Kept out of `descriptor.ts` so
- * the dialog can render them without dragging every descriptor dependency into
- * its module graph.
- */
+import { terminalSignInCommand } from "@/agentMode/backends/shared/terminalSignInCommand";
 
 export const CODEX_BINARY_NAME = "codex-acp";
+export const CODEX_ACP_PINNED_VERSION = "1.10.0";
+export const CODEX_BUNDLE_VERSION = CODEX_ACP_PINNED_VERSION;
 
 export function codexBinaryPathPlaceholder(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "/absolute/path/to/codex-acp.exe" : "/absolute/path/to/codex-acp";
+  return platform === "win32"
+    ? "C:\\path\\to\\@agentclientprotocol\\codex-acp\\dist\\index.js"
+    : "/absolute/path/to/codex-acp";
 }
 
-export const CODEX_INSTALL_COMMAND =
-  process.platform === "win32"
-    ? "irm https://gist.githubusercontent.com/logancyang/380ef4dbf9f98900771da76eca3d21e6/raw/install-codex-agent-mode-windows.ps1 | iex"
-    : "npm install -g @agentclientprotocol/codex-acp";
-
-/** Sign-in the `codex` CLI owns end to end; Copilot only inherits the credentials it stores. */
-export const CODEX_AUTH_COMMAND = "codex login";
+/**
+ * Uses the selected adapter with explicit profile overrides.
+ * @param binaryPath - Selected native adapter or npm package entry point.
+ * @param envOverrides - Configured environment, filtered to non-secret profile settings.
+ * @param platform - Platform whose terminal will run the command.
+ */
+export function codexSignInCommand(
+  binaryPath: string | undefined,
+  envOverrides: Record<string, string> | undefined,
+  platform: NodeJS.Platform
+): string | null {
+  return terminalSignInCommand({
+    binaryPath,
+    args: ["cli", "login"],
+    profileVariables: ["CODEX_HOME", "CODEX_PATH"],
+    envOverrides,
+    platform,
+    // Windows npm adapters are JavaScript entry points; native bundles launch directly.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/379
+    runtime: platform === "win32" && binaryPath?.endsWith(".js") ? "node" : undefined,
+  });
+}

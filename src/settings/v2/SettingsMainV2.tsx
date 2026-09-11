@@ -7,6 +7,8 @@ import { useLatestVersion } from "@/hooks/useLatestVersion";
 import CopilotPlugin from "@/main";
 import { ByokPanel, ModelManagementProvider } from "@/modelManagement";
 import { resetSettings } from "@/settings/model";
+import { COPILOT_SETTINGS_TAB_IDS, type CopilotSettingsTabId } from "@/settings/settingsTabs";
+import { useSkillLoadErrorCount } from "@/settings/skillLoadErrorState";
 import { CommandSettings } from "@/settings/v2/components/CommandSettings";
 import { Cog, Command, Cpu, ShieldCheck, Sigma, Sparkle, Wrench } from "lucide-react";
 import React from "react";
@@ -20,25 +22,12 @@ import { SelfHostSettings } from "./components/SelfHostSettings";
 // DESIGN NOTE (settings-v4, part 1): there is intentionally no "QA"/"Search"
 // tab here. The legacy QASettings panel was removed as orphan-component cleanup
 // (see designdocs/SETTINGS_REDESIGN_V4.md and SETTINGS_V4_PR_PLAN.md); the
-// underlying fields are NOT dropped and stay runtime-honored for existing
-// vaults:
-//   - enableSemanticSearchV3 — the Miyo connect flow (MiyoSettings) drives it
-//     implicitly. The Advanced tab surfaces it as "Legacy vault index"
-//     (LegacyVaultIndexSetting), the off switch a vault not using Miyo needs to
-//     stop indexing; it reads as the legacy index because that is all the flag
-//     still controls once Miyo owns semantic search.
-//   - qaInclusions/qaExclusions — still consumed (Miyo registration snapshot);
-//     their edit UI is deferred per issue #195 ("defer include/exclude").
-//   - embeddingModelKey / maxSourceChunks / enableInlineCitations / indexing
-//     limits — still read at runtime (embeddingManager, SearchTools,
-//     VaultQAChainRunner, CopilotPlusChainRunner) with their defaults; a
-//     UI is deferred to a later part of the #195 redesign.
-// The relabeled "Keyword (built-in) vs Miyo (semantic search)" engine toggle
-// and honest embedding-caveat copy land in a follow-up PR, not here. If a review
-// flags the missing QA/search UI again, point them at this note.
-const TAB_IDS = ["basic", "byok", "miyo", "skills", "command", "selfhost", "advanced"] as const;
-type TabId = (typeof TAB_IDS)[number];
-
+// underlying fields are NOT dropped yet so existing data remains loadable:
+//   - qaInclusions/qaExclusions — still consumed as the query-time scope filter
+//     over search results; their edit UI is deferred per issue #195
+//     ("defer include/exclude").
+//   - maxSourceChunks / enableInlineCitations — still read by search and chat.
+//     compatibility fields awaiting their dedicated settings migration.
 const LazySkillsSettings = React.lazy(() =>
   import("@/agentMode").then((module) => ({ default: module.SkillsSettings }))
 );
@@ -58,7 +47,7 @@ const SkillsSettingsPanel: React.FC = () => {
 };
 
 // tab icons
-const icons: Record<TabId, JSX.Element> = {
+const icons: Record<CopilotSettingsTabId, JSX.Element> = {
   basic: <Cog className="tw-size-5" />,
   byok: <Cpu className="tw-size-5" />,
   miyo: <Sigma className="tw-size-5" />,
@@ -69,7 +58,7 @@ const icons: Record<TabId, JSX.Element> = {
 };
 
 // tab components
-const components: Record<TabId, React.FC> = {
+const components: Record<CopilotSettingsTabId, React.FC> = {
   basic: () => <BasicSettings />,
   byok: () => <ByokPanel />,
   miyo: () => <MiyoSettings />,
@@ -81,7 +70,7 @@ const components: Record<TabId, React.FC> = {
 
 // Tab labels — most tabs derive from the id, but a few need a display form the
 // id can't produce ("byok" → "BYOK", "selfhost" → "Self-Host").
-const TAB_LABELS: Record<TabId, string> = {
+const TAB_LABELS: Record<CopilotSettingsTabId, string> = {
   basic: "Basic",
   byok: "BYOK",
   miyo: "Miyo",
@@ -92,14 +81,15 @@ const TAB_LABELS: Record<TabId, string> = {
 };
 
 // tabs
-const tabs: TabItemType[] = TAB_IDS.map((id) => ({
+const tabs = COPILOT_SETTINGS_TAB_IDS.map((id) => ({
   id,
   icon: icons[id],
   label: TAB_LABELS[id],
-}));
+})) satisfies TabItemType[];
 
 const SettingsContent: React.FC = () => {
   const { selectedTab, setSelectedTab } = useTab();
+  const skillLoadErrorCount = useSkillLoadErrorCount();
 
   return (
     <div className="tw-flex tw-flex-col">
@@ -107,7 +97,16 @@ const SettingsContent: React.FC = () => {
         {tabs.map((tab, index) => (
           <TabItem
             key={tab.id}
-            tab={tab}
+            tab={{
+              ...tab,
+              // https://github.com/Brevilabs/obsidian-copilot-private/issues/166
+              // The tab strip stays mounted while inactive panels do not, so
+              // load failures remain visible from every settings section.
+              warningLabel:
+                tab.id === "skills" && skillLoadErrorCount > 0
+                  ? "Some skills failed to load"
+                  : undefined,
+            }}
             isSelected={selectedTab === tab.id}
             onClick={() => setSelectedTab(tab.id)}
             isFirst={index === 0}
@@ -118,7 +117,7 @@ const SettingsContent: React.FC = () => {
       <div className="tw-w-full tw-border tw-border-solid" />
 
       <div>
-        {TAB_IDS.map((id) => {
+        {COPILOT_SETTINGS_TAB_IDS.map((id) => {
           const Component = components[id];
           return (
             <TabContent key={id} id={id} isSelected={selectedTab === id}>
@@ -133,12 +132,21 @@ const SettingsContent: React.FC = () => {
 
 interface SettingsMainV2Props {
   plugin: CopilotPlugin;
+  initialTab?: CopilotSettingsTabId;
 }
 
-const SettingsMainV2: React.FC<SettingsMainV2Props> = ({ plugin }) => {
+const SettingsMainV2: React.FC<SettingsMainV2Props> = ({ plugin, initialTab = "basic" }) => {
   // Add a key state that we'll change when resetting
   const [resetKey, setResetKey] = React.useState(0);
   const { latestVersion, hasUpdate } = useLatestVersion(plugin.manifest.version);
+
+  React.useEffect(() => {
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/166
+    // Agent repairs can change hidden files while the window stays focused and
+    // the Skills panel is unmounted. Refresh when Settings next opens so its tab
+    // marker never depends on visiting the Skills panel first.
+    void plugin.skills?.refresh();
+  }, [plugin]);
 
   const handleReset = () => {
     const modal = new ResetSettingsConfirmModal(plugin.app, () => {
@@ -152,7 +160,7 @@ const SettingsMainV2: React.FC<SettingsMainV2Props> = ({ plugin }) => {
   return (
     <PluginProvider plugin={plugin}>
       <ModelManagementProvider api={plugin.modelManagement}>
-        <TabProvider>
+        <TabProvider initialTab={initialTab}>
           {/* Obsidian 1.13 made the settings window resizable, and the panel has
               no width of its own — without a cap the rows stretch to whatever
               the user dragged the window to and every control drifts far from

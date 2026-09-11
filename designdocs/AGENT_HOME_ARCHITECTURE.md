@@ -25,7 +25,7 @@ and are not covered here.
 | AgentHome layout shell, persistent (no `key` remount)     | ✅ build (no-project state)                | + project state                         |
 | No-project landing (centered composer → pin to bottom)    | ✅                                         | —                                       |
 | Multi-session tabs (`AgentTabStrip`)                      | ✅ reuse, global                           | project-scoped                          |
-| Recent Chats section                                      | ✅ inline 3 + `ChatHistoryPopover`         | per-scope                               |
+| Recent Chats section                                      | ✅ searchable scrolling list               | per-scope                               |
 | Per-session compose drafts                                | ✅ queue survives switch, foreground flush | session-layer auto-flush still deferred |
 | Projects section                                          | ✅ read-only list + picker                 | real entry + CRUD                       |
 | Enter a project (header + per-project sessions + Context) | ❌ coming-soon `Notice`                    | ✅                                      |
@@ -150,14 +150,11 @@ strand it; the replacement session inherits the replaced session's `projectId`
 
 ## Landing sections, shared primitives & asset reuse
 
-The landing's two shelves sit at different capability levels on purpose: in PR1
-Projects was read-only (a coming-soon `Notice`) because real project management
-is backend work, while Recent Chats was fully manageable by reusing the existing
-`ChatHistoryPopover` (search / rename / delete / open-source). The shared shelf
-building blocks live in `AgentHomeSection.tsx` (`AgentHomeSection` /
-`AgentHomeListRow` / generic `AgentHomeViewAll<TItem>` with lazy
-`IntersectionObserver` paging), kept generic so PR2's project-scoped shelves
-reuse them.
+The Projects and Recent Chats shelves support inline search and scrolling. Both
+mount rows in batches of 50 through an `IntersectionObserver` sentinel; filtering
+runs over the full collection. Projects retain most-recently-used ordering and
+inline row actions. The shared row and scroll-region building blocks live in
+`AgentHomeSection.tsx`.
 
 The reuse rule of thumb: **a pure function, read-only selector, or side-effect-free
 hook is reused; a controller component or a hook that writes global state is

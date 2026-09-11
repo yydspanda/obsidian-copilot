@@ -13,7 +13,7 @@ import type {
   ModelEntry,
   ModelState,
 } from "@/agentMode/session/types";
-import type { CopilotSettings } from "@/settings/model";
+import { getSettings, setSettings, type CopilotSettings } from "@/settings/model";
 
 jest.mock("@/settings/model", () => ({
   ...jest.requireActual("@/settings/model"),
@@ -28,6 +28,112 @@ jest.mock("@/logger", () => ({
 
 describe("descriptor", () => {
   describe("OpencodeBackendDescriptor", () => {
+    describe("managedInstall.getState()", () => {
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 maps shared progress without adding a fabricated percentage", async () => {
+        const manager = getOpencodeBinaryManager(vaultPlugin(os.tmpdir()));
+        const getState = jest
+          .spyOn(manager, "getRuntimeState")
+          .mockReturnValue({ kind: "installing", progress: null });
+        const plugin = vaultPlugin(os.tmpdir());
+
+        expect(OpencodeBackendDescriptor.managedInstall?.getState(plugin)).toEqual({
+          kind: "running",
+          label: "Starting…",
+        });
+
+        for (const kind of ["busy", "detecting"] as const) {
+          getState.mockReturnValue({ kind });
+          expect(OpencodeBackendDescriptor.managedInstall?.getState(plugin)).toEqual({
+            kind: "running",
+            label: "Configuring…",
+          });
+        }
+        getState.mockReturnValue({
+          kind: "error",
+          message: "invalid path",
+          operation: "configure",
+        });
+        expect(OpencodeBackendDescriptor.managedInstall?.getState(plugin)).toEqual({
+          kind: "idle",
+        });
+        getState.mockReturnValue({
+          kind: "error",
+          message: "download failed",
+          operation: "install",
+        });
+        expect(OpencodeBackendDescriptor.managedInstall?.getState(plugin)).toEqual({
+          kind: "error",
+          message: "download failed",
+        });
+        for (const total of [100, undefined]) {
+          getState.mockReturnValue({
+            kind: "installing",
+            progress: { phase: "download", received: 42, total, assetName: "agent.zip" },
+          });
+          const state = OpencodeBackendDescriptor.managedInstall?.getState(plugin);
+          expect(state?.kind).toBe("running");
+          if (state?.kind === "running")
+            expect(state.label.match(/%/g)?.length ?? 0).toBe(total ? 1 : 0);
+        }
+        getState.mockRestore();
+      });
+    });
+
+    describe("managedInstall.subscribe()", () => {
+      it("subscribes to shared operation changes and returns cleanup", () => {
+        const plugin = vaultPlugin(os.tmpdir());
+        const manager = getOpencodeBinaryManager(plugin);
+        const cleanup = jest.fn();
+        const subscribe = jest.spyOn(manager, "subscribeRuntimeState").mockReturnValue(cleanup);
+        const listener = jest.fn();
+        expect(OpencodeBackendDescriptor.managedInstall?.subscribe(plugin, listener)).toBe(cleanup);
+        expect(subscribe).toHaveBeenCalledWith(listener);
+        subscribe.mockRestore();
+      });
+    });
+
+    describe("managedInstall.run()", () => {
+      it("keeps custom and managed upgrades on their existing manager paths", async () => {
+        const manager = getOpencodeBinaryManager(vaultPlugin(os.tmpdir()));
+        const upgradeCustom = jest.spyOn(manager, "upgradeCustomBinary").mockResolvedValue({
+          version: "1.0.0",
+          path: process.execPath,
+        });
+        const upgradeManaged = jest.spyOn(manager, "upgradeManaged").mockResolvedValue({
+          version: "1.0.0",
+          path: process.execPath,
+        });
+        const original = getSettings().agentMode;
+
+        try {
+          for (const source of ["custom", "managed"] as const) {
+            setSettings((current) => ({
+              agentMode: {
+                ...current.agentMode,
+                backends: {
+                  ...current.agentMode.backends,
+                  opencode: {
+                    ...current.agentMode.backends?.opencode,
+                    binaryPath: process.execPath,
+                    binaryVersion: "1.0.0",
+                    binarySource: source,
+                  },
+                },
+              },
+            }));
+            await OpencodeBackendDescriptor.managedInstall?.run(vaultPlugin(os.tmpdir()));
+          }
+
+          expect(upgradeCustom).toHaveBeenCalledTimes(1);
+          expect(upgradeManaged).toHaveBeenCalledTimes(1);
+        } finally {
+          setSettings({ agentMode: original });
+          upgradeCustom.mockRestore();
+          upgradeManaged.mockRestore();
+        }
+      });
+    });
+
     describe("wire.decode()", () => {
       const decode = OpencodeBackendDescriptor.wire.decode;
 
@@ -220,6 +326,26 @@ describe("descriptor", () => {
         };
       }
 
+      it.each(["high", null])(
+        "https://github.com/Brevilabs/obsidian-copilot-private/issues/219 resolves missing effort on the active model without resetting it: %s",
+        async (effort) => {
+          const { session, applyModelWireId, setConfigOption } = makeSession({
+            model: {
+              current: { baseModelId: "openai/gpt-5", effort },
+              availableModels: [entryOffering("openai/gpt-5", ["high", "low"])],
+              apply: { kind: "setConfigOption", configId: "model", effortConfigId: "effort" },
+            },
+            mode: null,
+          });
+          await OpencodeBackendDescriptor.applySelection(session, {
+            baseModelId: "openai/gpt-5",
+            effort: null,
+          });
+          expect(applyModelWireId).not.toHaveBeenCalled();
+          expect(setConfigOption).toHaveBeenCalledWith("effort", "low");
+        }
+      );
+
       it("routes config-option-backed effort through the thought-level option", async () => {
         const { session, applyModelWireId, setConfigOption } = makeSession({
           model: {
@@ -277,7 +403,27 @@ describe("descriptor", () => {
         expect(setConfigOption).toHaveBeenCalledWith("effort", "high");
       });
 
-      it("leaves the model on its native effort when the saved level is no longer offered (https://github.com/logancyang/obsidian-copilot/issues/2917)", async () => {
+      it("activates the bare model when the catalog is config-option backed but publishes no effort option, dropping a saved level instead of suffixing it (https://github.com/Brevilabs/obsidian-copilot-private/issues/364)", async () => {
+        const { session, applyModelWireId, setConfigOption } = makeSession({
+          model: {
+            current: { baseModelId: "opencode/big-pickle", effort: null },
+            availableModels: [entryOffering("copilot-plus/copilot-plus-flash", [])],
+            apply: { kind: "setConfigOption", configId: "model" },
+          },
+          mode: null,
+        });
+
+        await OpencodeBackendDescriptor.applySelection(session, {
+          baseModelId: "copilot-plus/copilot-plus-flash",
+          effort: "high",
+        });
+
+        expect(applyModelWireId).toHaveBeenCalledTimes(1);
+        expect(applyModelWireId).toHaveBeenCalledWith("copilot-plus/copilot-plus-flash");
+        expect(setConfigOption).not.toHaveBeenCalled();
+      });
+
+      it("https://github.com/Brevilabs/obsidian-copilot-private/issues/219 applies the lowest effort when the saved level is no longer offered (https://github.com/logancyang/obsidian-copilot/issues/2917)", async () => {
         const { session, applyModelWireId, setConfigOption } = makeSession({
           model: {
             current: { baseModelId: "anthropic/claude-sonnet", effort: null },
@@ -293,7 +439,7 @@ describe("descriptor", () => {
         });
 
         expect(applyModelWireId).toHaveBeenCalledWith("openai/gpt-5");
-        expect(setConfigOption).not.toHaveBeenCalled();
+        expect(setConfigOption).toHaveBeenCalledWith("effort", "low");
       });
     });
 

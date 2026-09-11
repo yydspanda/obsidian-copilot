@@ -8,11 +8,6 @@ import { PromptSortStrategy } from "./types";
 // fallback link when a usage-cap error doesn't carry its own dashboard_url.
 export const USAGE_DASHBOARD_URL = "https://www.obsidiancopilot.com/en/dashboard/token-usage";
 
-// Miyo's public homepage — where users download the Miyo desktop app and read
-// about it. Distinct from the Copilot site; used by the "download / pair with
-// Miyo" links in settings.
-export const MIYO_HOMEPAGE_URL = "https://www.miyo.md/";
-
 export const BREVILABS_API_BASE_URL = "https://api.brevilabs.com/v1";
 export const BREVILABS_MODELS_BASE_URL = "https://models.brevilabs.com/v1";
 export const CHAT_VIEWTYPE = "copilot-chat-view";
@@ -85,8 +80,7 @@ export const DEFAULT_SYSTEM_PROMPT = `You are Obsidian Copilot, a helpful assist
   11. Always respond in the language of the user's query.
   12. Do NOT mention the additional context provided such as getCurrentTime and getTimeRangeMs if it's irrelevant to the user message.
   13. If the user mentions "tags", it most likely means tags in Obsidian note properties.
-  14. YouTube URLs: If the user provides YouTube URLs in their message, transcriptions will be automatically fetched and provided to you. You don't need to do anything special - just use the transcription content if available.
-  15. For markdown lists, always use '- ' (hyphen followed by exactly one space) for bullet points, with no leading spaces before the hyphen. Never use '*' (asterisk) for bullets.`;
+  14. YouTube URLs: If the user provides YouTube URLs in their message, transcriptions will be automatically fetched and provided to you. You don't need to do anything special - just use the transcription content if available.`;
 
 export const COMPOSER_OUTPUT_INSTRUCTIONS = `Return the new note content or canvas JSON in <writeFile> tags.
 
@@ -162,7 +156,6 @@ export const VARIABLE_NOTE_TAG = "variable_note";
 export const EMBEDDED_PDF_TAG = "embedded_pdf";
 export const EMBEDDED_NOTE_TAG = "embedded_note";
 export const DATAVIEW_BLOCK_TAG = "dataview_block";
-export const RETRIEVED_DOCUMENT_TAG = "retrieved_document";
 export const WEB_TAB_CONTEXT_TAG = "web_tab_context";
 export const ACTIVE_WEB_TAB_CONTEXT_TAG = "active_web_tab";
 export const YOUTUBE_VIDEO_CONTEXT_TAG = "youtube_video_context";
@@ -523,135 +516,7 @@ export const BUILTIN_CHAT_MODELS: CustomModel[] = [
   },
 ];
 
-export enum EmbeddingModelProviders {
-  OPENAI = "openai",
-  OPENROUTERAI = "openrouterai",
-  COHEREAI = "cohereai",
-  GOOGLE = "google",
-  OLLAMA = "ollama",
-  LM_STUDIO = "lm-studio",
-  OPENAI_FORMAT = "3rd party (openai-format)",
-  COPILOT_PLUS = "copilot-plus",
-  COPILOT_PLUS_JINA = "copilot-plus-jina",
-  SILICONFLOW = "siliconflow",
-}
-
-export enum EmbeddingModels {
-  OPENAI_EMBEDDING_SMALL = "text-embedding-3-small",
-  OPENAI_EMBEDDING_LARGE = "text-embedding-3-large",
-  COHEREAI_EMBED_MULTILINGUAL_LIGHT_V3_0 = "embed-multilingual-light-v3.0",
-  GOOGLE_ENG = "text-embedding-004",
-  GOOGLE_GEMINI_EMBEDDING = "gemini-embedding-001",
-  GOOGLE_GEMINI_EMBEDDING_2_PREVIEW = "gemini-embedding-2-preview",
-  COPILOT_PLUS_SMALL = "copilot-plus-small",
-  COPILOT_PLUS_LARGE = "copilot-plus-large",
-  COPILOT_PLUS_MULTILINGUAL = "copilot-plus-multilingual",
-  SILICONFLOW_QWEN3_EMBEDDING_0_6B = "Qwen/Qwen3-Embedding-0.6B",
-  OPENROUTER_OPENAI_EMBEDDING_SMALL = "openai/text-embedding-3-small",
-}
-
-export const BUILTIN_EMBEDDING_MODELS: CustomModel[] = [
-  {
-    name: EmbeddingModels.COPILOT_PLUS_SMALL,
-    provider: EmbeddingModelProviders.COPILOT_PLUS,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-    plusExclusive: true,
-  },
-  {
-    name: EmbeddingModels.COPILOT_PLUS_LARGE,
-    provider: EmbeddingModelProviders.COPILOT_PLUS_JINA,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-    plusExclusive: true,
-    believerExclusive: true,
-    dimensions: 1024,
-  },
-  {
-    name: EmbeddingModels.COPILOT_PLUS_MULTILINGUAL,
-    provider: EmbeddingModelProviders.COPILOT_PLUS_JINA,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-    plusExclusive: true,
-    dimensions: 512,
-  },
-  {
-    name: EmbeddingModels.OPENROUTER_OPENAI_EMBEDDING_SMALL,
-    provider: EmbeddingModelProviders.OPENROUTERAI,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-  },
-  {
-    name: EmbeddingModels.OPENAI_EMBEDDING_SMALL,
-    provider: EmbeddingModelProviders.OPENAI,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-  },
-  {
-    name: EmbeddingModels.OPENAI_EMBEDDING_LARGE,
-    provider: EmbeddingModelProviders.OPENAI,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-  },
-  {
-    name: EmbeddingModels.COHEREAI_EMBED_MULTILINGUAL_LIGHT_V3_0,
-    provider: EmbeddingModelProviders.COHEREAI,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-  },
-  {
-    name: EmbeddingModels.GOOGLE_ENG,
-    provider: EmbeddingModelProviders.GOOGLE,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-  },
-  {
-    name: EmbeddingModels.GOOGLE_GEMINI_EMBEDDING,
-    provider: EmbeddingModelProviders.GOOGLE,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-  },
-  {
-    name: EmbeddingModels.GOOGLE_GEMINI_EMBEDDING_2_PREVIEW,
-    provider: EmbeddingModelProviders.GOOGLE,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-  },
-  {
-    name: EmbeddingModels.SILICONFLOW_QWEN3_EMBEDDING_0_6B,
-    provider: EmbeddingModelProviders.SILICONFLOW,
-    enabled: true,
-    isBuiltIn: true,
-    isEmbeddingModel: true,
-    core: true,
-    baseUrl: "https://api.siliconflow.com/v1",
-  },
-];
-
-// Embedding Models
-export const NOMIC_EMBED_TEXT = "nomic-embed-text";
-// export const DISTILBERT_NLI = 'sentence-transformers/distilbert-base-nli-mean-tokens';
-// export const INSTRUCTOR_XL = 'hkunlp/instructor-xl'; // Inference API is off for this
-// export const MPNET_V2 = 'sentence-transformers/all-mpnet-base-v2'; // Inference API returns 400
-
-export type Provider = ChatModelProviders | EmbeddingModelProviders;
+export type Provider = ChatModelProviders;
 
 export type SettingKeyProviders = Exclude<
   ChatModelProviders,
@@ -762,13 +627,7 @@ export const ProviderInfo: Record<Provider, ProviderMetadata> = {
     keyManagementURL: "https://platform.deepseek.com/api-keys",
     testModel: ChatModels.DEEPSEEK_CHAT,
   },
-  [EmbeddingModelProviders.COPILOT_PLUS]: {
-    label: "Copilot",
-    host: BREVILABS_MODELS_BASE_URL,
-    curlBaseURL: BREVILABS_MODELS_BASE_URL,
-    keyManagementURL: "",
-  },
-  [EmbeddingModelProviders.COPILOT_PLUS_JINA]: {
+  [ChatModelProviders.COPILOT_PLUS]: {
     label: "Copilot",
     host: BREVILABS_MODELS_BASE_URL,
     curlBaseURL: BREVILABS_MODELS_BASE_URL,
@@ -791,18 +650,6 @@ export const ProviderSettingsKeyMap: Record<SettingKeyProviders, keyof CopilotSe
   siliconflow: "siliconflowApiKey",
 };
 
-export enum VAULT_VECTOR_STORE_STRATEGY {
-  NEVER = "NEVER",
-  ON_STARTUP = "ON STARTUP",
-  ON_MODE_SWITCH = "ON MODE SWITCH",
-}
-
-export const VAULT_VECTOR_STORE_STRATEGIES = [
-  VAULT_VECTOR_STORE_STRATEGY.NEVER,
-  VAULT_VECTOR_STORE_STRATEGY.ON_STARTUP,
-  VAULT_VECTOR_STORE_STRATEGY.ON_MODE_SWITCH,
-];
-
 export enum DEFAULT_OPEN_AREA {
   EDITOR = "editor",
   VIEW = "view",
@@ -815,23 +662,20 @@ export enum SEND_SHORTCUT {
 
 export const COMMAND_IDS = {
   TRIGGER_QUICK_COMMAND: "trigger-quick-command",
-  CLEAR_LOCAL_COPILOT_INDEX: "clear-local-copilot-index",
   CLEAR_COPILOT_CACHE: "clear-copilot-cache",
   COUNT_WORD_AND_TOKENS_SELECTION: "count-word-and-tokens-selection",
   COUNT_TOTAL_VAULT_TOKENS: "count-total-vault-tokens",
   DEBUG_WORD_COMPLETION: "debug-word-completion",
-  FORCE_REINDEX_VAULT_TO_COPILOT_INDEX: "force-reindex-vault-to-copilot-index",
-  GARBAGE_COLLECT_COPILOT_INDEX: "garbage-collect-copilot-index",
-  INDEX_VAULT_TO_COPILOT_INDEX: "index-vault-to-copilot-index",
-  INSPECT_COPILOT_INDEX_BY_NOTE_PATHS: "copilot-inspect-index-by-note-paths",
-  LIST_INDEXED_FILES: "copilot-list-indexed-files",
+  // Obsidian persists command ids in hotkey bindings and external integrations.
+  // The Miyo replacement keeps the legacy refresh id so upgrades retain them.
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/282
+  REFRESH_MIYO_INDEX: "index-vault-to-copilot-index",
   LOAD_COPILOT_CHAT_CONVERSATION: "load-copilot-chat-conversation",
   NEW_CHAT: "new-chat",
   NEW_AGENT_CHAT: "new-agent-chat",
   OPEN_COPILOT_CHAT_WINDOW: "chat-open-window",
   OPEN_AGENT_CHAT_WINDOW: "agent-chat-open-window",
   OPEN_RELEVANT_NOTES_VIEW: "open-relevant-notes-view",
-  SEARCH_ORAMA_DB: "copilot-search-orama-db",
   TOGGLE_COPILOT_CHAT_WINDOW: "chat-toggle-window",
   TOGGLE_AGENT_CHAT_WINDOW: "agent-chat-toggle-window",
   ADD_SELECTION_TO_CHAT_CONTEXT: "add-selection-to-chat-context",
@@ -841,30 +685,24 @@ export const COMMAND_IDS = {
   OPEN_LOG_FILE: "open-log-file",
   CLEAR_LOG_FILE: "clear-log-file",
   DOWNLOAD_YOUTUBE_SCRIPT: "download-youtube-script",
-  PUBLISH_FILE_TO_SYMPOSIUM: "publish-file-to-symposium",
+  // The wire id is persisted by Obsidian in hotkeys and command integrations.
+  PUBLISH_FILE_TO_OPENARTIFACTS: "publish-file-to-symposium",
   TRIGGER_QUICK_ASK: "trigger-quick-ask",
 } as const;
 
 export const COMMAND_NAMES: Record<CommandId, string> = {
   [COMMAND_IDS.TRIGGER_QUICK_COMMAND]: "Trigger quick command",
-  [COMMAND_IDS.CLEAR_LOCAL_COPILOT_INDEX]: "Clear local Copilot index",
   [COMMAND_IDS.CLEAR_COPILOT_CACHE]: "Clear Copilot cache",
   [COMMAND_IDS.COUNT_TOTAL_VAULT_TOKENS]: "Count total tokens in your vault",
   [COMMAND_IDS.COUNT_WORD_AND_TOKENS_SELECTION]: "Count words and tokens in selection",
   [COMMAND_IDS.DEBUG_WORD_COMPLETION]: "Word completion: Debug",
-  [COMMAND_IDS.FORCE_REINDEX_VAULT_TO_COPILOT_INDEX]: "Force reindex vault",
-  [COMMAND_IDS.GARBAGE_COLLECT_COPILOT_INDEX]:
-    "Garbage collect Copilot index (remove files that no longer exist in vault)",
-  [COMMAND_IDS.INDEX_VAULT_TO_COPILOT_INDEX]: "Index (refresh) vault",
-  [COMMAND_IDS.INSPECT_COPILOT_INDEX_BY_NOTE_PATHS]: "Inspect Copilot index by note paths (debug)",
-  [COMMAND_IDS.LIST_INDEXED_FILES]: "List all indexed files (debug)",
+  [COMMAND_IDS.REFRESH_MIYO_INDEX]: "Refresh Miyo index",
   [COMMAND_IDS.LOAD_COPILOT_CHAT_CONVERSATION]: "Load Copilot chat conversation",
   [COMMAND_IDS.NEW_CHAT]: "New Copilot Quick Chat",
   [COMMAND_IDS.NEW_AGENT_CHAT]: "New Copilot Agent Chat",
   [COMMAND_IDS.OPEN_COPILOT_CHAT_WINDOW]: "Open Copilot Chat Window",
   [COMMAND_IDS.OPEN_AGENT_CHAT_WINDOW]: "Open Copilot Agent Chat Window",
   [COMMAND_IDS.OPEN_RELEVANT_NOTES_VIEW]: "Open Relevant Notes",
-  [COMMAND_IDS.SEARCH_ORAMA_DB]: "Search semantic index (debug)",
   [COMMAND_IDS.TOGGLE_COPILOT_CHAT_WINDOW]: "Toggle Copilot Chat Window",
   [COMMAND_IDS.TOGGLE_AGENT_CHAT_WINDOW]: "Toggle Copilot Agent Chat Window",
   [COMMAND_IDS.ADD_SELECTION_TO_CHAT_CONTEXT]: "Add selection to chat context",
@@ -874,7 +712,7 @@ export const COMMAND_NAMES: Record<CommandId, string> = {
   [COMMAND_IDS.OPEN_LOG_FILE]: "Create log file",
   [COMMAND_IDS.CLEAR_LOG_FILE]: "Clear log file",
   [COMMAND_IDS.DOWNLOAD_YOUTUBE_SCRIPT]: "Download YouTube Script (plus)",
-  [COMMAND_IDS.PUBLISH_FILE_TO_SYMPOSIUM]: "Publish file to Symposium",
+  [COMMAND_IDS.PUBLISH_FILE_TO_OPENARTIFACTS]: "Publish file to OpenArtifacts",
   [COMMAND_IDS.TRIGGER_QUICK_ASK]: "Quick Ask",
 };
 
@@ -899,17 +737,14 @@ export const COMMAND_ICONS: Partial<Record<CommandId, string>> = {
   [COMMAND_IDS.ADD_WEB_SELECTION_TO_CHAT_CONTEXT]: "globe",
   [COMMAND_IDS.ADD_CUSTOM_COMMAND]: "plus-circle",
   [COMMAND_IDS.APPLY_CUSTOM_COMMAND]: "play-circle",
-  [COMMAND_IDS.INDEX_VAULT_TO_COPILOT_INDEX]: "refresh-cw",
-  [COMMAND_IDS.FORCE_REINDEX_VAULT_TO_COPILOT_INDEX]: "rotate-cw",
-  [COMMAND_IDS.CLEAR_LOCAL_COPILOT_INDEX]: "trash-2",
+  [COMMAND_IDS.REFRESH_MIYO_INDEX]: "refresh-cw",
   [COMMAND_IDS.CLEAR_COPILOT_CACHE]: "eraser",
-  [COMMAND_IDS.GARBAGE_COLLECT_COPILOT_INDEX]: "filter-x",
   [COMMAND_IDS.COUNT_TOTAL_VAULT_TOKENS]: "calculator",
   [COMMAND_IDS.COUNT_WORD_AND_TOKENS_SELECTION]: "hash",
   [COMMAND_IDS.OPEN_LOG_FILE]: "file-text",
   [COMMAND_IDS.CLEAR_LOG_FILE]: "file-x",
   [COMMAND_IDS.DOWNLOAD_YOUTUBE_SCRIPT]: "youtube",
-  [COMMAND_IDS.PUBLISH_FILE_TO_SYMPOSIUM]: "share-2",
+  [COMMAND_IDS.PUBLISH_FILE_TO_OPENARTIFACTS]: "share-2",
 };
 
 /**
@@ -960,12 +795,9 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   siliconflowApiKey: "",
   defaultChainType: ChainType.LLM_CHAIN,
   defaultModelKey: ChatModels.OPENROUTER_GEMINI_2_5_FLASH + "|" + ChatModelProviders.OPENROUTERAI,
-  embeddingModelKey:
-    EmbeddingModels.OPENROUTER_OPENAI_EMBEDDING_SMALL + "|" + EmbeddingModelProviders.OPENROUTERAI,
   contextTurns: 15,
   userSystemPrompt: "",
   openAIProxyBaseUrl: "",
-  openAIEmbeddingProxyBaseUrl: "",
   stream: true,
   copilotFolder: DEFAULT_COPILOT_FOLDER,
   // Every folder ever activated as the Copilot root (seeded with the legacy
@@ -982,22 +814,15 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   defaultOpenArea: DEFAULT_OPEN_AREA.VIEW,
   defaultSendShortcut: SEND_SHORTCUT.ENTER,
   customPromptsFolder: DEFAULT_CUSTOM_PROMPTS_FOLDER,
-  indexVaultToVectorStore: VAULT_VECTOR_STORE_STRATEGY.ON_MODE_SWITCH,
   qaExclusions: DEFAULT_QA_EXCLUSIONS_SETTING,
   qaInclusions: "",
   chatNoteContextPath: "",
   chatNoteContextTags: [],
-  enableIndexSync: true,
   debug: false,
   maxSourceChunks: DEFAULT_MAX_SOURCE_CHUNKS,
   enableInlineCitations: true,
   groqApiKey: "",
   activeModels: BUILTIN_CHAT_MODELS,
-  activeEmbeddingModels: BUILTIN_EMBEDDING_MODELS,
-  embeddingRequestsPerMin: 60,
-  embeddingBatchSize: 16,
-  disableIndexOnMobile: true,
-  numPartitions: 1,
   lexicalSearchRamLimit: 100, // Default 100 MB
   promptUsageTimestamps: {},
   promptSortStrategy: PromptSortStrategy.TIMESTAMP,
@@ -1008,16 +833,16 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   inlineEditCommands: [],
   projectList: [],
   lastDismissedVersion: null,
+  lastShownStartupVersion: null,
   passMarkdownImages: true,
   enableAutonomousAgent: true,
   enableCustomPromptTemplating: true,
-  enableSemanticSearchV3: false,
   enableSelfHostMode: false,
   enableMiyo: false,
   enableMiyoSearchSkill: false,
   miyoSearchAll: false,
+  relevantNotesLiveUpdate: true,
   miyoServerUrl: "",
-  miyoSyncedExclusions: "",
   selfHostSearchProvider: "firecrawl",
   firecrawlApiKey: "",
   perplexityApiKey: "",
@@ -1065,6 +890,15 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
     // disclosure lives in the Report-issue modal, shown only when the user
     // chooses to share the log.
     debugFullFrames: true,
+    // On by default: an agent turn can run for minutes, and the chime is the
+    // only thing that reaches a user who has looked away. Turned off in
+    // Basic → Agents.
+    notificationSound: true,
+    // Named rather than imported from the sound catalog: `@/logger` pulls in
+    // `@/settings/model`, so importing the catalog here would make this module
+    // load before its own DEFAULT_SETTINGS exists. The literal is still
+    // checked, since the field is typed to the catalog's ids.
+    notificationSoundId: "piano",
     welcomeDismissed: false,
     skills: {
       folder: DEFAULT_SKILLS_FOLDER,

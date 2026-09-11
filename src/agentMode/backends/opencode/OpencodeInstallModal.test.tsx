@@ -23,7 +23,10 @@ import {
   type ProgressEvent,
   type RuntimeState,
 } from "@/agentMode/backends/opencode/OpencodeBinaryManager";
-import { OpencodeConfigContainer } from "@/agentMode/backends/opencode/OpencodeInstallModal";
+import {
+  OpencodeConfigContainer,
+  OpencodeInstallModal,
+} from "@/agentMode/backends/opencode/OpencodeInstallModal";
 import { getSettings, settingsAtom, settingsStore } from "@/settings/model";
 import type { OpencodeBackendSettings } from "@/settings/model";
 import { act, fireEvent, render, screen } from "@testing-library/react";
@@ -132,6 +135,18 @@ describe("OpencodeInstallModal", () => {
     setOpencodeSettings(undefined);
   });
 
+  describe("constructor()", () => {
+    it("uses the reusable full-bleed frame for https://github.com/Brevilabs/obsidian-copilot-private/issues/317", () => {
+      const { manager } = makeManager();
+      const modal = new OpencodeInstallModal(new App(), manager, {
+        platform: "darwin",
+        arch: "arm64",
+      });
+
+      expect(modal.modalEl.className).toBe("modal copilot-modal-full-bleed");
+    });
+  });
+
   describe("OpencodeConfigContainer()", () => {
     it("opens on the managed source when nothing was ever configured", () => {
       const { manager } = makeManager();
@@ -219,7 +234,7 @@ describe("OpencodeInstallModal", () => {
       expect(screen.getByRole("button", { name: "Download & install" })).toBeTruthy();
       expect(screen.queryByText("Aborted")).toBeNull();
 
-      // Unmounting is not a cancellation: the settings row may still be showing
+      // Unmounting is not a cancellation: reopening the dialog must still show
       // this same operation.
       cancelCurrentOperation.mockClear();
       unmount();
@@ -234,7 +249,7 @@ describe("OpencodeInstallModal", () => {
       await act(async () => {
         installDeferred().reject(new Error("tar exited with 1"));
       });
-      publish({ kind: "error", message: "tar exited with 1" });
+      publish({ kind: "error", operation: "install", message: "tar exited with 1" });
 
       expect(screen.getByText("tar exited with 1")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Download & install" })).toBeTruthy();

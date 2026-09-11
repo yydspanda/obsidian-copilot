@@ -7,16 +7,15 @@ import type { CopilotMode, ModelSelection } from "@/agentMode";
 import { ChainType } from "@/chainType";
 import type { BackendConfig, BackendType, ConfiguredModel, Provider } from "@/modelManagement";
 import { MODEL_SECRET_FIELDS, TOP_LEVEL_SECRET_FIELDS } from "@/services/settingsSecretTransforms";
+import { isNotificationSoundId, type NotificationSoundId } from "@/utils/notificationSoundCatalog";
 import { type SortStrategy, isSortStrategy } from "@/utils/recentUsageManager";
 import {
   AGENT_MAX_ITERATIONS_LIMIT,
   BUILTIN_CHAT_MODELS,
-  BUILTIN_EMBEDDING_MODELS,
   DEFAULT_OPEN_AREA,
   DEFAULT_QA_EXCLUSIONS_SETTING,
   DEFAULT_SETTINGS,
   DEFAULT_SKILLS_FOLDER,
-  EmbeddingModelProviders,
   SEND_SHORTCUT,
 } from "@/constants";
 
@@ -67,13 +66,12 @@ export interface CopilotSettings {
   siliconflowApiKey: string;
   defaultChainType: ChainType;
   defaultModelKey: string;
-  embeddingModelKey: string;
   contextTurns: number;
   lastDismissedVersion: string | null;
+  lastShownStartupVersion: string | null;
   // DEPRECATED: Do not use this directly, migrated to file-based system prompts
   userSystemPrompt: string;
   openAIProxyBaseUrl: string;
-  openAIEmbeddingProxyBaseUrl: string;
   stream: boolean;
   /** Configurable root folder all Copilot sub-folders derive from (default: "copilot"). */
   copilotFolder: string;
@@ -107,10 +105,8 @@ export interface CopilotSettings {
   autosaveChat: boolean;
   autoAddActiveContentToContext: boolean;
   customPromptsFolder: string;
-  indexVaultToVectorStore: string;
   chatNoteContextPath: string;
   chatNoteContextTags: string[];
-  enableIndexSync: boolean;
   debug: boolean;
   maxSourceChunks: number;
   enableInlineCitations: boolean;
@@ -118,18 +114,13 @@ export interface CopilotSettings {
   qaInclusions: string;
   groqApiKey: string;
   activeModels: Array<CustomModel>;
-  activeEmbeddingModels: Array<CustomModel>;
   promptUsageTimestamps: Record<string, number>;
   promptSortStrategy: string;
   chatHistorySortStrategy: SortStrategy;
   /** Projects config root folder in vault (default: "copilot/projects"). */
   projectsFolder: string;
-  embeddingRequestsPerMin: number;
-  embeddingBatchSize: number;
   defaultOpenArea: DEFAULT_OPEN_AREA;
   defaultSendShortcut: SEND_SHORTCUT;
-  disableIndexOnMobile: boolean;
-  numPartitions: number;
   defaultConversationNoteName: string;
   // Any valid paid license (Lite and above). undefined means never checked.
   isPaidUser: boolean | undefined;
@@ -149,31 +140,27 @@ export interface CopilotSettings {
   passMarkdownImages: boolean;
   enableAutonomousAgent: boolean;
   enableCustomPromptTemplating: boolean;
-  /** Enable semantic search using Orama for meaning-based document retrieval */
-  enableSemanticSearchV3: boolean;
   /** Enable self-host mode (e.g., Miyo) - uses self-hosted services for search, LLMs, OCR, etc. */
   enableSelfHostMode: boolean;
   /** Enable Miyo-backed indexing and semantic search when self-host mode is active */
   enableMiyo: boolean;
   /**
-   * User-controlled install of the `miyo-search` agent skill (path B: agent tool +
-   * system-prompt steering). Independent of `enableSemanticSearchV3` (path A: the
-   * Copilot chat/QA vector retrieval), which stays owned by Miyo Connect/Disconnect.
+   * User-controlled install of the `miyo-search` agent skill. This agent-tool
+   * integration is independent of the Miyo backend used by Copilot search.
    */
   enableMiyoSearchSkill: boolean;
   /** When true, omit folder_name from Miyo search requests so all indexed content is searched */
   miyoSearchAll: boolean;
+  /**
+   * Keep Relevant Notes in step with the note being written. Miyo re-embeds a
+   * file a few seconds after it lands on disk, so the pane can re-rank itself
+   * while the user types instead of only when they switch notes.
+   */
+  relevantNotesLiveUpdate: boolean;
   /** URL endpoint for the self-host mode backend */
   /** API key for the self-host mode backend (if required) */
   /** Custom Miyo server URL, e.g. "http://192.168.1.10:8742" (empty = use local service discovery) */
   miyoServerUrl: string;
-  /**
-   * Fingerprint of the system root exclusions last successfully synced to the
-   * registered Miyo folder (empty = never synced). Compared against the current
-   * fingerprint to detect that Miyo's server-side exclusions went stale after a
-   * Copilot root change; see `getMiyoExclusionsFingerprint` in miyoUtils.
-   */
-  miyoSyncedExclusions: string;
   /** Which provider to use for self-host web search */
   selfHostSearchProvider: SelfHostSearchProvider;
   /** Firecrawl API key for self-host web search */
@@ -292,6 +279,19 @@ export interface CopilotSettings {
      */
     debugFullFrames: boolean;
     /**
+     * Play a short chime whenever an agent session stops running and wants the
+     * user: the turn finished, the turn errored, or a permission prompt is
+     * waiting. On by default, so a user who walks away from a long turn is
+     * called back without having to watch the tab.
+     */
+    notificationSound: boolean;
+    /**
+     * Which sound from the `NOTIFICATION_SOUNDS` catalog to play. Kept
+     * separate from the on/off switch so muting and unmuting does not lose the
+     * user's pick.
+     */
+    notificationSoundId: NotificationSoundId;
+    /**
      * One-shot dismissal of the Agent Home "Try a project" welcome card. The card
      * only shows on the global landing while no projects exist; once dismissed it
      * stays hidden regardless of project count. Persisted so the nudge doesn't
@@ -368,8 +368,10 @@ export interface ClaudeBackendSettings {
 
 /** Settings slice owned by the Codex backend. */
 export interface CodexBackendSettings {
-  /** Path to the user-provided `codex-acp` binary. */
+  binaryVersion?: string;
+  /** Path to the configured `codex-acp` package entry. */
   binaryPath?: string;
+  binarySource?: "managed" | "custom";
   /** Sticky model preference — `{ baseModelId, effort }`. Unset = use the agent's default. */
   defaultModel?: ModelSelection | null;
   /** Sticky permission-mode preference (default/plan/auto). Unset = the agent's natural starting mode. */
@@ -421,6 +423,8 @@ export interface DeviceAgentProfile {
   claudeCliPath?: string;
   codex?: {
     binaryPath?: string;
+    binaryVersion?: string;
+    binarySource?: "managed" | "custom";
     envOverrides?: Record<string, string>;
   };
   opencode?: {
@@ -496,24 +500,6 @@ export function normalizeRootFolders(input: readonly (string | undefined)[]): st
 }
 
 /**
- * Resolve a valid embedding model key for the current settings.
- *
- * @param settings - Current Copilot settings.
- * @returns A valid embedding model key.
- */
-function resolveEmbeddingModelKey(settings: CopilotSettings): string {
-  const activeEmbeddingModelKeys = new Set(
-    (settings.activeEmbeddingModels || []).map((model) => getModelKeyFromModel(model))
-  );
-
-  if (settings.embeddingModelKey && activeEmbeddingModelKeys.has(settings.embeddingModelKey)) {
-    return settings.embeddingModelKey;
-  }
-
-  return DEFAULT_SETTINGS.embeddingModelKey;
-}
-
-/**
  * Sets the settings in the atom. Accepts either a partial object or an
  * updater function `(prev) => partial`. Prefer the updater form for any
  * read-modify-write — it routes through jotai's atom-setter callback so the
@@ -525,9 +511,7 @@ export function setSettings(
 ) {
   settingsStore.set(settingsAtom, (prev) => {
     const partial = typeof settings === "function" ? settings(prev) : settings;
-    const merged = mergeAllActiveModelsWithCoreModels({ ...prev, ...partial });
-    merged.embeddingModelKey = resolveEmbeddingModelKey(merged);
-    return merged;
+    return mergeActiveChatModelsWithCoreModels({ ...prev, ...partial });
   });
 }
 
@@ -864,10 +848,6 @@ export function resetSettings(): void {
       BUILTIN_CHAT_MODELS.map((model) => ({ ...model, enabled: true })),
       current.activeModels ?? []
     ),
-    activeEmbeddingModels: preserveModelCredentials(
-      BUILTIN_EMBEDDING_MODELS.map((model) => ({ ...model, enabled: true })),
-      current.activeEmbeddingModels ?? []
-    ),
     providers: preservedProviders,
     configuredModels: preserveConfiguredModelsForProviders(
       current.configuredModels,
@@ -919,14 +899,8 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     settingsToSanitize.userId = uuidv4();
   }
 
-  if (!settingsToSanitize.activeEmbeddingModels) {
-    settingsToSanitize.activeEmbeddingModels = BUILTIN_EMBEDDING_MODELS.map((model) => ({
-      ...model,
-      enabled: true,
-    }));
-  }
-
   const sanitizedSettings: CopilotSettings = { ...settingsToSanitize };
+  sanitizedSettings.lastShownStartupVersion ??= null;
   const sanitizedSettingsRecord = sanitizedSettings as unknown as Record<string, unknown>;
   delete sanitizedSettingsRecord.miyoRemoteVaultPath;
   delete sanitizedSettingsRecord.miyoVaultName;
@@ -936,14 +910,13 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   // https://github.com/logancyang/obsidian-copilot/issues/2928
   delete sanitizedSettingsRecord.amazonBedrockApiKey;
   delete sanitizedSettingsRecord.amazonBedrockRegion;
-  // Azure OpenAI is no longer a chat or embedding provider, so a stored key and
-  // its routing fields would only address a service Copilot cannot reach.
+  // Azure OpenAI is no longer a chat provider, so a stored key and its routing
+  // fields would only address a service Copilot cannot reach.
   // https://github.com/logancyang/obsidian-copilot/issues/2932
   delete sanitizedSettingsRecord.azureOpenAIApiKey;
   delete sanitizedSettingsRecord.azureOpenAIApiInstanceName;
   delete sanitizedSettingsRecord.azureOpenAIApiDeploymentName;
   delete sanitizedSettingsRecord.azureOpenAIApiVersion;
-  delete sanitizedSettingsRecord.azureOpenAIApiEmbeddingDeploymentName;
   // Copilot no longer limits how long an answer may be, so a stored limit
   // would only cut off answers the model was willing to finish.
   // https://github.com/logancyang/obsidian-copilot-preview/issues/312
@@ -980,16 +953,6 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   sanitizedSettings.contextTurns = isNaN(contextTurns)
     ? DEFAULT_SETTINGS.contextTurns
     : contextTurns;
-
-  const embeddingRequestsPerMin = Number(settingsToSanitize.embeddingRequestsPerMin);
-  sanitizedSettings.embeddingRequestsPerMin = isNaN(embeddingRequestsPerMin)
-    ? DEFAULT_SETTINGS.embeddingRequestsPerMin
-    : embeddingRequestsPerMin;
-
-  const embeddingBatchSize = Number(settingsToSanitize.embeddingBatchSize);
-  sanitizedSettings.embeddingBatchSize = isNaN(embeddingBatchSize)
-    ? DEFAULT_SETTINGS.embeddingBatchSize
-    : embeddingBatchSize;
 
   // Sanitize lexicalSearchRamLimit (20-1000 MB range)
   const lexicalSearchRamLimit = Number(settingsToSanitize.lexicalSearchRamLimit);
@@ -1028,14 +991,14 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.miyoSearchAll = DEFAULT_SETTINGS.miyoSearchAll;
   }
 
+  // Ensure relevantNotesLiveUpdate has a default value
+  if (typeof sanitizedSettings.relevantNotesLiveUpdate !== "boolean") {
+    sanitizedSettings.relevantNotesLiveUpdate = DEFAULT_SETTINGS.relevantNotesLiveUpdate;
+  }
+
   // Ensure miyoServerUrl has a default value
   if (typeof sanitizedSettings.miyoServerUrl !== "string") {
     sanitizedSettings.miyoServerUrl = DEFAULT_SETTINGS.miyoServerUrl;
-  }
-
-  // Ensure miyoSyncedExclusions has a default value
-  if (typeof sanitizedSettings.miyoSyncedExclusions !== "string") {
-    sanitizedSettings.miyoSyncedExclusions = DEFAULT_SETTINGS.miyoSyncedExclusions;
   }
 
   // Ensure selfHostSearchProvider is a valid value
@@ -1229,10 +1192,10 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.chatHistorySortStrategy = DEFAULT_SETTINGS.chatHistorySortStrategy;
   }
 
-  // Fall back when the persisted chain type isn't one this build offers. A vault
-  // last used with Quick Chat's Projects mode still holds "project" here, and
-  // chain construction would throw "Unsupported chain type" on it before the
-  // user could pick anything else.
+  // Fall back when a vault still holds a retired Quick Chat mode. Both Vault QA
+  // and Projects were persisted here, and chain construction would otherwise
+  // fail before the mode picker could render.
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/286
   // https://github.com/logancyang/obsidian-copilot-preview/issues/310
   if (!Object.values(ChainType).includes(sanitizedSettings.defaultChainType)) {
     sanitizedSettings.defaultChainType = DEFAULT_SETTINGS.defaultChainType;
@@ -1308,6 +1271,18 @@ function sanitizeAgentMode(raw: unknown): CopilotSettings["agentMode"] {
       ? r.debugFullFrames
       : DEFAULT_SETTINGS.agentMode.debugFullFrames;
 
+  const notificationSound =
+    typeof r.notificationSound === "boolean"
+      ? r.notificationSound
+      : DEFAULT_SETTINGS.agentMode.notificationSound;
+
+  // A sound dropped from the catalog would otherwise persist as a name nothing
+  // can play, leaving the user silently unnotified.
+  // https://github.com/logancyang/obsidian-copilot/issues/2987
+  const notificationSoundId = isNotificationSoundId(r.notificationSoundId)
+    ? r.notificationSoundId
+    : DEFAULT_SETTINGS.agentMode.notificationSoundId;
+
   const welcomeDismissed =
     typeof r.welcomeDismissed === "boolean"
       ? r.welcomeDismissed
@@ -1344,6 +1319,8 @@ function sanitizeAgentMode(raw: unknown): CopilotSettings["agentMode"] {
     activeBackend,
     backends,
     debugFullFrames,
+    notificationSound,
+    notificationSoundId,
     welcomeDismissed,
     skills,
     ...(claudeCli ? { claudeCli } : {}),
@@ -1618,8 +1595,18 @@ function sanitizeClaudeBackendSettings(raw: unknown): ClaudeBackendSettings {
 function sanitizeCodexBackendSettings(raw: unknown): CodexBackendSettings {
   if (!raw || typeof raw !== "object") return {};
   const r = raw as Record<string, unknown>;
+  const binaryPath = nonEmptyString(r.binaryPath);
+  const rawSource = r.binarySource;
   return {
-    binaryPath: nonEmptyString(r.binaryPath),
+    binaryPath,
+    binaryVersion: binaryPath ? nonEmptyString(r.binaryVersion) : undefined,
+    // Never take ownership of an existing or cross-device path.
+    // https://github.com/Brevilabs/obsidian-copilot-private/issues/368
+    binarySource: binaryPath
+      ? rawSource === "managed" || rawSource === "custom"
+        ? rawSource
+        : "custom"
+      : undefined,
     defaultModel: sanitizeDefaultModel(r.defaultModel),
     defaultMode: sanitizeDefaultMode(r.defaultMode),
     envOverrides: sanitizeEnvOverrides(r.envOverrides),
@@ -1664,6 +1651,12 @@ function sanitizeDeviceAgentProfile(raw: unknown): DeviceAgentProfile | undefine
     const codex: NonNullable<DeviceAgentProfile["codex"]> = {};
     const binaryPath = nonEmptyString(codexRaw.binaryPath);
     if (binaryPath) codex.binaryPath = binaryPath;
+    const binaryVersion = binaryPath ? nonEmptyString(codexRaw.binaryVersion) : undefined;
+    if (binaryVersion) codex.binaryVersion = binaryVersion;
+    const rawSource = codexRaw.binarySource;
+    if (binaryPath) {
+      codex.binarySource = rawSource === "managed" || rawSource === "custom" ? rawSource : "custom";
+    }
     const envOverrides = sanitizeEnvOverrides(codexRaw.envOverrides);
     if (envOverrides) codex.envOverrides = envOverrides;
     if (Object.keys(codex).length > 0) out.codex = codex;
@@ -1710,11 +1703,8 @@ function sanitizeDeviceProfiles(raw: unknown): Record<string, DeviceAgentProfile
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function mergeAllActiveModelsWithCoreModels(settings: CopilotSettings): CopilotSettings {
+function mergeActiveChatModelsWithCoreModels(settings: CopilotSettings): CopilotSettings {
   settings.activeModels = mergeActiveModels(settings.activeModels, BUILTIN_CHAT_MODELS);
-  settings.activeEmbeddingModels = filterUnsupportedEmbeddingModels(
-    mergeActiveModels(settings.activeEmbeddingModels, BUILTIN_EMBEDDING_MODELS)
-  );
   return settings;
 }
 
@@ -1759,17 +1749,4 @@ function mergeActiveModels(
   });
 
   return Array.from(modelMap.values());
-}
-
-/**
- * Remove embedding models that use unsupported providers.
- *
- * @param models - Embedding models to validate.
- * @returns Filtered list containing only supported providers.
- */
-function filterUnsupportedEmbeddingModels(models: CustomModel[]): CustomModel[] {
-  const supportedProviders = new Set(Object.values(EmbeddingModelProviders));
-  return models.filter((model) =>
-    supportedProviders.has(model.provider as EmbeddingModelProviders)
-  );
 }

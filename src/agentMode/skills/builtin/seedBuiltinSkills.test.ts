@@ -30,6 +30,10 @@ function memFs(initialFiles: Record<string, string> = {}): BuiltinSeedFs & {
     mkdir: async (p) => {
       dirs.add(p);
     },
+    removeFile: async (p) => {
+      if (dirs.has(p)) throw new Error(`EISDIR ${p}`);
+      files.delete(p);
+    },
     rmRecursive: async (p) => {
       dirs.delete(p);
       for (const key of [...files.keys()]) {
@@ -52,9 +56,27 @@ function skill(version: number): BuiltinSkill {
   };
 }
 
+function managedSymposiumSkillMd(): string {
+  return skill(8).skillMd.replaceAll("copilot-web-search", "symposium-publish");
+}
+
+function openArtifactsSkill(): BuiltinSkill {
+  const base = skill(1);
+  return {
+    ...base,
+    name: "openartifacts-publish",
+    legacyName: "symposium-publish",
+    skillMd: base.skillMd.replaceAll("copilot-web-search", "openartifacts-publish"),
+    files: [{ path: "openartifacts-publish.sh", content: "// script v1" }],
+  };
+}
+
 const FOLDER = "copilot/skills";
 const MD = "copilot/skills/copilot-web-search/SKILL.md";
 const SCRIPT = "copilot/skills/copilot-web-search/web-search.sh";
+const LEGACY_RENAMED_MD = "copilot/skills/symposium-publish/SKILL.md";
+const RENAMED_MD = "copilot/skills/openartifacts-publish/SKILL.md";
+const RENAMED_SCRIPT = "copilot/skills/openartifacts-publish/openartifacts-publish.sh";
 
 describe("seedBuiltinSkills", () => {
   describe("seedBuiltinSkills()", () => {
@@ -96,6 +118,49 @@ describe("seedBuiltinSkills", () => {
       expect(seeded).toEqual(["copilot-web-search"]);
       expect(fs.files.get(MD)).toContain("body v2");
       expect(fs.files.get(SCRIPT)).toBe("// script v2");
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/394 removes retired support files while preserving user files and enabled agents", async () => {
+      const v1: BuiltinSkill = {
+        ...skill(1),
+        files: [...skill(1).files, { path: "obsolete-rules.md", content: "old guidance" }],
+      };
+      const fs = memFs();
+      await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [v1] });
+      const obsolete = "copilot/skills/copilot-web-search/obsolete-rules.md";
+      expect(fs.files.has(obsolete)).toBe(true);
+      const custom = "copilot/skills/copilot-web-search/themes/custom.md";
+      fs.files.set(custom, "user theme");
+      fs.files.set(MD, fs.files.get(MD)!.replace("claude, codex, opencode", "codex"));
+
+      await seedBuiltinSkills({
+        skillsFolderRelPath: FOLDER,
+        fs,
+        skills: [{ ...skill(2), retiredFiles: ["obsolete-rules.md", "already-removed.md"] }],
+      });
+      expect(fs.files.has(obsolete)).toBe(false);
+      expect(fs.files.get(custom)).toBe("user theme");
+      expect(fs.files.get(SCRIPT)).toBe("// script v2");
+      expect(fs.files.get(MD)).toContain('copilot-builtin-version: "2"');
+      expect(fs.files.get(MD)).toContain("copilot-enabled-agents: codex");
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/394 preserves the old skill and user directory when a retired path is a directory", async () => {
+      const fs = memFs();
+      await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [skill(1)] });
+      const retiredPath = "copilot/skills/copilot-web-search/retired.md";
+      fs.dirs.add(retiredPath);
+      fs.files.set(`${retiredPath}/user.md`, "user reference");
+
+      const result = await seedBuiltinSkills({
+        skillsFolderRelPath: FOLDER,
+        fs,
+        skills: [{ ...skill(2), retiredFiles: ["retired.md"] }],
+      });
+
+      expect(result.seeded).toEqual([]);
+      expect(fs.files.get(`${retiredPath}/user.md`)).toBe("user reference");
+      expect(fs.files.get(MD)).toContain('copilot-builtin-version: "1"');
     });
 
     it("re-seeds when the SKILL.md was deleted", async () => {
@@ -172,6 +237,138 @@ describe("seedBuiltinSkills", () => {
       expect(fs.files.get("copilot/skills/copilot-web-search/references/EXAMPLES.md")).toBe(
         "# Examples"
       );
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/337 carries the managed legacy enable choices over and removes the legacy folder after seeding", async () => {
+      const legacyMd = managedSymposiumSkillMd().replace(
+        "copilot-enabled-agents: claude, codex, opencode",
+        "copilot-enabled-agents: codex"
+      );
+      const fs = memFs({ [LEGACY_RENAMED_MD]: legacyMd });
+      const operations: string[] = [];
+      const write = fs.write;
+      fs.write = async (path, content) => {
+        await write(path, content);
+        operations.push(`write:${path}`);
+      };
+      const rmRecursive = fs.rmRecursive;
+      fs.rmRecursive = async (path) => {
+        operations.push(`remove:${path}`);
+        await rmRecursive(path);
+      };
+
+      await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [openArtifactsSkill()] });
+
+      expect(fs.files.get(RENAMED_MD)).toContain("copilot-enabled-agents: codex\n");
+      expect(fs.files.get(RENAMED_SCRIPT)).toBe("// script v1");
+      expect(fs.files.has(LEGACY_RENAMED_MD)).toBe(false);
+      expect(operations.indexOf(`write:${RENAMED_MD}`)).toBeLessThan(
+        operations.indexOf("remove:copilot/skills/symposium-publish")
+      );
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/337 keeps the managed legacy folder when the renamed skill write is partial", async () => {
+      const legacyMd = managedSymposiumSkillMd();
+      const fs = memFs({ [LEGACY_RENAMED_MD]: legacyMd });
+      const write = fs.write;
+      fs.write = async (path, content) => {
+        if (path === RENAMED_MD) throw new Error("disk full");
+        await write(path, content);
+      };
+
+      await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [openArtifactsSkill()] });
+
+      expect(fs.files.get(LEGACY_RENAMED_MD)).toBe(legacyMd);
+      expect(fs.files.has(RENAMED_MD)).toBe(false);
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/337 leaves a renamed target and its managed predecessor untouched when the target cannot be read", async () => {
+      const renamedUserMd = "---\nname: openartifacts-publish\n---\ncustom renamed skill";
+      const legacyMd = managedSymposiumSkillMd();
+      const fs = memFs({ [RENAMED_MD]: renamedUserMd, [LEGACY_RENAMED_MD]: legacyMd });
+      const read = fs.read;
+      fs.read = async (path) => {
+        if (path === RENAMED_MD) throw new Error("temporarily unreadable");
+        return read(path);
+      };
+      fs.write = jest.fn(fs.write);
+      fs.rmRecursive = jest.fn(fs.rmRecursive);
+
+      await expect(
+        seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [openArtifactsSkill()] })
+      ).resolves.toEqual({ seeded: [] });
+
+      expect(fs.files.get(RENAMED_MD)).toBe(renamedUserMd);
+      expect(fs.files.get(LEGACY_RENAMED_MD)).toBe(legacyMd);
+      expect(fs.write).not.toHaveBeenCalled();
+      expect(fs.rmRecursive).not.toHaveBeenCalled();
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/337 keeps the managed predecessor and its enable choices when it cannot be read", async () => {
+      const legacyMd = managedSymposiumSkillMd().replace(
+        "copilot-enabled-agents: claude, codex, opencode",
+        "copilot-enabled-agents: codex"
+      );
+      const fs = memFs({ [LEGACY_RENAMED_MD]: legacyMd });
+      const read = fs.read;
+      fs.read = async (path) => {
+        if (path === LEGACY_RENAMED_MD) throw new Error("temporarily unreadable");
+        return read(path);
+      };
+      fs.write = jest.fn(fs.write);
+      fs.rmRecursive = jest.fn(fs.rmRecursive);
+
+      await expect(
+        seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [openArtifactsSkill()] })
+      ).resolves.toEqual({ seeded: [] });
+
+      expect(fs.files.get(LEGACY_RENAMED_MD)).toBe(legacyMd);
+      expect(fs.files.has(RENAMED_MD)).toBe(false);
+      expect(fs.write).not.toHaveBeenCalled();
+      expect(fs.rmRecursive).not.toHaveBeenCalled();
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/337 retries legacy cleanup after the renamed skill is already current", async () => {
+      const legacyMd = managedSymposiumSkillMd();
+      const current = openArtifactsSkill();
+      const fs = memFs({
+        [LEGACY_RENAMED_MD]: legacyMd,
+        [RENAMED_MD]: current.skillMd,
+        [RENAMED_SCRIPT]: current.files[0].content,
+      });
+
+      await expect(
+        seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [current] })
+      ).resolves.toEqual({ seeded: [] });
+
+      expect(fs.files.has(LEGACY_RENAMED_MD)).toBe(false);
+      expect(fs.files.get(RENAMED_MD)).toBe(current.skillMd);
+      expect(fs.files.get(RENAMED_SCRIPT)).toBe(current.files[0].content);
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/337 leaves an unmarked legacy collision while seeding the renamed skill", async () => {
+      const legacyUserMd = "---\nname: symposium-publish\n---\ncustom legacy skill";
+      const fs = memFs({ [LEGACY_RENAMED_MD]: legacyUserMd });
+
+      await seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [openArtifactsSkill()] });
+
+      expect(fs.files.get(LEGACY_RENAMED_MD)).toBe(legacyUserMd);
+      expect(fs.files.get(RENAMED_MD)).toContain("name: openartifacts-publish");
+    });
+
+    it("https://github.com/Brevilabs/obsidian-copilot-private/issues/337 keeps a user-authored renamed skill and retires the managed legacy folder beside it", async () => {
+      const renamedUserMd = "---\nname: openartifacts-publish\n---\ncustom renamed skill";
+      const fs = memFs({
+        [RENAMED_MD]: renamedUserMd,
+        [LEGACY_RENAMED_MD]: managedSymposiumSkillMd(),
+      });
+
+      await expect(
+        seedBuiltinSkills({ skillsFolderRelPath: FOLDER, fs, skills: [openArtifactsSkill()] })
+      ).resolves.toEqual({ seeded: [] });
+
+      expect(fs.files.get(RENAMED_MD)).toBe(renamedUserMd);
+      expect(fs.files.has(LEGACY_RENAMED_MD)).toBe(false);
     });
   });
 
