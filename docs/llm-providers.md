@@ -72,6 +72,13 @@ curate each list independently:
 - **Basic → Agents → opencode** controls the models opencode can use and its
   **Default model**.
 
+For the official DeepSeek provider, use `deepseek-flash` for new setups. An
+existing `deepseek-v4-flash` model or saved selection continues through the
+current Flash route, while `deepseek-v4-pro` is stopped instead of silently
+falling back to Flash. This compatibility rule applies only to DeepSeek's
+official endpoint; a custom DeepSeek-compatible endpoint keeps its own provider
+and model names.
+
 For enabled, routable models, Copilot passes the saved key and any custom
 endpoint override to opencode when it starts. A model that opencode cannot route
 is left out of the opencode list, but may still work in Quick Chat.

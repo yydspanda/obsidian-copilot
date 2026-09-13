@@ -65,12 +65,12 @@ Schema 必须是非空、严格 UTF-8 的普通文件，最多 1,000,000 bytes�
 
 ### 3. 创建拥有 Bundle 的 Project
 
-1. 打开 Copilot Chat。
-2. 在顶部模式选择器中选择 **Projects (alpha)**。
-3. 点击带 `+` 图标的 **Create**；随后打开的弹窗标题是 **New Project**。
-4. 输入名称，例如“Personal Knowledge”。
-5. 在 **Default Model** 中选择 `deepseek-v4-flash` 或 `deepseek-v4-pro`。
-6. 保存 Project。
+1. 从功能区打开 **Agent Chat**，或在命令面板运行 **Open Copilot Agent Chat Window**。
+2. 在 Agent Chat 首页打开 **Projects**，选择 **New project**。
+3. 输入名称，例如“Personal Knowledge”，然后点击 **Create**。
+4. 创建后选择 **Leave project** 返回首页；在 Project 列表中使用 **Reveal in vault**，打开该 Project 文件夹中的 `project.md`，并切换到源码模式。
+5. 把已有 frontmatter 中的 `copilot-project-model-key` 值改为 `deepseek-flash|deepseek`；只有该字段不存在时才加入，不要保留两个同名字段。已有 Project 如果仍保存 `deepseek-v4-flash|deepseek`，可以继续使用，不必手工改写。
+6. 保存 `project.md`。
 
 默认情况下，Project 配置位于：
 
@@ -148,15 +148,15 @@ Sources、Wiki 和 Schema 的精确拼写也是持久配置的一部分。不要
 
 ## 如果结果不同
 
-| 提示或现象                                               | 常见原因                                                     | 处理方式                                                                   |
-| -------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `No project has a Knowledge Bundle configuration...`     | Bundle 块不在被 Projects 识别的 `project.md`，或字段名拼错   | 确认配置位于当前 Projects 根目录下一层 Project 的 `project.md` frontmatter |
-| `A project Knowledge Bundle configuration is invalid...` | 多余字段、路径不规范、目录重叠、Schema 位于 Wiki、大小写冲突 | 对照本页六字段示例和路径规则逐项修正                                       |
-| 多 Bundle 或没有选中的 Bundle                            | 多个 Project 都含 Bundle 配置                                | 当前只保留一个 Bundle 块                                                   |
-| 模型配置不可用                                           | Project 没选 DeepSeek V4、模型未启用、密钥缺失或参数不受支持 | 回到 [安装、升级与 DeepSeek V4](installation-and-model.md) 检查            |
-| Schema 无法读取                                          | `schemaRef` 拼写与实际文件不同，或它指向文件夹               | 创建/移动正确文件，并保持大小写完全一致                                    |
-| Apply 提示父目录不存在                                   | Schema 要求了尚未创建的嵌套 Wiki 路径                        | 先创建目标父文件夹，再从 Review 重试合格操作                               |
-| Studio 要求 Recovery                                     | 上次有持久事务或队列状态尚未收敛                             | 使用 Recovery 提供的有限操作，不要手改运行文件                             |
+| 提示或现象                                               | 常见原因                                                                                             | 处理方式                                                                   |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `No project has a Knowledge Bundle configuration...`     | Bundle 块不在被 Projects 识别的 `project.md`，或字段名拼错                                           | 确认配置位于当前 Projects 根目录下一层 Project 的 `project.md` frontmatter |
+| `A project Knowledge Bundle configuration is invalid...` | 多余字段、路径不规范、目录重叠、Schema 位于 Wiki、大小写冲突                                         | 对照本页六字段示例和路径规则逐项修正                                       |
+| 多 Bundle 或没有选中的 Bundle                            | 多个 Project 都含 Bundle 配置                                                                        | 当前只保留一个 Bundle 块                                                   |
+| 模型配置不可用                                           | Project 未绑定受支持的 Flash、绑定了不再支持的 `deepseek-v4-pro`、模型未启用、密钥缺失或参数不受支持 | 回到 [安装、升级与 DeepSeek V4](installation-and-model.md) 检查            |
+| Schema 无法读取                                          | `schemaRef` 拼写与实际文件不同，或它指向文件夹                                                       | 创建/移动正确文件，并保持大小写完全一致                                    |
+| Apply 提示父目录不存在                                   | Schema 要求了尚未创建的嵌套 Wiki 路径                                                                | 先创建目标父文件夹，再从 Review 重试合格操作                               |
+| Studio 要求 Recovery                                     | 上次有持久事务或队列状态尚未收敛                                                                     | 使用 Recovery 提供的有限操作，不要手改运行文件                             |
 
 修改 Bundle 后仍无变化时，先确认 `project.md` 已保存，再关闭并重新打开 Studio。修改 Project/Bundle 或模型设置会使插件自动重建运行代；只修改 `schemaRef` 指向文件的内容则不会被 watcher 直接观察。在没有 `Applying`/`Finalizing` 时禁用再启用 Copilot，或完整重启 Obsidian，让新 Schema 字节进入下一代 fingerprint。完整排查见 [故障排查](troubleshooting.md)。
 

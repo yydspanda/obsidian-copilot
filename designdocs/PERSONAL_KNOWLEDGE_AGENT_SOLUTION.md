@@ -513,11 +513,11 @@ G.2k 将 watcher 的 fingerprint 来源收紧为 opaque `KnowledgeSourceWatchPla
 
 G.2n 在用户明确授权的独立提交中加入 Knowledge 专用 prompt 与首个 concrete provider route。Prompt Encoder 是纯确定性 leaf：analysis/generation 各固定两条消息，静态 system policy 声明 JSON shape、最小示例和数据/指令信任层级，完整 Compiler request 与 outputLanguage/OKF/citation/reasoning/verbosity behavior 只进入 canonical escaped `INPUT_JSON`。相同 request/prompt-visible behavior 产生逐字相同 prompt 与覆盖实际 system/user 消息的 domain-separated digest；这不承诺远端模型输出确定。实际两阶段 prompt policy/limits 的 identity 与 provider-route identity 进入 pipeline fingerprint，DeepSeek route 另与完整 profile digest 绑定。schema.content 仅可作为受 system 权限边界约束的 Wiki 组织、术语、内容和格式 policy；它不能改写输出合约、身份、路径、证据或权限。schema、evidence excerpt、context page、current target content 与 outputLanguage 即使含 prompt injection，也不进入 system message。模型仍无 tool、Vault、网络或写能力，最终 evidence/path/target/digest/citation/ChangeSet 权限继续由现有 Core 决定性复验。
 
-DeepSeek route 不复用 ChatModelManager、LangChain、`safeFetch` 或 `requestUrl`。首期固定官方 `https://api.deepseek.com/chat/completions` 与当前 `deepseek-v4-flash` / `deepseek-v4-pro` capability allowlist；custom endpoint、旧 alias 和未显式映射的 generic model field 都 unavailable。每个已授权 stage 只调用一次注入的 native-fetch port，透传 exact Queue-owned `AbortSignal`，强制 `stream: false`、JSON Object、exact model/max_tokens、无 tool/fallback/内部 retry/repair。JSON Object 不是 provider-native JSON Schema，strict Zod/Core parser 仍是输出 authority。HTTP response 从首字节（含 keep-alive 空白）流式计入 8 MiB cap，之后才 fatal UTF-8 和 JSON decode；status/content-type/redirect、单 choice、exact response model、`finish_reason=stop`、assistant content 与 completion usage 全部复验。credential 只保存在 module-private closure 与 Authorization header，不进入 descriptor/profile/prompt/error/cause/log/durable state。route 额外绑定完整 pipeline profile digest，避免两个 model configuration 相同但输出语言、compiler/parser 或 citation contract 不同的 workflow 互换。Route 模块本身仍不读取 settings/keychain 或选择 renderer lifecycle；这些 production edge 职责只由下述独立 preflight composer 承担。
+DeepSeek route 不复用 ChatModelManager、LangChain、`safeFetch` 或 `requestUrl`。首期固定官方 `https://api.deepseek.com/chat/completions` 与 canonical wire identity `deepseek-flash`。已持久化的 `deepseek-v4-flash` 是唯一兼容 alias：它在 profile 绑定和请求发送前规范化为同一 canonical identity；`deepseek-v4-pro` 在 provider I/O 前拒绝，避免服务端 alias 变化将它静默降级为 Flash。Knowledge 仍不接受 custom endpoint 或未显式映射的 generic model field；普通 Chat 的 custom DeepSeek-compatible endpoint 保留自己的模型命名空间，不应用官方 route 的规范化规则。每个已授权 stage 只调用一次注入的 native-fetch port，透传 exact Queue-owned `AbortSignal`，强制 `stream: false`、JSON Object、exact canonical model/max_tokens、无 tool/fallback/内部 retry/repair。JSON Object 不是 provider-native JSON Schema，strict Zod/Core parser 仍是输出 authority。HTTP response 从首字节（含 keep-alive 空白）流式计入 8 MiB cap，之后才 fatal UTF-8 和 JSON decode；status/content-type/redirect、单 choice、exact canonical response model、`finish_reason=stop`、assistant content 与 completion usage 全部复验。credential 只保存在 module-private closure 与 Authorization header，不进入 descriptor/profile/prompt/error/cause/log/durable state。route 额外绑定完整 pipeline profile digest，避免两个 model configuration 相同但输出语言、compiler/parser 或 citation contract 不同的 workflow 互换。Route 模块本身仍不读取 settings/keychain 或选择 renderer lifecycle；这些 production edge 职责只由下述独立 preflight composer 承担。
 
-G.2o 把这条隔离 transport 接到一个仍然零网络的 production preflight，而不是提前接 worker。Direct DeepSeek catalog 只把 V4 Flash/Pro 作为 current identity；旧 Chat/Reasoner 记录会被禁用并标为 retired，default、Quick Ask、Command、Project 与内部温度覆盖路径都不得把旧引用静默切换到别的模型或 provider。Flash 使用显式 `thinking: disabled` 后才允许 temperature/top-p；Pro 默认 High thinking，配置中保留可审计的 `temperature=0` 占位，但 wire 省略 temperature/top-p。官方当前只把 High/Max 定义为有效 effort，兼容输入 Low/Medium 都会映射为 High，因此 UI 和 Knowledge profile 拒绝这两个伪精度档位，XHigh 则显式映射为 Max。Frequency Penalty 对 direct DeepSeek 永久拒绝；Knowledge 还拒绝 custom endpoint、`numCtx`、Responses API、prompt caching 与 routing 等未纳入 contract 的字段。
+G.2o 把这条隔离 transport 接到一个仍然零网络的 production preflight，而不是提前接 worker。Direct DeepSeek catalog 只把 `deepseek-flash` 作为 current identity；兼容层仅允许已持久化的 `deepseek-v4-flash` 指向同一 canonical 模型。旧 Chat/Reasoner 记录继续禁用并标为 retired；`deepseek-v4-pro` 在 provider I/O 前拒绝。default、Quick Ask、Command、Project 与内部温度覆盖路径都不得把这些不受支持的引用静默切换到别的模型或 provider。当前 Knowledge 集成有意采用比 provider API 更窄的 effort 与 sampling 契约：插件 Minimal 用显式 `thinking: disabled` 关闭思考并允许已验证的 temperature/top-p；High/XHigh 开启思考并分别向 wire 发送 provider `high`/`max`，同时保留可审计的 `temperature=0` 占位、拒绝配置 top-p，并在 wire 省略两个 sampling 字段；插件 Low/Medium 直接拒绝。DeepSeek provider 本身的规范 effort 是 `none`、`low`、`high`、`max`，并把兼容输入 `minimal` 映射为 `low`、`medium`/`xhigh` 映射为 `high`。provider 的 temperature 在 thinking mode 不生效；top-p 在 thinking mode 生效但小于 `0.95` 时提升到 `0.95`，在 non-thinking mode 固定为 `1.0` 并忽略传入值。因此上述拒绝和 wire 省略是本地 fail-closed 契约，不是 provider 无法接收这些字段。Frequency Penalty 也由当前 direct DeepSeek 集成契约永久拒绝；Knowledge 还拒绝 custom endpoint、`numCtx`、Responses API、prompt caching 与 routing 等未纳入 contract 的字段。
 
-插件 Barrier 在 Runtime、Projects 与 aggregate Bundle strict validation 之后，用同一次 Projects snapshot、已经由 Keychain 层 hydrate 的 settings、reviewed compiler/UTF-8 parser/prompt/route profile 和插件主 renderer 启动时捕获的 native fetch 构造 `KnowledgeProductionPreflightComposer`。凭据选择只读取 exact selected model 的 own data `apiKey`，仅在 absent/empty 时读取 hydrated `deepseekApiKey`；accessor、重复模型、旧 identity、unsupported profile 或 route mismatch 都只产生固定脱敏 diagnostic。Preflight 仅构造 private route 并返回 bundle count，不调用 invoke/fetch，不暴露 route、Bundle id 或 credential。settings/Project snapshot 变化和插件 unload 会在首个异步边界前同步 close 当前 generation。成功仍由外层 Barrier 发布 `workflow_adapters_unavailable`，不会运行 startup Gate/release、Queue、watcher、Compiler、Review 或 Wiki mutation。
+插件 Barrier 在 Runtime、Projects 与 aggregate Bundle strict validation 之后，用同一次 Projects snapshot、已经由 Keychain 层 hydrate 的 settings、reviewed compiler/UTF-8 parser/prompt/route profile 和插件主 renderer 启动时捕获的 native fetch 构造 `KnowledgeProductionPreflightComposer`。凭据选择只读取 exact selected model 的 own data `apiKey`，仅在 absent/empty 时读取 hydrated `deepseekApiKey`；accessor、重复模型、unsupported/retired identity、unsupported profile 或 route mismatch 都只产生固定脱敏 diagnostic。Preflight 仅构造 private route 并返回 bundle count，不调用 invoke/fetch，不暴露 route、Bundle id 或 credential。settings/Project snapshot 变化和插件 unload 会在首个异步边界前同步 close 当前 generation。成功仍由外层 Barrier 发布 `workflow_adapters_unavailable`，不会运行 startup Gate/release、Queue、watcher、Compiler、Review 或 Wiki mutation。
 
 Transport failure 也在 G.2o 中改为显式、不可由普通错误对象伪造的窄协议。Profile、DeepSeek、Adapter 与 Compiler 各自用 module-private token/WeakMap brand 记录固定 code，跨层不保留 URL、header、body、prompt、credential 或原始 cause；Compiler/Queue 使用静态 policy 而不是接受 provider 提供的 retry boolean。Compiler error 和投影后的 Queue executor error 都绑定同一个 Queue-owned `AbortSignal`，Queue 在终结 attempt 时再次按 identity 复验，跨 attempt 重放只能落入通用终止错误。只有真实 429 可投影为 durable `rate_limit` pause；500/503 与 network failure 可由 Queue 建立新的 bounded attempt；鉴权、余额、request、response 与未知 HTTP 终止。任一 transport stage 仍只有一次 POST，`AbortSignal` 已取消时 cancellation 优先，transport 内永不 retry。
 
@@ -953,30 +953,30 @@ MVP 不引入研究、写作、整理等多个子 Agent。只有在以下条件�
 
 ## 18. 当前架构决策
 
-| 决策                                              | 理由                                                                             |
-| ------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Vault Markdown 是知识事实源                       | 用户可读、可编辑、可迁移，不依赖模型或服务商                                     |
-| Windows Obsidian Desktop 是唯一首期平台           | 产品、文件系统、性能、UI 和测试只对 Windows 做承诺，其他平台不占用当前开发范围   |
-| Raw Sources 与 LLM-maintained Wiki 分层           | 既保留来源真实性，又获得持续综合和链接的复利价值                                 |
-| Chat + 全页 Knowledge Studio                      | Chat 适合即时助手，摄入、审核、队列、维护和图谱需要完整工作区                    |
-| 指定 Wiki Root 采用 OKF v0.1                      | 提供最小、开放、可被其他 Agent 消费的文件契约                                    |
-| 普通 Vault 读取保持宽容                           | 不用标准化成本阻断现有 Obsidian 工作流                                           |
-| `index.md` 优先于全量扫描                         | 支持 Agent 渐进发现并降低 token 与检索成本                                       |
-| 多文件 Wiki 更新使用 ChangeSet                    | 让跨页面维护可预览、校验，并通过 journal 获得可恢复事务语义                      |
-| `PromptContextEnvelope` 是 LangChain 上下文契约   | 已覆盖所有当前 Chain Runner，并提供层级和 hash                                   |
-| Knowledge Prompt 使用独立确定性契约               | 编译 request/profile 可复现，不让 Raw/Wiki 文本进入 system instruction           |
-| 首个隔离 concrete provider route 为 DeepSeek 边界 | 官方 HTTPS/V4 allowlist、单次 non-streaming JSON Object、无 SDK fallback/retry   |
-| Search v3 是基础检索底座                          | 当前已有词法、语义和图信号；只叠加 Wiki 渐进发现与图扩展，不再建第二套搜索       |
-| Source hash 与 pipeline fingerprint 共同决定幂等  | 来源未变不代表解析、schema、模型或输出规则未变                                   |
-| 持久队列恢复后等待用户继续                        | 防止插件重启后意外调用模型和消耗额度                                             |
-| 用户显式附件高于自动检索                          | 尊重当前任务意图并降低上下文噪声                                                 |
-| 模型输出先是 Synthesis 或 Candidate               | 防止流畅回答直接污染长期知识                                                     |
-| 写入默认 preview/diff                             | 个人知识库最常见的高风险是误写而非网络攻击                                       |
-| LangChain 与 ACP 使用平行 Runtime                 | 两者的上下文、工具和会话所有权不同                                               |
-| Graphiti 仅是可选外部投影                         | 时态语义值得预留，但 Markdown/Raw 必须保持 canonical，且首个闭环不应依赖额外服务 |
-| 外部实现按 Copy / Port / Reference 管理           | 能快速吸收好代码，同时保留来源、测试、许可证和平台边界                           |
-| 暂不引入子 Agent                                  | 当前更需要预算、引用、权限和持久化正确性                                         |
-| 以 Golden Flow 驱动架构                           | 先完成一个来源到可复用知识的完整体验，再逐层增加工作台、图谱与自治               |
+| 决策                                              | 理由                                                                              |
+| ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Vault Markdown 是知识事实源                       | 用户可读、可编辑、可迁移，不依赖模型或服务商                                      |
+| Windows Obsidian Desktop 是唯一首期平台           | 产品、文件系统、性能、UI 和测试只对 Windows 做承诺，其他平台不占用当前开发范围    |
+| Raw Sources 与 LLM-maintained Wiki 分层           | 既保留来源真实性，又获得持续综合和链接的复利价值                                  |
+| Chat + 全页 Knowledge Studio                      | Chat 适合即时助手，摄入、审核、队列、维护和图谱需要完整工作区                     |
+| 指定 Wiki Root 采用 OKF v0.1                      | 提供最小、开放、可被其他 Agent 消费的文件契约                                     |
+| 普通 Vault 读取保持宽容                           | 不用标准化成本阻断现有 Obsidian 工作流                                            |
+| `index.md` 优先于全量扫描                         | 支持 Agent 渐进发现并降低 token 与检索成本                                        |
+| 多文件 Wiki 更新使用 ChangeSet                    | 让跨页面维护可预览、校验，并通过 journal 获得可恢复事务语义                       |
+| `PromptContextEnvelope` 是 LangChain 上下文契约   | 已覆盖所有当前 Chain Runner，并提供层级和 hash                                    |
+| Knowledge Prompt 使用独立确定性契约               | 编译 request/profile 可复现，不让 Raw/Wiki 文本进入 system instruction            |
+| 首个隔离 concrete provider route 为 DeepSeek 边界 | 官方 HTTPS/canonical Flash、单次 non-streaming JSON Object、无 SDK fallback/retry |
+| Search v3 是基础检索底座                          | 当前已有词法、语义和图信号；只叠加 Wiki 渐进发现与图扩展，不再建第二套搜索        |
+| Source hash 与 pipeline fingerprint 共同决定幂等  | 来源未变不代表解析、schema、模型或输出规则未变                                    |
+| 持久队列恢复后等待用户继续                        | 防止插件重启后意外调用模型和消耗额度                                              |
+| 用户显式附件高于自动检索                          | 尊重当前任务意图并降低上下文噪声                                                  |
+| 模型输出先是 Synthesis 或 Candidate               | 防止流畅回答直接污染长期知识                                                      |
+| 写入默认 preview/diff                             | 个人知识库最常见的高风险是误写而非网络攻击                                        |
+| LangChain 与 ACP 使用平行 Runtime                 | 两者的上下文、工具和会话所有权不同                                                |
+| Graphiti 仅是可选外部投影                         | 时态语义值得预留，但 Markdown/Raw 必须保持 canonical，且首个闭环不应依赖额外服务  |
+| 外部实现按 Copy / Port / Reference 管理           | 能快速吸收好代码，同时保留来源、测试、许可证和平台边界                            |
+| 暂不引入子 Agent                                  | 当前更需要预算、引用、权限和持久化正确性                                          |
+| 以 Golden Flow 驱动架构                           | 先完成一个来源到可复用知识的完整体验，再逐层增加工作台、图谱与自治                |
 
 ---
 

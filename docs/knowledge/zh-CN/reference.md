@@ -82,16 +82,18 @@
 
 ## Recovery 状态
 
-| 状态                    | 含义                           | 可能动作           |
-| ----------------------- | ------------------------------ | ------------------ |
-| Accepted, not started   | Review 已接受，Apply 尚未开始  | Continue           |
-| Decision required       | 有 claim、无 journal，需要决定 | Continue / Abandon |
-| Transaction active      | 持久事务正在进行               | Check again        |
-| Apply blocked           | 当前不允许自动写               | Check again        |
-| Commit finalizing       | Wiki 已提交，确认仍在完成      | Check again        |
-| Global transaction      | 另一个 Vault 事务占用写入槽    | Check again        |
-| Queue recovery required | Queue 因事务恢复暂停           | Check again        |
-| Queue commit pending    | 等待已提交事务确认             | Check again        |
+| 状态                    | 含义                          | 可能动作                                     |
+| ----------------------- | ----------------------------- | -------------------------------------------- |
+| Accepted, not started   | Review 已接受，Apply 尚未开始 | Continue                                     |
+| Decision required       | 需要明确决定怎样结束 Apply    | Continue / Abandon；若提案已过期则仅 Abandon |
+| Transaction active      | 持久事务正在进行              | Check again                                  |
+| Apply blocked           | 当前不允许自动写              | Check again                                  |
+| Commit finalizing       | Wiki 已提交，确认仍在完成     | Check again                                  |
+| Global transaction      | 另一个 Vault 事务占用写入槽   | Check again                                  |
+| Queue recovery required | Queue 因事务恢复暂停          | Check again                                  |
+| Queue commit pending    | 等待已提交事务确认            | Check again                                  |
+
+“提案已过期”表示提案生成后 Knowledge 状态发生了变化。本次 Apply 尚未写入 Wiki 文件；请先 `Abandon`，再重新生成并 Review 新提案。
 
 ### Forward revision 状态与恢复规则
 

@@ -45,7 +45,7 @@ Git 通常不覆盖插件所有私有状态。需要真正可恢复的快照时�
 3. 备份整个 Vault，包括隐藏的 `.obsidian` 配置目录。
 4. 验证备份能在另一个位置正常读取。
 
-旧安装若仍使用标准 API Key 存储，`.obsidian/plugins/copilot/data.json` 可能包含明文密钥。应该先迁移到 Obsidian Keychain；无论是否迁移，完整 Vault 备份都应加密并限制访问。
+旧安装若仍在 `.obsidian/plugins/copilot/data.json` 中保存 API Key，新版启动时会先创建凭证备份；只有备份成功后才从 `data.json` 移除这些密钥，随后需要在 **BYOK** 中重新输入。**Advanced → API Key Storage** 只显示 Keychain 状态并提供 **Delete All Keys**，没有迁移按钮。确认重新输入的 Key 可用后，应安全删除启动提示指出的凭证备份；在此之前，凭证备份和完整 Vault 备份都应加密并限制访问。
 
 **禁止**只复制或回滚插件的 Runtime、Manifest、事务 journal 中某一个文件。它们共同描述一次持久事务，混合不同时间点的文件可能让系统安全阻断。
 
@@ -90,11 +90,11 @@ Forward 恢复执行器始终先重新读取当前 Wiki 的精确字节，再决
 
 恢复（`Recovery`）页只显示当前状态允许的按钮。没有按钮不是界面损坏，而是系统拒绝猜测一次危险写入应该怎样结束。
 
-| 动作          | 何时出现                                        | 含义                       | 使用原则                     |
-| ------------- | ----------------------------------------------- | -------------------------- | ---------------------------- |
-| `Continue`    | 已接受但未开始，或无 journal 且可安全决定的状态 | 重新核对后继续原来的 Apply | 只有你仍希望应用原提案时使用 |
-| `Abandon`     | 尚未开始文件写入、且系统明确允许放弃            | 放弃该 Apply 决定          | 确认不需要该提案后使用       |
-| `Check again` | 活跃、阻断、finalizing 或全局事务状态           | 重新读取持久状态           | 它不强制继续，也不回滚文件   |
+| 动作          | 何时出现                                                | 含义                       | 使用原则                               |
+| ------------- | ------------------------------------------------------- | -------------------------- | -------------------------------------- |
+| `Continue`    | 已接受但未开始，或无 journal 且提案仍对应当前 Knowledge | 重新核对后继续原来的 Apply | 仍希望应用当前提案时使用               |
+| `Abandon`     | 尚未开始文件写入、且系统明确允许放弃                    | 放弃该 Apply 决定          | 页面标明提案已过期，或你不再需要时使用 |
+| `Check again` | 活跃、阻断、finalizing 或全局事务状态                   | 重新读取持久状态           | 它不强制继续，也不回滚文件             |
 
 ### Accepted, not started
 
@@ -102,7 +102,9 @@ Review 已接受，但 Apply claim 尚未开始。先确认目标 Wiki 没有被
 
 ### Decision required
 
-存在 Apply claim，但没有可继续执行的 transaction journal。你可以在系统允许时选择 `Continue` 或 `Abandon`。不要同时手工修改相关 Wiki 文件。
+这个状态通常表示存在 Apply claim，但没有可继续执行的 transaction journal；写入前已过期的提案也会进入这个状态。你可以在系统允许时选择页面提供的 `Continue` 或 `Abandon`。不要同时手工修改相关 Wiki 文件。
+
+如果提案生成后 Knowledge 状态发生变化，原提案已经不再对应当前状态，`Continue` 会不可用。这个状态证明本次 Apply 尚未写入任何 Wiki 文件；请明确选择 `Abandon`，待 Recovery 清除后，让来源重新生成提案，再重新 Review。这个说明只适用于 Recovery 判定的“写入前已过期”状态；如果 transaction 已经 active、blocked 或 finalizing，仍应按页面提供的动作处理，不能据此假定 `Abandon` 安全。
 
 ### Transaction active / Commit finalizing
 

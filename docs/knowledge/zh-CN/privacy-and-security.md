@@ -8,20 +8,20 @@
 
 ## 数据流概览
 
-| 数据或操作                                   | 默认位置                                                               | 是否可能发送给 DeepSeek                                                                    |
-| -------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| 外部文件夹枚举和复制                         | 本机                                                                   | 复制本身不会                                                                               |
-| 外部绝对路径                                 | 只用于系统选择过程，不作为 Knowledge 来源身份持久化                    | 不会作为导入元数据发送                                                                     |
-| Bundle 与 Vault 相对路径元数据               | 本机配置/持久状态                                                      | 编译时会发送 Bundle ID、source/wiki/schema/target 相对路径和必要哈希；它们不是外部绝对路径 |
-| Vault Source 原始内容                        | 本机 Vault                                                             | 编译该 Source 时会发送必要内容                                                             |
-| Schema 内容                                  | 本机 Vault                                                             | 编译时会发送，用于指导组织和输出                                                           |
-| 必要的现有 Wiki 内容                         | 本机 Vault                                                             | 更新关联页面时可能发送                                                                     |
-| PDF 文本提取                                 | 本机 Obsidian/PDF.js                                                   | 提取本身不会；提取出的页面文本可进入编译请求                                               |
-| Query 问题                                   | 内存/当前 Studio                                                       | 有合格证据时会发送给回答路由                                                               |
-| Query 的 Wiki 上下文和合格 `.md` Source 摘录 | 从已验证内容临时构造                                                   | 有合格证据时会发送正文、Wiki 相对页路径、标题路径和内容哈希                                |
-| Chat Knowledge Draft                         | 只把用户最终确认的标题与编辑后正文保存为本地 managed Source            | 点击创建不会；随后编译该 Source 时会发送必要内容                                           |
-| 启动预检、Recovery 核对、未变化跳过          | 本机                                                                   | 不应发送                                                                                   |
-| API Key                                      | 新安装/已迁移：Obsidian Keychain；旧标准存储：可能明文存在 `data.json` | 只作为 HTTPS 请求凭据，不应写入 Review、Runtime 或日志                                     |
+| 数据或操作                                   | 默认位置                                                                 | 是否可能发送给 DeepSeek                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| 外部文件夹枚举和复制                         | 本机                                                                     | 复制本身不会                                                                               |
+| 外部绝对路径                                 | 只用于系统选择过程，不作为 Knowledge 来源身份持久化                      | 不会作为导入元数据发送                                                                     |
+| Bundle 与 Vault 相对路径元数据               | 本机配置/持久状态                                                        | 编译时会发送 Bundle ID、source/wiki/schema/target 相对路径和必要哈希；它们不是外部绝对路径 |
+| Vault Source 原始内容                        | 本机 Vault                                                               | 编译该 Source 时会发送必要内容                                                             |
+| Schema 内容                                  | 本机 Vault                                                               | 编译时会发送，用于指导组织和输出                                                           |
+| 必要的现有 Wiki 内容                         | 本机 Vault                                                               | 更新关联页面时可能发送                                                                     |
+| PDF 文本提取                                 | 本机 Obsidian/PDF.js                                                     | 提取本身不会；提取出的页面文本可进入编译请求                                               |
+| Query 问题                                   | 内存/当前 Studio                                                         | 有合格证据时会发送给回答路由                                                               |
+| Query 的 Wiki 上下文和合格 `.md` Source 摘录 | 从已验证内容临时构造                                                     | 有合格证据时会发送正文、Wiki 相对页路径、标题路径和内容哈希                                |
+| Chat Knowledge Draft                         | 只把用户最终确认的标题与编辑后正文保存为本地 managed Source              | 点击创建不会；随后编译该 Source 时会发送必要内容                                           |
+| 启动预检、Recovery 核对、未变化跳过          | 本机                                                                     | 不应发送                                                                                   |
+| API Key                                      | 新安装：Obsidian Keychain；旧版升级：启动时先备份，再从 `data.json` 移除 | 只作为 HTTPS 请求凭据，不应写入 Review、Runtime 或日志                                     |
 
 ## DeepSeek 会收到什么
 
@@ -56,13 +56,14 @@
 
 ## API Key 规范
 
-- 应该通过 Obsidian 设置配置 DeepSeek Key，并使用 **Advanced → API Key Storage** 迁移到 Obsidian Keychain。旧标准磁盘模式可能把 Key 明文保存在插件 `data.json`。
-- 迁移前的 `data.json`、完整 Vault 备份和任何历史副本都必须按密钥材料加密、限制访问；迁移不会自动擦除你已经复制出去的旧备份。
+- 新安装通过 **BYOK** 配置 DeepSeek Key，并保存在 Obsidian Keychain。旧安装如果仍把 Key 保存在插件 `data.json`，新版启动时会先创建凭证备份；只有备份成功后才从 `data.json` 移除这些密钥。随后必须在 **BYOK** 中重新输入 Key。
+- **Advanced → API Key Storage** 只显示 Keychain 状态，并提供 **Delete All Keys**；它没有迁移或导入按钮。确认 BYOK 中重新输入的 Key 可用后，应安全删除启动提示指出的凭证备份。
+- 凭证备份、移除前的 `data.json`、完整 Vault 备份和任何历史副本都必须按密钥材料加密、限制访问；自动处理不会擦除你已经复制出去的旧副本。
 - 禁止把 Key 写进 Source、Schema、Wiki、Project frontmatter、截图或 Git 仓库。
 - 开发用 `.env.test` 只适合本地测试，不是日常用户配置入口。
 - 如果 Key 曾出现在聊天、日志、提交或截图中，应立即到提供商控制台吊销并重新生成。
 
-Knowledge 路由只接受当前审核过的 DeepSeek V4 身份和官方 endpoint。旧模型身份或自定义 endpoint 不会被静默替代。
+Knowledge 路由只向官方 endpoint 发送当前审核过的 `deepseek-flash` 身份。已有的 `deepseek-v4-flash` 配置只会规范化为这个同一模型；`deepseek-v4-pro` 会在 provider 请求发出前停止，其他旧身份也不会被静默替代。自定义 DeepSeek-compatible endpoint 只保留在普通 Chat 自己的模型命名空间中，不能用于 Knowledge。
 
 ## 文件夹导入的安全边界
 

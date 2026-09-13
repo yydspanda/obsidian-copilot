@@ -42,7 +42,7 @@ Studio 不能进入主界面时会先显示 `Setup & status`，不要再只凭�
 2. 是否只有一个有效 Bundle；当前不会自动选择多个 Bundle。
 3. Bundle 是否只有一个 sourceRoot。
 4. sourceRoot、wikiRoot 和 schemaRef 是否存在、互不重叠、大小写精确一致。
-5. DeepSeek V4 模型、官方 endpoint 和 API Key 是否可用。
+5. `deepseek-flash`、官方 endpoint 和 API Key 是否可用。
 6. Recovery 页是否有阻断项。
 
 修改设置或 Project 后，系统会自动重建 generation；中间可能短暂显示 `Refreshing Knowledge Studio…`，通常不需要反复重载插件。Setup 顶部的 **Refresh displayed status** 只刷新当前本地状态展示，不会改文件或测试 provider。
@@ -51,7 +51,7 @@ Studio 不能进入主界面时会先显示 `Setup & status`，不要再只凭�
 
 这张卡只管拥有 Bundle 的 Project 所选 Knowledge 模型，不管普通 Chat。按具体提示检查：
 
-1. Project 是否选择了精确、受支持的 DeepSeek V4 模型。
+1. Project 是否选择了 `deepseek-flash`，或已有的兼容 `deepseek-v4-flash` 配置。
 2. 模型是否 Enabled 并允许用于 Project。
 3. endpoint 与模型参数是否仍为当前支持配置。
 4. DeepSeek Key 是否已保存在 Copilot 设置中。
@@ -282,9 +282,10 @@ Query 只搜索已接受、已 Apply、且哈希仍验证通过的 Wiki。未审
 
 ## DeepSeek 问题
 
-- 确认显式选择 `deepseek-v4-flash` 或 `deepseek-v4-pro`。
-- 旧 `deepseek-chat`、`deepseek-reasoner` 不会自动迁移。
+- 新配置应显式选择 `deepseek-flash`；已有的 `deepseek-v4-flash` 配置会在运行时安全映射到这个规范名称，不需要手工改 Project。
+- `deepseek-v4-pro`、`deepseek-chat` 和 `deepseek-reasoner` 不会自动迁移；其中 Pro 会在 provider 请求发出前停止，避免服务端把它静默转到 Flash。
 - 确认使用官方 endpoint、Key 有效且账户有额度。
+- 自定义 DeepSeek-compatible endpoint 可以在普通 Chat 中继续使用自己的模型名，但不能用于 Knowledge；插件不会用官方模型规则改写它的模型名。
 - thinking 模式下不要强行配置不支持的 Temperature、Top P 或 Frequency Penalty 组合。
 - 网络错误后不要连续重复导入；先看 Activity 是否已经持久成功，避免重复费用。
 

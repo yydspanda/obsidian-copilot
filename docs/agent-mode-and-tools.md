@@ -30,6 +30,12 @@ There are three ways to provide model access:
 - **Your API key:** open [**Settings → Copilot → BYOK**](settings.md#byok), add a provider, and configure its models. Copilot stores supported secrets in the Obsidian Keychain.
 - **Local:** add an OpenAI-compatible endpoint from software such as Ollama or LM Studio under **BYOK**.
 
+For DeepSeek's official BYOK provider, opencode carries an existing
+`deepseek-v4-flash` selection forward as `deepseek-flash`. A saved
+`deepseek-v4-pro` selection no longer starts a chat or falls back to another
+model; choose Flash under **Basic → Agents → opencode** instead. Custom
+DeepSeek-compatible endpoints keep their configured model names.
+
 ### Claude
 
 The Claude backend runs through Claude Code on your computer:
