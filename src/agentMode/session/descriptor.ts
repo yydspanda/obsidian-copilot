@@ -328,6 +328,15 @@ export interface BackendDescriptor {
   readonly showModelDescriptions?: boolean;
 
   /**
+   * Optional: normalize a persisted or backend-reported selection before a
+   * session can use it. Return `null` when the selection must fail closed.
+   *
+   * @param selection - Selection recovered from settings or backend session state.
+   * @param settings - Current settings used to classify provider-owned identities.
+   */
+  normalizeSelection?(selection: ModelSelection, settings: CopilotSettings): ModelSelection | null;
+
+  /**
    * Apply a model and resolved effort using this backend's protocol.
    * Used by visible chats and ephemeral fan-out sessions alike.
    *

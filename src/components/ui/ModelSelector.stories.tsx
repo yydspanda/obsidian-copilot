@@ -65,6 +65,14 @@ const OWN_MODELS: ModelSelectorEntry[] = [
   },
 ];
 
+const UNAVAILABLE_SAVED_MODEL: ModelSelectorEntry = {
+  name: "__chat_model_unavailable__",
+  provider: "",
+  displayName: "Model unavailable — choose another",
+  enabled: true,
+  _disabledReason: "Choose another model",
+};
+
 const meta = {
   title: "UI/Model Selector",
   component: ModelSelector,
@@ -99,5 +107,16 @@ export const UnlicensedWithNoModelsOfTheirOwn: StoryObj<ModelSelectorProps> = {
   args: {
     value: "",
     models: LOCKED_COPILOT_ROWS,
+  },
+};
+
+/**
+ * A retained selection that is unsafe to redirect silently. The disabled
+ * current row explains the state while the remaining rows stay selectable.
+ */
+export const UnavailableSavedModel: StoryObj<ModelSelectorProps> = {
+  args: {
+    value: "__chat_model_unavailable__|",
+    models: [UNAVAILABLE_SAVED_MODEL, ...OWN_MODELS],
   },
 };

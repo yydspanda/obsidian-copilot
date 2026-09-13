@@ -16,7 +16,7 @@ import {
 } from "@/knowledge/query/KnowledgeGroundedAnswer";
 import { createKnowledgeGroundedAnswerModelPort } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
 
-const MODEL = "deepseek-v4-pro";
+const MODEL = "deepseek-flash";
 
 /** Creates the exact admitted profile shared with the Compiler preflight. */
 function createProfile(): KnowledgeBundlePipelineProfile {
@@ -129,7 +129,7 @@ function createResponse(
 }
 
 describe("KnowledgeDeepSeekGroundedAnswerRoute", () => {
-  it("performs one non-streaming JSON request and returns strict answer content", async () => {
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 sends canonical Flash in one non-streaming JSON request and returns strict answer content", async () => {
     const request = createRequest();
     const fetchPort = jest.fn(async (_url: string, init: RequestInit) => {
       if (typeof init.body !== "string") throw new Error("Expected encoded request text");

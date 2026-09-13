@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FileSystemAdapter } from "obsidian";
 import type { AgentSession } from "@/agentMode/session/AgentSession";
+import type { ConfiguredModel, Provider } from "@/modelManagement";
 import type {
   BackendProcess,
   BackendState,
@@ -28,6 +29,52 @@ jest.mock("@/logger", () => ({
 
 describe("descriptor", () => {
   describe("OpencodeBackendDescriptor", () => {
+    describe("normalizeSelection()", () => {
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes legacy Flash, preserves current Flash, and rejects retired Pro", () => {
+        const provider: Provider = {
+          providerId: "deepseek-official",
+          providerType: "openai-compatible",
+          displayName: "DeepSeek",
+          baseUrl: "https://api.deepseek.com",
+          origin: { kind: "byok", catalogProviderId: "deepseek" },
+          addedAt: 0,
+        };
+        const configuredModels: ConfiguredModel[] = [
+          {
+            configuredModelId: "legacy",
+            providerId: provider.providerId,
+            info: { id: "deepseek-v4-flash", displayName: "Legacy Flash" },
+            configuredAt: 0,
+          },
+          {
+            configuredModelId: "pro",
+            providerId: provider.providerId,
+            info: { id: "deepseek-v4-pro", displayName: "Pro" },
+            configuredAt: 0,
+          },
+        ];
+        const settings = {
+          providers: { [provider.providerId]: provider },
+          configuredModels,
+        } as unknown as CopilotSettings;
+        const canonical = { baseModelId: "deepseek/deepseek-flash", effort: null };
+
+        expect(
+          OpencodeBackendDescriptor.normalizeSelection?.(
+            { baseModelId: "deepseek/deepseek-v4-flash", effort: null },
+            settings
+          )
+        ).toEqual(canonical);
+        expect(OpencodeBackendDescriptor.normalizeSelection?.(canonical, settings)).toBe(canonical);
+        expect(
+          OpencodeBackendDescriptor.normalizeSelection?.(
+            { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+            settings
+          )
+        ).toBeNull();
+      });
+    });
+
     describe("managedInstall.getState()", () => {
       it("https://github.com/Brevilabs/obsidian-copilot-private/issues/368 maps shared progress without adding a fabricated percentage", async () => {
         const manager = getOpencodeBinaryManager(vaultPlugin(os.tmpdir()));
@@ -325,6 +372,79 @@ describe("descriptor", () => {
           setConfigOption,
         };
       }
+
+      function installDeepSeekSettings(modelIdentity: string): () => void {
+        const previous = getSettings();
+        const provider: Provider = {
+          providerId: "deepseek-official",
+          providerType: "openai-compatible",
+          displayName: "DeepSeek",
+          baseUrl: "https://api.deepseek.com",
+          origin: { kind: "byok", catalogProviderId: "deepseek" },
+          addedAt: 0,
+        };
+        const configuredModel: ConfiguredModel = {
+          configuredModelId: "deepseek-model",
+          providerId: provider.providerId,
+          info: { id: modelIdentity, displayName: modelIdentity },
+          configuredAt: 0,
+        };
+        setSettings({
+          providers: { [provider.providerId]: provider },
+          configuredModels: [configuredModel],
+        });
+        return () =>
+          setSettings({
+            providers: previous.providers,
+            configuredModels: previous.configuredModels,
+          });
+      }
+
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes a persisted Flash default before OpenCode I/O", async () => {
+        const restore = installDeepSeekSettings("deepseek-v4-flash");
+        const { session, applyModelWireId } = makeSession({
+          model: {
+            current: { baseModelId: "openai/gpt-5", effort: null },
+            availableModels: [entryOffering("deepseek/deepseek-flash", [])],
+            apply: { kind: "setModel" },
+          },
+          mode: null,
+        });
+
+        try {
+          await OpencodeBackendDescriptor.applySelection(session, {
+            baseModelId: "deepseek/deepseek-v4-flash",
+            effort: null,
+          });
+          expect(applyModelWireId).toHaveBeenCalledWith("deepseek/deepseek-flash");
+        } finally {
+          restore();
+        }
+      });
+
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks a persisted Pro default before OpenCode I/O", async () => {
+        const restore = installDeepSeekSettings("deepseek-v4-pro");
+        const { session, applyModelWireId } = makeSession({
+          model: {
+            current: { baseModelId: "openai/gpt-5", effort: null },
+            availableModels: [],
+            apply: { kind: "setModel" },
+          },
+          mode: null,
+        });
+
+        try {
+          await expect(
+            OpencodeBackendDescriptor.applySelection(session, {
+              baseModelId: "deepseek/deepseek-v4-pro",
+              effort: null,
+            })
+          ).rejects.toThrow("no longer supported");
+          expect(applyModelWireId).not.toHaveBeenCalled();
+        } finally {
+          restore();
+        }
+      });
 
       it.each(["high", null])(
         "https://github.com/Brevilabs/obsidian-copilot-private/issues/219 resolves missing effort on the active model without resetting it: %s",

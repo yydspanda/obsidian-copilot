@@ -74,7 +74,7 @@ import {
 import { App, EventRef, FileSystemAdapter, TAbstractFile, TFile, Vault } from "obsidian";
 
 const PROJECT_ID = "project-personal";
-const MODEL_NAME = "deepseek-v4-pro";
+const MODEL_NAME = "deepseek-flash";
 const MODEL_KEY = `${MODEL_NAME}|deepseek`;
 const SOURCE_PATH = "Sources/personal/研究.md";
 const SCHEMA_PATH = "Schemas/personal.md";

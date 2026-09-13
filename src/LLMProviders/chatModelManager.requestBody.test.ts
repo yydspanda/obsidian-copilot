@@ -1,5 +1,5 @@
 import type { CustomModel } from "@/aiParams";
-import { ChatModelProviders, DEFAULT_MAX_OUTPUT_TOKENS } from "@/constants";
+import { ChatModelProviders, DEFAULT_MAX_OUTPUT_TOKENS, ReasoningEffort } from "@/constants";
 
 import * as obsidianModule from "obsidian";
 
@@ -110,6 +110,84 @@ async function send(model: CustomModel): Promise<void> {
 describe("chatModelManager", () => {
   describe("ChatModelManager", () => {
     describe("createModelInstanceFromBridged()", () => {
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 sends a persisted DeepSeek V4 Flash alias as the canonical Flash wire identity", async () => {
+        const body = captureRequestBody(OPENAI_RESPONSE);
+
+        await send(
+          wireModel({
+            name: "deepseek-v4-flash",
+            provider: ChatModelProviders.DEEPSEEK,
+            baseUrl: "https://api.deepseek.com",
+          })
+        );
+
+        expect(body()).toMatchObject({
+          model: "deepseek-flash",
+          thinking: { type: "disabled" },
+        });
+        for (const param of RETIRED_SAMPLING_PARAMS) {
+          expect(body()).not.toHaveProperty(param);
+        }
+      });
+
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 sends explicit thinking configuration for canonical Flash", async () => {
+        const body = captureRequestBody(OPENAI_RESPONSE);
+
+        await send(
+          wireModel({
+            name: "deepseek-flash",
+            provider: ChatModelProviders.DEEPSEEK,
+            baseUrl: "https://api.deepseek.com/v1/",
+            reasoningEffort: ReasoningEffort.HIGH,
+          })
+        );
+
+        expect(body()).toMatchObject({
+          model: "deepseek-flash",
+          thinking: { type: "enabled" },
+          reasoning_effort: "high",
+        });
+        for (const param of RETIRED_SAMPLING_PARAMS) {
+          expect(body()).not.toHaveProperty(param);
+        }
+      });
+
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks DeepSeek V4 Pro before provider I/O", async () => {
+        let requestCount = 0;
+        setRequestUrlImpl(() => {
+          requestCount += 1;
+          return Promise.reject(new Error("A blocked model must not reach provider I/O"));
+        });
+
+        await expect(
+          ChatModelManager.getInstance().createModelInstanceFromBridged(
+            wireModel({
+              name: "deepseek-v4-pro",
+              provider: ChatModelProviders.DEEPSEEK,
+              baseUrl: "https://api.deepseek.com",
+            })
+          )
+        ).rejects.toMatchObject({ code: "model_unsupported" });
+        expect(requestCount).toBe(0);
+      });
+
+      it.each(["https://deepseek-proxy.example/v1", "https://api.deepseek.com/openai/v1"])(
+        "https://github.com/yydspanda/obsidian-copilot/issues/3 preserves model identities on custom DeepSeek-compatible endpoint %s",
+        async (baseUrl) => {
+          const body = captureRequestBody(OPENAI_RESPONSE);
+
+          await send(
+            wireModel({
+              name: "deepseek-v4-pro",
+              provider: ChatModelProviders.DEEPSEEK,
+              baseUrl,
+            })
+          );
+
+          expect(body().model).toBe("deepseek-v4-pro");
+        }
+      );
+
       it("sends an OpenAI-compatible request with no output limit at all (https://github.com/logancyang/obsidian-copilot-preview/issues/312)", async () => {
         const body = captureRequestBody(OPENAI_RESPONSE);
 

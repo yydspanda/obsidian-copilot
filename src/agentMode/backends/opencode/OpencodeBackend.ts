@@ -15,7 +15,12 @@ import {
   sanitizeBuiltinSkillEnvOverrides,
 } from "@/agentMode/backends/shared/builtinSkillEnv";
 import { OpencodeBackendDescriptor } from "./descriptor";
-import { copilotPlusModelId, mapProviderToOpencodeId } from "./opencodeModelResolve";
+import {
+  copilotPlusModelId,
+  mapProviderToOpencodeId,
+  resolveOpencodeConfiguredModelIdentity,
+} from "./opencodeModelResolve";
+import { hasAmbiguousDeepSeekOpencodeRoute } from "@/agentMode/backends/opencode/deepseekOpencodePolicy";
 import type { PlanUsageReading } from "@/agentMode/session/planUsage";
 import { CopilotPlusUsageReader } from "@/agentMode/backends/shared/copilotPlusUsage";
 import type { SelfHostWebSearchAgentChannel } from "@/LLMProviders/selfHostServices";
@@ -326,13 +331,27 @@ export async function buildOpencodeConfig(
 
   const provider: Record<string, ProviderConfig> = {};
   const injected: string[] = [];
+  const enabledEntries = backendConfigRegistry.resolveEnabled("opencode");
+  const hasAmbiguousDeepSeekRoute = hasAmbiguousDeepSeekOpencodeRoute(enabledEntries);
 
-  for (const entry of backendConfigRegistry.resolveEnabled("opencode")) {
+  for (const entry of enabledEntries) {
     if (entry.state !== "ok") continue;
     const mapping = mapProviderToOpencodeId(entry.provider);
     if (!mapping) continue;
     // opencode hosts native (agent-origin) providers itself, so never register them.
     if (mapping.native) continue;
+    // A catalog provider key has room for one credential. Multiple official
+    // DeepSeek accounts must not be collapsed according to registry order.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    if (mapping.id === "deepseek" && hasAmbiguousDeepSeekRoute) continue;
+    const modelIdentity = resolveOpencodeConfiguredModelIdentity(
+      entry.provider,
+      entry.configuredModel
+    );
+    // Retired official identities are omitted before OpenCode can register or
+    // later route them to a provider-side substitute.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    if (!modelIdentity) continue;
 
     // opencode resolves catalog providers (those with a models.dev
     // `catalogProviderId`) natively — it knows their npm SDK and default base
@@ -343,7 +362,10 @@ export async function buildOpencodeConfig(
     // pointed at its own baseURL.
     const origin = entry.provider.origin;
     const catalogProviderId = origin.kind === "byok" ? origin.catalogProviderId : undefined;
-    const hasCatalogIdentity = !!catalogProviderId;
+    // A custom compatible endpoint uses its stable providerId mapping so it
+    // cannot inherit the official catalog route or another row's credential.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const hasCatalogIdentity = !!catalogProviderId && mapping.id === catalogProviderId;
 
     let providerConfig = provider[mapping.id];
     if (!providerConfig) {
@@ -434,8 +456,8 @@ export async function buildOpencodeConfig(
         if (published) modelConfig.variants = effortVariantsFor(published);
       }
     }
-    providerConfig.models[info.id] = modelConfig;
-    injected.push(`${mapping.id}/${info.id}`);
+    providerConfig.models[modelIdentity] = modelConfig;
+    injected.push(`${mapping.id}/${modelIdentity}`);
   }
 
   if (injected.length > 0) {

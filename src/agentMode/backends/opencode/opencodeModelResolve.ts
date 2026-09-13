@@ -8,6 +8,15 @@ import {
   providerRequiresApiKey,
 } from "@/modelManagement";
 import type { EnabledModelCredentialState, EnabledModelEntry } from "@/agentMode/session/types";
+import {
+  deepSeekOpencodeProviderIdOverride,
+  normalizeOpencodeSelectionBaseId,
+  reconcileDeepSeekOpencodePickerCandidates,
+  resolveOpencodeConfiguredModelIdentity,
+} from "@/agentMode/backends/opencode/deepseekOpencodePolicy";
+import type { DeepSeekOpencodePickerCandidate } from "@/agentMode/backends/opencode/deepseekOpencodePolicy";
+
+export { normalizeOpencodeSelectionBaseId, resolveOpencodeConfiguredModelIdentity };
 
 export interface OpencodeProviderMapping {
   /** The opencode provider id — leading segment of `<provider>/<model>`. */
@@ -44,18 +53,25 @@ const EMPTY_ENABLED_ENTRIES: readonly EnabledModelEntry[] = Object.freeze([]);
 
 /**
  * Map a Copilot `Provider` onto its opencode provider id, or `null` when
- * opencode can't route it (so callers skip it). A BYOK provider with a
- * `catalogProviderId` maps to it (identical to opencode's provider id). A BYOK
- * provider without one has no catalog identity opencode can resolve: when it
- * speaks OpenAI's wire format (`openai-compatible` — Ollama, LM Studio, custom)
- * it's routable as a per-provider `@ai-sdk/openai-compatible` entry keyed by its
- * `providerId` (see `buildOpencodeConfig`).
+ * opencode can't route it (so callers skip it). A BYOK provider normally maps
+ * to its `catalogProviderId`, which is identical to opencode's provider id.
+ * Custom DeepSeek-compatible endpoints deliberately use their stable
+ * `providerId` instead so they cannot share the official route or credential.
+ * A BYOK provider without a catalog identity is routable only when it speaks
+ * OpenAI's wire format; those entries likewise use their `providerId` (see
+ * `buildOpencodeConfig`).
  */
 export function mapProviderToOpencodeId(provider: Provider): OpencodeProviderMapping | null {
   switch (provider.origin.kind) {
     case "byok": {
       const catalogProviderId = provider.origin.catalogProviderId;
-      if (catalogProviderId) return { id: catalogProviderId, native: false };
+      if (catalogProviderId) {
+        const providerIdOverride = deepSeekOpencodeProviderIdOverride(provider);
+        // Provider-specific compatibility policy may isolate a catalog route.
+        // https://github.com/yydspanda/obsidian-copilot/issues/3
+        if (providerIdOverride) return { id: providerIdOverride, native: false };
+        return { id: catalogProviderId, native: false };
+      }
       if (provider.providerType === "openai-compatible") {
         // The providerId is unique + stable and can't collide with a real
         // models.dev provider id; it's the wire-id prefix `<providerId>/<model>`.
@@ -74,15 +90,13 @@ export function mapProviderToOpencodeId(provider: Provider): OpencodeProviderMap
   }
 }
 
-/**
- * The opencode wire base id for one routable configured model
- * (`<providerId>/<model>` for non-native, `info.id` verbatim for agent-hosted
- * native). Returns `null` when the provider isn't opencode-routable.
- */
+/** Build the complete OpenCode wire base id for one routable configured model. */
 function opencodeWireBaseId(provider: Provider, configuredModel: ConfiguredModel): string | null {
   const mapping = mapProviderToOpencodeId(provider);
   if (!mapping) return null;
-  return mapping.native ? configuredModel.info.id : `${mapping.id}/${configuredModel.info.id}`;
+  const modelIdentity = resolveOpencodeConfiguredModelIdentity(provider, configuredModel);
+  if (!modelIdentity) return null;
+  return mapping.native ? modelIdentity : `${mapping.id}/${modelIdentity}`;
 }
 
 /**
@@ -138,7 +152,7 @@ export function opencodeEnabledModelEntries(
     modelsById.set(model.configuredModelId, model);
   }
 
-  const out: EnabledModelEntry[] = [];
+  const candidates: DeepSeekOpencodePickerCandidate[] = [];
   for (const configuredModelId of enabledIds) {
     const configuredModel = modelsById.get(configuredModelId);
     if (!configuredModel) continue;
@@ -148,7 +162,7 @@ export function opencodeEnabledModelEntries(
     if (!mapping) continue;
     const baseModelId = opencodeWireBaseId(provider, configuredModel);
     if (!baseModelId) continue;
-    out.push({
+    const entry: EnabledModelEntry = {
       baseModelId,
       name: configuredModel.info.displayName || configuredModel.info.id,
       description: configuredModel.info.description,
@@ -156,7 +170,9 @@ export function opencodeEnabledModelEntries(
       isFree: isOpencodeZenWireId(baseModelId),
       capabilities: capabilitiesFromConfiguredInfo(configuredModel.info),
       needsSelfHostWarning: providerNeedsSelfHostWarning(provider, settings),
-    });
+    };
+    candidates.push({ entry, provider, configuredModel });
   }
-  return out.length === 0 ? EMPTY_ENABLED_ENTRIES : out;
+  const entries = reconcileDeepSeekOpencodePickerCandidates(candidates);
+  return entries.length === 0 ? EMPTY_ENABLED_ENTRIES : entries;
 }

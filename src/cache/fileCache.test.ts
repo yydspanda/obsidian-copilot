@@ -91,18 +91,6 @@ describe("fileCache", () => {
       });
     });
 
-    describe("remove()", () => {
-      it("removes memory and disk entries through the supplied Vault", async () => {
-        const vault = createVault();
-        vault.adapter.exists.mockResolvedValue(true);
-        await cache.set(vault.vault, "remove-key", "content");
-
-        await cache.remove(vault.vault, "remove-key");
-
-        expect(vault.adapter.remove).toHaveBeenCalledWith(".cache/remove-key.md");
-      });
-    });
-
     describe("clear()", () => {
       it("clears memory and removes listed disk entries through the supplied Vault", async () => {
         const vault = createVault();

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod";
 
 import {
   createTransactionCommitReceipt,
@@ -11251,6 +11251,15 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       ...runtimeIdentity,
       bundle: bundleValue as KnowledgeBundleConfig,
     });
+    // A changed Manifest makes this accepted intent permanently unable to
+    // publish its first journal; only the separately authorized Abandon path
+    // remains actionable. https://github.com/yydspanda/obsidian-copilot/issues/2
+    if (classification.candidate.continueBlockedReason !== undefined) {
+      throw new KnowledgeNoJournalApplyRecoveryConflictError(
+        reference.bundleId,
+        "state_not_actionable"
+      );
+    }
     this.assertTransactionFileAccessAuthority(state, proof);
     return {
       changeSet: cloneJson(proof.changeSet),
@@ -12581,6 +12590,14 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       return { kind: "finalizing", reference, transactionId: active.transactionId };
     }
 
+    const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+    const manifest =
+      manifestRaw === null
+        ? { version: 1 as const, bundleId, revision: 0, entries: [] }
+        : this.requireManifest(bundleId, manifestRaw);
+    const manifestReadSetChanged =
+      manifest.revision !== record.manifestCommitIntent.expectedManifestRevision ||
+      createSourceManifestDigest(manifest) !== record.manifestCommitIntent.expectedManifestDigest;
     const pending = queue.pendingReviews.find(
       (candidate) => candidate.jobId === record.jobClaim.jobId
     );
@@ -12602,6 +12619,12 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         bundleId,
         changeSetId: record.changeSetId,
         jobId: record.jobClaim.jobId,
+        // An accepted action can outlive its Manifest read-set before Queue apply starts.
+        // Preserve the durable decision while preventing a doomed Continue loop.
+        // https://github.com/yydspanda/obsidian-copilot/issues/2
+        ...(manifestReadSetChanged
+          ? { continueBlockedReason: "manifest_read_set_changed" as const }
+          : {}),
       };
     }
 
@@ -12624,9 +12647,17 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
         reason: "other_transaction_active",
       };
     }
+    // A no-journal claim tied to an older Manifest can never succeed on retry.
+    // It stays decision-required so its existing Abandon proof remains valid,
+    // but callers must not advertise Continue. https://github.com/yydspanda/obsidian-copilot/issues/2
     return {
       kind: "requires_decision",
-      candidate: createNoJournalApplyRecoveryCandidate(bundleId, record, claim),
+      candidate: {
+        ...createNoJournalApplyRecoveryCandidate(bundleId, record, claim),
+        ...(manifestReadSetChanged
+          ? { continueBlockedReason: "manifest_read_set_changed" as const }
+          : {}),
+      },
     };
   }
 

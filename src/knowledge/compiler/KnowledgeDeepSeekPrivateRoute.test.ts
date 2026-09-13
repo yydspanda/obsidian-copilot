@@ -60,7 +60,8 @@ const BUNDLE_ID = "personal";
 const SOURCE_ID = "source-notes";
 const SOURCE_PATH = "Sources/Notes.md";
 const SCHEMA_PATH = "Schema/knowledge.md";
-const MODEL = "deepseek-v4-pro";
+const MODEL = "deepseek-flash";
+const LEGACY_FLASH_MODEL = "deepseek-v4-flash";
 const SOURCE_BYTES = new TextEncoder().encode("# Source\nExact source text\n");
 const SCHEMA_BYTES = new TextEncoder().encode("# Knowledge schema\n");
 const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_BYTES);
@@ -523,6 +524,127 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
       expect(wire).not.toHaveProperty("fallback");
       expect(call.init.body).not.toContain(secret);
     }
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 sends the canonical Flash identity for a persisted legacy Flash profile", async () => {
+    const calls: RequestInit[] = [];
+    const canonicalProfile = createPipelineProfile({
+      reasoningEffort: "minimal",
+      temperature: 0.1,
+    });
+    const legacyProfile: KnowledgeBundlePipelineProfile = {
+      ...canonicalProfile,
+      model: {
+        ...canonicalProfile.model,
+        model: LEGACY_FLASH_MODEL,
+      },
+    };
+    const fetchPort: KnowledgeDeepSeekFetchPort = async (_url, init) => {
+      calls.push(init);
+      const parsed = parseWirePrompt(init.body as string);
+      return createResponse(createModelContent(parsed.stage, parsed.request), {
+        model: MODEL,
+      });
+    };
+
+    await runAuthorizedRouteAttempt(
+      canonicalProfile,
+      async ({ context, preparation, reportStage }) => {
+        const route = createKnowledgeDeepSeekPrivateRoute(legacyProfile, "sk-valid", fetchPort);
+        const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
+        await expect(
+          createCompiler(adapter).compile(createCompileInput(preparation), context.signal)
+        ).resolves.toMatchObject({ kind: "no_changes" });
+      }
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => parseWirePrompt(call.body as string).wire.model)).toEqual([
+      MODEL,
+      MODEL,
+    ]);
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 binds legacy and canonical Flash routes to one canonical descriptor and profile", () => {
+    const canonicalProfile = createPipelineProfile({
+      reasoningEffort: "minimal",
+      temperature: 0.1,
+    });
+    const legacyProfile: KnowledgeBundlePipelineProfile = {
+      ...canonicalProfile,
+      model: { ...canonicalProfile.model, model: LEGACY_FLASH_MODEL },
+    };
+
+    const canonicalRoute = createKnowledgeDeepSeekPrivateRoute(
+      canonicalProfile,
+      "sk-valid",
+      jest.fn()
+    );
+    const legacyRoute = createKnowledgeDeepSeekPrivateRoute(legacyProfile, "sk-valid", jest.fn());
+
+    expect(legacyRoute.getDescriptor()).toEqual(canonicalRoute.getDescriptor());
+    expect(legacyRoute.matchesProfile(canonicalProfile)).toBe(true);
+    expect(canonicalRoute.matchesProfile(canonicalProfile)).toBe(true);
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 accepts the canonical Flash profile identity", () => {
+    const profile = createPipelineProfile(
+      {},
+      {
+        model: {
+          ...createPipelineProfile().model,
+          model: MODEL,
+        },
+      }
+    );
+
+    expect(() => createKnowledgeDeepSeekPrivateRoute(profile, "sk-valid", jest.fn())).not.toThrow();
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks the retiring Pro identity before network access", () => {
+    const fetchPort = jest.fn<
+      ReturnType<KnowledgeDeepSeekFetchPort>,
+      Parameters<KnowledgeDeepSeekFetchPort>
+    >();
+
+    const canonicalProfile = createPipelineProfile();
+    const proProfile: KnowledgeBundlePipelineProfile = {
+      ...canonicalProfile,
+      model: { ...canonicalProfile.model, model: "deepseek-v4-pro" },
+    };
+    expectTransportError(
+      () => createKnowledgeDeepSeekPrivateRoute(proProfile, "sk-valid", fetchPort),
+      "model_unsupported"
+    );
+    expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a legacy Flash response identity after canonical request resolution", async () => {
+    const canonicalProfile = createPipelineProfile({
+      reasoningEffort: "minimal",
+      temperature: 0.1,
+    });
+    const legacyProfile: KnowledgeBundlePipelineProfile = {
+      ...canonicalProfile,
+      model: {
+        ...canonicalProfile.model,
+        model: LEGACY_FLASH_MODEL,
+      },
+    };
+    const fetchPort: KnowledgeDeepSeekFetchPort = async (_url, init) => {
+      const parsed = parseWirePrompt(init.body as string);
+      return createResponse(createModelContent(parsed.stage, parsed.request), {
+        model: LEGACY_FLASH_MODEL,
+      });
+    };
+
+    await expect(
+      runAuthorizedRouteAttempt(canonicalProfile, async ({ context, preparation, reportStage }) => {
+        const route = createKnowledgeDeepSeekPrivateRoute(legacyProfile, "sk-valid", fetchPort);
+        const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
+        await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
+      })
+    ).rejects.toMatchObject({ code: "provider_response_invalid" });
   });
 
   it("uses bounded storage across many one-byte response chunks", async () => {

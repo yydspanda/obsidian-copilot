@@ -106,7 +106,7 @@ const SOURCE_ID = "source-atlas-live";
 const SOURCE_PATH = "Sources/Atlas.md";
 const SCHEMA_PATH = "Schema/knowledge.md";
 const ATLAS_PATH = "Wiki/Atlas.md";
-const MODEL_NAME = "deepseek-v4-flash";
+const MODEL_NAME = "deepseek-flash";
 const JOB_ID = "job-live-deepseek-atlas";
 const SOURCE_CONTENT = "# Project Atlas source\n\nProject Atlas launch date is 2026-08-01.\n";
 const SCHEMA_CONTENT = `# Atlas Wiki schema
@@ -343,7 +343,7 @@ class ExactArtifactReader implements KnowledgeExactArtifactReaderPort {
 }
 
 describeWithDeepSeek("Knowledge Compiler DeepSeek production chain", () => {
-  it("runs one strict grounded-answer request through the exact preflight lease", async () => {
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 runs one canonical-Flash grounded-answer request through the exact preflight lease", async () => {
     const apiKey = DEEPSEEK_API_KEY;
     if (!apiKey) throw new Error("DEEPSEEK_API_KEY is required for this live integration test");
 
@@ -427,7 +427,7 @@ describeWithDeepSeek("Knowledge Compiler DeepSeek production chain", () => {
     }
   }, 120_000);
 
-  it("persists an exact pending Review without mutating Manifest or Wiki bytes", async () => {
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 persists an exact pending Review through canonical Flash without mutating Manifest or Wiki bytes", async () => {
     const apiKey = DEEPSEEK_API_KEY;
     if (!apiKey) throw new Error("DEEPSEEK_API_KEY is required for this live integration test");
 

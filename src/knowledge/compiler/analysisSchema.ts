@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod";
 
 import { KNOWLEDGE_COMPILER_PROTOCOL_VERSION } from "@/knowledge/compiler/CompilerModelPort";
 import type { KnowledgeDiagnostic, KnowledgeParseResult } from "@/knowledge/model/types";

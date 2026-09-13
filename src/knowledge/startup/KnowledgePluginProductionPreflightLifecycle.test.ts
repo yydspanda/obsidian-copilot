@@ -23,7 +23,7 @@ import {
 import { createKnowledgeProductionWorkflowExecutionPairing } from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 
 const PROJECT_ID = "project-personal";
-const MODEL_NAME = "deepseek-v4-pro";
+const MODEL_NAME = "deepseek-flash";
 const MODEL_KEY = `${MODEL_NAME}|deepseek`;
 
 /** Creates one strict Bundle with independent source and Wiki boundaries. */
@@ -39,12 +39,12 @@ function createBundle(id = "personal"): KnowledgeBundleConfig {
 }
 
 /** Creates the narrow Project snapshot captured by one lifecycle generation. */
-function createProjectRecord(bundle: unknown = createBundle()) {
+function createProjectRecord(bundle: unknown = createBundle(), modelKey = MODEL_KEY) {
   return {
     project: {
       id: PROJECT_ID,
       knowledgeBundle: bundle,
-      projectModelKey: MODEL_KEY,
+      projectModelKey: modelKey,
       modelConfigs: {},
     },
   };
@@ -59,7 +59,7 @@ function cloneOwner(owner: ConfiguredProjectKnowledgeBundle): ConfiguredProjectK
 }
 
 /** Creates already-hydrated settings without exposing a real credential. */
-function createSettings(): KnowledgeProductionPreflightSettingsInput {
+function createSettings(modelName = MODEL_NAME): KnowledgeProductionPreflightSettingsInput {
   return {
     temperature: 0,
     maxTokens: 8_192,
@@ -67,7 +67,7 @@ function createSettings(): KnowledgeProductionPreflightSettingsInput {
     verbosity: "medium",
     activeModels: [
       {
-        name: MODEL_NAME,
+        name: modelName,
         provider: "deepseek",
         enabled: true,
         projectEnabled: true,
@@ -159,6 +159,24 @@ describe("KnowledgePluginProductionPreflightLifecycle", () => {
     expect(fetchPort).not.toHaveBeenCalled();
     lifecycle.close();
     expect(fetchPort).not.toHaveBeenCalled();
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 admits the persisted Flash alias through the real legacy lifecycle", async () => {
+    const fetchPort = createFetchPort();
+    const legacyModelName = "deepseek-v4-flash";
+    const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
+      executionPreflightClaim: createKnowledgeProductionWorkflowExecutionPairing().preflightClaim,
+      getProjectRecords: () => [createProjectRecord(createBundle(), `${legacyModelName}|deepseek`)],
+      getSettings: () => createSettings(legacyModelName),
+      fetchPort,
+      createResources: () => createKnowledgeProductionPipelineResources(),
+    });
+
+    const result = await lifecycle.load(new AbortController().signal);
+
+    expect(result).toMatchObject({ kind: "configured", bundleIds: ["personal"] });
+    expect(fetchPort).not.toHaveBeenCalled();
+    lifecycle.close();
   });
 
   it("installs a configured-model preparation without reading legacy settings", async () => {

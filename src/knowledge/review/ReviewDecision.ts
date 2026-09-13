@@ -1,5 +1,5 @@
 import { diffLines, type Change } from "diff";
-import { z } from "zod";
+import * as z from "zod";
 
 import { createKnowledgeChangeSetDigest } from "@/knowledge/changeset/ChangeSetValidator";
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";

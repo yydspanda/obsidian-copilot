@@ -445,9 +445,15 @@ export class KnowledgePluginIntegration {
 
   /** Projects the exact Quick Chat selection into a secret-free local status. */
   private projectKnowledgeChatReadiness(): KnowledgeChatModelReadiness {
+    const settings = getSettings();
+    const selection = settings.defaultModelKey;
     const selected = findChatBackendEntry(
       this.modelManagement.backendConfigRegistry.resolveEnabled("chat"),
-      getSettings().defaultModelKey
+      selection,
+      {
+        configuredModels: settings.configuredModels,
+        providers: Object.values(settings.providers),
+      }
     );
     if (!selected) {
       return Object.freeze({ reason: "missing" });

@@ -103,8 +103,11 @@ export default class ChainManager {
           preferredId || undefined
         );
         if (!resolution.ok) {
+          // This wording covers both an empty backend and an intentionally
+          // blocked retained selection without disguising one as the other.
+          // https://github.com/yydspanda/obsidian-copilot/issues/3
           throw new MissingModelKeyError(
-            "No chat model enabled. Enable a model under Settings → Basic → Agents → Quick Chat, " +
+            "No usable chat model is selected. Choose an enabled model under Settings → Basic → Agents → Quick Chat, " +
               "or add one on the Models (BYOK) tab."
           );
         }

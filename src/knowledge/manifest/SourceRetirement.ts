@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod";
 
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import { sourceManifestEntrySchema } from "@/knowledge/model/schemas";

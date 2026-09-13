@@ -1,5 +1,6 @@
 import type {
   NoJournalApplyGlobalTransactionObservation,
+  NoJournalApplyRecoveryCandidate,
   NoJournalApplyRecoveryClassification,
   NoJournalApplyRecoverySnapshot,
 } from "@/knowledge/recovery/NoJournalApplyRecovery";
@@ -91,6 +92,59 @@ describe("deriveKnowledgeRecoveryModel", () => {
         status: "decision_required",
         changeSetId: "changeset-decision",
         actions: { canContinue: true, canAbandon: true },
+      },
+    ]);
+  });
+
+  it("makes a stale Manifest decision abandon-only while retaining its explanation (https://github.com/yydspanda/obsidian-copilot/issues/2)", () => {
+    const staleCandidate: NoJournalApplyRecoveryCandidate = {
+      ...createReference("recovery-stale-manifest"),
+      jobId: "job-stale-manifest",
+      changeSetId: "changeset-stale-manifest",
+      sourceId: "source-1",
+      sourceContentHash: "source-hash",
+      pipelineFingerprint: "pipeline-fingerprint",
+      inputRevision: 4,
+      attempt: 2,
+      startedAt: 100,
+      acceptedAt: 110,
+      continueBlockedReason: "manifest_read_set_changed",
+    };
+
+    const model = deriveKnowledgeRecoveryModel(
+      createRecoverySnapshot([{ kind: "requires_decision", candidate: staleCandidate }])
+    );
+
+    expect(model.items).toEqual([
+      {
+        id: "recovery-stale-manifest",
+        status: "decision_required",
+        changeSetId: "changeset-stale-manifest",
+        continueBlockedReason: "manifest_read_set_changed",
+        actions: { canContinue: false, canAbandon: true },
+      },
+    ]);
+  });
+
+  it("makes stale accepted-not-started work abandon-only (https://github.com/yydspanda/obsidian-copilot/issues/2)", () => {
+    const staleAccepted: NoJournalApplyRecoveryClassification = {
+      kind: "accepted_not_started",
+      reference: createReference("recovery-stale-accepted"),
+      bundleId: BUNDLE_ID,
+      changeSetId: "changeset-stale-accepted",
+      jobId: "job-stale-accepted",
+      continueBlockedReason: "manifest_read_set_changed",
+    };
+
+    const model = deriveKnowledgeRecoveryModel(createRecoverySnapshot([staleAccepted]));
+
+    expect(model.items).toEqual([
+      {
+        id: "recovery-stale-accepted",
+        status: "decision_required",
+        changeSetId: "changeset-stale-accepted",
+        continueBlockedReason: "manifest_read_set_changed",
+        actions: { canContinue: false, canAbandon: true },
       },
     ]);
   });

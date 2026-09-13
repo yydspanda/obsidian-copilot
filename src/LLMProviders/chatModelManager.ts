@@ -3,14 +3,23 @@ import {
   BREVILABS_MODELS_BASE_URL,
   BUILTIN_CHAT_MODELS,
   ChatModelProviders,
+  DEFAULT_MODEL_SETTING,
   DEFAULT_OLLAMA_NUM_CTX,
   ModelCapability,
   ProviderInfo,
 } from "@/constants";
+import {
+  createDeepSeekChatModelPolicy,
+  resolveDeepSeekTemperatureOverride,
+} from "@/LLMProviders/deepseekModelPolicy";
 import { logError, logInfo, logWarn } from "@/logger";
 import { getModelKeyFromModel, getSettings, subscribeToSettingsChange } from "@/settings/model";
 import { getModelInfo, safeFetchNoThrow } from "@/utils";
-import { googleHostBaseUrl, groqHostBaseUrl } from "@/utils/providerBaseUrl";
+import {
+  googleHostBaseUrl,
+  groqHostBaseUrl,
+  isCatalogProviderDefaultEndpoint,
+} from "@/utils/providerBaseUrl";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { BaseLanguageModel } from "@langchain/core/language_models/base";
@@ -126,7 +135,23 @@ export default class ChatModelManager {
   ): Promise<ModelConfig> {
     const settings = getSettings();
 
-    const modelName = customModel.name;
+    // Apply the official DeepSeek identity contract only to the provider's own
+    // endpoint. Compatible proxies retain their independent model namespace.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const usesOfficialDeepSeekRoute =
+      (customModel.provider as ChatModelProviders) === ChatModelProviders.DEEPSEEK &&
+      (!customModel.baseUrl || isCatalogProviderDefaultEndpoint("deepseek", customModel.baseUrl));
+    const deepSeekPolicy = usesOfficialDeepSeekRoute
+      ? createDeepSeekChatModelPolicy({
+          model: customModel.name,
+          reasoningEffort: customModel.reasoningEffort,
+          temperature: resolveDeepSeekTemperatureOverride(
+            customModel.reasoningEffort,
+            DEFAULT_MODEL_SETTING.TEMPERATURE
+          ),
+        })
+      : undefined;
+    const modelName = deepSeekPolicy?.wireModelIdentity ?? customModel.name;
     const modelInfo = getModelInfo(modelName);
     const { isThinkingEnabled, usesAdaptiveThinking } = modelInfo;
     // Copilot sets no output limit. This stays undefined unless the model
@@ -385,7 +410,7 @@ export default class ChatModelManager {
         },
       },
       [ChatModelProviders.DEEPSEEK]: {
-        modelName: modelName,
+        modelName,
         apiKey: await this.resolveApiKey(
           customModel.apiKey,
           settings.deepseekApiKey,
@@ -395,6 +420,7 @@ export default class ChatModelManager {
           baseURL: customModel.baseUrl || ProviderInfo[ChatModelProviders.DEEPSEEK].host,
           fetch: customModel.enableCors ? safeFetchNoThrow : undefined,
         },
+        ...(deepSeekPolicy ? { modelKwargs: deepSeekPolicy.modelKwargs } : {}),
       },
     };
 

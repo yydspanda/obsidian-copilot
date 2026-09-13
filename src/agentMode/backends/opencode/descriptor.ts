@@ -19,7 +19,11 @@ import {
   OpencodeBinaryManager,
   toOpencodeInstallState,
 } from "./OpencodeBinaryManager";
-import { opencodeEnabledModelEntries, opencodeWireBaseIdFor } from "./opencodeModelResolve";
+import {
+  normalizeOpencodeSelectionBaseId,
+  opencodeEnabledModelEntries,
+  opencodeWireBaseIdFor,
+} from "./opencodeModelResolve";
 import { OpencodeSettingsPanel } from "./OpencodeSettingsPanel";
 import { mapNodeArch, mapNodePlatform } from "./platformResolver";
 import { cacheRoot } from "@/context/conversionsLocation";
@@ -45,6 +49,20 @@ const OPENCODE_MODE_CONFIG_OPTION_ID = "mode";
 
 /** Frozen empty effort catalog — referential stability for the "no effort" case. */
 const EMPTY_EFFORT_CATALOG: Record<string, EffortOption[]> = Object.freeze({});
+
+function normalizeOpencodeSelection(
+  selection: ModelSelection,
+  settings: CopilotSettings
+): ModelSelection | null {
+  const normalizedBaseModelId = normalizeOpencodeSelectionBaseId(selection.baseModelId, settings);
+  // Unsupported official identities must fail before a session can fall back
+  // to an agent-selected model and make the change look successful.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
+  if (!normalizedBaseModelId) return null;
+  return normalizedBaseModelId === selection.baseModelId
+    ? selection
+    : { ...selection, baseModelId: normalizedBaseModelId };
+}
 
 // Lazy-created singleton manager, kept across plugin lifecycles so an install
 // started in one is still running in the next. The instance is reused but its
@@ -163,6 +181,10 @@ export const OpencodeBackendDescriptor: BackendDescriptor = {
     return opencodeWireBaseIdFor(configuredModelId, settings);
   },
 
+  normalizeSelection(selection: ModelSelection, settings: CopilotSettings): ModelSelection | null {
+    return normalizeOpencodeSelection(selection, settings);
+  },
+
   getInstallState(settings: CopilotSettings): InstallState {
     return toOpencodeInstallState(computeInstallState(settings.agentMode?.backends?.opencode));
   },
@@ -220,6 +242,13 @@ export const OpencodeBackendDescriptor: BackendDescriptor = {
     selection: ModelSelection,
     context
   ): Promise<void> {
+    // Normalize persisted official DeepSeek selections at the final pre-I/O
+    // boundary so stale defaults cannot bypass picker/config filtering.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const effectiveSelection = normalizeOpencodeSelection(selection, getSettings());
+    if (!effectiveSelection) {
+      throw new TypeError("The selected OpenCode model is no longer supported");
+    }
     const apply = session.getState()?.model?.apply;
     // A config-option catalog takes bare model ids only. Effort travels through
     // its own option when the model publishes one and is dropped otherwise; a
@@ -232,9 +261,9 @@ export const OpencodeBackendDescriptor: BackendDescriptor = {
       const currentBase = context
         ? context.backendReportedCurrent?.baseModelId
         : session.getState()?.model?.current.baseModelId;
-      if (currentBase !== selection.baseModelId) {
+      if (currentBase !== effectiveSelection.baseModelId) {
         await session.applyModelWireId(
-          opencodeWire.encode({ baseModelId: selection.baseModelId, effort: null })
+          opencodeWire.encode({ baseModelId: effectiveSelection.baseModelId, effort: null })
         );
       }
       const refreshed = session.getState()?.model;
@@ -242,15 +271,21 @@ export const OpencodeBackendDescriptor: BackendDescriptor = {
       const effortConfigId =
         refreshedApply?.kind === "setConfigOption" ? refreshedApply.effortConfigId : undefined;
       const effort = resolveEffort(
-        selection.effort,
-        findModelEntry(refreshed, selection.baseModelId)?.effortOptions
+        effectiveSelection.effort,
+        findModelEntry(refreshed, effectiveSelection.baseModelId)?.effortOptions
       );
       if (effortConfigId && effort !== null) await session.setConfigOption(effortConfigId, effort);
       return;
     }
-    const options = findModelEntry(session.getState()?.model, selection.baseModelId)?.effortOptions;
+    const options = findModelEntry(
+      session.getState()?.model,
+      effectiveSelection.baseModelId
+    )?.effortOptions;
     await session.applyModelWireId(
-      opencodeWire.encode({ ...selection, effort: resolveEffort(selection.effort, options) })
+      opencodeWire.encode({
+        ...effectiveSelection,
+        effort: resolveEffort(effectiveSelection.effort, options),
+      })
     );
   },
 

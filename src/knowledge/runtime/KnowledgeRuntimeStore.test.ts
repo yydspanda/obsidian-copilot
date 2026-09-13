@@ -2244,7 +2244,7 @@ async function createForwardDecisionExecutionLease(
   executionPreflightClaim: KnowledgeProductionWorkflowExecutionPreflightClaim,
   createResources: () => KnowledgeProductionPipelineResources = createKnowledgeProductionPipelineResources
 ) {
-  const modelName = "deepseek-v4-pro";
+  const modelName = "deepseek-flash";
   const lifecycle = new KnowledgePluginProductionPreflightLifecycle({
     executionPreflightClaim,
     getProjectRecords: () => [
@@ -3325,6 +3325,46 @@ async function createNoJournalRecoveryHarness(transactionId = "transaction-no-jo
     journal,
     manifest,
   };
+}
+
+/** Converts the applying fixture back to its durable accepted-before-start boundary. */
+function markAcceptedApplyNotStarted(state: KnowledgeRuntimeStoreSnapshot): void {
+  const queue = state.queues[0].value as IngestQueueSnapshot;
+  const applying = queue.jobs[0];
+  const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+  const record = review.records[0];
+  if (!record || record.outcome !== "accepted") {
+    throw new Error("Expected accepted Review fixture");
+  }
+  queue.jobs = [
+    {
+      id: applying.id,
+      bundleId: applying.bundleId,
+      sourceId: applying.sourceId,
+      sourceContentHash: applying.sourceContentHash,
+      pipelineFingerprint: applying.pipelineFingerprint,
+      inputRevision: applying.inputRevision,
+      attempt: applying.attempt,
+      rerunRequested: false,
+      createdAt: applying.createdAt,
+      updatedAt: record.recordedAt,
+      status: "awaiting_review",
+      stage: "review",
+      changeSetId: record.changeSetId,
+    },
+  ];
+  queue.pendingReviews = [
+    {
+      kind: "durable",
+      jobId: applying.id,
+      changeSetId: record.changeSetId,
+      proposalDigest: record.proposalDigest,
+      reviewRecordRevision: 0,
+      recordedAt: record.recordedAt,
+    },
+  ];
+  delete queue.applyClaim;
+  queue.control = { status: "paused", reason: "startup_recovery", pausedAt: 200 };
 }
 
 /**
@@ -5406,42 +5446,13 @@ describe("KnowledgeRuntimeStore", () => {
   it("keeps an accepted Review not started and rejects a fabricated abandonment", async () => {
     const harness = await createNoJournalRecoveryHarness();
     const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    markAcceptedApplyNotStarted(state);
     const queue = state.queues[0].value as IngestQueueSnapshot;
-    const applying = queue.jobs[0];
     const review = state.reviews[0].value as ChangeSetReviewSnapshot;
     const record = review.records[0];
     if (!record || record.outcome !== "accepted") {
       throw new Error("Expected accepted Review fixture");
     }
-    queue.jobs = [
-      {
-        id: applying.id,
-        bundleId: applying.bundleId,
-        sourceId: applying.sourceId,
-        sourceContentHash: applying.sourceContentHash,
-        pipelineFingerprint: applying.pipelineFingerprint,
-        inputRevision: applying.inputRevision,
-        attempt: applying.attempt,
-        rerunRequested: false,
-        createdAt: applying.createdAt,
-        updatedAt: record.recordedAt,
-        status: "awaiting_review",
-        stage: "review",
-        changeSetId: record.changeSetId,
-      },
-    ];
-    queue.pendingReviews = [
-      {
-        kind: "durable",
-        jobId: applying.id,
-        changeSetId: record.changeSetId,
-        proposalDigest: record.proposalDigest,
-        reviewRecordRevision: 0,
-        recordedAt: record.recordedAt,
-      },
-    ];
-    delete queue.applyClaim;
-    queue.control = { status: "paused", reason: "startup_recovery", pausedAt: 200 };
     harness.file.replaceContent(JSON.stringify(state));
 
     await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
@@ -5557,6 +5568,24 @@ describe("KnowledgeRuntimeStore", () => {
     });
   });
 
+  it("marks a stale accepted-not-started Manifest as unable to continue (https://github.com/yydspanda/obsidian-copilot/issues/2)", async () => {
+    const harness = await createNoJournalRecoveryHarness();
+    const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    markAcceptedApplyNotStarted(state);
+    const manifest = state.manifests[0].value as SourceManifest;
+    manifest.revision += 1;
+    harness.file.replaceContent(JSON.stringify(state));
+
+    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
+      kind: "accepted_not_started",
+      reference: createNoJournalApplyRecoveryReference("personal", harness.identity),
+      bundleId: "personal",
+      changeSetId: harness.journal.changeSetId,
+      jobId: harness.journal.jobClaim.jobId,
+      continueBlockedReason: "manifest_read_set_changed",
+    });
+  });
+
   it("classifies exact active phases and blocks both recovery-required and unrelated journals", async () => {
     const harness = await createNoJournalRecoveryHarness();
     const initial = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
@@ -5647,7 +5676,7 @@ describe("KnowledgeRuntimeStore", () => {
     });
   });
 
-  it("reloads exact continuation input but leaves stale-Manifest attempts abandonable", async () => {
+  it("marks a stale Manifest claim abandon-only and rejects direct continuation without mutation (https://github.com/yydspanda/obsidian-copilot/issues/2)", async () => {
     const harness = await createNoJournalRecoveryHarness();
     const classification = await harness.recovery.classify(harness.identity);
     if (classification.kind !== "requires_decision") {
@@ -5667,14 +5696,22 @@ describe("KnowledgeRuntimeStore", () => {
     const staleManifest = stale.manifests[0].value as SourceManifest;
     staleManifest.revision += 1;
     harness.file.replaceContent(JSON.stringify(stale));
+    const staleText = await harness.file.read();
 
-    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual(classification);
+    await expect(harness.recovery.classify(harness.identity)).resolves.toEqual({
+      kind: "requires_decision",
+      candidate: {
+        ...classification.candidate,
+        continueBlockedReason: "manifest_read_set_changed",
+      },
+    });
     await expect(
       harness.recovery.loadContinueInput(reference, createBundle())
     ).rejects.toMatchObject({
-      name: KnowledgeApplyCommitManifestConflictError.name,
-      reason: "intent_invalid",
+      name: KnowledgeNoJournalApplyRecoveryConflictError.name,
+      reason: "state_not_actionable",
     });
+    expect(await harness.file.read()).toBe(staleText);
     await expect(harness.recovery.abandon(reference, 300)).resolves.toMatchObject({
       bundleId: reference.bundleId,
       recoveryId: reference.recoveryId,

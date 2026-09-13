@@ -1,4 +1,4 @@
-import { isCurrentDeepSeekModelIdentity } from "@/LLMProviders/deepseekModelPolicy";
+import { resolveDeepSeekWireModelIdentity } from "@/LLMProviders/deepseekModelPolicy";
 import {
   KnowledgeProductionPreflightComposer,
   type KnowledgeProductionPreflightDiagnosticCode,
@@ -14,11 +14,16 @@ import {
   type ProjectKnowledgePipelineProjectInput,
   type ProjectKnowledgePipelineSettingsInput,
 } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
-import { isChatModelSelectionForEntry } from "@/modelManagement";
 import type {
+  ConfiguredModel,
   EnabledBackendEntry,
   ModelManagementApi,
+  Provider,
   ResolvedChatBackendEntry,
+} from "@/modelManagement";
+import {
+  findChatBackendEntryMatches,
+  hasAmbiguousPersistedChatModelSelection,
 } from "@/modelManagement";
 
 /** Knowledge-owned defaults retained after ordinary Chat retired its global output cap. */
@@ -44,6 +49,8 @@ export interface KnowledgeConfiguredModelProjectionInput {
   owners: readonly ConfiguredProjectKnowledgeBundle[];
   projects: readonly KnowledgeConfiguredModelProjectInput[];
   enabledChatModels: readonly EnabledBackendEntry[];
+  configuredModels: readonly ConfiguredModel[];
+  providers: readonly Provider[];
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
 }
 
@@ -82,7 +89,10 @@ export type KnowledgeConfiguredModelProjectionResult =
 export interface PrepareKnowledgeConfiguredModelPreflightInput {
   owners: readonly ConfiguredProjectKnowledgeBundle[];
   projects: readonly KnowledgeConfiguredModelProjectInput[];
-  modelManagement: Pick<ModelManagementApi, "backendConfigRegistry" | "providerRegistry">;
+  modelManagement: Pick<
+    ModelManagementApi,
+    "backendConfigRegistry" | "configuredModelRegistry" | "providerRegistry"
+  >;
   profileOptions: ProjectKnowledgePipelineProfileSourceOptions;
   fetchPort: KnowledgeDeepSeekFetchPort;
   signal: AbortSignal;
@@ -98,7 +108,6 @@ export type PreparedKnowledgeConfiguredModelPreflight =
   | Readonly<{ kind: "diagnostic"; code: KnowledgeConfiguredModelBridgeDiagnosticCode }>;
 
 interface ProjectedActiveModel {
-  configuredModelId: string;
   providerId: string;
   modelKey: string;
   value: Readonly<Record<string, unknown>>;
@@ -135,12 +144,17 @@ function isRuntimeArray(value: unknown): boolean {
 
 function requireResolvedEntry(
   entries: readonly EnabledBackendEntry[],
-  selection: string
+  selection: string,
+  configuredModels: readonly ConfiguredModel[],
+  providers: readonly Provider[]
 ): ResolvedChatBackendEntry {
-  const matches = entries.filter(
-    (entry): entry is ResolvedChatBackendEntry =>
-      entry.state === "ok" && isChatModelSelectionForEntry(entry, selection)
-  );
+  // Disabled rows still identify the account that originally owned a legacy
+  // Project key. Never let an enabled row on another account inherit it.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
+  if (hasAmbiguousPersistedChatModelSelection({ configuredModels, providers }, selection)) {
+    fail("model_ambiguous");
+  }
+  const matches = findChatBackendEntryMatches(entries, selection);
   // Project model retirement left old selections readable, but neither a stale
   // configured id nor an ambiguous legacy key may inherit the first enabled row.
   // https://github.com/logancyang/obsidian-copilot-preview/issues/310
@@ -166,20 +180,21 @@ function projectActiveModel(entry: ResolvedChatBackendEntry): ProjectedActiveMod
     fail("provider_unsupported");
   }
 
-  const model = requireCanonicalText(configuredModel.info.id);
-  if (!isCurrentDeepSeekModelIdentity(model) || configuredModel.info.isEmbedding === true) {
+  const configuredModelIdentity = requireCanonicalText(configuredModel.info.id);
+  // Resolve the temporary persisted Flash alias only after the configured row
+  // has been selected exactly. This keeps UUID/project references stable while
+  // making equivalent old and new settings produce one canonical profile.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
+  const model = resolveDeepSeekWireModelIdentity(configuredModelIdentity);
+  if (model === undefined || configuredModel.info.isEmbedding === true) {
     fail("model_unsupported");
   }
-  const behavior =
-    model === "deepseek-v4-pro"
-      ? { temperature: 0, reasoningEffort: "high" as const }
-      : {
-          temperature: KNOWLEDGE_CONFIGURED_MODEL_DEFAULTS.temperature,
-          reasoningEffort: "minimal" as const,
-        };
+  const behavior = {
+    temperature: KNOWLEDGE_CONFIGURED_MODEL_DEFAULTS.temperature,
+    reasoningEffort: "minimal" as const,
+  };
   const modelKey = `${model}|deepseek`;
   return Object.freeze({
-    configuredModelId: configuredModel.configuredModelId,
     providerId: provider.providerId,
     modelKey,
     value: Object.freeze({
@@ -216,11 +231,16 @@ export function createKnowledgeConfiguredModelProjection(
   input: KnowledgeConfiguredModelProjectionInput
 ): KnowledgeConfiguredModelProjectionResult {
   try {
+    // The complete retained inventory is a security input: without it a
+    // disabled Project model can be mistaken for an unrelated enabled owner.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
     if (
       !isRuntimeArray(input.owners) ||
       input.owners.length === 0 ||
       !isRuntimeArray(input.projects) ||
-      !isRuntimeArray(input.enabledChatModels)
+      !isRuntimeArray(input.enabledChatModels) ||
+      !isRuntimeArray(input.configuredModels) ||
+      !isRuntimeArray(input.providers)
     ) {
       fail("input_invalid");
     }
@@ -240,9 +260,19 @@ export function createKnowledgeConfiguredModelProjection(
       const project = projectsById.get(projectId);
       if (!project) fail("project_missing");
       const selection = requireCanonicalText(project.modelSelection);
-      const selected = projectActiveModel(requireResolvedEntry(input.enabledChatModels, selection));
+      const selected = projectActiveModel(
+        requireResolvedEntry(
+          input.enabledChatModels,
+          selection,
+          input.configuredModels,
+          input.providers
+        )
+      );
       const existing = activeModelsByKey.get(selected.modelKey);
-      if (existing && existing.configuredModelId !== selected.configuredModelId) {
+      // Equivalent old/current Flash rows may share one provider credential;
+      // rows owned by different providers must remain distinct and ambiguous.
+      // https://github.com/yydspanda/obsidian-copilot/issues/3
+      if (existing && existing.providerId !== selected.providerId) {
         fail("model_ambiguous");
       }
       if (!existing) activeModelsByKey.set(selected.modelKey, selected);
@@ -321,6 +351,8 @@ export async function prepareKnowledgeConfiguredModelPreflight(
     owners: input.owners,
     projects: input.projects,
     enabledChatModels,
+    configuredModels: input.modelManagement.configuredModelRegistry.list(),
+    providers: input.modelManagement.providerRegistry.list(),
     profileOptions: input.profileOptions,
   });
   if (projected.kind === "diagnostic") return projected;

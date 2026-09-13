@@ -351,9 +351,10 @@ function modelCatalog(baseModelId: string): BackendModelCatalog {
 }
 
 function buildManager(
-  modelPreloaderOverrides: Partial<AgentModelPreloader> = {}
+  modelPreloaderOverrides: Partial<AgentModelPreloader> = {},
+  descriptorOverrides: Partial<BackendDescriptor> = {}
 ): AgentSessionManager {
-  const descriptor = buildDescriptor();
+  const descriptor = { ...buildDescriptor(), ...descriptorOverrides };
   const modelPreloader = {
     getCachedModelCatalog: jest.fn(() => null),
     getEffortCatalog: jest.fn(() => null),
@@ -455,6 +456,56 @@ describe("AgentSessionManager", () => {
         );
       });
 
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes a persisted selection before starting a backend session", async () => {
+        const persisted = { baseModelId: "deepseek/deepseek-v4-flash", effort: null };
+        const canonical = { baseModelId: "deepseek/deepseek-flash", effort: null };
+        const normalizeSelection = jest.fn(() => canonical);
+        const getSettingsMock = mockedGetSettings as jest.Mock;
+        const previousImplementation = getSettingsMock.getMockImplementation();
+        getSettingsMock.mockReturnValue({
+          agentMode: {
+            activeBackend: "opencode",
+            backends: { opencode: { defaultModel: persisted } },
+          },
+        });
+        const mgr = buildManager({}, { normalizeSelection });
+
+        try {
+          await mgr.createSession();
+
+          expect(normalizeSelection).toHaveBeenCalledWith(persisted, expect.any(Object));
+          expect(sessionCreateSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ defaultModelSelection: canonical })
+          );
+        } finally {
+          if (previousImplementation) getSettingsMock.mockImplementation(previousImplementation);
+        }
+      });
+
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a retired persisted selection before starting a backend session", async () => {
+        const persisted = { baseModelId: "deepseek/deepseek-v4-pro", effort: null };
+        const normalizeSelection = jest.fn(() => null);
+        const getSettingsMock = mockedGetSettings as jest.Mock;
+        const previousImplementation = getSettingsMock.getMockImplementation();
+        getSettingsMock.mockReturnValue({
+          agentMode: {
+            activeBackend: "opencode",
+            backends: { opencode: { defaultModel: persisted } },
+          },
+        });
+        const mgr = buildManager({}, { normalizeSelection });
+
+        try {
+          await expect(mgr.createSession()).rejects.toThrow("no longer supported");
+
+          expect(normalizeSelection).toHaveBeenCalledWith(persisted, expect.any(Object));
+          expect(sessionCreateSpy).not.toHaveBeenCalled();
+          expect(mgr.getSessions()).toEqual([]);
+        } finally {
+          if (previousImplementation) getSettingsMock.mockImplementation(previousImplementation);
+        }
+      });
+
       it("a concurrent create that succeeds does not wipe a sibling create's lastError", async () => {
         const mgr = buildManager();
         // First call fails. Second call starts before first settles, so the
@@ -495,6 +546,61 @@ describe("AgentSessionManager", () => {
         for (let i = 0; i < 10; i++) await Promise.resolve();
 
         expect(mgr.getLastError()).toMatch(/boom/);
+      });
+    });
+
+    describe("getDefaultSelection()", () => {
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes a compatible Flash alias but preserves rejected Pro for fail-closed callers", () => {
+        const getSettingsMock = mockedGetSettings as jest.Mock;
+        const previousImplementation = getSettingsMock.getMockImplementation();
+        const normalizeSelection = jest.fn(
+          (selection: { baseModelId: string; effort: string | null }) => {
+            if (selection.baseModelId.endsWith("deepseek-v4-pro")) return null;
+            return {
+              ...selection,
+              baseModelId: selection.baseModelId.replace("deepseek-v4-flash", "deepseek-flash"),
+            };
+          }
+        );
+        const mgr = buildManager({}, { normalizeSelection });
+
+        try {
+          getSettingsMock.mockReturnValue({
+            agentMode: {
+              backends: {
+                opencode: {
+                  defaultModel: {
+                    baseModelId: "deepseek/deepseek-v4-flash",
+                    effort: null,
+                  },
+                },
+              },
+            },
+          });
+          expect(mgr.getDefaultSelection("opencode")).toEqual({
+            baseModelId: "deepseek/deepseek-flash",
+            effort: null,
+          });
+
+          getSettingsMock.mockReturnValue({
+            agentMode: {
+              backends: {
+                opencode: {
+                  defaultModel: {
+                    baseModelId: "deepseek/deepseek-v4-pro",
+                    effort: null,
+                  },
+                },
+              },
+            },
+          });
+          expect(mgr.getDefaultSelection("opencode")).toEqual({
+            baseModelId: "deepseek/deepseek-v4-pro",
+            effort: null,
+          });
+        } finally {
+          if (previousImplementation) getSettingsMock.mockImplementation(previousImplementation);
+        }
       });
     });
 
@@ -2088,6 +2194,44 @@ describe("AgentSessionManager default-model settings subscription", () => {
     });
   });
 
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 retains a live session when a valid default model switch fails", async () => {
+    const applySelectionMock = jest.fn(async () => {
+      throw new Error("The model switch is temporarily unavailable");
+    });
+    const descriptor = makeApplySelectionDescriptor(applySelectionMock);
+    const mgr = new AgentSessionManager(
+      buildApp(),
+      buildPlugin() as unknown as ConstructorParameters<typeof AgentSessionManager>[1],
+      {
+        permissionPrompter: jest.fn(),
+        resolveDescriptor: (id) => (id === descriptor.id ? descriptor : undefined),
+        modelPreloader: makeStubPreloader() as unknown as ConstructorParameters<
+          typeof AgentSessionManager
+        >[2]["modelPreloader"],
+      }
+    );
+    const session = await mgr.createSession();
+    const requested = { baseModelId: "supported-model", effort: null };
+    (mockedGetSettings as jest.Mock).mockReturnValue({
+      agentMode: { activeBackend: "opencode", backends: { opencode: { defaultModel: requested } } },
+    });
+
+    emitSettingsChange(
+      { agentMode: { backends: { opencode: { defaultModel: null } } } },
+      { agentMode: { backends: { opencode: { defaultModel: requested } } } }
+    );
+
+    await flushApplyChain();
+    expect(applySelectionMock).toHaveBeenCalledWith(session, requested);
+    expect(mgr.getSessions()).toEqual([session]);
+    expect(mockSessionCancel).not.toHaveBeenCalled();
+    expect(mockSessionDispose).not.toHaveBeenCalled();
+    (mockedGetSettings as jest.Mock).mockReturnValue({
+      agentMode: { activeBackend: "opencode", backends: {} },
+    });
+    await mgr.shutdown();
+  });
+
   it("ignores an unchanged default and other backends' changes", async () => {
     const applySelectionMock = jest.fn(async () => {});
     const descriptor = makeApplySelectionDescriptor(applySelectionMock);
@@ -2489,6 +2633,8 @@ describe("AgentSessionManager chat history aggregation", () => {
     backendId?: BackendId;
     createBackendProcess?: jest.Mock;
     applyInitialSessionConfig?: BackendDescriptor["applyInitialSessionConfig"];
+    applySelection?: BackendDescriptor["applySelection"];
+    normalizeSelection?: BackendDescriptor["normalizeSelection"];
   }) {
     const frontmatterByPath = opts?.files ?? {};
     const hiddenByPath = opts?.hiddenFiles ?? {};
@@ -2543,6 +2689,8 @@ describe("AgentSessionManager chat history aggregation", () => {
       summarizesSessionTitle: opts?.summarizesSessionTitle ?? true,
       getProbeSessionId: jest.fn(() => opts?.probeSessionId),
       applyInitialSessionConfig: opts?.applyInitialSessionConfig,
+      applySelection: opts?.applySelection,
+      normalizeSelection: opts?.normalizeSelection,
     } as unknown as BackendDescriptor;
     if (opts?.createBackendProcess) {
       (descriptor as unknown as { createBackendProcess: jest.Mock }).createBackendProcess =
@@ -2829,37 +2977,128 @@ describe("AgentSessionManager chat history aggregation", () => {
           backends: { claude: { defaultMode: "auto" } },
         },
       };
-      (mockedGetSettings as jest.Mock).mockReturnValueOnce(settings).mockReturnValueOnce(settings);
+      const settingsMock = mockedGetSettings as jest.Mock;
+      const originalGetSettings = settingsMock.getMockImplementation();
+      settingsMock.mockReturnValue(settings);
+      try {
+        let returned = false;
+        const loading = manager
+          .loadNativeSessionFromHistory("claude", "saved-chat")
+          .then((session) => {
+            returned = true;
+            return session;
+          });
+        await applyStarted;
+        await Promise.resolve();
+        expect(returned).toBe(false);
 
-      let returned = false;
-      const loading = manager
-        .loadNativeSessionFromHistory("claude", "saved-chat")
-        .then((session) => {
-          returned = true;
-          return session;
+        releaseApply();
+        const session = await loading;
+
+        expect(applyInitialSessionConfig).toHaveBeenCalledWith(
+          session,
+          expect.objectContaining({ agentMode: expect.any(Object) })
+        );
+        expect(setSessionConfigOption).toHaveBeenCalledWith({
+          sessionId: "saved-chat",
+          configId: "effort",
+          value: "high",
         });
-      await applyStarted;
-      await Promise.resolve();
-      expect(returned).toBe(false);
+        expect(setSessionMode).toHaveBeenCalledWith({
+          sessionId: "saved-chat",
+          modeId: "bypassPermissions",
+        });
+        expect(session.getState()?.model?.current.effort).toBe("high");
+        expect(session.getState()?.mode?.current).toBe("auto");
+      } finally {
+        settingsMock.mockImplementation(originalGetSettings);
+      }
+    });
 
-      releaseApply();
-      const session = await loading;
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a resumed retired model before constructing a sendable session", async () => {
+      const prompt = jest.fn();
+      const backend = {
+        ...makeMockBackendProcess(),
+        prompt,
+        loadSession: jest.fn(async ({ sessionId }: { sessionId: string }) => ({
+          sessionId,
+          state: {
+            model: {
+              current: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+              availableModels: [],
+              apply: { kind: "setModel" as const },
+            },
+            mode: null,
+          },
+        })),
+      };
+      const normalizeSelection = jest.fn(() => null);
+      const { manager } = buildHistoryHarness({
+        createBackendProcess: jest.fn(() => backend),
+        normalizeSelection,
+      });
 
-      expect(applyInitialSessionConfig).toHaveBeenCalledWith(
-        session,
-        expect.objectContaining({ agentMode: expect.any(Object) })
+      await expect(
+        manager.loadNativeSessionFromHistory("opencode", "retired-session")
+      ).rejects.toThrow("no longer supported");
+
+      expect(normalizeSelection).toHaveBeenCalledWith(
+        { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+        expect.any(Object)
       );
-      expect(setSessionConfigOption).toHaveBeenCalledWith({
-        sessionId: "saved-chat",
-        configId: "effort",
-        value: "high",
+      expect(backend.registerSessionHandler).not.toHaveBeenCalled();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(manager.getSessions()).toEqual([]);
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a resumed legacy alias when the canonical switch fails", async () => {
+      const prompt = jest.fn();
+      const legacySelection = { baseModelId: "deepseek/deepseek-v4-flash", effort: null };
+      const canonicalSelection = { baseModelId: "deepseek/deepseek-flash", effort: null };
+      const backend = {
+        ...makeMockBackendProcess(),
+        prompt,
+        loadSession: jest.fn(async ({ sessionId }: { sessionId: string }) => ({
+          sessionId,
+          state: {
+            model: {
+              current: legacySelection,
+              availableModels: [
+                {
+                  ...legacySelection,
+                  name: "Legacy Flash",
+                  provider: "deepseek",
+                  effortOptions: [],
+                },
+              ],
+              apply: { kind: "setModel" as const },
+            },
+            mode: null,
+          },
+        })),
+      };
+      const applySelection = jest.fn(async () => {
+        throw new Error("model switch failed");
       });
-      expect(setSessionMode).toHaveBeenCalledWith({
-        sessionId: "saved-chat",
-        modeId: "bypassPermissions",
+      const normalizeSelection = jest.fn(
+        (selection: { baseModelId: string; effort: string | null }) =>
+          selection.baseModelId === legacySelection.baseModelId ? canonicalSelection : selection
+      );
+      const { manager } = buildHistoryHarness({
+        createBackendProcess: jest.fn(() => backend),
+        applySelection,
+        normalizeSelection,
       });
-      expect(session.getState()?.model?.current.effort).toBe("high");
-      expect(session.getState()?.mode?.current).toBe("auto");
+
+      await expect(
+        manager.loadNativeSessionFromHistory("opencode", "legacy-session")
+      ).rejects.toThrow("no longer supported");
+
+      expect(applySelection).toHaveBeenCalledWith(expect.any(AgentSession), canonicalSelection, {
+        backendReportedCurrent: legacySelection,
+      });
+      expect(prompt).not.toHaveBeenCalled();
+      expect(manager.getSessions()).toEqual([]);
     });
 
     it("keeps focus on the most recently opened history row when resumes finish out of order", async () => {

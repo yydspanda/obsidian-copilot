@@ -29,6 +29,7 @@ export interface KnowledgeRecoveryItem {
   transactionId?: string;
   phase?: "prepared" | "applying" | "recovery_required" | "committed";
   blockedReason?: "transaction_recovery_required" | "other_transaction_active";
+  continueBlockedReason?: "manifest_read_set_changed";
 }
 
 /** Complete immutable recovery projection for one configured Bundle. */
@@ -48,19 +49,34 @@ function deriveClassificationItem(
   classification: NoJournalApplyRecoveryClassification
 ): KnowledgeRecoveryItem | undefined {
   switch (classification.kind) {
-    case "accepted_not_started":
+    case "accepted_not_started": {
+      const continueBlockedReason = classification.continueBlockedReason;
+      // A stale pre-start acceptance requires a fresh decision instead of a retry
+      // against a Manifest read-set that can no longer commit.
+      // https://github.com/yydspanda/obsidian-copilot/issues/2
       return Object.freeze({
         id: classification.reference.recoveryId,
-        status: "accepted_not_started",
+        status: continueBlockedReason === undefined ? "accepted_not_started" : "decision_required",
         changeSetId: classification.changeSetId,
-        actions: createActions(true, false),
+        ...(continueBlockedReason === undefined ? {} : { continueBlockedReason }),
+        actions: createActions(
+          continueBlockedReason === undefined,
+          continueBlockedReason !== undefined
+        ),
       });
+    }
     case "requires_decision":
+      // A stale accepted Manifest remains safely abandonable, but presenting
+      // Continue would create a deterministic retry loop.
+      // https://github.com/yydspanda/obsidian-copilot/issues/2
       return Object.freeze({
         id: classification.candidate.recoveryId,
         status: "decision_required",
         changeSetId: classification.candidate.changeSetId,
-        actions: createActions(true, true),
+        ...(classification.candidate.continueBlockedReason === undefined
+          ? {}
+          : { continueBlockedReason: classification.candidate.continueBlockedReason }),
+        actions: createActions(classification.candidate.continueBlockedReason === undefined, true),
       });
     case "active":
       return Object.freeze({

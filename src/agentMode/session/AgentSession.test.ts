@@ -3,6 +3,7 @@ import { OpencodeBackendDescriptor } from "@/agentMode/backends/opencode/descrip
 import { AI_SENDER, USER_SENDER } from "@/constants";
 import { ClaudeBackendDescriptor } from "@/agentMode/backends/claude/descriptor";
 import { waitFor } from "@testing-library/react";
+import { getSettings } from "@/settings/model";
 import type { TFile } from "obsidian";
 import {
   AgentSession,
@@ -32,7 +33,11 @@ jest.mock("@/logger", () => ({
   logError: jest.fn(),
 }));
 jest.mock("@/settings/model", () => ({
-  getSettings: jest.fn().mockReturnValue({ agentMode: {} }),
+  getSettings: jest.fn().mockReturnValue({
+    agentMode: {},
+    configuredModels: [],
+    providers: {},
+  }),
 }));
 // The authoritative send-boundary paywall (Phase 4) lives in plusUtils; mock it
 // so fan-out tests don't reach the real `isPlusEnabled()`/BrevilabsClient. The
@@ -2529,6 +2534,62 @@ describe("AgentSession.create (via start)", () => {
     expect(session.getState()?.model?.current.baseModelId).toBe("anthropic/sonnet");
   });
 
+  it.each([
+    ["without a saved seed", undefined],
+    [
+      "after a safe seed fails to replace it",
+      { baseModelId: "deepseek/deepseek-flash", effort: null },
+    ],
+  ] as const)(
+    "https://github.com/yydspanda/obsidian-copilot/issues/3 keeps a backend-reported retired model unsendable %s",
+    async (_scenario, defaultModelSelection) => {
+      const mock = makeMockBackend();
+      const retiredState: BackendState = {
+        model: {
+          current: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+          apply: { kind: "setModel" },
+          availableModels: [
+            {
+              baseModelId: "deepseek/deepseek-v4-pro",
+              name: "DeepSeek Pro",
+              provider: "deepseek",
+              effortOptions: [],
+            },
+            {
+              baseModelId: "deepseek/deepseek-flash",
+              name: "DeepSeek Flash",
+              provider: "deepseek",
+              effortOptions: [],
+            },
+          ],
+        },
+        mode: null,
+      };
+      mock.newSession.mockResolvedValueOnce({ sessionId: "acp-retired", state: retiredState });
+      const descriptor = {
+        ...makeWireOnlyDescriptor(),
+        normalizeSelection: (selection: { baseModelId: string; effort: string | null }) =>
+          selection.baseModelId === "deepseek/deepseek-v4-pro" ? null : selection,
+        applySelection: jest.fn(async () => {
+          throw new TypeError("retired model");
+        }),
+      } as unknown as BackendDescriptor;
+      const session = AgentSession.start({
+        backend: mock.asBackend,
+        cwd: "/vault",
+        internalId: "internal-retired",
+        backendId: "opencode",
+        defaultModelSelection,
+        getDescriptor: () => descriptor,
+      });
+
+      await expect(session.ready).rejects.toThrow("no longer supported");
+
+      expect(session.getStatus()).toBe("error");
+      expect(mock.prompt).not.toHaveBeenCalled();
+    }
+  );
+
   it("seeds config-option opencode effort via the effort option, not the model id", async () => {
     // Regression: a cross-backend pick to config-option opencode (≥1.15.13)
     // must set the bare model on the model config option and the effort on the
@@ -2813,6 +2874,55 @@ describe("AgentSession warm-adoption ready gating", () => {
     expect(mock.setSessionModel).not.toHaveBeenCalled();
   });
 
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a resumed legacy Flash state when canonical confirmation fails", async () => {
+    const mock = makeMockBackend();
+    const legacyState: BackendState = {
+      model: {
+        current: { baseModelId: "deepseek/deepseek-v4-flash", effort: null },
+        apply: { kind: "setModel" },
+        availableModels: [
+          {
+            baseModelId: "deepseek/deepseek-v4-flash",
+            name: "Legacy Flash",
+            provider: "deepseek",
+            effortOptions: [],
+          },
+          {
+            baseModelId: "deepseek/deepseek-flash",
+            name: "DeepSeek Flash",
+            provider: "deepseek",
+            effortOptions: [],
+          },
+        ],
+      },
+      mode: null,
+    };
+    const descriptor = {
+      ...makeWireOnlyDescriptor(),
+      normalizeSelection: (selection: { baseModelId: string; effort: string | null }) =>
+        selection.baseModelId === "deepseek/deepseek-v4-flash"
+          ? { ...selection, baseModelId: "deepseek/deepseek-flash" }
+          : selection,
+      applySelection: jest.fn(async () => {
+        throw new Error("model confirmation failed");
+      }),
+    } as unknown as BackendDescriptor;
+    const session = new AgentSession({
+      backend: mock.asBackend,
+      backendSessionId: "resumed-legacy",
+      internalId: "internal-resumed-legacy",
+      backendId: "opencode",
+      initialState: legacyState,
+      defaultModelSelection: { baseModelId: "deepseek/deepseek-flash", effort: null },
+      getDescriptor: () => descriptor,
+    });
+
+    await expect(session.ready).rejects.toThrow("no longer supported");
+
+    expect(session.getStatus()).toBe("error");
+    expect(mock.prompt).not.toHaveBeenCalled();
+  });
+
   it("ready resolves immediately when no default selection is supplied", async () => {
     const mock = makeMockBackend();
     const session = new AgentSession({
@@ -3021,6 +3131,53 @@ describe("AgentSession.setMode", () => {
 });
 
 describe("AgentSession state_changed event", () => {
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks a same-tick prompt after the saved default becomes invalid and allows an explicit valid replacement", async () => {
+    const mock = makeMockBackend();
+    const safeSelection = { baseModelId: "deepseek/deepseek-flash", effort: null };
+    const descriptor = {
+      applySelection: jest.fn(async () => undefined),
+      normalizeSelection: (selection: { baseModelId: string; effort: string | null }) =>
+        selection.baseModelId === "deepseek/deepseek-v4-pro" ? null : selection,
+    } as unknown as BackendDescriptor;
+    const settings = getSettings();
+    const session = new AgentSession({
+      backend: mock.asBackend,
+      backendSessionId: "same-tick-session",
+      internalId: "same-tick-internal",
+      backendId: "opencode",
+      initialState: {
+        model: { current: safeSelection, apply: { kind: "setModel" }, availableModels: [] },
+        mode: null,
+      },
+      getDescriptor: () => descriptor,
+    });
+    await session.ready;
+    try {
+      jest.mocked(getSettings).mockReturnValue({
+        ...settings,
+        agentMode: {
+          ...settings.agentMode,
+          backends: {
+            opencode: {
+              defaultModel: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+            },
+          },
+        },
+      });
+      const blocked = session.sendPrompt("Do not send to the previous model");
+      expect(mock.prompt).not.toHaveBeenCalled();
+      await expect(blocked.turn).rejects.toThrow("no longer supported");
+
+      jest.mocked(getSettings).mockReturnValue(settings);
+      await expect(session.sendPrompt("Use the confirmed model").turn).resolves.toBe("end_turn");
+      expect(mock.prompt).toHaveBeenCalledTimes(1);
+      expect(session.getStatus()).toBe("idle");
+    } finally {
+      jest.mocked(getSettings).mockReturnValue(settings);
+      await session.dispose();
+    }
+  });
+
   it("swaps cached state and notifies onModelChanged", () => {
     const mock = makeMockBackend();
     const session = new AgentSession({
@@ -3045,6 +3202,49 @@ describe("AgentSession state_changed event", () => {
     });
     expect(session.getState()).toBe(newState);
     expect(onModelChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks a retired model selected after startup before prompting", async () => {
+    const mock = makeMockBackend();
+    const safeState: BackendState = {
+      model: {
+        current: { baseModelId: "deepseek/deepseek-flash", effort: null },
+        apply: { kind: "setModel" },
+        availableModels: [],
+      },
+      mode: null,
+    };
+    const descriptor = {
+      applySelection: jest.fn(async () => undefined),
+      normalizeSelection: (selection: { baseModelId: string; effort: string | null }) =>
+        selection.baseModelId === "deepseek/deepseek-v4-pro" ? null : selection,
+    } as unknown as BackendDescriptor;
+    const session = new AgentSession({
+      backend: mock.asBackend,
+      backendSessionId: "acp-1",
+      internalId: "internal-1",
+      backendId: "opencode",
+      initialState: safeState,
+      getDescriptor: () => descriptor,
+    });
+    await session.ready;
+
+    mock.emit({
+      sessionId: "acp-1",
+      update: {
+        sessionUpdate: "state_changed",
+        state: {
+          ...safeState,
+          model: {
+            ...safeState.model!,
+            current: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+          },
+        },
+      },
+    });
+
+    await expect(session.sendPrompt("do not send").turn).rejects.toThrow("no longer supported");
+    expect(mock.prompt).not.toHaveBeenCalled();
   });
 });
 

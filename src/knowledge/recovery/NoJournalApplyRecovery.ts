@@ -33,6 +33,7 @@ export interface NoJournalApplyRecoveryCandidate extends NoJournalApplyRecoveryR
   attempt: number;
   startedAt: number;
   acceptedAt: number;
+  continueBlockedReason?: "manifest_read_set_changed";
 }
 
 /** Durable classification of one accepted Review record at the runtime authority boundary. */
@@ -43,6 +44,7 @@ export type NoJournalApplyRecoveryClassification =
       bundleId: string;
       changeSetId: string;
       jobId: string;
+      continueBlockedReason?: "manifest_read_set_changed";
     }
   | { kind: "requires_decision"; candidate: NoJournalApplyRecoveryCandidate }
   | {

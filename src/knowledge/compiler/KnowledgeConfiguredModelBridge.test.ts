@@ -3,6 +3,7 @@ import {
   createKnowledgeConfiguredModelProjection,
   KNOWLEDGE_CONFIGURED_MODEL_DEFAULTS,
   prepareKnowledgeConfiguredModelPreflight,
+  type KnowledgeConfiguredModelProjectionInput,
   type KnowledgeConfiguredModelProjectInput,
   type PrepareKnowledgeConfiguredModelPreflightInput,
 } from "@/knowledge/compiler/KnowledgeConfiguredModelBridge";
@@ -13,9 +14,10 @@ import {
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import type { ProjectKnowledgePipelineProfileSourceOptions } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
-import type { ModelManagementApi, Provider, ResolvedChatBackendEntry } from "@/modelManagement";
+import type { Provider, ResolvedChatBackendEntry } from "@/modelManagement";
 
-const FLASH = "deepseek-v4-flash";
+const FLASH = "deepseek-flash";
+const LEGACY_FLASH = "deepseek-v4-flash";
 const PRO = "deepseek-v4-pro";
 const PROJECT_ID = "project-a";
 const BUNDLE_ID = "bundle-a";
@@ -81,6 +83,31 @@ function createEntry(
   };
 }
 
+function createInventory(
+  enabledEntries: readonly ResolvedChatBackendEntry[],
+  retainedEntries: readonly ResolvedChatBackendEntry[] = []
+): Pick<KnowledgeConfiguredModelProjectionInput, "configuredModels" | "providers"> {
+  const entries = [...enabledEntries, ...retainedEntries];
+  const providers = new Map(entries.map((entry) => [entry.provider.providerId, entry.provider]));
+  return {
+    configuredModels: entries.map((entry) => entry.configuredModel),
+    providers: [...providers.values()],
+  };
+}
+
+function projectConfiguredModels(
+  input: Omit<KnowledgeConfiguredModelProjectionInput, "configuredModels" | "providers"> &
+    Partial<Pick<KnowledgeConfiguredModelProjectionInput, "configuredModels" | "providers">>
+) {
+  const enabledEntries = input.enabledChatModels.filter(
+    (entry): entry is ResolvedChatBackendEntry => entry.state === "ok"
+  );
+  return createKnowledgeConfiguredModelProjection({
+    ...createInventory(enabledEntries),
+    ...input,
+  });
+}
+
 function createProfileOptions(): ProjectKnowledgePipelineProfileSourceOptions {
   return {
     compilerVersion: "knowledge-compiler-v2",
@@ -104,7 +131,8 @@ function createProfileOptions(): ProjectKnowledgePipelineProfileSourceOptions {
 
 function createModelManagement(
   entries: readonly ResolvedChatBackendEntry[],
-  credential: string | null | Error = CREDENTIAL
+  credential: string | null | Error = CREDENTIAL,
+  retainedEntries: readonly ResolvedChatBackendEntry[] = []
 ): {
   api: PrepareKnowledgeConfiguredModelPreflightInput["modelManagement"];
   resolveEnabled: jest.Mock;
@@ -115,11 +143,13 @@ function createModelManagement(
     credential instanceof Error
       ? jest.fn().mockRejectedValue(credential)
       : jest.fn().mockResolvedValue(credential);
+  const inventory = createInventory(entries, retainedEntries);
   return {
     api: {
       backendConfigRegistry: { resolveEnabled },
-      providerRegistry: { getApiKey },
-    } as unknown as Pick<ModelManagementApi, "backendConfigRegistry" | "providerRegistry">,
+      configuredModelRegistry: { list: () => inventory.configuredModels },
+      providerRegistry: { list: () => inventory.providers, getApiKey },
+    } as unknown as PrepareKnowledgeConfiguredModelPreflightInput["modelManagement"],
     resolveEnabled,
     getApiKey,
   };
@@ -142,20 +172,20 @@ function createPrepareInput(
 
 describe("KnowledgeConfiguredModelBridge", () => {
   describe("createKnowledgeConfiguredModelProjection()", () => {
-    it("projects explicit Flash and Pro defaults without provider secrets (https://github.com/logancyang/obsidian-copilot-preview/issues/312)", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 projects canonical and persisted Flash identities to the same defaults without provider secrets", () => {
       const owners = [
         createOwner("project-flash", "bundle-flash"),
-        createOwner("project-pro", "bundle-pro"),
+        createOwner("project-legacy-flash", "bundle-legacy-flash"),
       ];
-      const result = createKnowledgeConfiguredModelProjection({
+      const result = projectConfiguredModels({
         owners,
         projects: [
           createProject("configured-flash", { id: "project-flash" }),
-          createProject("configured-pro", { id: "project-pro" }),
+          createProject("configured-legacy-flash", { id: "project-legacy-flash" }),
         ],
         enabledChatModels: [
           createEntry(FLASH, "configured-flash"),
-          createEntry(PRO, "configured-pro"),
+          createEntry(LEGACY_FLASH, "configured-legacy-flash"),
         ],
         profileOptions: createProfileOptions(),
       });
@@ -163,7 +193,7 @@ describe("KnowledgeConfiguredModelBridge", () => {
       expect(result.kind).toBe("ready");
       if (result.kind !== "ready") return;
       const flash = result.projection.profileSource.resolve(owners[0]);
-      const pro = result.projection.profileSource.resolve(owners[1]);
+      const legacyFlash = result.projection.profileSource.resolve(owners[1]);
       expect(flash.model.configuration).toMatchObject({
         temperature: 0.1,
         maxTokens: 6_000,
@@ -171,10 +201,11 @@ describe("KnowledgeConfiguredModelBridge", () => {
         verbosity: "medium",
         modelFallback: false,
       });
-      expect(pro.model.configuration).toMatchObject({
-        temperature: 0,
+      expect(legacyFlash.model).toEqual(flash.model);
+      expect(legacyFlash.model.configuration).toMatchObject({
+        temperature: 0.1,
         maxTokens: 6_000,
-        reasoningEffort: "high",
+        reasoningEffort: "minimal",
         verbosity: "medium",
         modelFallback: false,
       });
@@ -184,7 +215,7 @@ describe("KnowledgeConfiguredModelBridge", () => {
     });
 
     it("never replaces a missing Project selection with the first enabled model (https://github.com/logancyang/obsidian-copilot-preview/issues/310)", () => {
-      const result = createKnowledgeConfiguredModelProjection({
+      const result = projectConfiguredModels({
         owners: [createOwner()],
         projects: [createProject("missing-configured-id")],
         enabledChatModels: [createEntry()],
@@ -194,20 +225,20 @@ describe("KnowledgeConfiguredModelBridge", () => {
       expect(result).toEqual({ kind: "diagnostic", code: "model_missing" });
     });
 
-    it("resolves a configured id exactly while rejecting an ambiguous migrated legacy key", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 resolves a configured id exactly while keeping different-provider legacy matches ambiguous", () => {
       const first = createEntry(FLASH, "configured-first", {
         providerId: "provider-first",
       });
       const second = createEntry(FLASH, "configured-second", {
         providerId: "provider-second",
       });
-      const exact = createKnowledgeConfiguredModelProjection({
+      const exact = projectConfiguredModels({
         owners: [createOwner()],
         projects: [createProject("configured-second")],
         enabledChatModels: [first, second],
         profileOptions: createProfileOptions(),
       });
-      const legacy = createKnowledgeConfiguredModelProjection({
+      const legacy = projectConfiguredModels({
         owners: [createOwner()],
         projects: [createProject(`${FLASH}|deepseek`)],
         enabledChatModels: [first, second],
@@ -223,26 +254,82 @@ describe("KnowledgeConfiguredModelBridge", () => {
       expect(legacy).toEqual({ kind: "diagnostic", code: "model_ambiguous" });
     });
 
-    it("applies Project overrides while preserving Pro thinking sampling constraints", () => {
-      const owner = createOwner();
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 keeps a disabled Project model owner from being replaced by an enabled account", () => {
+      const disabledOwner = createEntry(LEGACY_FLASH, "disabled-owner", {
+        providerId: "provider-disabled",
+      });
+      const enabledOtherAccount = createEntry(FLASH, "enabled-other", {
+        providerId: "provider-enabled",
+      });
+      const result = projectConfiguredModels({
+        owners: [createOwner()],
+        projects: [createProject(`${LEGACY_FLASH}|deepseek`)],
+        enabledChatModels: [enabledOtherAccount],
+        ...createInventory([enabledOtherAccount], [disabledOwner]),
+        profileOptions: createProfileOptions(),
+      });
+
+      expect(result).toEqual({ kind: "diagnostic", code: "model_ambiguous" });
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a projection that omits its retained provider inventory", () => {
       const result = createKnowledgeConfiguredModelProjection({
+        owners: [createOwner()],
+        projects: [createProject()],
+        enabledChatModels: [createEntry()],
+        configuredModels: undefined as unknown as readonly never[],
+        providers: [],
+        profileOptions: createProfileOptions(),
+      });
+
+      expect(result).toEqual({ kind: "diagnostic", code: "input_invalid" });
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 resolves a persisted Flash Project key against a canonical configured row", () => {
+      const owner = createOwner();
+      const result = projectConfiguredModels({
+        owners: [owner],
+        projects: [createProject(`${LEGACY_FLASH}|deepseek`)],
+        enabledChatModels: [createEntry(FLASH, "configured-flash")],
+        profileOptions: createProfileOptions(),
+      });
+
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") return;
+      expect(result.projection.profileSource.resolve(owner).model.model).toBe(FLASH);
+    });
+
+    it("applies Project sampling and output overrides to canonical Flash", () => {
+      const owner = createOwner();
+      const result = projectConfiguredModels({
         owners: [owner],
         projects: [
-          createProject("configured-pro", {
+          createProject("configured-flash", {
             modelConfigs: { temperature: 0.7, maxTokens: 8_192 },
           }),
         ],
-        enabledChatModels: [createEntry(PRO, "configured-pro")],
+        enabledChatModels: [createEntry(FLASH, "configured-flash")],
         profileOptions: createProfileOptions(),
       });
 
       expect(result.kind).toBe("ready");
       if (result.kind !== "ready") return;
       expect(result.projection.profileSource.resolve(owner).model.configuration).toMatchObject({
-        temperature: 0,
+        temperature: 0.7,
         maxTokens: 8_192,
-        reasoningEffort: "high",
+        reasoningEffort: "minimal",
       });
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects V4 Pro instead of silently projecting it as Flash", () => {
+      const result = projectConfiguredModels({
+        owners: [createOwner()],
+        projects: [createProject("configured-pro")],
+        enabledChatModels: [createEntry(PRO, "configured-pro")],
+        profileOptions: createProfileOptions(),
+      });
+
+      expect(result).toEqual({ kind: "diagnostic", code: "model_unsupported" });
     });
 
     it.each([
@@ -258,7 +345,7 @@ describe("KnowledgeConfiguredModelBridge", () => {
         "profile_endpoint_invalid",
       ],
     ] as const)("rejects an unsupported configured route %#", (entry, code) => {
-      const result = createKnowledgeConfiguredModelProjection({
+      const result = projectConfiguredModels({
         owners: [createOwner()],
         projects: [createProject(entry.configuredModelId)],
         enabledChatModels: [entry],

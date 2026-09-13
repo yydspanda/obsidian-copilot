@@ -22,6 +22,10 @@ import {
   KnowledgeSourceExecutionPlan,
   type KnowledgeSourceParseJob,
 } from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
+import {
+  projectManifestCommitIntent,
+  validateManifestCommitIntentAgainstManifest,
+} from "@/knowledge/manifest/ManifestCommitIntent";
 import { canonicalizeJson } from "@/knowledge/model/fingerprint";
 import type { JsonValue, KnowledgeBundleConfig } from "@/knowledge/model/types";
 import {
@@ -373,6 +377,24 @@ export class KnowledgeProductionReviewedApplyCoordinator {
           createLiteralRejectCommand(context.record, capturedCommand)
         );
         return { kind: "rejected" };
+      }
+
+      const manifestCommitIntent = projectManifestCommitIntent(
+        context.record.manifestCommitPlan,
+        decision.changeSet
+      );
+      const manifestValidation = validateManifestCommitIntentAgainstManifest(
+        manifestCommitIntent,
+        context.record.manifestCommitPlan,
+        reviewPreparation.manifest,
+        decision.changeSet,
+        bundle
+      );
+      // A known-stale read-set cannot converge after acceptance, so it must stay
+      // pending instead of manufacturing a no-journal Recovery loop.
+      // https://github.com/yydspanda/obsidian-copilot/issues/2
+      if (!manifestValidation.valid) {
+        throw new ChangeSetValidationError(manifestValidation.diagnostics);
       }
 
       // Revalidate target bytes, citations, projection, and adapter-specific

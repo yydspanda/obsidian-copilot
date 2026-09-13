@@ -32,6 +32,7 @@ import {
   createManifestCommitPlanDigest,
   type ManifestCommitMutation,
 } from "@/knowledge/manifest/ManifestCommitIntent";
+import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
 import {
   createFileContentHash,
   createQuoteHash,
@@ -804,6 +805,61 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
       pendingReviews: [expect.objectContaining({ changeSetId: harness.changeSetId })],
     });
     expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+    expect(harness.refresh).not.toHaveBeenCalled();
+    const runtime = parseKnowledgeRuntimeStoreSnapshot(
+      JSON.parse(await harness.capabilities.file.read()) as unknown
+    );
+    expect(runtime.activeTransaction).toBeNull();
+    expect(runtime.applyCommits).toEqual([]);
+  });
+
+  it("blocks Manifest drift before durable Review acceptance (https://github.com/yydspanda/obsidian-copilot/issues/2)", async () => {
+    const harness = await createReviewedApplyHarness("missing");
+    const command = await createAcceptCommand(harness);
+    const manifests = new SourceManifestRepository(
+      new KnowledgeRuntimeManifestStorage(harness.capabilities.runtime)
+    );
+    await manifests.registerSource(BUNDLE_ID, {
+      sourceId: "source-unrelated",
+      sourcePath: "Sources/Unrelated.md",
+      custody: "user_managed",
+    });
+    const currentManifest = await manifests.load(BUNDLE_ID);
+    const currentPlan = await createExecutionPlan(currentManifest, createKnowledgeExecutionOwner());
+    const coordinator = new KnowledgeProductionReviewedApplyCoordinator({
+      runtime: harness.capabilities.runtime,
+      queue: harness.capabilities.queue,
+      reviews: harness.reviews,
+      plan: currentPlan,
+      bundles: [harness.bundle],
+      targetResolver: harness.resolver,
+      fileStore: harness.fileStore,
+      assertCurrent: () => undefined,
+      onGenerationRefreshRequired: harness.refresh,
+    });
+
+    const result = await coordinator.submit(BUNDLE_ID, command, new AbortController().signal);
+
+    expect(result.kind).toBe("blocked");
+    if (result.kind !== "blocked") throw new Error("Expected stale Manifest Review to block");
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
+      expect.arrayContaining([
+        "manifest_commit_revision_mismatch",
+        "manifest_commit_digest_mismatch",
+      ])
+    );
+    await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+      outcome: "pending",
+      recordRevision: 0,
+    });
+    const queue = await harness.capabilities.queue.load(BUNDLE_ID);
+    expect(queue).toMatchObject({
+      jobs: [{ id: "job-reviewed-apply", status: "awaiting_review", stage: "review" }],
+      pendingReviews: [expect.objectContaining({ changeSetId: harness.changeSetId })],
+    });
+    expect(queue.applyClaim).toBeUndefined();
+    expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+    expect(harness.fileStore.files.has(TARGET_PATH)).toBe(false);
     expect(harness.refresh).not.toHaveBeenCalled();
     const runtime = parseKnowledgeRuntimeStoreSnapshot(
       JSON.parse(await harness.capabilities.file.read()) as unknown

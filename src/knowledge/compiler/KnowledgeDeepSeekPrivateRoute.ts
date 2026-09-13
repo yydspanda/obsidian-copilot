@@ -5,6 +5,11 @@ import {
   type KnowledgePrivateModelStage,
 } from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 import {
+  DEEPSEEK_FLASH_WIRE_IDENTITY,
+  resolveDeepSeekWireModelIdentity,
+  SUPPORTED_DEEPSEEK_MODEL_IDENTITIES,
+} from "@/LLMProviders/deepseekModelPolicy";
+import {
   encodeKnowledgeCompilerPrompt,
   KNOWLEDGE_COMPILER_PROMPT_CONTRACT_IDENTITY,
   KNOWLEDGE_COMPILER_PROMPT_CONTRACT_VERSION,
@@ -50,8 +55,6 @@ export const KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT = Object.freeze({
   maxContentBytes: 8_000_000,
 });
 
-const SUPPORTED_MODEL_IDENTITIES = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
-const SUPPORTED_MODELS = new Set<string>(SUPPORTED_MODEL_IDENTITIES);
 const SUPPORTED_REASONING_EFFORTS = new Set(["minimal", "high", "xhigh"]);
 const SUPPORTED_VERBOSITIES = new Set(["low", "medium", "high"]);
 const REQUIRED_CONFIGURATION_KEYS = [
@@ -71,12 +74,18 @@ const REQUIRED_CONFIGURATION_KEYS = [
 ] as const;
 const OPTIONAL_CONFIGURATION_KEYS = ["topP", "endpointIdentity"] as const;
 const REFLECT_APPLY = Reflect.apply;
+const DEEPSEEK_MODEL_IDENTITY_POLICY = SUPPORTED_DEEPSEEK_MODEL_IDENTITIES.map(
+  (profileIdentity) => ({
+    profileIdentity,
+    wireIdentity: DEEPSEEK_FLASH_WIRE_IDENTITY,
+  })
+);
 
 /** Exact reviewed transport behavior identity for pipeline fingerprinting. */
 export const KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY = sha256(
-  `knowledge-deepseek-private-route-v1\n${canonicalizeJson({
+  `knowledge-deepseek-private-route-v2\n${canonicalizeJson({
     endpoint: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
-    models: [...SUPPORTED_MODEL_IDENTITIES],
+    modelIdentityPolicy: DEEPSEEK_MODEL_IDENTITY_POLICY,
     limits: KNOWLEDGE_DEEPSEEK_TRANSPORT_CONTRACT,
     requestPolicy: "post-json-object-two-messages-non-streaming-no-tools-no-fallback-no-retry-v1",
     thinkingPolicy: "minimal-disabled-sampling-or-high-xhigh-enabled-no-sampling-v1",
@@ -88,9 +97,9 @@ export const KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY = sha256(
 
 /** Exact reviewed transport behavior identity for read-only grounded answers. */
 export const KNOWLEDGE_DEEPSEEK_GROUNDED_ANSWER_ROUTE_IDENTITY = sha256(
-  `knowledge-deepseek-grounded-answer-route-v1\n${canonicalizeJson({
+  `knowledge-deepseek-grounded-answer-route-v2\n${canonicalizeJson({
     endpoint: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
-    models: [...SUPPORTED_MODEL_IDENTITIES],
+    modelIdentityPolicy: DEEPSEEK_MODEL_IDENTITY_POLICY,
     promptContractIdentity: KNOWLEDGE_GROUNDED_ANSWER_PROMPT_CONTRACT_IDENTITY,
     requestPolicy: "post-json-object-two-messages-non-streaming-no-tools-no-fallback-no-retry-v1",
     responsePolicy:
@@ -226,7 +235,7 @@ interface CapturedDeepSeekConfiguration {
 
 interface CapturedDeepSeekProfile {
   profile: KnowledgeBundlePipelineProfile;
-  model: string;
+  wireModelIdentity: string;
   configuration: CapturedDeepSeekConfiguration;
   behavior: KnowledgeCompilerPromptBehavior;
 }
@@ -507,13 +516,30 @@ function captureProfile(profileValue: KnowledgeBundlePipelineProfile): CapturedD
     ) {
       throw new TypeError("Unsupported profile");
     }
-    if (!SUPPORTED_MODELS.has(model)) {
+    // DeepSeek now reports only the canonical Flash identity. Resolve the one
+    // documented persisted alias explicitly and reject Pro before provider I/O
+    // rather than accepting its scheduled silent server-side reroute.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const wireModelIdentity =
+      typeof model === "string" ? resolveDeepSeekWireModelIdentity(model) : undefined;
+    if (wireModelIdentity === undefined) {
       throw createDeepSeekTransportError("model_unsupported");
     }
     const configuration = captureConfiguration(readDataProperty(modelProfile, "configuration"));
+    // Route descriptors and profile digests must use the same canonical model
+    // identity as provider requests; otherwise an old Flash alias creates a
+    // second, non-matching authorization identity for identical behavior.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const canonicalProfile = Object.freeze({
+      ...profile,
+      model: Object.freeze({
+        ...(modelProfile as KnowledgeBundlePipelineProfile["model"]),
+        model: wireModelIdentity,
+      }),
+    });
     return Object.freeze({
-      profile,
-      model,
+      profile: canonicalProfile,
+      wireModelIdentity,
       configuration,
       behavior: Object.freeze({
         outputLanguage,
@@ -758,7 +784,7 @@ function createRequestBody(
   const thinkingEnabled = captured.configuration.reasoningEffort !== "minimal";
   const reasoningEffort = captured.configuration.reasoningEffort === "xhigh" ? "max" : "high";
   const body: JsonValue = {
-    model: captured.model,
+    model: captured.wireModelIdentity,
     messages: prompt.messages as unknown as JsonValue,
     response_format: { type: "json_object" },
     stream: false,
@@ -859,7 +885,7 @@ async function invokeDeepSeek(
   if (signal.aborted) throw createAbortError();
   return executeDeepSeekRequest(
     body,
-    captured.model,
+    captured.wireModelIdentity,
     captured.configuration.maxTokens,
     signal,
     apiKey,
@@ -885,7 +911,7 @@ function createGroundedAnswerRequestBody(
   const thinkingEnabled = captured.configuration.reasoningEffort !== "minimal";
   const reasoningEffort = captured.configuration.reasoningEffort === "xhigh" ? "max" : "high";
   const body: JsonValue = {
-    model: captured.model,
+    model: captured.wireModelIdentity,
     messages: prompt.messages as unknown as JsonValue,
     response_format: { type: "json_object" },
     stream: false,
@@ -923,7 +949,7 @@ async function invokeGroundedAnswerDeepSeek(
   if (signal.aborted) throw createAbortError();
   return executeDeepSeekRequest(
     encoded.body,
-    captured.model,
+    captured.wireModelIdentity,
     encoded.maxTokens,
     signal,
     apiKey,

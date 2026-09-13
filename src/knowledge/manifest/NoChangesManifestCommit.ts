@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod";
 
 import type { KnowledgeSourceCompileAuthority } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import type { ManifestCommitPage } from "@/knowledge/manifest/ManifestCommitIntent";

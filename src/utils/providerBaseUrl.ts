@@ -54,6 +54,10 @@ export function groqHostBaseUrl(baseUrl: string | undefined): string | undefined
  */
 const CATALOG_DEFAULT_ORIGINS: Record<string, string> = {
   anthropic: "https://api.anthropic.com",
+  // Official direct DeepSeek requests use a reviewed model-identity policy;
+  // genuine compatible proxies must retain their own model namespace.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
+  deepseek: "https://api.deepseek.com",
   google: "https://generativelanguage.googleapis.com",
   groq: "https://api.groq.com",
   openai: "https://api.openai.com",
@@ -64,6 +68,7 @@ const CATALOG_DEFAULT_ORIGINS: Record<string, string> = {
  * known version/prefix segment a user (or our own seeding) might include.
  */
 const DEFAULT_ENDPOINT_PATHS = new Set(["", "/v1", "/v1beta", "/openai", "/openai/v1"]);
+const DEEPSEEK_DEFAULT_ENDPOINT_PATHS = new Set(["", "/v1"]);
 
 /**
  * `true` when `baseUrl` points at the catalog provider's own canonical API
@@ -83,7 +88,13 @@ export function isCatalogProviderDefaultEndpoint(
   try {
     const url = new URL(baseUrl.trim());
     const path = url.pathname.replace(/\/+$/, "").toLowerCase();
-    return url.origin === defaultOrigin && DEFAULT_ENDPOINT_PATHS.has(path);
+    // DeepSeek's reviewed direct API has only host and `/v1` spellings. Paths
+    // borrowed from Google/Groq are compatible endpoint overrides even on the
+    // same host and must retain their own model namespace.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const acceptedPaths =
+      catalogProviderId === "deepseek" ? DEEPSEEK_DEFAULT_ENDPOINT_PATHS : DEFAULT_ENDPOINT_PATHS;
+    return url.origin === defaultOrigin && acceptedPaths.has(path);
   } catch {
     return false;
   }

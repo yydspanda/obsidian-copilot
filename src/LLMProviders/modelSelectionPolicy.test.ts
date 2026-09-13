@@ -47,10 +47,10 @@ describe("saved model reference policy", () => {
     ).toMatchObject({ name: "safe-model", provider: "openai" });
   });
 
-  it("marks only reviewed direct DeepSeek identities as runnable catalog records", () => {
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 marks only reviewed direct DeepSeek identities as runnable catalog records", () => {
     expect(
       isModelReferenceRunnable({
-        name: "deepseek-v4-flash",
+        name: "deepseek-flash",
         provider: "deepseek",
         enabled: true,
       })

@@ -543,7 +543,7 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       modelOverrides: Record<string, unknown> = {},
       projectOverrides: Partial<ProjectKnowledgePipelineProjectInput> = {}
     ): KnowledgeBundlePipelineProfile {
-      const modelName = (modelOverrides.name as string | undefined) ?? "deepseek-v4-flash";
+      const modelName = (modelOverrides.name as string | undefined) ?? "deepseek-flash";
       return resolveProfile({
         project: createProject({
           projectModelKey: `${modelName}|deepseek`,
@@ -567,7 +567,7 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       });
     }
 
-    it("accepts explicit non-thinking sampling for a current V4 model", () => {
+    it("accepts explicit non-thinking sampling for the current V4.1 Flash model", () => {
       expect(
         resolveDeepSeekProfile({ temperature: 0.2, topP: 0.8 }).model.configuration
       ).toMatchObject({
@@ -577,10 +577,18 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       });
     });
 
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 gives persisted and canonical Flash identities the same profile and fingerprint", () => {
+      const canonical = resolveDeepSeekProfile();
+      const persistedAlias = resolveDeepSeekProfile({ name: "deepseek-v4-flash" });
+
+      expect(persistedAlias).toEqual(canonical);
+      expect(createProfileDigest(persistedAlias)).toBe(createProfileDigest(canonical));
+    });
+
     it("accepts explicit thinking only with the zero placeholder and no top-p", () => {
       expect(
         resolveDeepSeekProfile({
-          name: "deepseek-v4-pro",
+          name: "deepseek-flash",
           reasoningEffort: "high",
           temperature: 0,
         }).model.configuration
@@ -594,7 +602,7 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       expect(
         resolveDeepSeekProfile(
           {
-            name: "deepseek-v4-pro",
+            name: "deepseek-flash",
             reasoningEffort: "high",
             temperature: 0,
           },
@@ -611,13 +619,20 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
         () =>
           resolveDeepSeekProfile(
             {
-              name: "deepseek-v4-pro",
+              name: "deepseek-flash",
               reasoningEffort: "high",
               temperature: 0.1,
             },
             { modelConfigs: { temperature: 0.1 } }
           ),
         "configuration_unsupported"
+      );
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects V4 Pro before route construction", () => {
+      expectProfileError(
+        () => resolveDeepSeekProfile({ name: "deepseek-v4-pro" }),
+        "model_unsupported"
       );
     });
 

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod";
 
 import type { NoChangesManifestCommitPlan } from "@/knowledge/manifest/NoChangesManifestCommit";
 import { knowledgeIngestJobSchema } from "@/knowledge/model/schemas";

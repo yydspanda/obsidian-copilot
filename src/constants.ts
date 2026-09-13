@@ -263,7 +263,11 @@ export enum ChatModels {
   GROQ_LLAMA_8b = "llama3-8b-8192",
   COMMAND_R = "command-r",
   MISTRAL_TINY = "mistral-tiny-latest",
+  // Keep the former Flash identity for persisted settings; new direct-provider
+  // entries use the canonical identity below.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
   DEEPSEEK_V4_FLASH = "deepseek-v4-flash",
+  DEEPSEEK_FLASH = "deepseek-flash",
   DEEPSEEK_REASONER = "deepseek-reasoner",
   DEEPSEEK_CHAT = "deepseek-chat",
   OPENROUTER_GEMINI_3_5_FLASH = "google/gemini-3.5-flash",
@@ -470,19 +474,11 @@ export const BUILTIN_CHAT_MODELS: CustomModel[] = [
     capabilities: [ModelCapability.VISION],
   },
   {
-    name: ChatModels.DEEPSEEK_V4_FLASH,
+    name: ChatModels.DEEPSEEK_FLASH,
     provider: ChatModelProviders.DEEPSEEK,
     enabled: false,
     isBuiltIn: true,
     reasoningEffort: ReasoningEffort.MINIMAL,
-    capabilities: [ModelCapability.REASONING],
-  },
-  {
-    name: ChatModels.COPILOT_PLUS_DEEPSEEK_V4_PRO,
-    provider: ChatModelProviders.DEEPSEEK,
-    enabled: false,
-    isBuiltIn: true,
-    reasoningEffort: ReasoningEffort.HIGH,
     capabilities: [ModelCapability.REASONING],
   },
   {
@@ -624,7 +620,10 @@ export const ProviderInfo: Record<Provider, ProviderMetadata> = {
     host: "https://api.deepseek.com/",
     curlBaseURL: "https://api.deepseek.com",
     keyManagementURL: "https://platform.deepseek.com/api-keys",
-    testModel: ChatModels.DEEPSEEK_CHAT,
+    // Retired identities may now be silently rerouted; verify with the current
+    // canonical model instead.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    testModel: ChatModels.DEEPSEEK_FLASH,
   },
   [ChatModelProviders.COPILOT_PLUS]: {
     label: "Copilot",

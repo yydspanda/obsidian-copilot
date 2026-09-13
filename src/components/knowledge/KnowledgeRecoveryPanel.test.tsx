@@ -189,6 +189,25 @@ describe("KnowledgeRecoveryPanel", () => {
     }
   });
 
+  it("https://github.com/yydspanda/obsidian-copilot/issues/2 shows only Abandon when Knowledge changed since proposal generation", () => {
+    renderPanel(
+      createModel([
+        createItem({
+          id: "outdated-proposal",
+          status: "decision_required",
+          continueBlockedReason: "manifest_read_set_changed",
+          actions: { canContinue: false, canAbandon: true },
+        }),
+      ])
+    );
+
+    expect(screen.getByText(/Knowledge changed since this proposal was generated/)).toBeTruthy();
+    expect(screen.getByText(/This Apply did not write any Wiki files/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Continue outdated-proposal" })).toBeNull();
+    expect(getButton("Abandon outdated-proposal")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Check again outdated-proposal" })).toBeNull();
+  });
+
   it("marks the matching row busy and suppresses concurrent recovery commands", () => {
     const items = [
       createItem({

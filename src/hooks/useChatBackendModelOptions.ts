@@ -1,4 +1,9 @@
-import { backendPickerAtomFamily, resolveChatModelSelectionId } from "@/modelManagement";
+import {
+  backendPickerAtomFamily,
+  configuredModelsAtom,
+  providersAtom,
+  resolveChatModelSelectionId,
+} from "@/modelManagement";
 import { settingsStore } from "@/settings/model";
 import { useAtomValue } from "jotai";
 import { useCallback, useMemo } from "react";
@@ -16,6 +21,8 @@ export interface ChatBackendModelOptions {
 /** Native-select-ready chat backend options plus legacy-key compatibility resolution. */
 export function useChatBackendModelOptions(): ChatBackendModelOptions {
   const entries = useAtomValue(backendPickerAtomFamily("chat"), { store: settingsStore });
+  const configuredModels = useAtomValue(configuredModelsAtom, { store: settingsStore });
+  const providers = useAtomValue(providersAtom, { store: settingsStore });
   const options = useMemo(() => {
     const result: ChatBackendModelOption[] = [];
     for (const entry of entries) {
@@ -29,8 +36,13 @@ export function useChatBackendModelOptions(): ChatBackendModelOptions {
   }, [entries]);
 
   const resolveSelectionId = useCallback(
-    (selection: string | undefined) => resolveChatModelSelectionId(entries, selection),
-    [entries]
+    (selection: string | undefined) => {
+      return resolveChatModelSelectionId(entries, selection, {
+        configuredModels,
+        providers: Object.values(providers),
+      });
+    },
+    [configuredModels, entries, providers]
   );
 
   return { options, resolveSelectionId };

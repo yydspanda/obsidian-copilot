@@ -18,7 +18,7 @@ import {
 import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
 
 const PROJECT_ID = "project-personal";
-const MODEL_NAME = "deepseek-v4-pro";
+const MODEL_NAME = "deepseek-flash";
 const MODEL_KEY = `${MODEL_NAME}|deepseek`;
 const MODEL_SECRET = "sk-model-secret-canary";
 const PROVIDER_SECRET = "sk-provider-secret-canary";
@@ -198,6 +198,22 @@ describe("KnowledgeProductionPreflightComposer", () => {
       expect(composer.preflight()).toEqual({ kind: "ready", bundleCount: 1 });
       expect(fetchPort).not.toHaveBeenCalled();
     }
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 uses the credential on a persisted Flash alias after the profile becomes canonical", () => {
+    const fetchPort = createFetchPort();
+    const composer = new KnowledgeProductionPreflightComposer(
+      createInput({
+        projects: [createProject({ projectModelKey: "deepseek-v4-flash|deepseek" })],
+        settings: createSettings([
+          createModel({ name: "deepseek-v4-flash", apiKey: MODEL_SECRET }),
+        ]),
+        fetchPort,
+      })
+    );
+
+    expect(composer.preflight()).toEqual({ kind: "ready", bundleCount: 1 });
+    expect(fetchPort).not.toHaveBeenCalled();
   });
 
   it("does not hide an invalid selected model key behind a valid provider fallback", () => {

@@ -136,7 +136,7 @@ import { KnowledgeProductionRecoveryActionCoordinator } from "@/knowledge/startu
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 
 const PROJECT_ID = "project-personal";
-const MODEL_NAME = "deepseek-v4-pro";
+const MODEL_NAME = "deepseek-flash";
 const MODEL_KEY = `${MODEL_NAME}|deepseek`;
 const BUNDLE_ID = "personal";
 const SOURCE_ID = "source-atlas";
@@ -409,7 +409,10 @@ interface RecoveryActionHarness {
 }
 
 /** Seeds an accepted-not-started or requires-decision production recovery state. */
-async function createHarness(startApply: boolean): Promise<RecoveryActionHarness> {
+async function createHarness(
+  startApply: boolean,
+  advanceManifestBeforeAcceptance = false
+): Promise<RecoveryActionHarness> {
   const fetchPort = createFetchPort();
   const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
   const vault = new RecoveryVaultHarness();
@@ -519,6 +522,25 @@ async function createHarness(startApply: boolean): Promise<RecoveryActionHarness
   await queue.runNext(BUNDLE_ID);
   const pending = await reviews.get(BUNDLE_ID, proposal.id);
   if (pending?.outcome !== "pending") throw new Error("Expected pending Review before acceptance");
+  if (advanceManifestBeforeAcceptance) {
+    await new KnowledgeRuntimeManifestStorage(runtime).write(
+      BUNDLE_ID,
+      {
+        ...manifest,
+        revision: manifest.revision + 1,
+        entries: [
+          ...manifest.entries,
+          {
+            sourceId: "source-other",
+            sourcePath: "Sources/personal/Other.md",
+            sourceKey: toWindowsPathKey("Sources/personal/Other.md"),
+            custody: "user_managed",
+          },
+        ],
+      },
+      manifest.revision
+    );
+  }
   const accepted = await reviews.accept(
     BUNDLE_ID,
     pending.changeSetId,
@@ -644,6 +666,64 @@ describe("KnowledgeProductionRecoveryActionCoordinator", () => {
     harness.lifecycle.close();
   });
 
+  it("https://github.com/yydspanda/obsidian-copilot/issues/2 blocks stale accepted_not_started Continue before source or Vault access", async () => {
+    const harness = await createHarness(false, true);
+    expect(harness.classification).toMatchObject({
+      kind: "accepted_not_started",
+      continueBlockedReason: "manifest_read_set_changed",
+    });
+    harness.vault.clearCalls();
+    const runtimeBefore = await harness.runtimeFile.read();
+
+    await expect(
+      harness.coordinator.continue(
+        BUNDLE_ID,
+        getRecoveryId(harness.classification),
+        harness.snapshot.runtimeRevision,
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "blocked" });
+
+    expect(harness.vault.readBinary).not.toHaveBeenCalled();
+    expect(harness.vault.read).not.toHaveBeenCalled();
+    expect(harness.vault.stat).not.toHaveBeenCalled();
+    expect(harness.vault.create).not.toHaveBeenCalled();
+    expect(harness.vault.process).not.toHaveBeenCalled();
+    expect(harness.fetchPort).not.toHaveBeenCalled();
+    expect(harness.refresh).not.toHaveBeenCalled();
+    expect(await harness.runtimeFile.read()).toBe(runtimeBefore);
+    expect(harness.vault.files.has(TARGET_PATH)).toBe(false);
+    harness.lifecycle.close();
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/2 explicitly abandons stale accepted_not_started without source or Vault access", async () => {
+    const harness = await createHarness(false, true);
+    harness.vault.clearCalls();
+
+    await expect(
+      harness.coordinator.abandon(
+        BUNDLE_ID,
+        getRecoveryId(harness.classification),
+        harness.snapshot.runtimeRevision,
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "completed" });
+
+    expect(harness.vault.readBinary).not.toHaveBeenCalled();
+    expect(harness.vault.read).not.toHaveBeenCalled();
+    expect(harness.vault.stat).not.toHaveBeenCalled();
+    expect(harness.vault.create).not.toHaveBeenCalled();
+    expect(harness.vault.process).not.toHaveBeenCalled();
+    expect(harness.fetchPort).not.toHaveBeenCalled();
+    expect(harness.refresh).toHaveBeenCalledTimes(1);
+    await expect(harness.queue.load(BUNDLE_ID)).resolves.toMatchObject({
+      jobs: [{ id: "job-atlas-recovery", status: "cancelled", stage: "cancelled" }],
+      applyAbandonments: [expect.objectContaining({ changeSetId: harness.accepted.changeSetId })],
+    });
+    expect(harness.vault.files.has(TARGET_PATH)).toBe(false);
+    harness.lifecycle.close();
+  });
+
   it("continues an existing requires_decision claim without starting another apply", async () => {
     const harness = await createHarness(true);
     expect(harness.classification.kind).toBe("requires_decision");
@@ -662,6 +742,36 @@ describe("KnowledgeProductionRecoveryActionCoordinator", () => {
     await expect(harness.queue.load(BUNDLE_ID)).resolves.toMatchObject({
       jobs: [{ id: "job-atlas-recovery", status: "completed", stage: "completed" }],
     });
+    harness.lifecycle.close();
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/2 blocks a stale-Manifest Continue before Vault access or refresh", async () => {
+    const harness = await createHarness(true, true);
+    expect(harness.classification).toMatchObject({
+      kind: "requires_decision",
+      candidate: { continueBlockedReason: "manifest_read_set_changed" },
+    });
+    harness.vault.clearCalls();
+    const runtimeBefore = await harness.runtimeFile.read();
+
+    await expect(
+      harness.coordinator.continue(
+        BUNDLE_ID,
+        getRecoveryId(harness.classification),
+        harness.snapshot.runtimeRevision,
+        new AbortController().signal
+      )
+    ).resolves.toEqual({ kind: "blocked" });
+
+    expect(harness.vault.readBinary).not.toHaveBeenCalled();
+    expect(harness.vault.read).not.toHaveBeenCalled();
+    expect(harness.vault.stat).not.toHaveBeenCalled();
+    expect(harness.vault.create).not.toHaveBeenCalled();
+    expect(harness.vault.process).not.toHaveBeenCalled();
+    expect(harness.fetchPort).not.toHaveBeenCalled();
+    expect(harness.refresh).not.toHaveBeenCalled();
+    expect(await harness.runtimeFile.read()).toBe(runtimeBefore);
+    expect(harness.vault.files.has(TARGET_PATH)).toBe(false);
     harness.lifecycle.close();
   });
 

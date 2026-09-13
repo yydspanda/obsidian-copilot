@@ -1281,7 +1281,22 @@ export class AgentSessionManager {
     // An absent preference means "Agent default": let session/new report the
     // backend's actual selection. Catalog ordering describes choices, not a
     // default, so only explicit transient or persisted selections are applied.
-    const resolvedSeed = seedSelection ?? this.getDefaultSelection(resolvedId) ?? undefined;
+    const requestedSeed = seedSelection ?? this.getDefaultSelection(resolvedId) ?? undefined;
+    const resolvedSeed =
+      requestedSeed && descriptor.normalizeSelection
+        ? descriptor.normalizeSelection(requestedSeed, getSettings())
+        : requestedSeed;
+    // A retired persisted model must stop session creation before `newSession`
+    // can silently choose a different model and make the unsafe fallback usable.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    if (resolvedSeed === null) {
+      const error = new TypeError(
+        `The saved model selection is no longer supported by ${descriptor.displayName}.`
+      );
+      this.setLastError(error.message);
+      this.finishPendingCreate();
+      throw error;
+    }
 
     // A new chat must always start from a brand-new backend session. When a
     // warm preload probe is available we reuse its already-spawned and
@@ -2111,10 +2126,18 @@ export class AgentSessionManager {
 
   /** Read the user's sticky model preference for `backendId`, or `null` if none. */
   getDefaultSelection(backendId: BackendId): ModelSelection | null {
-    const backends = getSettings().agentMode?.backends as
+    const settings = getSettings();
+    const backends = settings.agentMode?.backends as
       | Record<string, { defaultModel?: ModelSelection | null } | undefined>
       | undefined;
-    return backends?.[backendId]?.defaultModel ?? null;
+    const persisted = backends?.[backendId]?.defaultModel ?? null;
+    if (!persisted) return null;
+    const descriptor = this.opts.resolveDescriptor(backendId);
+    // Read-time normalization keeps compatible aliases aligned with current
+    // catalogs without rewriting synced settings. Preserve rejected identities
+    // so session boundaries can surface the error instead of using a fallback.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    return descriptor?.normalizeSelection?.(persisted, settings) ?? persisted;
   }
 
   private repairDefaultEffort(backendId: BackendId, state: BackendState | null): void {
@@ -3153,6 +3176,23 @@ export class AgentSessionManager {
       return null;
     }
 
+    const reportedSelection = resumeResult.state.model?.current;
+    const resumedSelection =
+      reportedSelection && descriptor.normalizeSelection
+        ? descriptor.normalizeSelection(reportedSelection, getSettings())
+        : reportedSelection;
+    // Resumed state is just as capable of reviving a retired provider model as
+    // a saved default. Reject it before constructing a sendable AgentSession.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    if (resumedSelection === null) {
+      const error = new TypeError(
+        `The resumed model selection is no longer supported by ${descriptor.displayName}.`
+      );
+      this.setLastError(error.message);
+      this.finishPendingCreate();
+      throw error;
+    }
+
     const internalId = uuidv4();
     const session = new AgentSession({
       backend,
@@ -3161,6 +3201,7 @@ export class AgentSessionManager {
       backendId,
       projectId,
       initialState: resumeResult.state,
+      defaultModelSelection: resumedSelection,
       cwd,
       getDescriptor: () => this.opts.resolveDescriptor(backendId),
       runFanoutTurn: (input) => this.runFanoutTurn(input),
@@ -3179,6 +3220,19 @@ export class AgentSessionManager {
           }
         : {}),
     });
+
+    try {
+      // A resumed session confirms the normalized model asynchronously. Wait
+      // before replaying settings or returning it so a failed canonical switch
+      // cannot escape as an error-state session with a rejected ready promise.
+      // https://github.com/yydspanda/obsidian-copilot/issues/3
+      await session.ready;
+    } catch (error) {
+      await session.dispose();
+      this.setLastError(err2String(error));
+      this.finishPendingCreate();
+      throw error;
+    }
 
     // ACP backends rebuild the visible transcript from the frames the agent
     // replays during `loadSession`; `resumeSession` (Claude) returns none and

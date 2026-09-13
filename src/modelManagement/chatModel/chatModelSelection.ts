@@ -1,4 +1,8 @@
 import { ChatModelProviders } from "@/constants";
+import {
+  type ChatModelSelectionInventory,
+  resolveDeepSeekChatModelSelection,
+} from "@/modelManagement/chatModel/deepSeekChatModelSelection";
 import type { EnabledBackendEntry } from "@/modelManagement/types/runtime";
 
 import {
@@ -7,6 +11,9 @@ import {
 } from "./configuredModelToCustomModel";
 
 export type ResolvedChatBackendEntry = Extract<EnabledBackendEntry, { state: "ok" }>;
+export type { ChatModelSelectionInventory } from "@/modelManagement/chatModel/deepSeekChatModelSelection";
+
+const EMPTY_RESOLVED_CHAT_BACKEND_ENTRIES: readonly ResolvedChatBackendEntry[] = Object.freeze([]);
 
 const DISPLAY_NAME_TO_LEGACY_PROVIDER: Record<string, ChatModelProviders> = {
   ollama: ChatModelProviders.OLLAMA,
@@ -46,28 +53,76 @@ export function isChatModelSelectionForEntry(
 }
 
 /**
+ * Whether a legacy selection can name more than one retained provider, including disabled rows.
+ * https://github.com/yydspanda/obsidian-copilot/issues/3
+ *
+ * @param inventory - All retained configured models and their provider accounts
+ * @param selection - Persisted configured-model ID or legacy selection key
+ */
+export function hasAmbiguousPersistedChatModelSelection(
+  inventory: ChatModelSelectionInventory,
+  selection: string
+): boolean {
+  return resolveDeepSeekChatModelSelection(
+    EMPTY_RESOLVED_CHAT_BACKEND_ENTRIES,
+    selection,
+    isChatModelSelectionForEntry,
+    inventory
+  ).hasAmbiguousOwner;
+}
+
+/**
+ * Finds exact selection matches before considering the narrow DeepSeek Flash alias.
+ *
+ * @param entries - Enabled backend rows from the current registry snapshot
+ * @param selection - Persisted configured-model ID or legacy `name|provider` key
+ */
+export function findChatBackendEntryMatches(
+  entries: readonly EnabledBackendEntry[],
+  selection: string
+): readonly ResolvedChatBackendEntry[] {
+  const okEntries = entries.filter(
+    (entry): entry is ResolvedChatBackendEntry => entry.state === "ok"
+  );
+  return resolveDeepSeekChatModelSelection(okEntries, selection, isChatModelSelectionForEntry)
+    .matches;
+}
+
+/**
  * Resolve a persisted chat selection. New writes are configured-model IDs, while legacy
  * `name|provider` keys remain readable for settings, project files, and command frontmatter.
  */
 export function findChatBackendEntry(
   entries: readonly EnabledBackendEntry[],
-  preferredSelection: string | undefined
+  preferredSelection: string | undefined,
+  inventory?: ChatModelSelectionInventory
 ): ResolvedChatBackendEntry | undefined {
   const okEntries = entries.filter(
     (entry): entry is ResolvedChatBackendEntry => entry.state === "ok"
   );
   if (!preferredSelection) return okEntries[0];
 
-  return (
-    okEntries.find((entry) => isChatModelSelectionForEntry(entry, preferredSelection)) ??
-    okEntries[0]
+  const resolution = resolveDeepSeekChatModelSelection(
+    okEntries,
+    preferredSelection,
+    isChatModelSelectionForEntry,
+    inventory
   );
+  // Direct DeepSeek selections must not inherit an unrelated first enabled
+  // row or another account when the saved identity is retired or ambiguous.
+  // Retained disabled rows participate because they preserve the historical
+  // provider owner even though they are not eligible request targets. Other
+  // providers retain the historical stale-selection fallback.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
+  if (resolution.mustFailClosed) return undefined;
+  return resolution.matches[0] ?? okEntries[0];
 }
 
 /** Return the configured-model ID represented by either a new or legacy selection. */
 export function resolveChatModelSelectionId(
   entries: readonly EnabledBackendEntry[],
-  selection: string | undefined
+  selection: string | undefined,
+  inventory?: ChatModelSelectionInventory
 ): string | undefined {
-  return findChatBackendEntry(entries, selection)?.configuredModelId;
+  return findChatBackendEntry(entries, selection, inventory)?.configuredModelId;
 }

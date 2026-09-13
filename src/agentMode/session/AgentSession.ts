@@ -61,6 +61,8 @@ import {
   type PendingFanoutContext,
 } from "@/agentMode/session/fanout/fanoutTypes";
 import { v4 as uuidv4 } from "uuid";
+import { getSettings } from "@/settings/model";
+import { assertSessionModelSelectionSupported } from "@/agentMode/session/modelSelectionGuard";
 
 /**
  * Seam the session calls to dispatch a multi-agent read-only QA turn. Supplied
@@ -514,10 +516,16 @@ export class AgentSession {
       // selection is applied to the backend.
       const selection = opts.defaultModelSelection ?? originalState?.model?.current;
       if (selection && originalState) {
-        this.ready = this.confirmSeededSelection(selection, originalState).finally(() => {
-          this.startupSettled = true;
-          this.recomputeStatusIfChanged();
-        });
+        this.ready = this.confirmSeededSelection(selection, originalState)
+          .then(() => this.assertCurrentSelectionNormalized())
+          .catch((error) => {
+            this.startupFailed = true;
+            throw error;
+          })
+          .finally(() => {
+            this.startupSettled = true;
+            this.recomputeStatusIfChanged();
+          });
       } else {
         this.startupSettled = true;
         this.ready = Promise.resolve();
@@ -593,6 +601,7 @@ export class AgentSession {
 
       const selection = defaultModelSelection ?? resp.state.model?.current;
       if (selection) await this.confirmSeededSelection(selection, resp.state);
+      this.assertCurrentSelectionNormalized();
       this.startupSettled = true;
       this.recomputeStatusIfChanged();
     } catch (err) {
@@ -687,6 +696,16 @@ export class AgentSession {
       this.currentState = originalState;
       this.notifyModelChanged();
     }
+  }
+
+  /** Reject a backend state that still requires normalization after seed confirmation. */
+  private assertCurrentSelectionNormalized(): void {
+    assertSessionModelSelectionSupported(
+      this.getDescriptor?.(),
+      this.currentState?.model?.current,
+      getSettings(),
+      this.backendId
+    );
   }
 
   /**
@@ -1016,6 +1035,10 @@ export class AgentSession {
     const sessionId = this.backendSessionId!;
     const signal = this.abortController!.signal;
     try {
+      // Cover same-tick settings changes and fan-out before any asynchronous
+      // preparation can dispatch this turn with an invalid saved selection.
+      // https://github.com/yydspanda/obsidian-copilot/issues/3
+      this.assertCurrentSelectionNormalized();
       const priorPromptDrain = this.cancelledPromptDrain;
       if (priorPromptDrain) {
         await Promise.race([
@@ -1109,6 +1132,11 @@ export class AgentSession {
       const promptStarted = !signal.aborted;
       let resp: PromptOutput = { stopReason: "cancelled" };
       if (promptStarted) {
+        // Backend state can change after startup (for example an external
+        // OpenCode model switch). Re-check at the last local boundary so a
+        // retired or aliased identity never reaches provider I/O.
+        // https://github.com/yydspanda/obsidian-copilot/issues/3
+        this.assertCurrentSelectionNormalized();
         const backingPrompt = this.backend.prompt(req);
         resp = await Promise.race([
           backingPrompt,

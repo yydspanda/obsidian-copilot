@@ -356,7 +356,7 @@ async function confirmRequiresDecision(
 /** Begins an accepted-not-started apply or confirms its exact ambiguous commit. */
 async function beginAcceptedApply(
   state: KnowledgeProductionRecoveryActionCoordinatorState,
-  preparation: ContinuePreparation,
+  queue: IngestQueue,
   bundleId: string,
   reference: NoJournalApplyRecoveryReference,
   record: AcceptedChangeSetReviewRecord
@@ -364,10 +364,10 @@ async function beginAcceptedApply(
   const receipt = createAcceptedReceipt(bundleId, record);
   let applying;
   try {
-    applying = await preparation.queue.beginReviewApply(bundleId, receipt);
+    applying = await queue.beginReviewApply(bundleId, receipt);
   } catch {
     try {
-      applying = await preparation.queue.beginReviewApply(bundleId, receipt);
+      applying = await queue.beginReviewApply(bundleId, receipt);
     } catch (error) {
       const confirmed = await confirmRequiresDecision(state, bundleId, reference, record);
       if (confirmed) return confirmed;
@@ -555,7 +555,7 @@ export class KnowledgeProductionRecoveryActionCoordinator {
     return operation;
   }
 
-  /** Abandons one exact requires-decision state without source or Wiki access. */
+  /** Abandons one exact actionable no-journal state without source or Wiki access. */
   abandon(
     bundleId: string,
     recoveryId: string,
@@ -604,6 +604,17 @@ export class KnowledgeProductionRecoveryActionCoordinator {
       ) {
         return { kind: "blocked" };
       }
+      // https://github.com/yydspanda/obsidian-copilot/issues/2
+      // A proposal whose Manifest read-set changed cannot succeed on retry; keep only explicit
+      // abandonment available without touching source or Wiki adapters.
+      if (
+        (classification.kind === "accepted_not_started" &&
+          classification.continueBlockedReason === "manifest_read_set_changed") ||
+        (classification.kind === "requires_decision" &&
+          classification.candidate.continueBlockedReason === "manifest_read_set_changed")
+      ) {
+        return { kind: "blocked" };
+      }
 
       let acceptedRecord: AcceptedChangeSetReviewRecord | undefined;
       let job: KnowledgeSourceParseJob;
@@ -638,7 +649,7 @@ export class KnowledgeProductionRecoveryActionCoordinator {
         durableAttempted = true;
         expected = await beginAcceptedApply(
           state,
-          preparation,
+          preparation.queue,
           bundleId,
           reference,
           acceptedRecord
@@ -694,16 +705,32 @@ export class KnowledgeProductionRecoveryActionCoordinator {
         signal
       );
       if (lookup.kind !== "found") return lookup;
-      if (
-        lookup.classification.kind === "committed" ||
-        lookup.classification.kind === "abandoned"
-      ) {
+      const { classification } = lookup;
+      if (classification.kind === "committed" || classification.kind === "abandoned") {
         return { kind: "stale" };
       }
-      if (lookup.classification.kind !== "requires_decision") {
+      // https://github.com/yydspanda/obsidian-copilot/issues/2
+      // Explicit Abandon may move this pre-claim legacy/race state into the existing claim-backed
+      // no-journal transition, without loading source artifacts or touching Wiki files.
+      if (
+        classification.kind !== "requires_decision" &&
+        (classification.kind !== "accepted_not_started" ||
+          classification.continueBlockedReason !== "manifest_read_set_changed")
+      ) {
         return { kind: "blocked" };
       }
       assertInvocation(state, signal);
+      if (classification.kind === "accepted_not_started") {
+        const record = await loadAcceptedNotStartedRecord(state, bundleId, classification);
+        assertInvocation(state, signal);
+        if (!record) return { kind: "stale" };
+        durableAttempted = true;
+        const queue = new IngestQueue(
+          new KnowledgeRuntimeQueueStorage(state.runtime, createKnowledgeExecutionOwner()),
+          new RecoveryExecutionUnavailableExecutor()
+        );
+        await beginAcceptedApply(state, queue, bundleId, lookup.reference, record);
+      }
       durableAttempted = true;
       const recovery = new NoJournalApplyRecoveryCoordinator({
         state: new KnowledgeRuntimeNoJournalApplyRecoveryPort(state.runtime),

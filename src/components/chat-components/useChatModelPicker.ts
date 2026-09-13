@@ -41,6 +41,19 @@ const EMPTY_ENTRY: ModelSelectorEntry = {
 const EMPTY_ENTRY_KEY = getModelKeyFromModel(EMPTY_ENTRY);
 
 /**
+ * Synthetic disabled row shown when a retained selection is intentionally not
+ * allowed to fall through to a different model.
+ */
+const UNAVAILABLE_ENTRY: ModelSelectorEntry = {
+  name: "__chat_model_unavailable__",
+  provider: "",
+  displayName: "Model unavailable — choose another",
+  enabled: true,
+  _disabledReason: "Choose another model",
+};
+const UNAVAILABLE_ENTRY_KEY = getModelKeyFromModel(UNAVAILABLE_ENTRY);
+
+/**
  * Drives the chat model picker off the model-management "chat" backend
  * (`backends.chat.enabledModels`) instead of the legacy `settings.activeModels`.
  *
@@ -48,7 +61,7 @@ const EMPTY_ENTRY_KEY = getModelKeyFromModel(EMPTY_ENTRY);
  * legacy `name|provider` key; `value`/`onChange` translate between that id
  * (what the caller stores) and the `ModelSelector` model key internally. The
  * displayed value reflects the *effective* model — the stored selection if it's
- * still enabled, else the first enabled model — matching `resolveChatBackendModel`.
+ * still enabled, otherwise the runtime resolver's fallback or fail-closed result.
  */
 export function useChatModelPicker(params: {
   /** Current selection — a `configuredModelId`. */
@@ -98,14 +111,18 @@ export function useChatModelPicker(params: {
   }, [entries]);
 
   const resolvedValue = React.useMemo(() => {
-    const resolvedId = resolveChatModelSelectionId(entries, value);
+    const resolvedId = resolveChatModelSelectionId(entries, value, {
+      configuredModels: settings.configuredModels,
+      providers: Object.values(settings.providers),
+    });
     const current = resolvedId ? idToModelKey.get(resolvedId) : undefined;
     if (current) return current;
-    // Fallback must match the runtime's order-preserving "first enabled" pick
-    // (`resolveChatBackendModel`), so resolve against the unsorted list.
-    const first = models[0];
-    return first ? getModelKeyFromModel(first) : "";
-  }, [entries, value, idToModelKey, models]);
+    // Some direct-provider selections deliberately fail closed instead of
+    // inheriting another account or provider. Keep that security decision
+    // visible and let the user make the replacement choice explicitly.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    return models.length > 0 ? UNAVAILABLE_ENTRY_KEY : "";
+  }, [entries, value, idToModelKey, models.length, settings.configuredModels, settings.providers]);
 
   // Display order only: Self-Host Mode sinks cloud (warned) models to the
   // bottom via a stable partition. Selection/fallback stay on the unsorted
@@ -133,8 +150,11 @@ export function useChatModelPicker(params: {
     return { models: [...lockedRows, EMPTY_ENTRY], value: EMPTY_ENTRY_KEY, onChange: NOOP };
   }
 
+  const pickerModels =
+    resolvedValue === UNAVAILABLE_ENTRY_KEY ? [UNAVAILABLE_ENTRY, ...displayModels] : displayModels;
+
   return {
-    models: lockedRows.length > 0 ? [...lockedRows, ...displayModels] : displayModels,
+    models: lockedRows.length > 0 ? [...lockedRows, ...pickerModels] : pickerModels,
     value: resolvedValue,
     onChange: handleChange,
   };

@@ -1,4 +1,7 @@
-import { isCurrentDeepSeekModelIdentity } from "@/LLMProviders/deepseekModelPolicy";
+import {
+  isCurrentDeepSeekModelIdentity,
+  resolveDeepSeekWireModelIdentity,
+} from "@/LLMProviders/deepseekModelPolicy";
 import {
   createKnowledgeDeepSeekPrivateRoute,
   createKnowledgeDeepSeekGroundedAnswerModelRoute,
@@ -268,11 +271,17 @@ function selectCredential(
   profile: KnowledgeBundlePipelineProfile
 ): string {
   const activeModels = snapshotDenseArray(readDataProperty(settings, "activeModels"));
-  const matches = activeModels.filter(
-    (model) =>
-      readModelIdentity(model, "name") === profile.model.model &&
-      readModelIdentity(model, "provider") === profile.model.provider
-  );
+  const matches = activeModels.filter((model) => {
+    const provider = readModelIdentity(model, "provider");
+    const modelIdentity = readModelIdentity(model, "name");
+    if (provider !== profile.model.provider) return false;
+    // The profile stores the canonical wire identity, while the exact model
+    // record selected earlier may still retain DeepSeek's persisted Flash alias.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const credentialIdentity =
+      provider === "deepseek" ? resolveDeepSeekWireModelIdentity(modelIdentity) : modelIdentity;
+    return credentialIdentity === profile.model.model;
+  });
   if (matches.length !== 1) {
     throw new KnowledgeProductionPreflightFailure("input_invalid");
   }

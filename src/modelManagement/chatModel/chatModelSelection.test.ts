@@ -2,7 +2,13 @@ import { ChatModelProviders } from "@/constants";
 import type { ConfiguredModel, Provider } from "@/modelManagement/types/persisted";
 import type { EnabledBackendEntry } from "@/modelManagement/types/runtime";
 
-import { findChatBackendEntry, resolveChatModelSelectionId } from "./chatModelSelection";
+import {
+  findChatBackendEntry,
+  findChatBackendEntryMatches,
+  hasAmbiguousPersistedChatModelSelection,
+  isChatModelSelectionForEntry,
+  resolveChatModelSelectionId,
+} from "./chatModelSelection";
 
 function provider(id: string, overrides: Partial<Provider> = {}): Provider {
   return {
@@ -31,74 +37,164 @@ function entry(
 }
 
 describe("chatModelSelection", () => {
-  it("resolves configured-model ids", () => {
-    const p = provider("p1");
-    const entries = [entry("a", "gpt-4o", p), entry("b", "gpt-5", p)];
+  describe("hasAmbiguousPersistedChatModelSelection()", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 reports retained owners on different accounts but not aliases on one account", () => {
+      const official = provider("deepseek-official", {
+        origin: { kind: "byok", catalogProviderId: "deepseek" },
+      });
+      const proxy = provider("deepseek-proxy", {
+        origin: { kind: "byok", catalogProviderId: "deepseek" },
+        baseUrl: "https://proxy.example/v1",
+      });
+      const selection = `deepseek-v4-flash|${ChatModelProviders.DEEPSEEK}`;
 
-    expect(findChatBackendEntry(entries, "b")?.configuredModelId).toBe("b");
-    expect(resolveChatModelSelectionId(entries, "b")).toBe("b");
-  });
-
-  it("resolves legacy name|provider keys", () => {
-    const p = provider("p1");
-    const target = entry("a", "gpt-4o", p);
-
-    expect(resolveChatModelSelectionId([target], `gpt-4o|${ChatModelProviders.OPENAI}`)).toBe("a");
-  });
-
-  it("resolves legacy Copilot Plus keys to the Plus configured model", () => {
-    const plus = provider("plus", {
-      origin: { kind: "copilot-plus" },
-      requiresApiKey: false,
+      expect(
+        hasAmbiguousPersistedChatModelSelection(
+          {
+            configuredModels: [
+              entry("canonical", "deepseek-flash", official).configuredModel,
+              entry("alias", "deepseek-v4-flash", official).configuredModel,
+            ],
+            providers: [official],
+          },
+          selection
+        )
+      ).toBe(false);
+      expect(
+        hasAmbiguousPersistedChatModelSelection(
+          {
+            configuredModels: [
+              entry("canonical", "deepseek-flash", official).configuredModel,
+              entry("proxy", "deepseek-v4-flash", proxy).configuredModel,
+            ],
+            providers: [official, proxy],
+          },
+          selection
+        )
+      ).toBe(true);
     });
-    const byok = entry("byok", "gpt-4o", provider("p1"));
-    const plusEntry = entry("plus-model", "copilot-plus-flash", plus);
-
-    expect(
-      resolveChatModelSelectionId(
-        [byok, plusEntry],
-        `copilot-plus-flash|${ChatModelProviders.COPILOT_PLUS}`
-      )
-    ).toBe("plus-model");
   });
 
-  it("resolves legacy local-provider aliases after migration to openai-compatible", () => {
-    const ollama = provider("ollama", {
-      displayName: "Ollama",
-      baseUrl: "http://localhost:11434/v1",
-      origin: { kind: "byok" },
-      requiresApiKey: false,
+  describe("isChatModelSelectionForEntry()", () => {
+    it("matches configured-model IDs and unchanged legacy provider keys", () => {
+      const target = entry("configured", "gpt-4o", provider("openai"));
+
+      expect(isChatModelSelectionForEntry(target, "configured")).toBe(true);
+      expect(isChatModelSelectionForEntry(target, `gpt-4o|${ChatModelProviders.OPENAI}`)).toBe(
+        true
+      );
+      expect(isChatModelSelectionForEntry(target, "other")).toBe(false);
+    });
+  });
+
+  describe("findChatBackendEntryMatches()", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 resolves a legacy Flash alias only to the official endpoint", () => {
+      const official = provider("deepseek-official", {
+        origin: { kind: "byok", catalogProviderId: "deepseek" },
+      });
+      const proxy = provider("deepseek-proxy", {
+        origin: { kind: "byok", catalogProviderId: "deepseek" },
+        baseUrl: "https://proxy.example/v1",
+      });
+      const canonical = entry("canonical", "deepseek-flash", official);
+
+      expect(
+        findChatBackendEntryMatches(
+          [canonical, entry("proxy", "deepseek-flash", proxy)],
+          `deepseek-v4-flash|${ChatModelProviders.DEEPSEEK}`
+        )
+      ).toEqual([canonical]);
+    });
+  });
+
+  describe("findChatBackendEntry()", () => {
+    it("resolves configured-model IDs and keeps ordinary stale-selection fallback", () => {
+      const p = provider("p1");
+      const first = entry("first", "gpt-4o", p);
+      const second = entry("second", "gpt-5", p);
+
+      expect(findChatBackendEntry([first, second], "second")).toBe(second);
+      expect(findChatBackendEntry([first, second], "stale")).toBe(first);
     });
 
-    expect(
-      resolveChatModelSelectionId(
-        [entry("ollama-model", "qwen3", ollama)],
-        `qwen3|${ChatModelProviders.OLLAMA}`
-      )
-    ).toBe("ollama-model");
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 fails closed for an unavailable direct DeepSeek selection", () => {
+      const safe = entry("safe", "gpt-5", provider("openai"));
+
+      expect(
+        findChatBackendEntry([safe], `deepseek-v4-pro|${ChatModelProviders.DEEPSEEK}`)
+      ).toBeUndefined();
+    });
   });
 
-  it("resolves a legacy xAI key when a custom endpoint uses the OpenAI-format constructor", () => {
-    const xai = provider("xai", {
-      baseUrl: "https://proxy.example.com/v1",
-      origin: { kind: "byok", catalogProviderId: "xai" },
+  describe("resolveChatModelSelectionId()", () => {
+    it("resolves configured-model IDs", () => {
+      const p = provider("p1");
+      const entries = [entry("a", "gpt-4o", p), entry("b", "gpt-5", p)];
+
+      expect(resolveChatModelSelectionId(entries, "b")).toBe("b");
     });
 
-    expect(
-      resolveChatModelSelectionId(
-        [entry("xai-model", "grok-4", xai)],
-        `grok-4|${ChatModelProviders.XAI}`
-      )
-    ).toBe("xai-model");
-  });
+    it("resolves legacy name and provider keys", () => {
+      const target = entry("a", "gpt-4o", provider("p1"));
 
-  it("falls back to the first valid entry for stale selections", () => {
-    const p = provider("p1");
-    const entries: EnabledBackendEntry[] = [
-      { configuredModelId: "broken", state: "broken" },
-      entry("a", "gpt-4o", p),
-    ];
+      expect(resolveChatModelSelectionId([target], `gpt-4o|${ChatModelProviders.OPENAI}`)).toBe(
+        "a"
+      );
+    });
 
-    expect(resolveChatModelSelectionId(entries, "gone")).toBe("a");
+    it("resolves legacy Copilot Plus keys to the Plus configured model", () => {
+      const plus = provider("plus", {
+        origin: { kind: "copilot-plus" },
+        requiresApiKey: false,
+      });
+      const byok = entry("byok", "gpt-4o", provider("p1"));
+      const plusEntry = entry("plus-model", "copilot-plus-flash", plus);
+
+      expect(
+        resolveChatModelSelectionId(
+          [byok, plusEntry],
+          `copilot-plus-flash|${ChatModelProviders.COPILOT_PLUS}`
+        )
+      ).toBe("plus-model");
+    });
+
+    it("resolves legacy local-provider aliases after migration to openai-compatible", () => {
+      const ollama = provider("ollama", {
+        displayName: "Ollama",
+        baseUrl: "http://localhost:11434/v1",
+        origin: { kind: "byok" },
+        requiresApiKey: false,
+      });
+
+      expect(
+        resolveChatModelSelectionId(
+          [entry("ollama-model", "qwen3", ollama)],
+          `qwen3|${ChatModelProviders.OLLAMA}`
+        )
+      ).toBe("ollama-model");
+    });
+
+    it("resolves a legacy xAI key when a custom endpoint uses the OpenAI-format constructor", () => {
+      const xai = provider("xai", {
+        baseUrl: "https://proxy.example.com/v1",
+        origin: { kind: "byok", catalogProviderId: "xai" },
+      });
+
+      expect(
+        resolveChatModelSelectionId(
+          [entry("xai-model", "grok-4", xai)],
+          `grok-4|${ChatModelProviders.XAI}`
+        )
+      ).toBe("xai-model");
+    });
+
+    it("skips broken rows and falls back to the first valid entry", () => {
+      const entries: EnabledBackendEntry[] = [
+        { configuredModelId: "broken", state: "broken" },
+        entry("a", "gpt-4o", provider("p1")),
+      ];
+
+      expect(resolveChatModelSelectionId(entries, "gone")).toBe("a");
+    });
   });
 });

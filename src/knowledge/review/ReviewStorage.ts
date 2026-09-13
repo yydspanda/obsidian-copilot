@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod";
 
 import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
 import {

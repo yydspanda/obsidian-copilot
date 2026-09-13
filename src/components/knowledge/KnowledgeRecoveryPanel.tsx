@@ -102,6 +102,11 @@ const RECOVERY_PRESENTATION: Readonly<Record<KnowledgeRecoveryStatus, RecoveryPr
  * @returns Human-readable detail without adding recovery authority
  */
 function getRecoveryDetail(item: Readonly<KnowledgeRecoveryItem>): string {
+  // https://github.com/yydspanda/obsidian-copilot/issues/2
+  // A changed Knowledge read-set makes retry misleading, so the row explains the only safe exit.
+  if (item.continueBlockedReason === "manifest_read_set_changed") {
+    return "Knowledge changed since this proposal was generated, so Continue cannot safely succeed. Abandon this outdated proposal, then generate and review a fresh one. This Apply did not write any Wiki files.";
+  }
   if (item.status !== "apply_blocked") return RECOVERY_PRESENTATION[item.status].detail;
   if (item.blockedReason === "transaction_recovery_required") {
     return "The transaction requires explicit recovery. Automatic writes remain blocked.";

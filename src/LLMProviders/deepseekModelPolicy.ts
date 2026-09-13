@@ -1,10 +1,31 @@
-/** Official DeepSeek model identities accepted by the direct provider integration. */
+/**
+ * Canonical model identity sent by the direct DeepSeek provider integration.
+ * https://github.com/yydspanda/obsidian-copilot/issues/3
+ */
+export const DEEPSEEK_FLASH_WIRE_IDENTITY = "deepseek-flash" as const;
+
+/**
+ * Official DeepSeek model identities accepted for newly configured models.
+ * https://github.com/yydspanda/obsidian-copilot/issues/3
+ */
 export const CURRENT_DEEPSEEK_MODEL_IDENTITIES = Object.freeze([
+  DEEPSEEK_FLASH_WIRE_IDENTITY,
+] as const);
+
+/**
+ * DeepSeek identities accepted from current or already-persisted configuration.
+ *
+ * Existing vaults may retain the former Flash alias while requests use the
+ * canonical identity; no other retired identity is substituted.
+ * https://github.com/yydspanda/obsidian-copilot/issues/3
+ */
+export const SUPPORTED_DEEPSEEK_MODEL_IDENTITIES = Object.freeze([
+  DEEPSEEK_FLASH_WIRE_IDENTITY,
   "deepseek-v4-flash",
-  "deepseek-v4-pro",
 ] as const);
 
 const CURRENT_DEEPSEEK_MODELS = new Set<string>(CURRENT_DEEPSEEK_MODEL_IDENTITIES);
+const SUPPORTED_DEEPSEEK_MODELS = new Set<string>(SUPPORTED_DEEPSEEK_MODEL_IDENTITIES);
 
 /** Stable configuration failures raised before a direct DeepSeek request is created. */
 export type DeepSeekModelPolicyErrorCode =
@@ -33,6 +54,7 @@ export interface DeepSeekModelPolicyInput {
 
 /** Explicit wire fields consumed by ChatDeepSeek without provider-default thinking. */
 export interface DeepSeekChatModelPolicy {
+  wireModelIdentity: typeof DEEPSEEK_FLASH_WIRE_IDENTITY;
   thinkingEnabled: boolean;
   temperature?: number;
   topP?: number;
@@ -45,6 +67,18 @@ export interface DeepSeekChatModelPolicy {
 /** Returns whether one identity is in the reviewed current DeepSeek catalog. */
 export function isCurrentDeepSeekModelIdentity(value: string): boolean {
   return CURRENT_DEEPSEEK_MODELS.has(value);
+}
+
+/**
+ * Resolves current and compatible persisted identities to the reviewed wire model.
+ * https://github.com/yydspanda/obsidian-copilot/issues/3
+ *
+ * @param value - Model identity from a saved selection, catalog, or official request.
+ */
+export function resolveDeepSeekWireModelIdentity(
+  value: string
+): typeof DEEPSEEK_FLASH_WIRE_IDENTITY | undefined {
+  return SUPPORTED_DEEPSEEK_MODELS.has(value) ? DEEPSEEK_FLASH_WIRE_IDENTITY : undefined;
 }
 
 /** Returns whether one plugin reasoning setting explicitly enables DeepSeek thinking. */
@@ -87,8 +121,8 @@ export function shouldBlockDeepSeekThinkingAgentTools(
  * Resolves explicit direct-chat thinking and sampling behavior before network I/O.
  *
  * `minimal` is the plugin's explicit "thinking disabled" setting. Thinking
- * requests omit temperature/top-p entirely; the zero temperature stored on the
- * Pro built-in is an auditable placeholder rather than a wire parameter.
+ * requests omit temperature/top-p entirely; their zero temperature is an
+ * auditable internal placeholder rather than a wire parameter.
  *
  * @param input - Exact selected model behavior and resolved sampling temperature
  * @returns Frozen ChatDeepSeek fields with no fallback or ignored configuration
@@ -96,7 +130,10 @@ export function shouldBlockDeepSeekThinkingAgentTools(
 export function createDeepSeekChatModelPolicy(
   input: DeepSeekModelPolicyInput
 ): DeepSeekChatModelPolicy {
-  if (!isCurrentDeepSeekModelIdentity(input.model)) {
+  // Persisted Flash configurations remain routable only through the reviewed canonical identity.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
+  const wireModelIdentity = resolveDeepSeekWireModelIdentity(input.model);
+  if (!wireModelIdentity) {
     throw new DeepSeekModelPolicyError("model_unsupported");
   }
   if (input.frequencyPenalty !== undefined) {
@@ -113,6 +150,7 @@ export function createDeepSeekChatModelPolicy(
     }
     const reasoningEffort = effort === "xhigh" ? "max" : "high";
     return Object.freeze({
+      wireModelIdentity,
       thinkingEnabled: true,
       modelKwargs: Object.freeze({
         thinking: Object.freeze({ type: "enabled" as const }),
@@ -130,6 +168,7 @@ export function createDeepSeekChatModelPolicy(
     throw new DeepSeekModelPolicyError("sampling_unsupported");
   }
   return Object.freeze({
+    wireModelIdentity,
     thinkingEnabled: false,
     temperature: input.temperature,
     ...(input.topP === undefined ? {} : { topP: input.topP }),

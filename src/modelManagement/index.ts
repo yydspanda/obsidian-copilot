@@ -48,10 +48,15 @@ export {
 } from "./chatModel/configuredModelToCustomModel";
 export {
   findChatBackendEntry,
+  findChatBackendEntryMatches,
+  hasAmbiguousPersistedChatModelSelection,
   isChatModelSelectionForEntry,
   resolveChatModelSelectionId,
 } from "./chatModel/chatModelSelection";
-export type { ResolvedChatBackendEntry } from "./chatModel/chatModelSelection";
+export type {
+  ChatModelSelectionInventory,
+  ResolvedChatBackendEntry,
+} from "./chatModel/chatModelSelection";
 export { resolveChatBackendModel } from "./chatModel/resolveChatBackendModel";
 export type { ChatBackendResolution } from "./chatModel/resolveChatBackendModel";
 export {

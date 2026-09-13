@@ -1,7 +1,7 @@
 import type { ConfiguredProjectKnowledgeBundle } from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 import {
-  isCurrentDeepSeekModelIdentity,
   isDeepSeekThinkingEffort,
+  resolveDeepSeekWireModelIdentity,
 } from "@/LLMProviders/deepseekModelPolicy";
 import {
   KNOWLEDGE_CITATION_CONTRACT_VERSION,
@@ -665,10 +665,17 @@ function selectModelBehavior(
   }
   let temperature = project.temperature ?? selected.temperature ?? settings.temperature;
   const reasoningEffort = selected.reasoningEffort ?? settings.reasoningEffort;
+  let modelIdentity = selected.name;
   if (selected.provider === "deepseek") {
-    if (!isCurrentDeepSeekModelIdentity(selected.name)) {
+    // Match the persisted Project/model row before resolving its provider wire
+    // identity. This preserves the user's reference while old and new Flash
+    // settings converge on the same profile and pipeline fingerprint.
+    // https://github.com/yydspanda/obsidian-copilot/issues/3
+    const wireModelIdentity = resolveDeepSeekWireModelIdentity(selected.name);
+    if (wireModelIdentity === undefined) {
       throw createProjectKnowledgePipelineProfileError("model_unsupported");
     }
+    modelIdentity = wireModelIdentity;
     if (
       selected.frequencyPenalty !== undefined ||
       selected.numCtx !== undefined ||
@@ -733,7 +740,7 @@ function selectModelBehavior(
       ? {}
       : { routingIdentity: selected.routingIdentity }),
   });
-  return Object.freeze({ provider: selected.provider, model: selected.name, configuration });
+  return Object.freeze({ provider: selected.provider, model: modelIdentity, configuration });
 }
 
 /** Returns opaque source state only for an authentic constructed instance. */

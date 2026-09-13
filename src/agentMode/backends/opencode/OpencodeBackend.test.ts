@@ -227,6 +227,134 @@ describe("buildOpencodeConfig — provider/model injection", () => {
     expect(cfg.provider.anthropic.models).toEqual({ "claude-sonnet-4-6": {} });
   });
 
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 injects canonical Flash and omits Pro for the official DeepSeek provider", async () => {
+    const provider = makeProvider(
+      "p-deepseek",
+      { kind: "byok", catalogProviderId: "deepseek" },
+      { providerType: "openai-compatible", baseUrl: "https://api.deepseek.com/v1/" }
+    );
+    const deps = makeDeps({
+      resolved: [
+        okEntry(provider, makeModel("p-deepseek", "deepseek-v4-flash")),
+        okEntry(provider, makeModel("p-deepseek", "deepseek-v4-pro")),
+      ],
+      keys: { "p-deepseek": "deepseek-key" },
+    });
+
+    const cfg = (await buildOpencodeConfig(getSettings(), deps)) as {
+      provider: Record<
+        string,
+        { options?: { baseURL?: string }; models?: Record<string, unknown> }
+      >;
+    };
+    expect(cfg.provider.deepseek.options?.baseURL).toBeUndefined();
+    expect(cfg.provider.deepseek.models).toEqual({ "deepseek-flash": {} });
+  });
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 keeps a custom DeepSeek-compatible endpoint's model namespace", async () => {
+    const provider = makeProvider(
+      "p-deepseek-proxy",
+      { kind: "byok", catalogProviderId: "deepseek" },
+      { providerType: "openai-compatible", baseUrl: "https://proxy.example/v1" }
+    );
+    const deps = makeDeps({
+      resolved: [okEntry(provider, makeModel("p-deepseek-proxy", "deepseek-v4-pro"))],
+      keys: { "p-deepseek-proxy": "proxy-key" },
+    });
+
+    const cfg = (await buildOpencodeConfig(getSettings(), deps)) as {
+      provider: Record<
+        string,
+        { options?: { baseURL?: string }; models?: Record<string, unknown> }
+      >;
+    };
+    expect(cfg.provider["p-deepseek-proxy"].options?.baseURL).toBe("https://proxy.example/v1");
+    expect(cfg.provider["p-deepseek-proxy"].models).toEqual({ "deepseek-v4-pro": {} });
+  });
+
+  it.each(["official-first", "proxy-first"] as const)(
+    "https://github.com/yydspanda/obsidian-copilot/issues/3 isolates official and custom DeepSeek routes when configured %s",
+    async (order) => {
+      const official = makeProvider(
+        "p-deepseek",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        { providerType: "openai-compatible", baseUrl: "https://api.deepseek.com/v1" }
+      );
+      const proxy = makeProvider(
+        "p-deepseek-proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        { providerType: "openai-compatible", baseUrl: "https://proxy.example/v1" }
+      );
+      const officialEntry = okEntry(official, makeModel("p-deepseek", "deepseek-v4-flash"));
+      const proxyEntry = okEntry(proxy, makeModel("p-deepseek-proxy", "deepseek-v4-pro"));
+      const resolved =
+        order === "official-first" ? [officialEntry, proxyEntry] : [proxyEntry, officialEntry];
+      const deps = makeDeps({
+        resolved,
+        keys: {
+          "p-deepseek": "official-key",
+          "p-deepseek-proxy": "proxy-key",
+        },
+      });
+
+      const cfg = (await buildOpencodeConfig(getSettings(), deps)) as {
+        provider: Record<
+          string,
+          {
+            options?: { apiKey?: string; baseURL?: string };
+            models?: Record<string, unknown>;
+          }
+        >;
+      };
+
+      expect(cfg.provider.deepseek).toEqual({
+        options: { apiKey: "official-key" },
+        models: { "deepseek-flash": {} },
+      });
+      expect(cfg.provider["p-deepseek-proxy"]).toEqual({
+        npm: "@ai-sdk/openai-compatible",
+        name: "p-deepseek-proxy",
+        options: { apiKey: "proxy-key", baseURL: "https://proxy.example/v1" },
+        models: { "deepseek-v4-pro": {} },
+      });
+    }
+  );
+
+  it.each(["first-account-first", "second-account-first"] as const)(
+    "https://github.com/yydspanda/obsidian-copilot/issues/3 omits an ambiguous shared DeepSeek route when configured %s",
+    async (order) => {
+      const first = makeProvider(
+        "p-deepseek-first",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        { providerType: "openai-compatible" }
+      );
+      const second = makeProvider(
+        "p-deepseek-second",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        { providerType: "openai-compatible" }
+      );
+      const firstEntry = okEntry(first, makeModel(first.providerId, "deepseek-v4-flash"));
+      const secondEntry = okEntry(second, makeModel(second.providerId, "deepseek-flash"));
+      const resolved =
+        order === "first-account-first" ? [firstEntry, secondEntry] : [secondEntry, firstEntry];
+      const deps = makeDeps({
+        resolved,
+        keys: {
+          [first.providerId]: "first-key",
+          [second.providerId]: "second-key",
+        },
+      });
+      const keySpy = jest.spyOn(deps.providerRegistry, "getApiKey");
+
+      const cfg = (await buildOpencodeConfig(getSettings(), deps)) as {
+        provider: Record<string, unknown>;
+      };
+
+      expect(cfg.provider.deepseek).toBeUndefined();
+      expect(keySpy).not.toHaveBeenCalled();
+    }
+  );
+
   it("injects multiple models under the same provider", async () => {
     const provider = makeProvider("p-anthropic", {
       kind: "byok",

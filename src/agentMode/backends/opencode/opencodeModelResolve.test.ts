@@ -6,8 +6,10 @@ import {
   copilotPlusModelId,
   isOpencodeZenWireId,
   mapProviderToOpencodeId,
+  normalizeOpencodeSelectionBaseId,
   opencodeEnabledModelEntries,
   opencodeWireBaseIdFor,
+  resolveOpencodeConfiguredModelIdentity,
 } from "./opencodeModelResolve";
 
 /** Build a minimal `Provider` row for a given origin + type. */
@@ -58,7 +60,7 @@ function makeSettings(args: {
 }
 
 describe("opencodeModelResolve", () => {
-  describe("mapProviderToOpencodeId", () => {
+  describe("mapProviderToOpencodeId()", () => {
     it("maps a BYOK provider with a catalog id to that id, non-native", () => {
       const provider = makeProvider("p1", { kind: "byok", catalogProviderId: "anthropic" });
       expect(mapProviderToOpencodeId(provider)).toEqual({ id: "anthropic", native: false });
@@ -67,6 +69,44 @@ describe("opencodeModelResolve", () => {
     it("maps BYOK openrouter to openrouter, non-native", () => {
       const provider = makeProvider("p1", { kind: "byok", catalogProviderId: "openrouter" });
       expect(mapProviderToOpencodeId(provider)).toEqual({ id: "openrouter", native: false });
+    });
+
+    it("keeps an OpenRouter endpoint override on the existing catalog route", () => {
+      const provider = makeProvider(
+        "p1",
+        { kind: "byok", catalogProviderId: "openrouter" },
+        "openai-compatible",
+        "https://openrouter.example/v1"
+      );
+      expect(mapProviderToOpencodeId(provider)).toEqual({ id: "openrouter", native: false });
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 gives a custom catalog-compatible endpoint its stable provider id", () => {
+      const provider = makeProvider(
+        "deepseek-proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://proxy.example/v1"
+      );
+
+      expect(mapProviderToOpencodeId(provider)).toEqual({
+        id: "deepseek-proxy",
+        native: false,
+      });
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 keeps a nonstandard path on the DeepSeek origin in a custom provider namespace", () => {
+      const provider = makeProvider(
+        "deepseek-proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://api.deepseek.com/openai/v1"
+      );
+
+      expect(mapProviderToOpencodeId(provider)).toEqual({
+        id: "deepseek-proxy",
+        native: false,
+      });
     });
 
     it("returns null for a non-OpenAI-compatible BYOK provider without a catalog id", () => {
@@ -97,7 +137,7 @@ describe("opencodeModelResolve", () => {
     });
   });
 
-  describe("isOpencodeZenWireId", () => {
+  describe("isOpencodeZenWireId()", () => {
     it("matches the opencode/ prefix only", () => {
       expect(isOpencodeZenWireId("opencode/big-pickle")).toBe(true);
       expect(isOpencodeZenWireId("opencode/deepseek-v4-flash-free")).toBe(true);
@@ -107,7 +147,236 @@ describe("opencodeModelResolve", () => {
     });
   });
 
-  describe("opencodeEnabledModelEntries", () => {
+  describe("resolveOpencodeConfiguredModelIdentity()", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes legacy Flash and rejects Pro only for official DeepSeek", () => {
+      const official = makeProvider(
+        "official",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://api.deepseek.com"
+      );
+      const proxy = makeProvider(
+        "proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://proxy.example/v1"
+      );
+
+      expect(
+        resolveOpencodeConfiguredModelIdentity(
+          official,
+          makeModel("flash", "official", "deepseek-v4-flash")
+        )
+      ).toBe("deepseek-flash");
+      expect(
+        resolveOpencodeConfiguredModelIdentity(
+          official,
+          makeModel("pro", "official", "deepseek-v4-pro")
+        )
+      ).toBeNull();
+      expect(
+        resolveOpencodeConfiguredModelIdentity(
+          proxy,
+          makeModel("proxy-pro", "proxy", "deepseek-v4-pro")
+        )
+      ).toBe("deepseek-v4-pro");
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes Flash and rejects Pro in OpenCode's native DeepSeek namespace", () => {
+      const native = makeProvider("opencode", { kind: "agent", agentType: "opencode" });
+
+      expect(
+        resolveOpencodeConfiguredModelIdentity(
+          native,
+          makeModel("flash", "opencode", "deepseek/deepseek-v4-flash")
+        )
+      ).toBe("deepseek/deepseek-flash");
+      expect(
+        resolveOpencodeConfiguredModelIdentity(
+          native,
+          makeModel("pro", "opencode", "deepseek/deepseek-v4-pro")
+        )
+      ).toBeNull();
+      expect(
+        resolveOpencodeConfiguredModelIdentity(
+          native,
+          makeModel("other", "opencode", "opencode/big-pickle")
+        )
+      ).toBe("opencode/big-pickle");
+    });
+  });
+
+  describe("normalizeOpencodeSelectionBaseId()", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes persisted Flash and blocks Pro before OpenCode applies them", () => {
+      const official = makeProvider(
+        "official",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://api.deepseek.com/v1"
+      );
+      const settings = makeSettings({
+        providers: { official },
+        configuredModels: [
+          makeModel("flash", "official", "deepseek-v4-flash"),
+          makeModel("pro", "official", "deepseek-v4-pro"),
+        ],
+      });
+
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-flash", settings)).toBe(
+        "deepseek/deepseek-flash"
+      );
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", settings)).toBeNull();
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 preserves custom endpoints only in their unique namespace and fails closed on orphaned official selections", () => {
+      const proxy = makeProvider(
+        "proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://proxy.example/v1"
+      );
+      const settings = makeSettings({
+        enabledModels: ["proxy-pro"],
+        providers: { proxy },
+        configuredModels: [makeModel("proxy-pro", "proxy", "deepseek-v4-pro")],
+      });
+
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", settings)).toBe(
+        "proxy/deepseek-v4-pro"
+      );
+      expect(normalizeOpencodeSelectionBaseId("proxy/deepseek-v4-pro", settings)).toBe(
+        "proxy/deepseek-v4-pro"
+      );
+      expect(
+        normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-flash", makeSettings({}))
+      ).toBeNull();
+      expect(
+        normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", makeSettings({}))
+      ).toBeNull();
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 does not let a disabled custom proxy claim an old shared DeepSeek selection", () => {
+      const proxy = makeProvider(
+        "proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://proxy.example/v1"
+      );
+      const settings = makeSettings({
+        enabledModels: [],
+        providers: { proxy },
+        configuredModels: [makeModel("proxy-pro", "proxy", "deepseek-v4-pro")],
+      });
+
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", settings)).toBeNull();
+    });
+
+    it.each([
+      {
+        description: "an enabled official canonical row after a retained disabled proxy alias",
+        enabledModels: ["official-flash"],
+        officialWireId: "deepseek-flash",
+        proxyFirst: true,
+      },
+      {
+        description: "an enabled official canonical row before a retained disabled proxy alias",
+        enabledModels: ["official-flash"],
+        officialWireId: "deepseek-flash",
+        proxyFirst: false,
+      },
+      {
+        description: "an enabled proxy alias after a retained disabled official alias",
+        enabledModels: ["proxy-flash"],
+        officialWireId: "deepseek-v4-flash",
+        proxyFirst: false,
+      },
+      {
+        description: "an enabled proxy alias before a retained disabled official alias",
+        enabledModels: ["proxy-flash"],
+        officialWireId: "deepseek-v4-flash",
+        proxyFirst: true,
+      },
+    ])(
+      "https://github.com/yydspanda/obsidian-copilot/issues/3 returns null for $description",
+      ({ enabledModels, officialWireId, proxyFirst }) => {
+        const official = makeProvider(
+          "official",
+          { kind: "byok", catalogProviderId: "deepseek" },
+          "openai-compatible",
+          "https://api.deepseek.com/v1"
+        );
+        const proxy = makeProvider(
+          "proxy",
+          { kind: "byok", catalogProviderId: "deepseek" },
+          "openai-compatible",
+          "https://proxy.example/v1"
+        );
+        const officialModel = makeModel("official-flash", "official", officialWireId);
+        const proxyModel = makeModel("proxy-flash", "proxy", "deepseek-v4-flash");
+        const configuredModels = proxyFirst
+          ? [proxyModel, officialModel]
+          : [officialModel, proxyModel];
+        const settings = makeSettings({
+          enabledModels,
+          providers: { official, proxy },
+          configuredModels,
+        });
+
+        expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-flash", settings)).toBeNull();
+      }
+    );
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes native Flash and blocks native Pro even when a custom proxy row has the same bare id", () => {
+      const native = makeProvider("opencode", { kind: "agent", agentType: "opencode" });
+      const proxy = makeProvider(
+        "proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://proxy.example/v1"
+      );
+      const settings = makeSettings({
+        providers: { opencode: native, proxy },
+        configuredModels: [
+          makeModel("native-flash", "opencode", "deepseek/deepseek-v4-flash"),
+          makeModel("native-pro", "opencode", "deepseek/deepseek-v4-pro"),
+          makeModel("proxy-pro", "proxy", "deepseek-v4-pro"),
+        ],
+      });
+
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-flash", settings)).toBe(
+        "deepseek/deepseek-flash"
+      );
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", settings)).toBeNull();
+      expect(normalizeOpencodeSelectionBaseId("proxy/deepseek-v4-pro", settings)).toBe(
+        "proxy/deepseek-v4-pro"
+      );
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a shared DeepSeek selection owned by two configured accounts", () => {
+      const first = makeProvider(
+        "first",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible"
+      );
+      const second = makeProvider(
+        "second",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible"
+      );
+      const settings = makeSettings({
+        providers: { first, second },
+        configuredModels: [
+          makeModel("first-flash", "first", "deepseek-v4-flash"),
+          makeModel("second-flash", "second", "deepseek-flash"),
+        ],
+      });
+
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-flash", settings)).toBeNull();
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-flash", settings)).toBeNull();
+    });
+  });
+
+  describe("opencodeEnabledModelEntries()", () => {
     const byokProvider = (overrides: Partial<Provider> = {}): Provider => ({
       ...makeProvider("p1", { kind: "byok", catalogProviderId: "openrouter" }, "openai-compatible"),
       requiresApiKey: true,
@@ -142,6 +411,70 @@ describe("opencodeModelResolve", () => {
       const [entry] = opencodeEnabledModelEntries(settings);
       expect(entry.credentialState).toBe("ok");
       expect(entry.name).toBe("Big X");
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 exposes canonical Flash and omits retiring Pro for official DeepSeek", () => {
+      const deepseek = makeProvider(
+        "deepseek-official",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://api.deepseek.com"
+      );
+      const settings = makeSettings({
+        enabledModels: ["flash", "pro"],
+        providers: { "deepseek-official": deepseek },
+        configuredModels: [
+          makeModel("flash", "deepseek-official", "deepseek-v4-flash"),
+          makeModel("pro", "deepseek-official", "deepseek-v4-pro"),
+        ],
+      });
+
+      expect(opencodeEnabledModelEntries(settings).map((entry) => entry.baseModelId)).toEqual([
+        "deepseek/deepseek-flash",
+      ]);
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 collapses one provider's alias and canonical row to one canonical picker entry", () => {
+      const deepseek = makeProvider(
+        "deepseek-official",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible"
+      );
+      const settings = makeSettings({
+        enabledModels: ["alias", "canonical"],
+        providers: { "deepseek-official": deepseek },
+        configuredModels: [
+          makeModel("alias", "deepseek-official", "deepseek-v4-flash"),
+          makeModel("canonical", "deepseek-official", "deepseek-flash"),
+        ],
+      });
+
+      expect(opencodeEnabledModelEntries(settings).map((entry) => entry.baseModelId)).toEqual([
+        "deepseek/deepseek-flash",
+      ]);
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 omits a shared DeepSeek picker entry owned by two accounts", () => {
+      const first = makeProvider(
+        "first",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible"
+      );
+      const second = makeProvider(
+        "second",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible"
+      );
+      const settings = makeSettings({
+        enabledModels: ["first-flash", "second-flash"],
+        providers: { first, second },
+        configuredModels: [
+          makeModel("first-flash", "first", "deepseek-v4-flash"),
+          makeModel("second-flash", "second", "deepseek-flash"),
+        ],
+      });
+
+      expect(opencodeEnabledModelEntries(settings)).toHaveLength(0);
     });
 
     it("treats agent-origin (native) models as ok regardless of key", () => {
@@ -269,7 +602,7 @@ describe("opencodeModelResolve", () => {
     });
   });
 
-  describe("copilotPlusModelId", () => {
+  describe("copilotPlusModelId()", () => {
     it("strips opencode's Copilot Plus prefix down to the bare model id", () => {
       expect(copilotPlusModelId("copilot-plus/gemini-3-pro")).toBe("gemini-3-pro");
     });
@@ -285,7 +618,7 @@ describe("opencodeModelResolve", () => {
     });
   });
 
-  describe("opencodeWireBaseIdFor", () => {
+  describe("opencodeWireBaseIdFor()", () => {
     const plusProvider = makeProvider("plus-1", { kind: "copilot-plus" }, "openai-compatible");
 
     it("prefixes a Copilot model with the provider opencode routes it under", () => {
@@ -313,6 +646,54 @@ describe("opencodeModelResolve", () => {
         configuredModels: [makeModel("cm1", "oc-1", "opencode/zen-model")],
       });
       expect(opencodeWireBaseIdFor("cm1", settings)).toBe("opencode/zen-model");
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes only supported models on the official DeepSeek endpoint", () => {
+      const official = makeProvider(
+        "deepseek-official",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://api.deepseek.com/v1/"
+      );
+      const settings = makeSettings({
+        providers: { "deepseek-official": official },
+        configuredModels: [
+          makeModel("flash", "deepseek-official", "deepseek-v4-flash"),
+          makeModel("pro", "deepseek-official", "deepseek-v4-pro"),
+        ],
+      });
+
+      expect(opencodeWireBaseIdFor("flash", settings)).toBe("deepseek/deepseek-flash");
+      expect(opencodeWireBaseIdFor("pro", settings)).toBeNull();
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes native Flash and omits native Pro", () => {
+      const native = makeProvider("opencode", { kind: "agent", agentType: "opencode" });
+      const settings = makeSettings({
+        providers: { opencode: native },
+        configuredModels: [
+          makeModel("flash", "opencode", "deepseek/deepseek-v4-flash"),
+          makeModel("pro", "opencode", "deepseek/deepseek-v4-pro"),
+        ],
+      });
+
+      expect(opencodeWireBaseIdFor("flash", settings)).toBe("deepseek/deepseek-flash");
+      expect(opencodeWireBaseIdFor("pro", settings)).toBeNull();
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 preserves a custom DeepSeek-compatible endpoint's model namespace", () => {
+      const proxy = makeProvider(
+        "deepseek-proxy",
+        { kind: "byok", catalogProviderId: "deepseek" },
+        "openai-compatible",
+        "https://proxy.example/v1"
+      );
+      const settings = makeSettings({
+        providers: { "deepseek-proxy": proxy },
+        configuredModels: [makeModel("proxy-model", "deepseek-proxy", "deepseek-v4-pro")],
+      });
+
+      expect(opencodeWireBaseIdFor("proxy-model", settings)).toBe("deepseek-proxy/deepseek-v4-pro");
     });
 
     it("returns null for an unknown model, a missing provider, and an unroutable one", () => {
