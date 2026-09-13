@@ -113,7 +113,7 @@ function dedupeEsbuildLegalComments(source) {
 }
 
 function assertBundleSize(source, maxBytes = MAX_BUNDLE_BYTES) {
-  // The ceiling is decimal 5 MB and rejects equality, so the release artifact must
+  // The default ceiling is decimal 5 MB and rejects equality, so the release artifact must
   // stay strictly below it. https://github.com/Brevilabs/obsidian-copilot-private/issues/94
   const bytes = Buffer.byteLength(source, "utf8");
   if (bytes >= maxBytes) {
@@ -140,6 +140,22 @@ function createBundleSizeGuard({ production }) {
       // notice block and skip release-only enforcement for issue #94.
       // https://github.com/Brevilabs/obsidian-copilot-private/issues/94
       if (!production) return;
+
+      // Local-only builds need a bounded budget independent of Sync Standard; an invalid
+      // override must not silently disable enforcement. The default remains Sync-compatible.
+      // https://github.com/yydspanda/obsidian-copilot/issues/4
+      const configuredMaxBytes = process.env.COPILOT_PERSONAL_MAX_BUNDLE_BYTES;
+      const maxBytes =
+        configuredMaxBytes === undefined ? MAX_BUNDLE_BYTES : Number(configuredMaxBytes);
+      if (
+        configuredMaxBytes !== undefined &&
+        (!/^\d+$/.test(configuredMaxBytes) || !Number.isSafeInteger(maxBytes) || maxBytes <= 0)
+      ) {
+        throw new Error(
+          "[bundle-size-guard] COPILOT_PERSONAL_MAX_BUNDLE_BYTES must be a positive safe integer byte count"
+        );
+      }
+
       build.onEnd((result) => {
         if (result.errors.length > 0) return;
         const outfile = build.initialOptions.outfile;
@@ -147,7 +163,7 @@ function createBundleSizeGuard({ production }) {
 
         const source = fs.readFileSync(outfile, "utf8");
         const output = dedupeEsbuildLegalComments(source);
-        assertBundleSize(output);
+        assertBundleSize(output, maxBytes);
         fs.writeFileSync(outfile, output, "utf8");
       });
     },
