@@ -33,7 +33,7 @@
 - 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — User accepted the Review selection feedback repair.
   Paused Apply fix under [issue #6](https://github.com/yydspanda/obsidian-copilot/issues/6)
   blocks acceptance before durable mutation and explains the disabled action; 14 suites / 622 tests pass.
-  Windows virtual gallery checks pass; production deployment is next. No upstream-owned source file changed.
+  Windows virtual gallery checks pass; clean `73a26b72` is deployed. No upstream-owned source file changed.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -76,7 +76,7 @@
 
 ## Current Verification
 
-- Personal production build passes at 6,394,785 bytes under the explicit 10,000,000-byte ceiling.
+- Personal production build passes at 6,396,142 bytes under the explicit 10,000,000-byte ceiling.
   Default 5,000,000-byte enforcement still rejects this artifact; it is not a default-policy release
   or Sync Standard-compatible delivery. Build inputs are in the September log; current hashes are in the Windows checkpoint.
 - Size-guard regression: 41/41 tests pass after observing 21 intended failures before implementation.
@@ -103,16 +103,16 @@
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift: the working branch remains synced through `9e2594b4`, with no missing upstream commits.
-- September 14 Windows deployment: build `7b0c9a8b-clean-9c310a31aac2` is loaded in the test Vault;
+- September 14 Windows deployment: build `73a26b72-clean-47fdb9b2fe41` is loaded in the test Vault;
   the startup diagnostic captured zero uncaught errors or unhandled rejections. The UI manifest label
   now reports 4.0.8 after refreshing the manifest; instance replacement confirms the new code.
-  The deployment command exited successfully but esbuild emitted a shutdown deadlock after the build;
-  copied artifact hashes match the build. Automatic reload required the plugin-manager fallback.
+  The deployment command exited successfully without the earlier intermittent esbuild shutdown deadlock;
+  copied hashes match the build. Automatic reload still required the plugin-manager fallback.
 - September 14: Studio, local Setup, Project/rules navigation and Review rendering pass; the user paused the Bundle.
   Four proposals remain. Before pause, counters reached 35 failed / 10 completed; analysis failures remain unresolved.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Review feedback passes; paused Apply repair awaits deployment. Apply, analysis/navigation, recovery, migration and popout remain.
+- Review feedback passes; paused Apply repair is deployed. User paused-state check, Apply, analysis/navigation, recovery, migration and popout remain.
 
 ## Archive
 
