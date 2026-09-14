@@ -108,11 +108,11 @@
   remains cached at the old version; instance replacement and the live guard confirm the new code.
   The deployment command exited successfully but esbuild emitted a shutdown deadlock after the build;
   copied artifact hashes are unchanged. Automatic reload required the plugin-manager fallback above.
-- September 14 Studio: Bundle, revision and Activity render. Runtime 1194: 4 awaiting review, 32 failed, 9 completed.
-- Five jobs were created at reload time: 2 await review; 3 failed with `knowledge_compiler_analysis_rejected`.
-  Startup can run background model work without Studio; no manual request does not prove no background requests.
-  No active processing or Apply remains, and no proposal decisions were made. Analysis failures remain unverified.
-- Pending: Setup/provider/project/settings, Review/Apply, recovery and popout acceptance. Build policy is unchanged.
+- September 14: Studio, local Setup, Project/rules navigation and Review rendering pass; the user paused the Bundle.
+  Four proposals remain. Before pause, counters reached 35 failed / 10 completed; analysis failures remain unresolved.
+  Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
+  See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
+- Pending: analysis failures, exact navigation, Review/Apply, recovery, migration and popout. Build policy is unchanged.
 
 ## Archive
 
