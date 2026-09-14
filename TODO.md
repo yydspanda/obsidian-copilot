@@ -33,8 +33,7 @@
 - 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — Deployed the clean `1420e2be` personal artifact to
   the Windows test Vault; `main.js` and `styles.css` match the verified September 13 hashes.
   Automatic reload failed, so the test Vault's plugin manager disabled and re-enabled Copilot.
-  The new instance reached `workflow_read_ready`, exposes the corrected stale-Manifest guard,
-  and registered the Studio command. Fresh visual acceptance remains in progress.
+  The new instance reached `workflow_read_ready` with the corrected guard and Studio command; acceptance continues.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -109,9 +108,11 @@
   remains cached at the old version; instance replacement and the live guard confirm the new code.
   The deployment command exited successfully but esbuild emitted a shutdown deadlock after the build;
   copied artifact hashes are unchanged. Automatic reload required the plugin-manager fallback above.
-- Pending: fresh Windows visual acceptance, including provider/project/settings migration, Studio,
-  and popout behavior. No model requests, proposal decisions, default-threshold changes, or production
-  target/minifier changes were initiated during the September 14 deployment checks.
+- September 14 Studio: Bundle, revision and Activity render. Runtime 1194: 4 awaiting review, 32 failed, 9 completed.
+- Five jobs were created at reload time: 2 await review; 3 failed with `knowledge_compiler_analysis_rejected`.
+  Startup can run background model work without Studio; no manual request does not prove no background requests.
+  No active processing or Apply remains, and no proposal decisions were made. Analysis failures remain unverified.
+- Pending: Setup/provider/project/settings, Review/Apply, recovery and popout acceptance. Build policy is unchanged.
 
 ## Archive
 
