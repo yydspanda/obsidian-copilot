@@ -30,8 +30,8 @@
 
 ## Recent Activity
 
-- 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — Deployed the clean `1420e2be` personal artifact to
-  the Windows test Vault; `main.js` and `styles.css` match the verified September 13 hashes.
+- 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — Deployed the clean `7b0c9a8b` personal artifact to
+  the Windows test Vault; the replaced plugin instance reached `workflow_read_ready`.
   Review feedback repair under [issue #5](https://github.com/yydspanda/obsidian-copilot/issues/5)
   passes 29 panel tests, 86 workflow regressions and 30 gallery tests; Windows gallery checks pass.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
@@ -76,9 +76,9 @@
 
 ## Current Verification
 
-- Personal production build passes at 6,393,390 bytes under the explicit 10,000,000-byte ceiling.
+- Personal production build passes at 6,394,785 bytes under the explicit 10,000,000-byte ceiling.
   Default 5,000,000-byte enforcement still rejects this artifact; it is not a default-policy release
-  or Sync Standard-compatible delivery. Exact artifact/config/source hashes are in the September log.
+  or Sync Standard-compatible delivery. Build inputs are in the September log; current hashes are in the Windows checkpoint.
 - Size-guard regression: 41/41 tests pass after observing 21 intended failures before implementation.
   Final artifact syntax and simulated mobile module-load smoke checks pass; these are not live UI tests.
 - September 13 merge checks: typecheck, diff whitespace check, progress governance, and 10 focused
@@ -103,16 +103,16 @@
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift: the working branch remains synced through `9e2594b4`, with no missing upstream commits.
-- September 14 Windows deployment: build `1420e2be-clean-e07399f5ce79` is loaded in the test Vault;
+- September 14 Windows deployment: build `7b0c9a8b-clean-9c310a31aac2` is loaded in the test Vault;
   the startup diagnostic captured zero uncaught errors or unhandled rejections. The UI manifest label
-  remains cached at the old version; instance replacement and the live guard confirm the new code.
+  now reports 4.0.8 after refreshing the manifest; instance replacement confirms the new code.
   The deployment command exited successfully but esbuild emitted a shutdown deadlock after the build;
-  copied artifact hashes are unchanged. Automatic reload required the plugin-manager fallback above.
+  copied artifact hashes match the build. Automatic reload required the plugin-manager fallback.
 - September 14: Studio, local Setup, Project/rules navigation and Review rendering pass; the user paused the Bundle.
   Four proposals remain. Before pause, counters reached 35 failed / 10 completed; analysis failures remain unresolved.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Pending: deploy Review feedback repair, then user feedback/Apply, analysis/navigation, recovery, migration and popout.
+- Pending: user's Review feedback/Apply check, analysis/navigation fixes, recovery, migration and popout.
 
 ## Archive
 
