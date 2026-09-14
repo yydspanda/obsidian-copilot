@@ -112,7 +112,7 @@
   Four proposals remain. Before pause, counters reached 35 failed / 10 completed; analysis failures remain unresolved.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Pending: analysis failures, exact navigation, Review/Apply, recovery, migration and popout. Build policy is unchanged.
+- Pending: analysis/navigation failures, Review feedback/Apply, recovery, migration and popout. Build policy is unchanged.
 
 ## Archive
 
