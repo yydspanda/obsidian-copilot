@@ -30,6 +30,11 @@
 
 ## Recent Activity
 
+- 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — Deployed the clean `1420e2be` personal artifact to
+  the Windows test Vault; `main.js` and `styles.css` match the verified September 13 hashes.
+  Automatic reload failed, so the test Vault's plugin manager disabled and re-enabled Copilot.
+  The new instance reached `workflow_read_ready`, exposes the corrected stale-Manifest guard,
+  and registered the Studio command. Fresh visual acceptance remains in progress.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -55,8 +60,6 @@
   pointer, frozen migration snapshot, monthly archive, experiment contract, and CI validation.
 - 2026-08-26 — `OPS-UPSTREAM-SYNC` — Merged upstream `054dc69b`; retained the new upstream user
   message folding behavior and only reapplied the narrow Knowledge Draft extension.
-- 2026-08-26 — `OPS-UPSTREAM-SYNC` — Merged upstream `13aad329`; resolved 52 conflict files and
-  passed the full automated gate (648 suites / 9,291 tests).
 - 2026-08-25 — `PK-H3-FORWARD-REVISION-WIN` — Automated and release gates completed; bounded
   Windows acceptance remains on the roadmap.
 
@@ -101,8 +104,14 @@
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift: the working branch remains synced through `9e2594b4`, with no missing upstream commits.
-- Pending: deployment and fresh Windows visual acceptance of the personal artifact. No Vault copy,
-  Obsidian reload, model requests, default-threshold change, or production target/minifier change occurred.
+- September 14 Windows deployment: build `1420e2be-clean-e07399f5ce79` is loaded in the test Vault;
+  the startup diagnostic captured zero uncaught errors or unhandled rejections. The UI manifest label
+  remains cached at the old version; instance replacement and the live guard confirm the new code.
+  The deployment command exited successfully but esbuild emitted a shutdown deadlock after the build;
+  copied artifact hashes are unchanged. Automatic reload required the plugin-manager fallback above.
+- Pending: fresh Windows visual acceptance, including provider/project/settings migration, Studio,
+  and popout behavior. No model requests, proposal decisions, default-threshold changes, or production
+  target/minifier changes were initiated during the September 14 deployment checks.
 
 ## Archive
 
