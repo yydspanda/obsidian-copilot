@@ -245,6 +245,9 @@ export interface KnowledgeStudioState {
 /** Callback used by a UI binding to observe controller state changes. */
 export type KnowledgeStudioStateListener = () => void;
 
+const REVIEW_APPLY_PAUSED_MESSAGE =
+  "Apply is paused. Your proposal is still awaiting review. Check Activity before continuing.";
+
 const EMPTY_STATUS_COUNTS: Readonly<Record<KnowledgeActivityStatus, number>> = Object.freeze({
   queued: 0,
   parsing: 0,
@@ -1680,6 +1683,14 @@ export class KnowledgeStudioController {
       return;
     }
 
+    // A paused queue cannot claim an ordinary Apply; keep the draft pending
+    // instead of allowing acceptance to create a recovery item without a write.
+    // https://github.com/yydspanda/obsidian-copilot/issues/6
+    if (!rejectsWholeProposal && snapshot?.activity.controls.state !== "running") {
+      await this.rejectUnavailableAction(REVIEW_APPLY_PAUSED_MESSAGE);
+      return;
+    }
+
     await this.executeAction(
       { kind: "submit_review", targetId: captured.changeSetId },
       async (bundleId, signal) => {
@@ -1713,7 +1724,14 @@ export class KnowledgeStudioController {
           case "blocked":
             return {
               kind: "blocked",
-              message: "The selected changes did not pass deterministic validation.",
+              // Pause may arrive after this controller snapshot; the atomic
+              // rejection is not a validation failure in the proposed content.
+              // https://github.com/yydspanda/obsidian-copilot/issues/6
+              message: result.diagnostics.some(
+                (diagnostic) => diagnostic.code === "review_apply_queue_paused"
+              )
+                ? REVIEW_APPLY_PAUSED_MESSAGE
+                : "The selected changes did not pass deterministic validation.",
               diagnostics: result.diagnostics.map((diagnostic) => ({ ...diagnostic })),
             };
         }

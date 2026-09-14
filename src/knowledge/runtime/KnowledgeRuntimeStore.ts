@@ -296,6 +296,7 @@ import {
 import type { AcceptedReviewStartupIdentity } from "@/knowledge/review/ReviewQueueStartupReconciler";
 import {
   CHANGESET_REVIEW_SNAPSHOT_VERSION,
+  ReviewStorageAcceptanceBlockedError,
   ReviewStorageRevisionConflictError,
   parseChangeSetReviewSnapshot,
   validateChangeSetReviewSnapshot,
@@ -10778,6 +10779,26 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       const actualRevision = current?.revision ?? null;
       if (actualRevision !== expectedRevision) {
         throw new ReviewStorageRevisionConflictError(bundleId, expectedRevision, actualRevision);
+      }
+      // Pause may arrive after asynchronous validation. Recheck it in the same
+      // commit as a new acceptance so a paused Queue cannot strand that decision.
+      // Startup recovery and already accepted history keep their existing contract.
+      // https://github.com/yydspanda/obsidian-copilot/issues/6
+      const queueRaw = findBundleSlot(state, "queues", bundleId);
+      const queue = queueRaw === null ? null : this.requireQueueSnapshot(bundleId, queueRaw);
+      if (queue?.control.status === "paused" && queue.control.reason !== "startup_recovery") {
+        const acceptedIds = new Set(
+          candidate.records
+            .filter((record) => record.outcome === "accepted")
+            .map((record) => record.changeSetId)
+        );
+        if (
+          current?.records.some(
+            (record) => record.outcome === "pending" && acceptedIds.has(record.changeSetId)
+          )
+        ) {
+          throw new ReviewStorageAcceptanceBlockedError();
+        }
       }
       return {
         next: {

@@ -2134,6 +2134,111 @@ describe("KnowledgeStudioController", () => {
     expect(getterCalls).toBe(0);
   });
 
+  describe("KnowledgeStudioController", () => {
+    describe("submitReview()", () => {
+      it.each([
+        "paused",
+        "rate_limited",
+        "startup_recovery",
+        "recovery_required",
+        "finalizing",
+      ] as const)(
+        "keeps choices and does not submit or resume while Activity is %s (https://github.com/yydspanda/obsidian-copilot/issues/6)",
+        async (state) => {
+          const plan = createReviewPlan();
+          const snapshot = createSnapshot("paused", [plan]);
+          snapshot.activity = {
+            ...snapshot.activity,
+            controls: { state, canPause: false, canResume: state === "paused" },
+          };
+          const port = new FakeKnowledgeStudioPort(async () => snapshot);
+          const controller = new KnowledgeStudioController(port, port);
+          controller.start("personal");
+          await flushAsync();
+          controller.openReview(plan.changeSetId);
+          const draft = { "change-1": { kind: "accept_exact" as const } };
+          expect(controller.updateReviewDraft(plan, draft)).toBe(true);
+
+          await controller.submitReview(createReviewCommand());
+
+          expect(port.reviewCalls).toHaveLength(0);
+          expect(port.resumeCalls).toHaveLength(0);
+          expect(controller.getReviewDraft(plan)).toEqual(draft);
+          expect(controller.getState().feedback).toEqual({
+            kind: "blocked",
+            message:
+              "Apply is paused. Your proposal is still awaiting review. Check Activity before continuing.",
+          });
+        }
+      );
+
+      it("allows a whole-proposal rejection while paused without resuming the Bundle (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const snapshot = createSnapshot();
+        snapshot.activity = {
+          ...snapshot.activity,
+          controls: { state: "paused", canPause: false, canResume: true, pauseReason: "user" },
+        };
+        const port = new FakeKnowledgeStudioPort(
+          async () => snapshot,
+          undefined,
+          async () => ({ kind: "rejected" })
+        );
+        const controller = new KnowledgeStudioController(port, port);
+        controller.start("personal");
+        await flushAsync();
+        const command: KnowledgeReviewCommand = {
+          ...createReviewCommand(),
+          decisions: [{ changeId: "change-1", decision: "reject" }],
+        };
+
+        await controller.submitReview(command);
+
+        expect(port.reviewCalls).toHaveLength(1);
+        expect(port.reviewCalls[0].command).toEqual(command);
+        expect(port.resumeCalls).toHaveLength(0);
+        expect(controller.getState().feedback).toMatchObject({ kind: "success" });
+      });
+
+      it("explains a command-time pause without blaming proposal validation or clearing the draft (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const plan = createReviewPlan();
+        const snapshot = createSnapshot("running", [plan]);
+        const port = new FakeKnowledgeStudioPort(
+          async () => snapshot,
+          undefined,
+          async () => ({
+            kind: "blocked",
+            diagnostics: [
+              {
+                code: "review_apply_queue_paused",
+                severity: "error",
+                field: "queue.control",
+                message: "The Bundle is paused; the proposal is still pending.",
+              },
+            ],
+          })
+        );
+        const controller = new KnowledgeStudioController(port, port);
+        controller.start("personal");
+        await flushAsync();
+        controller.openReview(plan.changeSetId);
+        const draft = { "change-1": { kind: "accept_exact" as const } };
+        controller.updateReviewDraft(plan, draft);
+
+        await controller.submitReview(createReviewCommand());
+
+        expect(port.reviewCalls).toHaveLength(1);
+        expect(port.resumeCalls).toHaveLength(0);
+        expect(controller.getReviewDraft(plan)).toEqual(draft);
+        expect(controller.getState().feedback).toMatchObject({
+          kind: "blocked",
+          message:
+            "Apply is paused. Your proposal is still awaiting review. Check Activity before continuing.",
+          diagnostics: [{ code: "review_apply_queue_paused" }],
+        });
+      });
+    });
+  });
+
   it("allows literal rejection while keeping acceptance behind its separate capability", async () => {
     const review = createReviewPlan();
     const rejectCommand: KnowledgeReviewCommand = {

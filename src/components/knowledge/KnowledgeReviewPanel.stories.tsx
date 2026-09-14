@@ -173,6 +173,11 @@ export const InteractiveDraft: StoryObj<Props> = {
   render: InteractiveReview,
 };
 
+export const PausedInteractive: StoryObj<Props> = {
+  args: { applyPaused: true },
+  render: InteractiveReview,
+};
+
 export const AllSelected: StoryObj<Props> = {
   args: { draft: allSelected },
   render: InteractiveReview,

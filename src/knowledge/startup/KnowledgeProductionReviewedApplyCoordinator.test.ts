@@ -738,6 +738,166 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
     }
   });
 
+  describe("KnowledgeProductionReviewedApplyCoordinator", () => {
+    describe("submit()", () => {
+      it("applies a pending proposal after the user explicitly resumes the Bundle (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const harness = await createReviewedApplyHarness("missing");
+        await harness.capabilities.queue.pause(BUNDLE_ID);
+        const command = await createAcceptCommand(harness);
+        await harness.capabilities.queue.resume(BUNDLE_ID);
+
+        await expect(
+          harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+        ).resolves.toEqual({ kind: "applied" });
+
+        expect(harness.fileStore.files.get(TARGET_PATH)).toBe(PAGE_CONTENT);
+        await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+          outcome: "accepted",
+        });
+      });
+
+      it.each(["user", "rate_limit"] as const)(
+        "keeps the proposal pending and Runtime unchanged when paused for %s (https://github.com/yydspanda/obsidian-copilot/issues/6)",
+        async (reason) => {
+          const harness = await createReviewedApplyHarness("missing");
+          const queue = await harness.capabilities.queue.load(BUNDLE_ID);
+          await harness.capabilities.runtime.writeQueue(
+            BUNDLE_ID,
+            {
+              ...queue,
+              revision: queue.revision + 1,
+              control: {
+                status: "paused",
+                reason,
+                pausedAt: 105,
+                ...(reason === "rate_limit" ? { resumeAt: 200 } : {}),
+              },
+            },
+            queue.revision
+          );
+          const command = await createAcceptCommand(harness);
+          const before = await harness.capabilities.file.read();
+
+          await expect(
+            harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+          ).resolves.toMatchObject({
+            kind: "blocked",
+            diagnostics: [expect.objectContaining({ code: "review_apply_queue_paused" })],
+          });
+
+          expect(await harness.capabilities.file.read()).toBe(before);
+          expect(harness.fileStore.files.size).toBe(0);
+          expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+          expect(harness.refresh).not.toHaveBeenCalled();
+          await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+            outcome: "pending",
+            recordRevision: 0,
+          });
+        }
+      );
+
+      it("keeps a proposal pending when Pause arrives after validation but before acceptance commits (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const harness = await createReviewedApplyHarness("missing");
+        const command = await createAcceptCommand(harness);
+        const writeReview = harness.capabilities.runtime.writeReview;
+        let pausedState: string | undefined;
+        const writeSpy = jest
+          .spyOn(harness.capabilities.runtime, "writeReview")
+          .mockImplementationOnce(async (bundleId, snapshot, expectedRevision) => {
+            await harness.capabilities.queue.pause(BUNDLE_ID);
+            pausedState = await harness.capabilities.file.read();
+            await writeReview.call(
+              harness.capabilities.runtime,
+              bundleId,
+              snapshot,
+              expectedRevision
+            );
+          });
+
+        await expect(
+          harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+        ).resolves.toMatchObject({
+          kind: "blocked",
+          diagnostics: [expect.objectContaining({ code: "review_apply_queue_paused" })],
+        });
+
+        expect(writeSpy).toHaveBeenCalledTimes(1);
+        expect(pausedState).toBeDefined();
+        expect(await harness.capabilities.file.read()).toBe(pausedState);
+        expect(harness.fileStore.files.size).toBe(0);
+        expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+        expect(harness.refresh).not.toHaveBeenCalled();
+        await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+          outcome: "pending",
+          recordRevision: 0,
+        });
+      });
+
+      it("allows rejection while paused without resuming the Bundle or writing Wiki files (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const harness = await createReviewedApplyHarness("missing");
+        await harness.capabilities.queue.pause(BUNDLE_ID);
+        const command = await createAcceptCommand(harness);
+
+        await expect(
+          harness.coordinator.submit(
+            BUNDLE_ID,
+            {
+              ...command,
+              decisions: command.decisions.map(({ changeId }) => ({
+                changeId,
+                decision: "reject" as const,
+              })),
+            },
+            new AbortController().signal
+          )
+        ).resolves.toEqual({ kind: "rejected" });
+
+        await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+          outcome: "rejected",
+        });
+        await expect(harness.capabilities.queue.load(BUNDLE_ID)).resolves.toMatchObject({
+          control: { status: "paused", reason: "user" },
+          pendingReviews: [],
+        });
+        expect(harness.fileStore.files.size).toBe(0);
+        expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+      });
+
+      it("preserves accepted-not-started recovery when Pause arrives after acceptance committed (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const harness = await createReviewedApplyHarness("missing");
+        const command = await createAcceptCommand(harness);
+        const writeReview = harness.capabilities.runtime.writeReview;
+        jest
+          .spyOn(harness.capabilities.runtime, "writeReview")
+          .mockImplementationOnce(async (bundleId, snapshot, expectedRevision) => {
+            await writeReview.call(
+              harness.capabilities.runtime,
+              bundleId,
+              snapshot,
+              expectedRevision
+            );
+            await harness.capabilities.queue.pause(BUNDLE_ID);
+          });
+
+        await expect(
+          harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+        ).resolves.toEqual({ kind: "recovery_required" });
+
+        await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
+          outcome: "accepted",
+        });
+        const runtime = parseKnowledgeRuntimeStoreSnapshot(
+          JSON.parse(await harness.capabilities.file.read()) as unknown
+        );
+        expect(runtime.activeTransaction).toBeNull();
+        expect(runtime.applyCommits).toEqual([]);
+        expect(harness.fileStore.files.size).toBe(0);
+        expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+        expect(harness.refresh).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
   it("applies one reviewed create and finalizes Runtime, Manifest, Queue, and journal state", async () => {
     const harness = await createReviewedApplyHarness("missing");
     const command = await createAcceptCommand(harness);

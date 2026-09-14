@@ -1,4 +1,5 @@
 import {
+  ReviewStorageAcceptanceBlockedError,
   ReviewStorageRevisionConflictError,
   type AcceptedChangeSetReviewRecord,
   type ChangeSetReviewJobClaim,
@@ -753,6 +754,9 @@ export class ChangeSetReviewRepository {
         await this.storage.write(bundleId, next, loaded.expectedRevision);
         return this.cloneValidatedSnapshot(bundleId, next);
       } catch (error) {
+        // Preserve the safe pause result so callers do not mistake unchanged Review
+        // state for a storage failure. https://github.com/yydspanda/obsidian-copilot/issues/6
+        if (error instanceof ReviewStorageAcceptanceBlockedError) throw error;
         if (error instanceof ReviewStorageRevisionConflictError) {
           lastConflict = error;
           continue;

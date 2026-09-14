@@ -111,6 +111,14 @@ export class ReviewStorageRevisionConflictError extends Error {
   }
 }
 
+/** Reports a sanitized Queue pause that prevents persisting a new acceptance decision. */
+export class ReviewStorageAcceptanceBlockedError extends Error {
+  constructor() {
+    super("The Bundle is paused; the proposal remains pending and Apply has not started.");
+    this.name = "ReviewStorageAcceptanceBlockedError";
+  }
+}
+
 /** Atomic persistence port for complete per-Bundle review snapshots. */
 export interface ReviewStorage {
   /**

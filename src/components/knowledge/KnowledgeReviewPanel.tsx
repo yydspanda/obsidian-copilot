@@ -26,6 +26,8 @@ import { cn } from "@/lib/utils";
 export interface KnowledgeReviewPanelProps {
   plan: Readonly<KnowledgeReviewPlan>;
   busy: boolean;
+  /** Keeps choices editable while the Bundle disallows write-bearing submission. */
+  applyPaused?: boolean;
   acceptCommandsEnabled: boolean;
   rejectCommandsEnabled: boolean;
   onSubmit: (command: KnowledgeReviewCommand) => void | Promise<void>;
@@ -362,6 +364,7 @@ function getRejectFileLabel(file: KnowledgeReviewFile): string {
 function getSubmissionLabel({
   acceptCommandsEnabled,
   rejectCommandsEnabled,
+  applyPaused,
   actionBusy,
   complete,
   commandEnabled,
@@ -369,6 +372,7 @@ function getSubmissionLabel({
 }: {
   acceptCommandsEnabled: boolean;
   rejectCommandsEnabled: boolean;
+  applyPaused: boolean;
   actionBusy: boolean;
   complete: boolean;
   commandEnabled: boolean;
@@ -378,6 +382,9 @@ function getSubmissionLabel({
   if (actionBusy) {
     return wholeProposalRejected ? "Rejecting proposal…" : "Validating and applying…";
   }
+  // A paused Bundle still permits a no-write rejection and local decision drafting.
+  // https://github.com/yydspanda/obsidian-copilot/issues/6
+  if (applyPaused && acceptCommandsEnabled && !wholeProposalRejected) return "Apply paused";
   if (!complete) return "Choose all decisions";
   if (!commandEnabled) {
     return wholeProposalRejected ? "Proposal rejection unavailable" : "Apply unavailable";
@@ -395,6 +402,7 @@ function getSubmissionLabel({
 function KnowledgeReviewSnapshotPanel({
   plan,
   busy,
+  applyPaused = false,
   acceptCommandsEnabled,
   rejectCommandsEnabled,
   onSubmit,
@@ -426,7 +434,12 @@ function KnowledgeReviewSnapshotPanel({
     () => complete && plan.files.every((file) => decisions[file.changeId]?.kind === "reject"),
     [complete, decisions, plan]
   );
-  const commandEnabled = wholeProposalRejected ? rejectCommandsEnabled : acceptCommandsEnabled;
+  // Pause blocks write-bearing submission, not local choices or whole-proposal rejection.
+  // The handler shares this gate so disabled-button presentation is not the only protection.
+  // https://github.com/yydspanda/obsidian-copilot/issues/6
+  const commandEnabled = wholeProposalRejected
+    ? rejectCommandsEnabled
+    : acceptCommandsEnabled && !applyPaused;
   const actionBusy = busy || submitting;
   const hasRejectOnlyFile = plan.files.some((file) => file.capability === "reject_only");
   // Feedback follows the retained draft, including refused saves and partial choices;
@@ -454,6 +467,7 @@ function KnowledgeReviewSnapshotPanel({
     : getSubmissionLabel({
         acceptCommandsEnabled,
         rejectCommandsEnabled,
+        applyPaused,
         actionBusy,
         complete,
         commandEnabled,
@@ -687,6 +701,13 @@ function KnowledgeReviewSnapshotPanel({
         <p className="tw-m-0 tw-text-sm" role="status" aria-live="polite" aria-atomic="true">
           {selectionStatus}
         </p>
+        {/* Unavailable adapters must not be described as a resumable Bundle pause.
+            https://github.com/yydspanda/obsidian-copilot/issues/6 */}
+        {applyPaused && acceptCommandsEnabled ? (
+          <p className="tw-m-0 tw-text-xs tw-text-muted">
+            Bundle is paused. Selections are kept only in this session and do not write Wiki files.
+          </p>
+        ) : null}
         {currentActiveEdit ? (
           <span className="tw-text-xs tw-text-muted">Use edited file or Cancel edit first.</span>
         ) : !complete ? (

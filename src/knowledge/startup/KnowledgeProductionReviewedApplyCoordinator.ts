@@ -41,9 +41,10 @@ import {
   snapshotKnowledgeReviewCommand,
   type KnowledgeReviewCommand,
 } from "@/knowledge/review/ReviewDecision";
-import type {
-  AcceptedChangeSetReviewRecord,
-  PendingChangeSetReviewRecord,
+import {
+  ReviewStorageAcceptanceBlockedError,
+  type AcceptedChangeSetReviewRecord,
+  type PendingChangeSetReviewRecord,
 } from "@/knowledge/review/ReviewStorage";
 import {
   KnowledgeRuntimeApplyAuthorityPort,
@@ -474,6 +475,22 @@ export class KnowledgeProductionReviewedApplyCoordinator {
       if (acceptedDurably) {
         requestGenerationRefresh(state);
         return { kind: "recovery_required" };
+      }
+      // A paused atomic acceptance leaves the proposal pending; it must not
+      // trigger recovery or resume the Queue. https://github.com/yydspanda/obsidian-copilot/issues/6
+      if (error instanceof ReviewStorageAcceptanceBlockedError) {
+        return {
+          kind: "blocked",
+          diagnostics: [
+            {
+              code: "review_apply_queue_paused",
+              severity: "error",
+              field: "queue.control",
+              message:
+                "The Bundle is paused; the proposal remains pending and Apply has not started.",
+            },
+          ],
+        };
       }
       if (error instanceof KnowledgeReviewDecisionError) {
         return { kind: "blocked", diagnostics: error.diagnostics };

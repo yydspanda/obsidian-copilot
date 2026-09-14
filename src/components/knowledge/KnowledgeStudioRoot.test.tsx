@@ -78,6 +78,7 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
   KnowledgeReviewPanel: (props: {
     plan: KnowledgeReviewPlan;
     busy: boolean;
+    applyPaused?: boolean;
     acceptCommandsEnabled: boolean;
     rejectCommandsEnabled: boolean;
     evidenceError?: string;
@@ -89,6 +90,7 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
     <div data-testid="review-panel">
       <span>Review plan {props.plan.changeSetId}</span>
       <span>Review busy {String(props.busy)}</span>
+      <span>Review apply paused {String(props.applyPaused)}</span>
       <span>Review accept {String(props.acceptCommandsEnabled)}</span>
       <span>Review reject {String(props.rejectCommandsEnabled)}</span>
       <span>Review evidence opening {props.openingEvidenceRef ?? "none"}</span>
@@ -921,6 +923,60 @@ describe("KnowledgeStudioRoot", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Review open evidence" }));
     expect(controller.calls).toContain("review-evidence:opaque-evidence-ref");
+  });
+
+  it.each([
+    ["running", false],
+    ["paused", true],
+    ["rate_limited", true],
+    ["startup_recovery", true],
+    ["recovery_required", true],
+    ["finalizing", true],
+  ] as const)(
+    "maps %s activity to applyPaused=%s in ordinary Review — https://github.com/yydspanda/obsidian-copilot/issues/6",
+    (bundleState, applyPaused) => {
+      const ready = createReadyState();
+      const controller = new TestKnowledgeStudioController({
+        ...ready,
+        activeTab: "review",
+        snapshot: {
+          ...ready.snapshot!,
+          activity: {
+            ...ready.snapshot!.activity,
+            controls: { state: bundleState, canPause: false, canResume: false },
+          },
+        },
+      });
+      renderStudio(controller);
+
+      expect(screen.getByText(`Review apply paused ${applyPaused}`)).toBeTruthy();
+      expect(screen.getByText("Review accept true")).toBeTruthy();
+      expect(screen.getByText("Review reject true")).toBeTruthy();
+    }
+  );
+
+  it("keeps paused ordinary Apply state out of forward Review and preserves its submit route — https://github.com/yydspanda/obsidian-copilot/issues/6", () => {
+    const ready = createForwardReadyState([createForwardPendingReview()]);
+    const controller = new TestKnowledgeStudioController({
+      ...ready,
+      snapshot: {
+        ...ready.snapshot!,
+        activity: {
+          ...ready.snapshot!.activity,
+          controls: { state: "paused", canPause: false, canResume: true },
+        },
+      },
+    });
+    renderStudio(controller);
+
+    expect(screen.getByText("Review apply paused undefined")).toBeTruthy();
+    expect(screen.getByText("Review accept true")).toBeTruthy();
+    expect(screen.getByText("Review reject true")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review submit" }));
+
+    expect(controller.calls).toEqual([`forward-submit:${FORWARD_REVIEW_REF}`]);
+    expect(controller.submitted).toBeUndefined();
+    expect(controller.submittedForward?.changeSetId).toBe(FORWARD_REVIEW_REF);
   });
 
   it("renders a pending forward row through Review while keeping its submit route distinct", () => {

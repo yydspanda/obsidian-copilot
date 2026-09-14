@@ -30,10 +30,10 @@
 
 ## Recent Activity
 
-- 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — Deployed the clean `7b0c9a8b` personal artifact to
-  the Windows test Vault; the replaced plugin instance reached `workflow_read_ready`.
-  Review feedback repair under [issue #5](https://github.com/yydspanda/obsidian-copilot/issues/5)
-  passes 29 panel tests, 86 workflow regressions and 30 gallery tests; Windows gallery checks pass.
+- 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — User accepted the Review selection feedback repair.
+  Paused Apply fix under [issue #6](https://github.com/yydspanda/obsidian-copilot/issues/6)
+  blocks acceptance before durable mutation and explains the disabled action; 14 suites / 622 tests pass.
+  Windows virtual gallery checks pass; production deployment is next. No upstream-owned source file changed.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -112,7 +112,7 @@
   Four proposals remain. Before pause, counters reached 35 failed / 10 completed; analysis failures remain unresolved.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Pending: user's Review feedback/Apply check, analysis/navigation fixes, recovery, migration and popout.
+- Review feedback passes; paused Apply repair awaits deployment. Apply, analysis/navigation, recovery, migration and popout remain.
 
 ## Archive
 

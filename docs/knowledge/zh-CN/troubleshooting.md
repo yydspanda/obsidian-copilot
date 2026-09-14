@@ -189,6 +189,8 @@ Rate limited 表示提供商或队列要求等待。普通用户 Pause 可以在
 
 必须给每个文件作出决定；允许区块级选择时，每个 changed block 也必须决定。有正在进行的人工编辑时，先保存或取消。顶部 `Review actions` 会显示选择统计和未完成、忙碌或不可用状态。选择只是草稿，不会立即写 Wiki；完成后显式点击 `Validate and apply selection`，或在全部跳过时点击 `Reject proposal`。
 
+如果普通提案显示 `Apply paused`，表示 Bundle 当前不允许运行 Apply，并非没有选中。可以继续勾选、编辑或整项拒绝，但不能提交接受项。先在 Activity 检查暂停原因；不要直接 Resume 来解锁按钮，因为这也可能恢复排队任务并调用模型。暂停检查若在保存接受决定前拦截提交，提案仍待审核，不需要因此进行恢复。
+
 ### Apply 后页面没有立即出现
 
 先看 Activity 是否处于 `Applying` 或 `Finalizing`。只有持久确认完成后才把它当成成功。不要在这个窗口手工创建同名文件。

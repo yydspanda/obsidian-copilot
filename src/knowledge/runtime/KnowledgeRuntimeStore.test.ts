@@ -106,6 +106,7 @@ import {
   createManifestCommitIntentDigest,
   createManifestCommitPlanDigest,
   createSourceManifestDigest,
+  projectManifestCommitIntent,
   type ManifestCommitIntent,
   type ManifestCommitPlan,
 } from "@/knowledge/manifest/ManifestCommitIntent";
@@ -3466,6 +3467,106 @@ function recordFixtureWatermarkAsConsumed(
 }
 
 describe("KnowledgeRuntimeStore", () => {
+  describe("KnowledgeRuntimeStore", () => {
+    describe("writeReview()", () => {
+      function acceptPendingReview(state: KnowledgeRuntimeStoreSnapshot): ChangeSetReviewSnapshot {
+        const current = state.reviews[0].value as ChangeSetReviewSnapshot;
+        const record = current.records[0];
+        if (record.outcome !== "pending") throw new Error("Expected a pending proposal");
+        const acceptedChangeSet: KnowledgeChangeSet = { ...record.proposal, status: "accepted" };
+        const manifestCommitIntent = projectManifestCommitIntent(
+          record.manifestCommitPlan,
+          acceptedChangeSet
+        );
+        return {
+          ...current,
+          revision: current.revision + 1,
+          records: [
+            {
+              ...record,
+              outcome: "accepted",
+              recordRevision: 1,
+              acceptedChangeSet,
+              acceptedDigest: createChangeSetTransactionDigest(acceptedChangeSet),
+              manifestCommitIntent,
+              manifestCommitIntentDigest: createManifestCommitIntentDigest(manifestCommitIntent),
+              acceptedAt: 130,
+            },
+          ],
+        };
+      }
+
+      it.each(["running", "startup_recovery"] as const)(
+        "preserves acceptance while the Queue is %s (https://github.com/yydspanda/obsidian-copilot/issues/6)",
+        async (control) => {
+          const harness = await createReviewRejectHarness();
+          const queue = harness.initialState.queues[0].value as IngestQueueSnapshot;
+          queue.control =
+            control === "running"
+              ? { status: "running" }
+              : { status: "paused", reason: control, pausedAt: 125 };
+          harness.file.replaceContent(JSON.stringify(harness.initialState));
+          const accepted = acceptPendingReview(harness.initialState);
+
+          await harness.runtime.writeReview("personal", accepted, accepted.revision - 1);
+
+          await expect(harness.runtime.readReview("personal")).resolves.toEqual(accepted);
+          await expect(harness.runtime.readQueue("personal")).resolves.toEqual(queue);
+        }
+      );
+
+      it.each(["user", "rate_limit"] as const)(
+        "rejects new acceptance against a %s pause committed at the atomic boundary without changing Runtime (https://github.com/yydspanda/obsidian-copilot/issues/6)",
+        async (reason) => {
+          const harness = await createReviewRejectHarness();
+          const accepted = acceptPendingReview(harness.initialState);
+          const paused = JSON.parse(
+            JSON.stringify(harness.initialState)
+          ) as KnowledgeRuntimeStoreSnapshot;
+          const queue = paused.queues[0].value as IngestQueueSnapshot;
+          paused.revision += 1;
+          queue.revision += 1;
+          queue.control = {
+            status: "paused",
+            reason,
+            pausedAt: 125,
+            ...(reason === "rate_limit" ? { resumeAt: 200 } : {}),
+          };
+          const pausedText = JSON.stringify(paused);
+          harness.file.runBeforeNextTransform(() => harness.file.replaceContent(pausedText));
+
+          await expect(
+            harness.runtime.writeReview("personal", accepted, accepted.revision - 1)
+          ).rejects.toMatchObject({ name: "ReviewStorageAcceptanceBlockedError" });
+
+          expect(await harness.file.read()).toBe(pausedText);
+        }
+      );
+
+      it("preserves an already accepted record during a paused Review snapshot write (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const harness = await createReviewRejectHarness();
+        const accepted = acceptPendingReview(harness.initialState);
+        await harness.runtime.writeReview("personal", accepted, accepted.revision - 1);
+        const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+        const queue = state.queues[0].value as IngestQueueSnapshot;
+        queue.control = { status: "paused", reason: "user", pausedAt: 135 };
+        harness.file.replaceContent(JSON.stringify(state));
+
+        await harness.runtime.writeReview(
+          "personal",
+          { ...accepted, revision: accepted.revision + 1 },
+          accepted.revision
+        );
+
+        await expect(harness.runtime.readReview("personal")).resolves.toEqual({
+          ...accepted,
+          revision: accepted.revision + 1,
+        });
+        await expect(harness.runtime.readQueue("personal")).resolves.toEqual(queue);
+      });
+    });
+  });
+
   it("initializes once and preserves an existing valid envelope", async () => {
     const harness = await createHarness();
     await harness.queue.write("personal", createQueueSnapshot(1), null);

@@ -9,6 +9,7 @@ import type {
   KnowledgeReviewFile,
   KnowledgeReviewPlan,
 } from "@/knowledge/review/ReviewDecision";
+import type { KnowledgeReviewDraftState } from "@/knowledge/ui/KnowledgeReviewDraftStore";
 
 /**
  * Creates one changed review block for a focused UI fixture.
@@ -278,6 +279,158 @@ describe("KnowledgeReviewPanel", () => {
     expect(getButton("Skip all changes").disabled).toBe(true);
     expect(getButton("Validating and applying…").disabled).toBe(true);
   });
+
+  it("keeps file, block, and edited choices session-local while Bundle Apply is paused — https://github.com/yydspanda/obsidian-copilot/issues/6", () => {
+    const onSubmit = jest.fn();
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        applyPaused={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
+      />
+    );
+    const actions = within(screen.getByRole("region", { name: "Review actions" }));
+
+    expect(
+      actions.getByText(
+        "Bundle is paused. Selections are kept only in this session and do not write Wiki files."
+      )
+    ).toBeTruthy();
+    expect(getButton("Apply paused").disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /resume/i })).toBeNull();
+
+    fireEvent.click(getButton("Use proposed file Knowledge/First.md"));
+    expect(getButton("Use proposed file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(getButton("Apply paused").disabled).toBe(true);
+
+    fireEvent.click(getButton("Keep current block 1 in Knowledge/First.md"));
+    expect(
+      getButton("Keep current block 1 in Knowledge/First.md").getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(getButton("Apply paused").disabled).toBe(true);
+
+    fireEvent.click(getButton("Edit proposed file Knowledge/First.md"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit complete proposed file" }), {
+      target: { value: "Saved only in this review session.\n" },
+    });
+    fireEvent.click(getButton("Use edited file"));
+    expect(getButton("Edit proposed file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(screen.getByRole("region", { name: "Edited file content" }).textContent).toContain(
+      "Saved only in this review session."
+    );
+    expect(getButton("Apply paused").disabled).toBe(true);
+    fireEvent.click(getButton("Apply paused"));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    selection: string;
+    draft: KnowledgeReviewDraftState;
+  }>([
+    {
+      selection: "all proposed files selected",
+      draft: { "change-1": { kind: "accept_exact" }, "change-2": { kind: "accept_exact" } },
+    },
+    {
+      selection: "a mixture of accepted and rejected files",
+      draft: { "change-1": { kind: "accept_exact" }, "change-2": { kind: "reject" } },
+    },
+  ])(
+    "blocks paused Apply with $selection and permits the same saved choices once unpaused — https://github.com/yydspanda/obsidian-copilot/issues/6",
+    ({ draft }) => {
+      const onSubmit = jest.fn();
+      const props = {
+        acceptCommandsEnabled: true,
+        busy: false,
+        draft,
+        onSubmit,
+        plan: createReviewPlan([
+          createReviewFile(),
+          createReviewFile({ changeId: "change-2", path: "Knowledge/Second.md" }),
+        ]),
+        rejectCommandsEnabled: true,
+      };
+      const { rerender } = render(<KnowledgeReviewPanel {...props} applyPaused={true} />);
+
+      expect(getButton("Apply paused").disabled).toBe(true);
+      fireEvent.click(getButton("Apply paused"));
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      rerender(<KnowledgeReviewPanel {...props} applyPaused={false} />);
+
+      expect(screen.queryByText(/Bundle is paused/)).toBeNull();
+      expect(getButton("Validate and apply selection").disabled).toBe(false);
+      fireEvent.click(getButton("Validate and apply selection"));
+      expect(onSubmit).toHaveBeenCalledWith({
+        changeSetId: "changeset-1",
+        proposalDigest: "proposal-digest-1",
+        expectedSnapshotToken: "snapshot-1",
+        decisions: [
+          { changeId: "change-1", decision: "accept_exact" },
+          { changeId: "change-2", decision: draft["change-2"]?.kind },
+        ],
+      });
+    }
+  );
+
+  it("allows explicit whole-proposal rejection while Bundle Apply remains paused — https://github.com/yydspanda/obsidian-copilot/issues/6", () => {
+    const onSubmit = jest.fn();
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        applyPaused={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(getButton("Apply paused").disabled).toBe(true);
+    fireEvent.click(getButton("Skip all changes"));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(getButton("Reject proposal").disabled).toBe(false);
+    fireEvent.click(getButton("Reject proposal"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      changeSetId: "changeset-1",
+      proposalDigest: "proposal-digest-1",
+      expectedSnapshotToken: "snapshot-1",
+      decisions: [{ changeId: "change-1", decision: "reject" }],
+    });
+  });
+
+  it.each([
+    { rejectCommandsEnabled: true, label: "Apply unavailable" },
+    { rejectCommandsEnabled: false, label: "Review actions unavailable" },
+  ])(
+    "shows $label rather than ordinary pause when acceptance capability is unavailable — https://github.com/yydspanda/obsidian-copilot/issues/6",
+    ({ rejectCommandsEnabled, label }) => {
+      render(
+        <KnowledgeReviewPanel
+          acceptCommandsEnabled={false}
+          applyPaused={true}
+          busy={false}
+          draft={{ "change-1": { kind: "accept_exact" } }}
+          onSubmit={jest.fn()}
+          plan={createReviewPlan([createReviewFile()])}
+          rejectCommandsEnabled={rejectCommandsEnabled}
+        />
+      );
+
+      expect(screen.queryByText(/Bundle is paused/)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Apply paused" })).toBeNull();
+      expect(getButton(label).disabled).toBe(true);
+      expect(getButton("Use all proposed changes").disabled).toBe(true);
+    }
+  );
 
   it("requires an explicit blocked-file decision instead of silently rejecting it in bulk", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();

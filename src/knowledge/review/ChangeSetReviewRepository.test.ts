@@ -20,6 +20,7 @@ import {
   ChangeSetReviewWriteConflictExhaustedError,
 } from "@/knowledge/review/ChangeSetReviewRepository";
 import {
+  ReviewStorageAcceptanceBlockedError,
   ReviewStorageRevisionConflictError,
   type ChangeSetReviewJobClaim,
   type ChangeSetReviewSnapshot,
@@ -213,6 +214,34 @@ function createSeedSnapshot(
 }
 
 describe("ChangeSetReviewRepository", () => {
+  describe("ChangeSetReviewRepository", () => {
+    describe("accept()", () => {
+      it("preserves a sanitized atomic acceptance blocker and the pending proposal without retrying (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+        const storage = new MemoryReviewStorage();
+        const repository = new ChangeSetReviewRepository(storage, { clock: () => 1000 });
+        const proposal = createProposal();
+        const pending = await repository.saveProposal("bundle-1", createSaveInput(proposal));
+        const blocked = new ReviewStorageAcceptanceBlockedError();
+        storage.writeFailure = blocked;
+        const writeSpy = jest.spyOn(storage, "write");
+
+        await expect(
+          repository.accept(
+            "bundle-1",
+            pending.changeSetId,
+            pending.recordRevision,
+            pending.proposalDigest,
+            createAccepted(proposal)
+          )
+        ).rejects.toBe(blocked);
+
+        expect(writeSpy).toHaveBeenCalledTimes(1);
+        await expect(repository.get("bundle-1", pending.changeSetId)).resolves.toEqual(pending);
+        expect(storage.writes).toHaveLength(1);
+      });
+    });
+  });
+
   it("saves an exact proposal idempotently and returns detached records", async () => {
     const storage = new MemoryReviewStorage();
     const repository = new ChangeSetReviewRepository(storage, { clock: () => 1000 });

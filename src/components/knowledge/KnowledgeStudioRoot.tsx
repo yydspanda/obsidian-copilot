@@ -562,6 +562,11 @@ function ReviewWorkspace({
       {selectedReview ? (
         <KnowledgeReviewPanel
           activeEdit={controller.getReviewActiveEdit(selectedReview)}
+          applyPaused={
+            // Ordinary Review must not promise immediate Apply while activity is stopped.
+            // https://github.com/yydspanda/obsidian-copilot/issues/6
+            state.snapshot?.activity.controls.state !== "running"
+          }
           busy={state.pendingAction !== undefined}
           acceptCommandsEnabled={state.snapshot?.commandCapabilities.reviewAccept === true}
           rejectCommandsEnabled={state.snapshot?.commandCapabilities.reviewReject === true}
