@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 
 import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
@@ -109,6 +109,176 @@ function getButton(name: string): HTMLButtonElement {
 }
 
 describe("KnowledgeReviewPanel", () => {
+  it("groups selection feedback and the single final action without submitting bulk choices — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
+    const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
+    const files = [
+      createReviewFile(),
+      createReviewFile({ changeId: "change-2", path: "Knowledge/Second.md" }),
+    ];
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan(files)}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    const actions = within(screen.getByRole("region", { name: "Review actions" }));
+    const status = actions.getByRole("status");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.textContent).toBe("0 of 2 files decided. Selections alone do not write files.");
+    expect(actions.getAllByRole("button")).toHaveLength(3);
+    expect(actions.getByRole("button", { name: "Choose all decisions" })).toBe(
+      getButton("Choose all decisions")
+    );
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(actions.getByRole("button", { name: "Use all proposed changes" }));
+
+    expect(status.textContent).toBe("All 2 files selected. Selections alone do not write files.");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("true");
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Use proposed file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(
+      getButton("Use proposed block 1 in Knowledge/Second.md").getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "Validate and apply selection" })).toHaveLength(1);
+
+    fireEvent.click(actions.getByRole("button", { name: "Validate and apply selection" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith({
+      changeSetId: "changeset-1",
+      proposalDigest: "proposal-digest-1",
+      expectedSnapshotToken: "snapshot-1",
+      decisions: [
+        { changeId: "change-1", decision: "accept_exact" },
+        { changeId: "change-2", decision: "accept_exact" },
+      ],
+    });
+  });
+
+  it("derives bulk selection from individual decisions and clears it when the review becomes mixed — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
+    const onSubmit = jest.fn();
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([
+          createReviewFile(),
+          createReviewFile({ changeId: "change-2", path: "Knowledge/Second.md" }),
+        ])}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    fireEvent.click(getButton("Use proposed file Knowledge/First.md"));
+    const status = within(screen.getByRole("region", { name: "Review actions" })).getByRole(
+      "status"
+    );
+    expect(status.textContent).toBe("1 of 2 files decided. Selections alone do not write files.");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(getButton("Use proposed file Knowledge/Second.md"));
+    expect(status.textContent).toBe("All 2 files selected. Selections alone do not write files.");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(getButton("Keep current file Knowledge/Second.md"));
+    expect(status.textContent).toBe("2 of 2 files decided. Selections alone do not write files.");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Keep current file Knowledge/Second.md").getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(getButton("Use proposed file Knowledge/Second.md").getAttribute("aria-pressed")).toBe(
+      "false"
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each(["Use all proposed changes", "Skip all changes"])(
+    "does not announce a successful %s choice when the controlled draft rejects saving — https://github.com/yydspanda/obsidian-copilot/issues/5",
+    (choice) => {
+      const onSubmit = jest.fn();
+      const onDraftChange = jest.fn(() => false);
+      render(
+        <KnowledgeReviewPanel
+          acceptCommandsEnabled={true}
+          busy={false}
+          draft={{}}
+          onDraftChange={onDraftChange}
+          onSubmit={onSubmit}
+          plan={createReviewPlan([createReviewFile()])}
+          rejectCommandsEnabled={true}
+        />
+      );
+
+      fireEvent.click(getButton(choice));
+
+      expect(onDraftChange).toHaveBeenCalledTimes(1);
+      expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+      expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
+      expect(
+        within(screen.getByRole("region", { name: "Review actions" })).getByRole("status")
+          .textContent
+      ).toBe("0 of 1 file decided. Selections alone do not write files.");
+      expect(getButton("Choose all decisions").disabled).toBe(true);
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not claim all files are selected or skipped for an empty proposal — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
+    const onSubmit = jest.fn();
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([])}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    fireEvent.click(getButton("Use all proposed changes"));
+    fireEvent.click(getButton("Skip all changes"));
+
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("0 of 0 files decided. Selections alone do not write files.");
+    expect(getButton("Choose all decisions").disabled).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("announces external submission progress while preserving the controlled selected draft — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={true}
+        draft={{ "change-1": { kind: "accept_exact" } }}
+        onSubmit={jest.fn()}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("Submitting review…");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("true");
+    expect(getButton("Use all proposed changes").disabled).toBe(true);
+    expect(getButton("Skip all changes").disabled).toBe(true);
+    expect(getButton("Validating and applying…").disabled).toBe(true);
+  });
+
   it("requires an explicit blocked-file decision instead of silently rejecting it in bulk", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     const update = createReviewFile();
@@ -156,7 +326,7 @@ describe("KnowledgeReviewPanel", () => {
     expect(JSON.stringify(command)).not.toMatch(/before|after|Hash|Content/);
   });
 
-  it("requires every changed block to be explicit before partial submission", () => {
+  it("counts a partial file as decided only after every changed block is explicit — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     const file = createReviewFile({
       blocks: [
@@ -182,12 +352,27 @@ describe("KnowledgeReviewPanel", () => {
       screen.getByRole("button", { name: "Use proposed block 1 in Knowledge/First.md" })
     );
     expect(submit.disabled).toBe(true);
+    const status = within(screen.getByRole("region", { name: "Review actions" })).getByRole(
+      "status"
+    );
+    expect(status.textContent).toBe("0 of 1 file decided. Selections alone do not write files.");
+    expect(
+      getButton("Use proposed block 1 in Knowledge/First.md").getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(onSubmit).not.toHaveBeenCalled();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Keep current block 2 in Knowledge/First.md" })
     );
     const apply = getButton("Validate and apply selection");
     expect(apply.disabled).toBe(false);
+    expect(status.textContent).toBe("1 of 1 file decided. Selections alone do not write files.");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
+    expect(
+      getButton("Keep current block 2 in Knowledge/First.md").getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(onSubmit).not.toHaveBeenCalled();
     fireEvent.click(apply);
 
     expect(onSubmit).toHaveBeenCalledWith({
@@ -204,7 +389,7 @@ describe("KnowledgeReviewPanel", () => {
     });
   });
 
-  it("rejects every file without requiring partial block decisions", () => {
+  it("marks all files skipped without submitting until final rejection is confirmed — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     const files = [
       createReviewFile(),
@@ -222,8 +407,21 @@ describe("KnowledgeReviewPanel", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Skip all changes" }));
+    const actions = within(screen.getByRole("region", { name: "Review actions" }));
+    expect(actions.getByRole("status").textContent).toBe(
+      "All 2 files skipped. Selections alone do not write files."
+    );
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("true");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Keep current file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(
+      getButton("Keep current block 1 in Knowledge/Second.md").getAttribute("aria-pressed")
+    ).toBe("true");
+    expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByText("Rejecting makes no Wiki file changes.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Reject proposal" }));
+    fireEvent.click(actions.getByRole("button", { name: "Reject proposal" }));
 
     expect(onSubmit.mock.calls[0][0].decisions).toEqual([
       { changeId: "change-1", decision: "reject" },
@@ -260,7 +458,7 @@ describe("KnowledgeReviewPanel", () => {
     });
   });
 
-  it("clears local decisions when the content-addressed snapshot changes", () => {
+  it("clears local decisions and selection feedback when the content-addressed snapshot changes — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     const file = createReviewFile({
       capability: "exact_only",
@@ -280,6 +478,9 @@ describe("KnowledgeReviewPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Use proposed file Knowledge/First.md" }));
     expect(getButton("Validate and apply selection").disabled).toBe(false);
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("All 1 file selected. Selections alone do not write files.");
 
     rerender(
       <KnowledgeReviewPanel
@@ -295,9 +496,13 @@ describe("KnowledgeReviewPanel", () => {
     expect(getButton("Use proposed file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
       "false"
     );
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("0 of 1 file decided. Selections alone do not write files.");
   });
 
-  it("suppresses duplicate submissions while an async command is pending", () => {
+  it("suppresses duplicate submissions and announces pending submission without claiming no writes — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
     const pendingSubmission = new Promise<void>(() => undefined);
     const onSubmit = jest.fn<Promise<void>, [KnowledgeReviewCommand]>(() => pendingSubmission);
 
@@ -318,9 +523,42 @@ describe("KnowledgeReviewPanel", () => {
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(getButton("Validating and applying…").disabled).toBe(true);
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("Submitting review…");
+    expect(getButton("Use all proposed changes").disabled).toBe(true);
+    expect(getButton("Skip all changes").disabled).toBe(true);
   });
 
-  it("renders the exact diff while disabling every review decision in read-only mode", () => {
+  it("does not deny prior writes after submission resolves while the same review plan remains mounted — https://github.com/yydspanda/obsidian-copilot/issues/5", async () => {
+    const onSubmit = jest
+      .fn<Promise<void>, [KnowledgeReviewCommand]>()
+      .mockResolvedValue(undefined);
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
+      />
+    );
+    const status = within(screen.getByRole("region", { name: "Review actions" })).getByRole(
+      "status"
+    );
+
+    fireEvent.click(getButton("Use all proposed changes"));
+    fireEvent.click(getButton("Validate and apply selection"));
+    expect(status.textContent).toBe("Submitting review…");
+
+    await waitFor(() => expect(getButton("Validate and apply selection").disabled).toBe(false));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(status.textContent).not.toContain("Nothing applied yet.");
+    expect(status.textContent).toBe("All 1 file selected. Selections alone do not write files.");
+  });
+
+  it("keeps undecided feedback while disabling every review decision in read-only mode — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     render(
       <KnowledgeReviewPanel
@@ -339,6 +577,11 @@ describe("KnowledgeReviewPanel", () => {
     expect(getButton("Use proposed file Knowledge/First.md").disabled).toBe(true);
     expect(getButton("Keep current file Knowledge/First.md").disabled).toBe(true);
     expect(getButton("Review actions unavailable").disabled).toBe(true);
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("0 of 1 file decided. Selections alone do not write files.");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
 
     fireEvent.click(getButton("Use all proposed changes"));
     fireEvent.click(getButton("Review actions unavailable"));
@@ -448,7 +691,11 @@ describe("KnowledgeReviewPanel", () => {
     );
 
     expect(getButton("Open exact source location 1").disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toBe("Opening…");
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "Source evidence for this proposal" })
+      ).getByRole("status").textContent
+    ).toBe("Opening…");
   });
 
   it("renders safe empty and error evidence states without inventing an open action", () => {
@@ -485,7 +732,7 @@ describe("KnowledgeReviewPanel", () => {
     expect(screen.getByText(/No source excerpt is available for this proposal/)).toBeTruthy();
   });
 
-  it("saves an LF-normalized manual whole-file edit without recalculating the diff", () => {
+  it("counts a saved manual edit as decided without marking the original proposal selected — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     render(
       <KnowledgeReviewPanel
@@ -511,6 +758,15 @@ describe("KnowledgeReviewPanel", () => {
     expect(screen.getByRole("note").textContent).toContain("exact saved full-file edit");
     expect(screen.getAllByText("before", { exact: false }).length).toBeGreaterThan(0);
     expect(screen.getAllByText("Human revised", { exact: false }).length).toBeGreaterThan(0);
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("1 of 1 file decided. Selections alone do not write files.");
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Skip all changes").getAttribute("aria-pressed")).toBe("false");
+    expect(getButton("Edit proposed file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(onSubmit).not.toHaveBeenCalled();
 
     fireEvent.click(getButton("Validate and apply selection"));
     expect(onSubmit).toHaveBeenCalledWith({
@@ -664,7 +920,7 @@ describe("KnowledgeReviewPanel", () => {
     );
   });
 
-  it("retains a controlled active buffer across remount and requires it to finish before submit", () => {
+  it("retains a controlled active buffer across remount and explains why editing blocks submission — https://github.com/yydspanda/obsidian-copilot/issues/5", () => {
     const plan = createReviewPlan([createReviewFile()]);
     const onSubmit = jest.fn();
     const onActiveEditChange = jest.fn(() => true);
@@ -690,6 +946,9 @@ describe("KnowledgeReviewPanel", () => {
     expect(getButton("Skip all changes").disabled).toBe(true);
     expect(getButton("Use proposed file Knowledge/First.md").disabled).toBe(true);
     expect(getButton("Edit proposed file Knowledge/First.md").disabled).toBe(true);
+    expect(
+      within(screen.getByRole("region", { name: "Review actions" })).getByRole("status").textContent
+    ).toBe("Editing a file. Save or cancel the edit before applying.");
     fireEvent.click(getButton("Finish or cancel edit"));
     expect(onSubmit).not.toHaveBeenCalled();
     unmount();

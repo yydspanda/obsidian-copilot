@@ -32,8 +32,8 @@
 
 - 2026-09-14 — `PK-H3-UPSTREAM-V4-WIN` — Deployed the clean `1420e2be` personal artifact to
   the Windows test Vault; `main.js` and `styles.css` match the verified September 13 hashes.
-  Automatic reload failed, so the test Vault's plugin manager disabled and re-enabled Copilot.
-  The new instance reached `workflow_read_ready` with the corrected guard and Studio command; acceptance continues.
+  Review feedback repair under [issue #5](https://github.com/yydspanda/obsidian-copilot/issues/5)
+  passes 29 panel tests, 86 workflow regressions and 30 gallery tests; Windows gallery checks pass.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -112,7 +112,7 @@
   Four proposals remain. Before pause, counters reached 35 failed / 10 completed; analysis failures remain unresolved.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Pending: analysis/navigation failures, Review feedback/Apply, recovery, migration and popout. Build policy is unchanged.
+- Pending: deploy Review feedback repair, then user feedback/Apply, analysis/navigation, recovery, migration and popout.
 
 ## Archive
 

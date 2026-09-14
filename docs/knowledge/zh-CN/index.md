@@ -27,15 +27,15 @@
 
 聊天记录即使被自动保存或手工保存成 Markdown，也仍然只是普通聊天记录，不会因此自动成为 Knowledge Source、Review 或 Wiki。只有在已完成、非错误的 AI 回答上显式选择 `Create Knowledge Draft`，编辑标题和正文、核对原始材料并勾选确认后，系统才会创建并登记一个新的 Source。流式生成中的回答、用户消息和错误消息没有这个入口。
 
-| 你做的动作                                        | 当下产生什么                                     | 这个动作会不会写入 Knowledge Wiki         |
-| ------------------------------------------------- | ------------------------------------------------ | ----------------------------------------- |
-| 普通 Chat                                         | 回答、解释、总结、比较、提纲、草稿或待办         | 不会                                      |
-| `Use in this chat`                                | 文件成为本次对话的临时上下文                     | 不会                                      |
-| `Add to Knowledge`                                | 持久登记一个现有 Vault 文件，并启动后台 Activity | 不会；可能得到 Review 或 `no_changes`     |
-| `Create Knowledge Draft`                          | 把核对、编辑后的 AI 回答登记为 managed Source    | 不会；可能得到 Review 或 `no_changes`     |
-| Knowledge Studio → `Query`                        | 有证据状态、结论和可打开引用的只读回答           | 不会                                      |
-| Query → `Save to Wiki`                            | 一个受管理的新 Source，再次进入后台编译          | 不会；结果为 `no_changes` 或 Review→Apply |
-| Review 中接受 → `Submit review`（随后受控 Apply） | 审核决定；只有接受的 create/update 才会写入 Wiki | 会，且只写你明确接受的修改                |
+| 你做的动作                                     | 当下产生什么                                     | 这个动作会不会写入 Knowledge Wiki         |
+| ---------------------------------------------- | ------------------------------------------------ | ----------------------------------------- |
+| 普通 Chat                                      | 回答、解释、总结、比较、提纲、草稿或待办         | 不会                                      |
+| `Use in this chat`                             | 文件成为本次对话的临时上下文                     | 不会                                      |
+| `Add to Knowledge`                             | 持久登记一个现有 Vault 文件，并启动后台 Activity | 不会；可能得到 Review 或 `no_changes`     |
+| `Create Knowledge Draft`                       | 把核对、编辑后的 AI 回答登记为 managed Source    | 不会；可能得到 Review 或 `no_changes`     |
+| Knowledge Studio → `Query`                     | 有证据状态、结论和可打开引用的只读回答           | 不会                                      |
+| Query → `Save to Wiki`                         | 一个受管理的新 Source，再次进入后台编译          | 不会；结果为 `no_changes` 或 Review→Apply |
+| Review 中选择 → `Validate and apply selection` | 选择只保存审核草稿；显式提交后才进入受控 Apply   | 会，且只写你明确接受的 create/update 修改 |
 
 把 Vault 文件拖进 Chat 后出现的两个按钮，含义完全不同：
 

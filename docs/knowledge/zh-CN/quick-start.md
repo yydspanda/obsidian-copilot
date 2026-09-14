@@ -84,8 +84,8 @@ Activity 会从持久队列读取真实状态。一个来源可能依次经过�
 1. 打开 **Review** 页签或从 Activity 进入对应提案。
 2. 逐个查看目标文件、操作类型和内容差异。
 3. 核对每个重要事实是否来自刚才的来源，而不是模型猜测。
-4. 对合格的 create/update 文件选择整文件或合格区块；也可以使用 **Accept all** 接受所有当前可接受修改。
-5. 点击 **Submit review** 提交决定。接受决定会进入显式 Apply；当前界面不是模型自动写入，也不需要再寻找第二个 Apply 按钮。
+4. 对合格的 create/update 文件选择整文件或合格区块；全部文件均可接受时，也可以使用 **Use all proposed changes**。顶部 **Review actions** 会更新草稿选择统计，这一步不写 Wiki；被阻止的文件需要单独明确决定。
+5. 完成全部决定后，点击 **Validate and apply selection** 提交并进入受控 Apply；全部跳过则点击 **Reject proposal**，不写 Wiki。当前界面不是模型自动写入，也不需要再寻找第二个 Apply 按钮。
 6. 等待 Activity 完成最终提交确认。
 7. 在 Vault 的 `wikiRoot` 中打开生成页面，核对实际字节和内容。
 

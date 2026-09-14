@@ -1,12 +1,12 @@
 # Review 与 Apply
 
-> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-08-25。
+> 适用范围：Windows Obsidian Desktop、个人使用、一个有效的 Knowledge Bundle、一个 `sourceRoot`。最近核对：2026-09-14。
 
 ## 本页目标
 
 本页帮助你审核后台编译产生的候选修改，并理解 Wiki 在什么时刻才会真正改变。
 
-核心规则只有一句：后台编译器只能提出 Proposal（提案）；你在 `Review` 中完成决定并点击 `Submit review` 后，系统才可能进入受控 `Apply`。当前没有自动接受或自动 Apply。
+核心规则只有一句：后台编译器只能提出 Proposal（提案）；你在 `Review` 中选择文件或修改块时，只是在准备审核草稿。只有完成决定并显式点击 `Validate and apply selection` 后，系统才可能进入受控 `Apply`。当前没有自动接受或自动 Apply。
 
 ## 前置条件
 
@@ -115,20 +115,25 @@ Forward Review 与普通编译 Review 使用不同的持久协议，但按钮语
 
 ### 整体决定
 
-- `Accept all`：对所有可接受文件选择整文件接受，并自动拒绝只能拒绝的文件。
-- `Reject all`：拒绝本提案的全部文件，不写 Wiki。
+顶部的 `Review actions` 区域集中显示整体选择、选择统计和最终提交按钮；向下阅读长提案时，该区域会保持可见。
+
+- `Use all proposed changes`：为每个文件选择完整候选内容，不立即应用。如果提案包含 `reject_only` 文件，此按钮禁用；系统不会替你拒绝被阻止的文件，需要逐文件决定。
+- `Skip all changes`：将所有文件标记为跳过，不立即结束提案，也不写 Wiki。确认放弃时，仍需点击 `Reject proposal`。
+
+刚打开提案时，文件默认尚未决定。选中的按钮会显示勾选和强调状态；选择统计会更新，不会自动跳到文件列表底部。全部选中时，统计会显示 `All N files selected. Selections alone do not write files.`（单文件使用 `file`），提醒你选择操作本身不会写入文件。这不是此前提交是否已写入的判断；提交结果应以实际完成或恢复提示为准。混合选择、人工编辑和未完成的区块决定会分别计数或提示；只读或忙碌状态会禁用不可用动作。选择完成也不表示已应用。
 
 ### 单文件决定
 
-- `Accept file`：接受该文件的完整候选内容。
-- `Reject file`：拒绝该文件的全部修改。
+- `Use proposed file`：为已有文件选择完整候选内容；新建文件对应 `Create proposed file`。
+- `Keep current file`：不采用该文件的修改；新建文件对应 `Skip proposed file`。
+- `Edit proposed file`：人工修改完整候选正文，再用 `Use edited file` 保存到审核草稿。保存编辑不等于 Apply；仍需完成所有决定并显式提交。编辑期间须先保存或取消编辑，再继续其他选择。
 
 ### 按块决定
 
 只有 `blocks_allowed` 文件会在每个 `Changed block` 上显示：
 
-- `Accept block`：保留这个修改块；
-- `Reject block`：不采用这个修改块。
+- `Use proposed block`：选择这个候选修改块；
+- `Keep current block`：保留这个块的当前内容。
 
 切换到按块决定后，**必须**为该文件的每个 Changed block 明确选择接受或拒绝。上下文块只用于帮助阅读，不需要单独决定。
 
@@ -136,14 +141,14 @@ Forward Review 与普通编译 Review 使用不同的持久协议，但按钮语
 
 1. 为提案中的每个文件作出决定。
 2. 如果使用按块审核，为每个 Changed block 作出决定。
-3. 确认 `Submit review` 不再禁用。
-4. 点击 `Submit review` 一次，然后等待结果。
+3. 检查顶部 `Review actions` 的统计；若还有未决定的文件或 Changed block，先完成选择。
+4. 有接受项时，点击可用的 `Validate and apply selection` 一次，然后等待结果；全部跳过时，点击 `Reject proposal` 明确结束提案。
 
-如果全部拒绝，系统结束提案且不写文件。如果至少接受一项，系统会再次校验当前快照和最终选中内容，然后在同一提交动作中进入 Apply；当前界面没有另一个需要点击的独立 Apply 按钮。
+选择和统计变化本身不会提交、应用或写 Wiki。如果全部拒绝，显式提交后系统结束提案且不写 Wiki。如果至少接受一项，显式提交后系统会再次校验当前快照和最终选中内容，然后在同一提交动作中进入 Apply；当前界面没有另一个需要点击的独立 Apply 按钮。
 
 ## 人工审核清单
 
-点击 `Submit review` 前，至少检查：
+点击 `Validate and apply selection` 前，至少检查：
 
 - 候选结论是否确实由列出的 Source refs 支撑；必要时从 Vault 手工打开这些来源核对；
 - 候选引用信息是否对应来源摘录或 PDF 页；Review 本身没有 Query 式的精确引用按钮；当前 production `.md` 导航只支持精确原句；
@@ -197,7 +202,7 @@ Forward Apply 若显示 `Applying accepted revision`，说明 journal 已持久�
 
 ## 如果结果不同
 
-- `Submit review` 仍禁用：还有文件或 Changed block 未决定，或者当前接受/拒绝能力未连接。
+- 顶部提交按钮仍禁用：还有文件或 Changed block 未决定、人工编辑尚未保存或取消、正在处理其他动作，或者当前接受/拒绝能力不可用。查看 `Review actions` 中的状态提示。
 - `Acceptance unavailable`：当前决定包含接受项，但安全 Apply 能力不可用；不要把它改成全拒绝来掩盖配置问题，除非你确实希望放弃提案。
 - `This review changed before submission`：提案快照已经刷新；重新阅读当前版本再决定。
 - `proposal or target files changed` / `stale`：目标内容发生漂移。先备份并检查当前 Wiki，然后拒绝旧提案。如仍需新提案，应等待已经明确排队的 rerun，或修改 Source 形成新版本；不要假定相同输入会自动重新编译。若要修改 Schema，须按 [Schema 变更规范](operating-guidelines.md#schema-变更规范) 在安全状态禁用/启用插件或完整重启后，才会进入新 generation。

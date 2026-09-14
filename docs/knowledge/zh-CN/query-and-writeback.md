@@ -154,7 +154,7 @@ PDF 页引用可以出现在检索证据中，并支持安全的精确页跳转�
       ↙         ↘
 no_changes     Review
                   ↓
-             显式 Submit review / Apply
+             显式 Validate and apply selection
                   ↓
                  Wiki
 ```

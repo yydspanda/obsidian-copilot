@@ -1,9 +1,10 @@
 import type { Change } from "diff";
+import { Check } from "lucide-react";
 import React, { useMemo, useRef, useState } from "react";
 
 import { SplitDiffBlock } from "@/components/composer/DiffPreview";
 import { KnowledgeReviewEvidencePanel } from "@/components/knowledge/KnowledgeReviewEvidencePanel";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   isValidKnowledgeReviewManualEditText,
@@ -19,6 +20,7 @@ import type {
   KnowledgeReviewDraftState,
   KnowledgeReviewLocalDecision,
 } from "@/knowledge/ui/KnowledgeReviewDraftStore";
+import { cn } from "@/lib/utils";
 
 /** Props for the capability-separated multi-file knowledge review surface. */
 export interface KnowledgeReviewPanelProps {
@@ -47,6 +49,36 @@ type LocalFileDecision = KnowledgeReviewLocalDecision;
 type LocalDecisionState = KnowledgeReviewDraftState;
 const MAX_SAVED_MANUAL_EDIT_DIFF_PREVIEW_CHARACTERS = 200_000;
 const MAX_SAVED_MANUAL_EDIT_DIFF_PREVIEW_LINES = 2_000;
+
+interface ReviewChoiceButtonProps extends Omit<ButtonProps, "variant" | "size" | "aria-pressed"> {
+  selected: boolean;
+}
+
+// A Review choice needs a persistent visual receipt, not only a color-coded action.
+// https://github.com/yydspanda/obsidian-copilot/issues/5
+const ReviewChoiceButton = React.forwardRef<HTMLButtonElement, ReviewChoiceButtonProps>(
+  function ReviewChoiceButton({ selected, children, className, ...props }, ref) {
+    return (
+      <Button
+        {...props}
+        ref={ref}
+        aria-pressed={selected}
+        variant="secondary"
+        size="sm"
+        className={cn(
+          "tw-group tw-h-auto tw-min-h-8 tw-max-w-full tw-whitespace-normal tw-border tw-border-solid tw-border-transparent tw-text-left active:tw-translate-y-px aria-pressed:tw-border-interactive-accent aria-pressed:tw-bg-interactive-accent-hsl/15 aria-pressed:hover:tw-bg-interactive-accent-hsl/20",
+          className
+        )}
+      >
+        <Check
+          aria-hidden="true"
+          className="tw-size-3 tw-opacity-0 group-aria-pressed:tw-opacity-100"
+        />
+        {children}
+      </Button>
+    );
+  }
+);
 
 /** Applies the native textarea's deterministic LF line-ending contract. */
 function normalizeReviewEditorLineEndings(value: string): string {
@@ -226,22 +258,28 @@ function isReviewComplete(plan: KnowledgeReviewPlan, decisions: LocalDecisionSta
   const editedCharacterCount = getSelectedEditedCharacterCount(decisions);
   if (editedCharacterCount > KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxTotalCharacters) return false;
 
-  return plan.files.every((file) => {
-    const decision = decisions[file.changeId];
-    if (!decision) return false;
-    if (decision.kind === "reject") return true;
-    if (decision.kind === "accept_exact") return file.capability !== "reject_only";
-    if (decision.kind === "accept_edited") {
-      return (
-        file.operation !== "delete" &&
-        file.capability !== "reject_only" &&
-        typeof file.afterContent === "string" &&
-        decision.afterContent.length <= KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile
-      );
-    }
-    if (file.capability !== "blocks_allowed") return false;
-    return getChangedBlocks(file).every((block) => decision.blocks[block.blockId] !== undefined);
-  });
+  return plan.files.every((file) => isFileReviewComplete(file, decisions[file.changeId]));
+}
+
+// Counts and submission must agree about unfinished block decisions.
+// https://github.com/yydspanda/obsidian-copilot/issues/5
+function isFileReviewComplete(
+  file: KnowledgeReviewFile,
+  decision: LocalFileDecision | undefined
+): boolean {
+  if (!decision) return false;
+  if (decision.kind === "reject") return true;
+  if (decision.kind === "accept_exact") return file.capability !== "reject_only";
+  if (decision.kind === "accept_edited") {
+    return (
+      file.operation !== "delete" &&
+      file.capability !== "reject_only" &&
+      typeof file.afterContent === "string" &&
+      decision.afterContent.length <= KNOWLEDGE_REVIEW_MANUAL_EDIT_LIMITS.maxCharactersPerFile
+    );
+  }
+  if (file.capability !== "blocks_allowed") return false;
+  return getChangedBlocks(file).every((block) => decision.blocks[block.blockId] !== undefined);
 }
 
 /**
@@ -391,6 +429,26 @@ function KnowledgeReviewSnapshotPanel({
   const commandEnabled = wholeProposalRejected ? rejectCommandsEnabled : acceptCommandsEnabled;
   const actionBusy = busy || submitting;
   const hasRejectOnlyFile = plan.files.some((file) => file.capability === "reject_only");
+  // Feedback follows the retained draft, including refused saves and partial choices;
+  // a click alone must never claim that a selection was saved or applied. The
+  // snapshot can also outlive a completed submission whose refresh failed, so
+  // this message describes choices, not whether Wiki writes have ever occurred.
+  // https://github.com/yydspanda/obsidian-copilot/issues/5
+  const allFilesSelected =
+    complete && plan.files.every((file) => decisions[file.changeId]?.kind === "accept_exact");
+  const decidedFileCount = plan.files.filter((file) =>
+    isFileReviewComplete(file, decisions[file.changeId])
+  ).length;
+  const fileLabel = plan.files.length === 1 ? "file" : "files";
+  const selectionStatus = actionBusy
+    ? "Submitting review…"
+    : currentActiveEdit
+      ? "Editing a file. Save or cancel the edit before applying."
+      : allFilesSelected
+        ? `All ${plan.files.length} ${fileLabel} selected. Selections alone do not write files.`
+        : wholeProposalRejected
+          ? `All ${plan.files.length} ${fileLabel} skipped. Selections alone do not write files.`
+          : `${decidedFileCount} of ${plan.files.length} ${fileLabel} decided. Selections alone do not write files.`;
   const submissionLabel = currentActiveEdit
     ? "Finish or cancel edit"
     : getSubmissionLabel({
@@ -578,32 +636,67 @@ function KnowledgeReviewSnapshotPanel({
             <span>Links: {plan.validation.linksValid ? "valid" : "needs validation"}</span>
           </div>
         </div>
-        <div className="tw-flex tw-flex-wrap tw-gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={
-              actionBusy ||
-              currentActiveEdit !== undefined ||
-              !acceptCommandsEnabled ||
-              hasRejectOnlyFile
-            }
-            onClick={acceptAll}
-          >
-            Use all proposed changes
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={actionBusy || currentActiveEdit !== undefined || !rejectCommandsEnabled}
-            onClick={rejectAll}
-          >
-            Skip all changes
-          </Button>
-        </div>
       </header>
+
+      {/* Keep selection feedback and the single explicit submit action together while reading.
+          https://github.com/yydspanda/obsidian-copilot/issues/5 */}
+      <section
+        aria-label="Review actions"
+        className="tw-sticky tw-top-0 tw-z-cover tw-flex tw-flex-col tw-gap-2 tw-rounded-md tw-border tw-border-solid tw-border-border tw-bg-primary tw-p-3 tw-shadow-sm"
+      >
+        <div className="tw-flex tw-flex-wrap tw-items-center tw-justify-between tw-gap-2">
+          <div className="tw-flex tw-flex-wrap tw-gap-2">
+            <ReviewChoiceButton
+              type="button"
+              selected={allFilesSelected}
+              disabled={
+                actionBusy ||
+                currentActiveEdit !== undefined ||
+                !acceptCommandsEnabled ||
+                hasRejectOnlyFile
+              }
+              onClick={acceptAll}
+            >
+              Use all proposed changes
+            </ReviewChoiceButton>
+            <ReviewChoiceButton
+              type="button"
+              selected={wholeProposalRejected}
+              disabled={actionBusy || currentActiveEdit !== undefined || !rejectCommandsEnabled}
+              onClick={rejectAll}
+            >
+              Skip all changes
+            </ReviewChoiceButton>
+          </div>
+          <div className="tw-flex tw-flex-wrap tw-items-center tw-gap-2">
+            {onBack ? (
+              <Button disabled={actionBusy} onClick={onBack} variant="secondary" size="sm">
+                Back
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              className="tw-h-auto tw-min-h-9 tw-max-w-full tw-whitespace-normal"
+              disabled={actionBusy || !complete || !commandEnabled}
+              onClick={submitReview}
+            >
+              {submissionLabel}
+            </Button>
+          </div>
+        </div>
+        <p className="tw-m-0 tw-text-sm" role="status" aria-live="polite" aria-atomic="true">
+          {selectionStatus}
+        </p>
+        {currentActiveEdit ? (
+          <span className="tw-text-xs tw-text-muted">Use edited file or Cancel edit first.</span>
+        ) : !complete ? (
+          <span className="tw-text-xs tw-text-muted">
+            Choose what to do with every file and changed block.
+          </span>
+        ) : wholeProposalRejected ? (
+          <span className="tw-text-xs tw-text-muted">Rejecting makes no Wiki file changes.</span>
+        ) : null}
+      </section>
 
       <KnowledgeReviewEvidencePanel
         busy={actionBusy}
@@ -651,11 +744,9 @@ function KnowledgeReviewSnapshotPanel({
                       Sources: {file.sourceRefs.join(", ") || "None"}
                     </div>
                   </div>
-                  <div className="tw-flex tw-gap-2">
-                    <Button
+                  <div className="tw-flex tw-flex-wrap tw-gap-2">
+                    <ReviewChoiceButton
                       type="button"
-                      variant="success"
-                      size="sm"
                       disabled={
                         actionBusy ||
                         currentActiveEdit !== undefined ||
@@ -663,32 +754,28 @@ function KnowledgeReviewSnapshotPanel({
                         rejectOnly
                       }
                       aria-label={`${getAcceptFileLabel(file)} ${file.path}`}
-                      aria-pressed={fileDecision?.kind === "accept_exact"}
+                      selected={fileDecision?.kind === "accept_exact"}
                       onClick={() => decideFile(file.changeId, { kind: "accept_exact" })}
                     >
                       {getAcceptFileLabel(file)}
-                    </Button>
-                    <Button
+                    </ReviewChoiceButton>
+                    <ReviewChoiceButton
                       type="button"
-                      variant="destructive"
-                      size="sm"
                       disabled={
                         actionBusy || currentActiveEdit !== undefined || !rejectCommandsEnabled
                       }
                       aria-label={`${getRejectFileLabel(file)} ${file.path}`}
-                      aria-pressed={fileDecision?.kind === "reject"}
+                      selected={fileDecision?.kind === "reject"}
                       onClick={() => decideFile(file.changeId, { kind: "reject" })}
                     >
                       {getRejectFileLabel(file)}
-                    </Button>
-                    <Button
+                    </ReviewChoiceButton>
+                    <ReviewChoiceButton
                       ref={(element) => {
                         if (element) editButtonRefs.current.set(file.changeId, element);
                         else editButtonRefs.current.delete(file.changeId);
                       }}
                       type="button"
-                      variant="secondary"
-                      size="sm"
                       disabled={
                         actionBusy ||
                         currentActiveEdit !== undefined ||
@@ -696,11 +783,11 @@ function KnowledgeReviewSnapshotPanel({
                         !editEligible
                       }
                       aria-label={`Edit proposed file ${file.path}`}
-                      aria-pressed={fileDecision?.kind === "accept_edited"}
+                      selected={fileDecision?.kind === "accept_edited"}
                       onClick={() => editFile(file)}
                     >
                       Edit proposed file
-                    </Button>
+                    </ReviewChoiceButton>
                   </div>
                 </div>
                 <p className="tw-m-0 tw-text-sm tw-text-muted">{file.reason}</p>
@@ -817,37 +904,33 @@ function KnowledgeReviewSnapshotPanel({
                             <span className="tw-text-xs tw-font-medium">
                               Changed block {changedIndex + 1}
                             </span>
-                            <div className="tw-flex tw-gap-2">
-                              <Button
+                            <div className="tw-flex tw-flex-wrap tw-gap-2">
+                              <ReviewChoiceButton
                                 type="button"
-                                variant="success"
-                                size="sm"
                                 disabled={
                                   actionBusy ||
                                   currentActiveEdit !== undefined ||
                                   !acceptCommandsEnabled
                                 }
                                 aria-label={`Use proposed block ${changedIndex + 1} in ${file.path}`}
-                                aria-pressed={visibleDecision === "accept"}
+                                selected={visibleDecision === "accept"}
                                 onClick={() => decideBlock(file, block.blockId, "accept")}
                               >
                                 Use proposed block
-                              </Button>
-                              <Button
+                              </ReviewChoiceButton>
+                              <ReviewChoiceButton
                                 type="button"
-                                variant="destructive"
-                                size="sm"
                                 disabled={
                                   actionBusy ||
                                   currentActiveEdit !== undefined ||
                                   !acceptCommandsEnabled
                                 }
                                 aria-label={`Keep current block ${changedIndex + 1} in ${file.path}`}
-                                aria-pressed={visibleDecision === "reject"}
+                                selected={visibleDecision === "reject"}
                                 onClick={() => decideBlock(file, block.blockId, "reject")}
                               >
                                 Keep current block
-                              </Button>
+                              </ReviewChoiceButton>
                             </div>
                           </div>
                         ) : null}
@@ -861,34 +944,6 @@ function KnowledgeReviewSnapshotPanel({
           );
         })}
       </div>
-
-      <footer className="tw-flex tw-flex-wrap tw-items-center tw-justify-between tw-gap-3">
-        <div>
-          {onBack ? (
-            <Button disabled={actionBusy} onClick={onBack}>
-              Back
-            </Button>
-          ) : null}
-        </div>
-        <div className="tw-flex tw-items-center tw-gap-3">
-          {currentActiveEdit ? (
-            <span className="tw-text-xs tw-text-muted">Use edited file or Cancel edit first.</span>
-          ) : !complete ? (
-            <span className="tw-text-xs tw-text-muted">
-              Choose what to do with every file and changed block.
-            </span>
-          ) : wholeProposalRejected ? (
-            <span className="tw-text-xs tw-text-muted">Rejecting makes no Wiki file changes.</span>
-          ) : null}
-          <Button
-            type="button"
-            disabled={actionBusy || !complete || !commandEnabled}
-            onClick={submitReview}
-          >
-            {submissionLabel}
-          </Button>
-        </div>
-      </footer>
     </section>
   );
 }
