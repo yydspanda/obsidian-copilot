@@ -65,6 +65,7 @@ import type {
 
 const DEFAULT_MAX_CONSISTENCY_ATTEMPTS = 3;
 const MAX_REVIEW_TARGET_CHARACTERS = 20_000_000;
+const EMPTY_OUTDATED_REVIEW_IDS: readonly string[] = Object.freeze([]);
 
 /** Narrow Runtime reads and hints required by the live Studio adapter. */
 export type KnowledgeStudioRuntimePort = Pick<
@@ -83,6 +84,13 @@ type KnowledgeStudioRuntimeQueryPort = Pick<
   Partial<Pick<KnowledgeStudioQueryWritebackPort, "saveQueryToWiki">> &
   Partial<Readonly<{ supportsWriteback(): boolean }>>;
 
+/** Generation-bound configuration identity; no source contents or execution authority. */
+export interface KnowledgeStudioReviewSource {
+  bundleId: string;
+  sourceId: string;
+  pipelineFingerprint: string;
+}
+
 /** Dependencies captured by one exact production Studio generation. */
 export interface KnowledgeStudioRuntimeReadAdapterInput {
   runtime: KnowledgeStudioRuntimePort;
@@ -90,6 +98,7 @@ export interface KnowledgeStudioRuntimeReadAdapterInput {
   targetResolver: CompilerTargetResolver;
   assertCurrent(): void;
   commands?: KnowledgeStudioRuntimeCommandAdapter;
+  reviewSources?: readonly Readonly<KnowledgeStudioReviewSource>[];
   query?: KnowledgeStudioRuntimeQueryPort;
   reviewEvidence?: KnowledgeStudioReviewEvidencePort;
   sourceLifecycle?: KnowledgeSourceLifecyclePort;
@@ -721,6 +730,7 @@ export async function loadKnowledgeStudioReviewContext(
 function createRevisionToken(
   projection: KnowledgeRuntimeStudioBundleSnapshot,
   plans: readonly KnowledgeReviewPlan[],
+  outdatedReviewIds: readonly string[],
   forwardRevisionToken?: string
 ): string {
   const digest = sha256(
@@ -729,6 +739,7 @@ function createRevisionToken(
       queueRevision: projection.queue.revision,
       reviewRevision: projection.review.revision,
       reviewSnapshotTokens: plans.map((plan) => plan.snapshotToken),
+      outdatedReviewIds: [...outdatedReviewIds],
       forwardRevisionToken: forwardRevisionToken ?? null,
     })}`
   );
@@ -802,6 +813,15 @@ export class KnowledgeStudioRuntimeReadAdapter
       targetResolver: input.targetResolver,
       assertCurrent,
       ...(input.commands === undefined ? {} : { commands: input.commands }),
+      ...(input.reviewSources === undefined
+        ? {}
+        : {
+            reviewSources: Object.freeze(
+              input.reviewSources.map(({ bundleId, sourceId, pipelineFingerprint }) =>
+                Object.freeze({ bundleId, sourceId, pipelineFingerprint })
+              )
+            ),
+          }),
       ...(query === undefined ? {} : { query }),
       ...(reviewEvidence === undefined ? {} : { reviewEvidence }),
       ...(sourceLifecycle === undefined ? {} : { sourceLifecycle }),
@@ -861,6 +881,21 @@ export class KnowledgeStudioRuntimeReadAdapter
           throw new KnowledgeStudioConsistencyRetry();
         }
         const reviews = reviewContexts.map(({ plan }) => plan);
+        // A target can remain unchanged while a retained proposal uses an old configuration.
+        // This read-only hint never replaces command-time authority verification.
+        // https://github.com/yydspanda/obsidian-copilot/issues/7
+        const outdatedIds = reviewContexts
+          .filter(({ record }) => {
+            if (this.input.reviewSources === undefined) return false;
+            const source = this.input.reviewSources.find(
+              (source) =>
+                source.bundleId === bundleId && source.sourceId === record.jobClaim.sourceId
+            );
+            return source?.pipelineFingerprint !== record.jobClaim.pipelineFingerprint;
+          })
+          .map(({ record }) => record.changeSetId);
+        const outdatedReviewIds =
+          outdatedIds.length === 0 ? EMPTY_OUTDATED_REVIEW_IDS : Object.freeze(outdatedIds);
         const baseCapabilities = this.input.commands
           ? this.input.commands.getCapabilities()
           : NO_KNOWLEDGE_STUDIO_COMMAND_CAPABILITIES;
@@ -870,11 +905,17 @@ export class KnowledgeStudioRuntimeReadAdapter
         });
         return Object.freeze({
           bundleId,
-          revisionToken: createRevisionToken(before, reviews, forwardRevision?.revisionToken),
+          revisionToken: createRevisionToken(
+            before,
+            reviews,
+            outdatedReviewIds,
+            forwardRevision?.revisionToken
+          ),
           availability: "ready" as const,
           commandCapabilities,
           activity: deriveKnowledgeActivityModel(before.queue),
           reviews: Object.freeze(reviews),
+          outdatedReviewIds,
           forwardRevisionReviews: forwardRevision?.reviews ?? Object.freeze([]),
           recovery: Object.freeze({
             bundleId,

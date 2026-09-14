@@ -2136,6 +2136,165 @@ describe("KnowledgeStudioController", () => {
 
   describe("KnowledgeStudioController", () => {
     describe("submitReview()", () => {
+      it.each(["accept_exact", "reject"] as const)(
+        "keeps a current proposal eligible for %s even when a different proposal is outdated (https://github.com/yydspanda/obsidian-copilot/issues/7)",
+        async (decision) => {
+          const snapshot = createSnapshot();
+          snapshot.outdatedReviewIds = ["another-changeset"];
+          const port = new FakeKnowledgeStudioPort(
+            async () => snapshot,
+            undefined,
+            async () => ({ kind: decision === "reject" ? "rejected" : "applied" })
+          );
+          const controller = new KnowledgeStudioController(port, port);
+          controller.start("personal");
+          await flushAsync();
+          const command: KnowledgeReviewCommand = {
+            ...createReviewCommand(),
+            decisions: [{ changeId: "change-1", decision }],
+          };
+
+          await controller.submitReview(command);
+
+          expect(port.reviewCalls).toHaveLength(1);
+          expect(port.reviewCalls[0].command).toEqual(command);
+          expect(controller.getState().feedback?.kind).toBe("success");
+        }
+      );
+
+      it.each(["running", "paused"] as const)(
+        "preserves the outdated proposal draft and refuses Apply while Activity is %s without submitting or retrying (https://github.com/yydspanda/obsidian-copilot/issues/7)",
+        async (state) => {
+          const plan = createReviewPlan();
+          const snapshot = createSnapshot("outdated", [plan]);
+          snapshot.outdatedReviewIds = [plan.changeSetId];
+          snapshot.activity = {
+            ...snapshot.activity,
+            controls: { state, canPause: false, canResume: state === "paused" },
+          };
+          const port = new FakeKnowledgeStudioPort(async () => snapshot);
+          const controller = new KnowledgeStudioController(port, port);
+          controller.start("personal");
+          await flushAsync();
+          controller.openReview(plan.changeSetId);
+          const draft = { "change-1": { kind: "accept_exact" as const } };
+          expect(controller.updateReviewDraft(plan, draft)).toBe(true);
+
+          await controller.submitReview(createReviewCommand());
+
+          expect(port.reviewCalls).toHaveLength(0);
+          expect(port.resumeCalls).toHaveLength(0);
+          expect(port.retryCalls).toHaveLength(0);
+          expect(controller.getReviewDraft(plan)).toEqual(draft);
+          expect(controller.getState().feedback).toEqual({
+            kind: "blocked",
+            message:
+              "This proposal cannot be verified against the current Knowledge configuration or source. It cannot be applied. You can inspect or reject it, then generate a new proposal.",
+          });
+        }
+      );
+
+      it("blocks a mixed acceptance and rejection command for an outdated proposal (https://github.com/yydspanda/obsidian-copilot/issues/7)", async () => {
+        const basePlan = createReviewPlan();
+        const plan = {
+          ...basePlan,
+          files: [
+            basePlan.files[0],
+            { ...basePlan.files[0], changeId: "change-2", path: "Wiki/Second.md" },
+          ],
+        };
+        const snapshot = createSnapshot("outdated", [plan]);
+        snapshot.outdatedReviewIds = [plan.changeSetId];
+        const port = new FakeKnowledgeStudioPort(async () => snapshot);
+        const controller = new KnowledgeStudioController(port, port);
+        controller.start("personal");
+        await flushAsync();
+
+        await controller.submitReview({
+          ...createReviewCommand(),
+          decisions: [
+            { changeId: "change-1", decision: "reject" },
+            { changeId: "change-2", decision: "accept_exact" },
+          ],
+        });
+
+        expect(port.reviewCalls).toHaveLength(0);
+        expect(controller.getState().feedback?.message).toContain("cannot be verified");
+      });
+
+      it.each([true, false])(
+        "keeps outdated paused proposal rejection subject to reject capability=%s without resuming or retrying (https://github.com/yydspanda/obsidian-copilot/issues/7)",
+        async (reviewReject) => {
+          const snapshot = createSnapshot();
+          snapshot.outdatedReviewIds = [snapshot.reviews[0].changeSetId];
+          snapshot.activity = {
+            ...snapshot.activity,
+            controls: { state: "paused", canPause: false, canResume: true },
+          };
+          snapshot.commandCapabilities = { ...snapshot.commandCapabilities, reviewReject };
+          const port = new FakeKnowledgeStudioPort(
+            async () => snapshot,
+            undefined,
+            async () => ({ kind: "rejected" })
+          );
+          const controller = new KnowledgeStudioController(port, port);
+          controller.start("personal");
+          await flushAsync();
+          const command: KnowledgeReviewCommand = {
+            ...createReviewCommand(),
+            decisions: [{ changeId: "change-1", decision: "reject" }],
+          };
+
+          await controller.submitReview(command);
+
+          expect(port.reviewCalls).toHaveLength(reviewReject ? 1 : 0);
+          if (reviewReject) expect(port.reviewCalls[0].command).toEqual(command);
+          expect(port.resumeCalls).toHaveLength(0);
+          expect(port.retryCalls).toHaveLength(0);
+          expect(controller.getState().feedback?.kind).toBe(reviewReject ? "success" : "blocked");
+        }
+      );
+
+      it("explains command-time outdated authority and keeps the draft without reporting a generic validation failure (https://github.com/yydspanda/obsidian-copilot/issues/7)", async () => {
+        const plan = createReviewPlan();
+        const snapshot = createSnapshot("initially-current", [plan]);
+        snapshot.outdatedReviewIds = [];
+        const port = new FakeKnowledgeStudioPort(
+          async () => snapshot,
+          undefined,
+          async () => ({
+            kind: "blocked",
+            diagnostics: [
+              {
+                code: "review_proposal_outdated",
+                severity: "error",
+                field: "job",
+                message: "The proposal cannot be verified against current authority.",
+              },
+            ],
+          })
+        );
+        const controller = new KnowledgeStudioController(port, port);
+        controller.start("personal");
+        await flushAsync();
+        controller.openReview(plan.changeSetId);
+        const draft = { "change-1": { kind: "accept_exact" as const } };
+        controller.updateReviewDraft(plan, draft);
+
+        await controller.submitReview(createReviewCommand());
+
+        expect(port.reviewCalls).toHaveLength(1);
+        expect(port.resumeCalls).toHaveLength(0);
+        expect(port.retryCalls).toHaveLength(0);
+        expect(controller.getReviewDraft(plan)).toEqual(draft);
+        expect(controller.getState().feedback).toMatchObject({
+          kind: "blocked",
+          message:
+            "This proposal cannot be verified against the current Knowledge configuration or source. It cannot be applied. You can inspect or reject it, then generate a new proposal.",
+          diagnostics: [{ code: "review_proposal_outdated" }],
+        });
+      });
+
       it.each([
         "paused",
         "rate_limited",

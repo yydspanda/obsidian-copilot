@@ -178,6 +178,22 @@ export const PausedInteractive: StoryObj<Props> = {
   render: InteractiveReview,
 };
 
+// Stored proposals remain inspectable without suggesting that selection updates their authority.
+// https://github.com/yydspanda/obsidian-copilot/issues/7
+export const OutdatedInteractive: StoryObj<Props> = {
+  args: { applyOutdated: true, draft: allSelected },
+  render: InteractiveReview,
+};
+
+export const OutdatedReadOnly: StoryObj<Props> = {
+  args: {
+    applyOutdated: true,
+    acceptCommandsEnabled: false,
+    rejectCommandsEnabled: false,
+    draft: allSelected,
+  },
+};
+
 export const AllSelected: StoryObj<Props> = {
   args: { draft: allSelected },
   render: InteractiveReview,

@@ -1124,6 +1124,17 @@ export class KnowledgeProductionObservationComposer {
       commands,
       query,
       reviewEvidence,
+      // Old proposals can outlive their pipeline configuration. Studio needs only
+      // fingerprints to flag them, never the execution plan or source paths.
+      // https://github.com/yydspanda/obsidian-copilot/issues/7
+      reviewSources: Object.freeze(
+        executionPlan
+          .getWatchPlan()
+          .getSources()
+          .map(({ bundleId, sourceId, pipelineFingerprint }) =>
+            Object.freeze({ bundleId, sourceId, pipelineFingerprint })
+          )
+      ),
       ...(forwardRevision === undefined
         ? {}
         : {

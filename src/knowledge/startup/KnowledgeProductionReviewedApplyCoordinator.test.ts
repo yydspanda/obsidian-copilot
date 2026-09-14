@@ -251,7 +251,9 @@ function createExactArtifact(sourcePath: string, bytes: Uint8Array): ExactSource
 async function createExecutionPlan(
   manifest: SourceManifest,
   executionOwner: ReturnType<typeof createKnowledgeExecutionOwner>,
-  sourceBytes: Uint8Array = SOURCE_BYTES
+  sourceBytes: Uint8Array = SOURCE_BYTES,
+  pipeline = createPipelineProfile(),
+  schemaBytes: Uint8Array = SCHEMA_BYTES
 ): Promise<KnowledgeSourceExecutionPlan> {
   const parser: KnowledgeByteParser = {
     /** Returns the exact profile bound during plan construction. */
@@ -269,11 +271,11 @@ async function createExecutionPlan(
   };
   const manifestPort: KnowledgeManifestSnapshotPort = { load: async () => manifest };
   const readerPort: KnowledgeExactArtifactReaderPort = {
-    read: async (path) => createExactArtifact(path, SCHEMA_BYTES),
+    read: async (path) => createExactArtifact(path, schemaBytes),
     readExpected: async (path) => createExactArtifact(path, sourceBytes),
   };
   const profilePort: KnowledgePipelineProfilePort = {
-    resolve: async () => createPipelineProfile(),
+    resolve: async () => pipeline,
   };
   const generationPort: KnowledgeWorkflowGenerationPort = { isCurrent: () => true };
   return await new KnowledgeSourceWorkflowPlanLoader({
@@ -740,6 +742,44 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
 
   describe("KnowledgeProductionReviewedApplyCoordinator", () => {
     describe("submit()", () => {
+      async function createPlanFixture(outdatedPipeline = false) {
+        const harness = await createReviewedApplyHarness("missing");
+        const command = await createAcceptCommand(harness);
+        const manifest = createManifest();
+        const pipeline = createPipelineProfile();
+        if (outdatedPipeline) pipeline.model.model = "replacement-test-model";
+        const schemaBytes = SCHEMA_BYTES.slice();
+        const sourceBytes = SOURCE_BYTES.slice();
+        const plan = await createExecutionPlan(
+          manifest,
+          createKnowledgeExecutionOwner(),
+          sourceBytes,
+          pipeline,
+          schemaBytes
+        );
+        const coordinator = new KnowledgeProductionReviewedApplyCoordinator({
+          runtime: harness.capabilities.runtime,
+          queue: harness.capabilities.queue,
+          reviews: harness.reviews,
+          plan,
+          bundles: [harness.bundle],
+          targetResolver: harness.resolver,
+          fileStore: harness.fileStore,
+          assertCurrent: () => undefined,
+          onGenerationRefreshRequired: harness.refresh,
+        });
+        return {
+          ...harness,
+          coordinator,
+          command,
+          manifest,
+          pipeline,
+          schemaBytes,
+          sourceBytes,
+          plan,
+        };
+      }
+
       it("applies a pending proposal after the user explicitly resumes the Bundle (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
         const harness = await createReviewedApplyHarness("missing");
         await harness.capabilities.queue.pause(BUNDLE_ID);
@@ -894,6 +934,155 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
         expect(harness.fileStore.files.size).toBe(0);
         expect(harness.fileStore.compareAndSwapCalls).toBe(0);
         expect(harness.refresh).toHaveBeenCalledTimes(1);
+      });
+
+      it("blocks an old pipeline proposal before accepting it or writing Wiki files (https://github.com/yydspanda/obsidian-copilot/issues/7)", async () => {
+        const fixture = await createPlanFixture(true);
+        const pending = await fixture.reviews.get(BUNDLE_ID, fixture.changeSetId);
+        expect(pending?.jobClaim.pipelineFingerprint).not.toBe(
+          fixture.plan.getWatchPlan().getSource(BUNDLE_ID, SOURCE_ID)?.pipelineFingerprint
+        );
+        const before = await fixture.capabilities.file.read();
+
+        await expect(
+          fixture.coordinator.submit(BUNDLE_ID, fixture.command, new AbortController().signal)
+        ).resolves.toMatchObject({
+          kind: "blocked",
+          diagnostics: [expect.objectContaining({ code: "review_proposal_outdated" })],
+        });
+
+        expect(await fixture.capabilities.file.read()).toBe(before);
+        expect(fixture.fileStore.files.size).toBe(0);
+        expect(fixture.fileStore.compareAndSwapCalls).toBe(0);
+        expect(fixture.refresh).not.toHaveBeenCalled();
+      });
+
+      it.each(["manifest", "schema", "profile"] as const)(
+        "reports a controlled outdated proposal when %s authority cannot be re-proved before acceptance (https://github.com/yydspanda/obsidian-copilot/issues/7)",
+        async (authority) => {
+          const fixture = await createPlanFixture();
+          if (authority === "manifest") fixture.manifest.revision += 1;
+          if (authority === "schema") fixture.schemaBytes[0] = "!".charCodeAt(0);
+          if (authority === "profile") fixture.pipeline.outputLanguage = "en";
+          const before = await fixture.capabilities.file.read();
+
+          await expect(
+            fixture.coordinator.submit(BUNDLE_ID, fixture.command, new AbortController().signal)
+          ).resolves.toMatchObject({
+            kind: "blocked",
+            diagnostics: [expect.objectContaining({ code: "review_proposal_outdated" })],
+          });
+
+          expect(await fixture.capabilities.file.read()).toBe(before);
+          expect(fixture.fileStore.files.size).toBe(0);
+          expect(fixture.fileStore.compareAndSwapCalls).toBe(0);
+          expect(fixture.refresh).not.toHaveBeenCalled();
+        }
+      );
+
+      it("rejects an old pipeline proposal through exact durable identity without preparing its source (https://github.com/yydspanda/obsidian-copilot/issues/7)", async () => {
+        const fixture = await createPlanFixture(true);
+        const before = parseKnowledgeRuntimeStoreSnapshot(
+          JSON.parse(await fixture.capabilities.file.read()) as unknown
+        );
+        const command = {
+          ...fixture.command,
+          decisions: fixture.command.decisions.map(({ changeId }) => ({
+            changeId,
+            decision: "reject" as const,
+          })),
+        };
+
+        await expect(
+          fixture.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+        ).resolves.toEqual({ kind: "rejected" });
+
+        await expect(fixture.reviews.get(BUNDLE_ID, fixture.changeSetId)).resolves.toMatchObject({
+          outcome: "rejected",
+        });
+        const after = parseKnowledgeRuntimeStoreSnapshot(
+          JSON.parse(await fixture.capabilities.file.read()) as unknown
+        );
+        expect(after.manifests).toEqual(before.manifests);
+        expect(after.activeTransaction).toBeNull();
+        expect(after.applyCommits).toEqual([]);
+        await expect(fixture.capabilities.queue.load(BUNDLE_ID)).resolves.toMatchObject({
+          control: { status: "running" },
+          pendingReviews: [],
+          jobs: [expect.objectContaining({ status: "cancelled" })],
+        });
+        expect(fixture.fileStore.files.size).toBe(0);
+        expect(fixture.fileStore.compareAndSwapCalls).toBe(0);
+        expect(fixture.refresh).not.toHaveBeenCalled();
+      });
+
+      it.each(["proposal digest", "change identity"] as const)(
+        "refuses rejection with a mismatched %s even when its pipeline is outdated (https://github.com/yydspanda/obsidian-copilot/issues/7)",
+        async (mismatch) => {
+          const fixture = await createPlanFixture(true);
+          const command = {
+            ...fixture.command,
+            proposalDigest:
+              mismatch === "proposal digest" ? "f".repeat(64) : fixture.command.proposalDigest,
+            decisions: fixture.command.decisions.map(({ changeId }) => ({
+              changeId: mismatch === "change identity" ? "unrelated-change" : changeId,
+              decision: "reject" as const,
+            })),
+          };
+          const before = await fixture.capabilities.file.read();
+
+          await expect(
+            fixture.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+          ).resolves.toEqual({ kind: "stale" });
+
+          expect(await fixture.capabilities.file.read()).toBe(before);
+          expect(fixture.fileStore.files.size).toBe(0);
+          expect(fixture.fileStore.compareAndSwapCalls).toBe(0);
+        }
+      );
+
+      it("keeps the broad artifact_invalid failure distinct from a confirmed outdated proposal (https://github.com/yydspanda/obsidian-copilot/issues/7)", async () => {
+        const fixture = await createPlanFixture();
+        fixture.sourceBytes[0] = "!".charCodeAt(0);
+        const before = await fixture.capabilities.file.read();
+
+        await expect(
+          fixture.coordinator.submit(BUNDLE_ID, fixture.command, new AbortController().signal)
+        ).rejects.toMatchObject({
+          name: "KnowledgeSourceWorkflowPlanError",
+          code: "artifact_invalid",
+        });
+
+        expect(await fixture.capabilities.file.read()).toBe(before);
+        expect(fixture.fileStore.files.size).toBe(0);
+        expect(fixture.refresh).not.toHaveBeenCalled();
+      });
+
+      it("retains recovery when plan authority changes only after acceptance was committed (https://github.com/yydspanda/obsidian-copilot/issues/7)", async () => {
+        const fixture = await createPlanFixture();
+        const writeReview = fixture.capabilities.runtime.writeReview;
+        jest
+          .spyOn(fixture.capabilities.runtime, "writeReview")
+          .mockImplementationOnce(async (bundleId, snapshot, expectedRevision) => {
+            await writeReview.call(
+              fixture.capabilities.runtime,
+              bundleId,
+              snapshot,
+              expectedRevision
+            );
+            fixture.pipeline.outputLanguage = "en";
+          });
+
+        await expect(
+          fixture.coordinator.submit(BUNDLE_ID, fixture.command, new AbortController().signal)
+        ).resolves.toEqual({ kind: "recovery_required" });
+
+        await expect(fixture.reviews.get(BUNDLE_ID, fixture.changeSetId)).resolves.toMatchObject({
+          outcome: "accepted",
+        });
+        expect(fixture.fileStore.files.size).toBe(0);
+        expect(fixture.fileStore.compareAndSwapCalls).toBe(0);
+        expect(fixture.refresh).toHaveBeenCalledTimes(1);
       });
     });
   });

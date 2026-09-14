@@ -432,6 +432,110 @@ describe("KnowledgeReviewPanel", () => {
     }
   );
 
+  it.each<{
+    selection: string;
+    draft: KnowledgeReviewDraftState;
+  }>([
+    {
+      selection: "all proposed files",
+      draft: { "change-1": { kind: "accept_exact" }, "change-2": { kind: "accept_exact" } },
+    },
+    {
+      selection: "mixed accept and reject decisions",
+      draft: { "change-1": { kind: "accept_exact" }, "change-2": { kind: "reject" } },
+    },
+  ])(
+    "blocks $selection for an outdated proposal without discarding the draft — https://github.com/yydspanda/obsidian-copilot/issues/7",
+    ({ draft }) => {
+      const onSubmit = jest.fn();
+      const props = {
+        acceptCommandsEnabled: true,
+        busy: false,
+        draft,
+        onSubmit,
+        plan: createReviewPlan([
+          createReviewFile(),
+          createReviewFile({ changeId: "change-2", path: "Knowledge/Second.md" }),
+        ]),
+        rejectCommandsEnabled: true,
+      };
+      const { rerender } = render(<KnowledgeReviewPanel {...props} applyOutdated={false} />);
+
+      expect(getButton("Validate and apply selection").disabled).toBe(false);
+      rerender(<KnowledgeReviewPanel {...props} applyOutdated={true} />);
+
+      expect(
+        within(screen.getByRole("region", { name: "Review actions" })).getByText(
+          "This proposal no longer matches the current Knowledge configuration. Apply is blocked. Keep it for reference, or reject it when Review actions are available. A new proposal is needed to apply changes."
+        )
+      ).toBeTruthy();
+      expect(getButton("Proposal out of date").disabled).toBe(true);
+      expect(getButton("Use all proposed changes").disabled).toBe(false);
+      expect(getButton("Use proposed file Knowledge/First.md").getAttribute("aria-pressed")).toBe(
+        "true"
+      );
+      fireEvent.click(getButton("Proposal out of date"));
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: /generate|retry|resume/i })).toBeNull();
+    }
+  );
+
+  it("permits deliberate whole-proposal rejection of an outdated paused proposal without an automatic action — https://github.com/yydspanda/obsidian-copilot/issues/7", () => {
+    const onSubmit = jest.fn();
+    render(
+      <KnowledgeReviewPanel
+        acceptCommandsEnabled={true}
+        applyOutdated={true}
+        applyPaused={true}
+        busy={false}
+        onSubmit={onSubmit}
+        plan={createReviewPlan([createReviewFile()])}
+        rejectCommandsEnabled={true}
+      />
+    );
+
+    expect(getButton("Proposal out of date").disabled).toBe(true);
+    fireEvent.click(getButton("Use all proposed changes"));
+    expect(getButton("Use all proposed changes").getAttribute("aria-pressed")).toBe("true");
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(getButton("Skip all changes"));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(getButton("Reject proposal").disabled).toBe(false);
+    fireEvent.click(getButton("Reject proposal"));
+    expect(onSubmit).toHaveBeenCalledWith({
+      changeSetId: "changeset-1",
+      proposalDigest: "proposal-digest-1",
+      expectedSnapshotToken: "snapshot-1",
+      decisions: [{ changeId: "change-1", decision: "reject" }],
+    });
+  });
+
+  it.each([
+    { rejectCommandsEnabled: true, label: "Apply unavailable" },
+    { rejectCommandsEnabled: false, label: "Review actions unavailable" },
+  ])(
+    "retains $label and read-only choices when an outdated proposal lacks acceptance authority — https://github.com/yydspanda/obsidian-copilot/issues/7",
+    ({ rejectCommandsEnabled, label }) => {
+      render(
+        <KnowledgeReviewPanel
+          acceptCommandsEnabled={false}
+          applyOutdated={true}
+          applyPaused={true}
+          busy={false}
+          draft={{ "change-1": { kind: "accept_exact" } }}
+          onSubmit={jest.fn()}
+          plan={createReviewPlan([createReviewFile()])}
+          rejectCommandsEnabled={rejectCommandsEnabled}
+        />
+      );
+
+      expect(screen.getByText(/This proposal no longer matches/)).toBeTruthy();
+      expect(getButton(label).disabled).toBe(true);
+      expect(getButton("Use all proposed changes").disabled).toBe(true);
+      expect(screen.queryByRole("button", { name: "Proposal out of date" })).toBeNull();
+    }
+  );
+
   it("requires an explicit blocked-file decision instead of silently rejecting it in bulk", () => {
     const onSubmit = jest.fn<void, [KnowledgeReviewCommand]>();
     const update = createReviewFile();

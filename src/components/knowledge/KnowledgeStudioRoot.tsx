@@ -562,6 +562,11 @@ function ReviewWorkspace({
       {selectedReview ? (
         <KnowledgeReviewPanel
           activeEdit={controller.getReviewActiveEdit(selectedReview)}
+          applyOutdated={
+            // Other pending proposals and the forward workflow retain their own authority.
+            // https://github.com/yydspanda/obsidian-copilot/issues/7
+            state.snapshot?.outdatedReviewIds?.includes(selectedReview.changeSetId) === true
+          }
           applyPaused={
             // Ordinary Review must not promise immediate Apply while activity is stopped.
             // https://github.com/yydspanda/obsidian-copilot/issues/6

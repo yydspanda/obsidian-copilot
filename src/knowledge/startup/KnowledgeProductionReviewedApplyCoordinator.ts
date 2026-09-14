@@ -20,6 +20,7 @@ import {
 } from "@/knowledge/ingest/queue/IngestQueue";
 import {
   KnowledgeSourceExecutionPlan,
+  KnowledgeSourceWorkflowPlanError,
   type KnowledgeSourceParseJob,
 } from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
 import {
@@ -46,6 +47,7 @@ import {
   type AcceptedChangeSetReviewRecord,
   type PendingChangeSetReviewRecord,
 } from "@/knowledge/review/ReviewStorage";
+import { KnowledgeReviewRejectConflictError } from "@/knowledge/review/ReviewRejectTransition";
 import {
   KnowledgeRuntimeApplyAuthorityPort,
   KnowledgeRuntimeApplyCommitManifestPort,
@@ -205,7 +207,10 @@ function isStaleReviewError(error: unknown): boolean {
     error instanceof ChangeSetReviewNotFoundError ||
     error instanceof ChangeSetReviewIdentityConflictError ||
     error instanceof ChangeSetReviewRecordRevisionConflictError ||
-    error instanceof ChangeSetReviewDecisionConflictError
+    error instanceof ChangeSetReviewDecisionConflictError ||
+    // Source-independent Reject still fails closed when its durable identity changed.
+    // https://github.com/yydspanda/obsidian-copilot/issues/7
+    error instanceof KnowledgeReviewRejectConflictError
   );
 }
 
@@ -351,6 +356,13 @@ export class KnowledgeProductionReviewedApplyCoordinator {
     try {
       const capturedCommand = snapshotKnowledgeReviewCommand(command);
       assertInvocation(state, signal);
+      // An obsolete parser or source must not prevent explicit rejection. The
+      // atomic Reject boundary proves the exact proposal, decision set, and Queue claim.
+      // https://github.com/yydspanda/obsidian-copilot/issues/7
+      if (capturedCommand.decisions.every((decision) => decision.decision === "reject")) {
+        await state.reviewReject.rejectReviewAtomically(bundleId, capturedCommand);
+        return { kind: "rejected" };
+      }
       const context = await loadKnowledgeStudioReviewContext({
         runtime: state.runtime,
         bundle,
@@ -475,6 +487,28 @@ export class KnowledgeProductionReviewedApplyCoordinator {
       if (acceptedDurably) {
         requestGenerationRefresh(state);
         return { kind: "recovery_required" };
+      }
+      // Historical proposals can outlive their configuration and source authority.
+      // Keep the decision pending when that authority cannot be re-proved; broad
+      // artifact failures do not prove obsolescence. https://github.com/yydspanda/obsidian-copilot/issues/7
+      if (
+        error instanceof KnowledgeSourceWorkflowPlanError &&
+        ["job_not_authorized", "manifest_stale", "schema_stale", "profile_stale"].includes(
+          error.code
+        )
+      ) {
+        return {
+          kind: "blocked",
+          diagnostics: [
+            {
+              code: "review_proposal_outdated",
+              severity: "error",
+              field: error.stage,
+              message:
+                "This proposal cannot be verified against the current Knowledge configuration or source. It cannot be applied. You can inspect or reject it, then generate a new proposal.",
+            },
+          ],
+        };
       }
       // A paused atomic acceptance leaves the proposal pending; it must not
       // trigger recovery or resume the Queue. https://github.com/yydspanda/obsidian-copilot/issues/6

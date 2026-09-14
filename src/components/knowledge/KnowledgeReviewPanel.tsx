@@ -28,6 +28,8 @@ export interface KnowledgeReviewPanelProps {
   busy: boolean;
   /** Keeps choices editable while the Bundle disallows write-bearing submission. */
   applyPaused?: boolean;
+  /** Retains inspection and rejection when current source/configuration authority has changed. */
+  applyOutdated?: boolean;
   acceptCommandsEnabled: boolean;
   rejectCommandsEnabled: boolean;
   onSubmit: (command: KnowledgeReviewCommand) => void | Promise<void>;
@@ -365,6 +367,7 @@ function getSubmissionLabel({
   acceptCommandsEnabled,
   rejectCommandsEnabled,
   applyPaused,
+  applyOutdated,
   actionBusy,
   complete,
   commandEnabled,
@@ -373,6 +376,7 @@ function getSubmissionLabel({
   acceptCommandsEnabled: boolean;
   rejectCommandsEnabled: boolean;
   applyPaused: boolean;
+  applyOutdated: boolean;
   actionBusy: boolean;
   complete: boolean;
   commandEnabled: boolean;
@@ -382,6 +386,10 @@ function getSubmissionLabel({
   if (actionBusy) {
     return wholeProposalRejected ? "Rejecting proposal…" : "Validating and applying…";
   }
+  // Choosing files cannot make an older proposal compatible with current configuration.
+  // https://github.com/yydspanda/obsidian-copilot/issues/7
+  if (applyOutdated && acceptCommandsEnabled && !wholeProposalRejected)
+    return "Proposal out of date";
   // A paused Bundle still permits a no-write rejection and local decision drafting.
   // https://github.com/yydspanda/obsidian-copilot/issues/6
   if (applyPaused && acceptCommandsEnabled && !wholeProposalRejected) return "Apply paused";
@@ -403,6 +411,7 @@ function KnowledgeReviewSnapshotPanel({
   plan,
   busy,
   applyPaused = false,
+  applyOutdated = false,
   acceptCommandsEnabled,
   rejectCommandsEnabled,
   onSubmit,
@@ -437,9 +446,11 @@ function KnowledgeReviewSnapshotPanel({
   // Pause blocks write-bearing submission, not local choices or whole-proposal rejection.
   // The handler shares this gate so disabled-button presentation is not the only protection.
   // https://github.com/yydspanda/obsidian-copilot/issues/6
+  // Outdated authority also forbids Apply but must not erase inspection or rejection choices.
+  // https://github.com/yydspanda/obsidian-copilot/issues/7
   const commandEnabled = wholeProposalRejected
     ? rejectCommandsEnabled
-    : acceptCommandsEnabled && !applyPaused;
+    : acceptCommandsEnabled && !applyPaused && !applyOutdated;
   const actionBusy = busy || submitting;
   const hasRejectOnlyFile = plan.files.some((file) => file.capability === "reject_only");
   // Feedback follows the retained draft, including refused saves and partial choices;
@@ -468,6 +479,7 @@ function KnowledgeReviewSnapshotPanel({
         acceptCommandsEnabled,
         rejectCommandsEnabled,
         applyPaused,
+        applyOutdated,
         actionBusy,
         complete,
         commandEnabled,
@@ -701,6 +713,15 @@ function KnowledgeReviewSnapshotPanel({
         <p className="tw-m-0 tw-text-sm" role="status" aria-live="polite" aria-atomic="true">
           {selectionStatus}
         </p>
+        {/* Explain the incompatibility beside Apply while keeping the stored proposal visible.
+            https://github.com/yydspanda/obsidian-copilot/issues/7 */}
+        {applyOutdated ? (
+          <p className="tw-m-0 tw-text-sm">
+            This proposal no longer matches the current Knowledge configuration. Apply is blocked.
+            Keep it for reference, or reject it when Review actions are available. A new proposal is
+            needed to apply changes.
+          </p>
+        ) : null}
         {/* Unavailable adapters must not be described as a resumable Bundle pause.
             https://github.com/yydspanda/obsidian-copilot/issues/6 */}
         {applyPaused && acceptCommandsEnabled ? (

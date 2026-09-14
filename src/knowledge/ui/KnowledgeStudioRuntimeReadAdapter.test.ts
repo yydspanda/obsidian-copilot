@@ -344,6 +344,156 @@ function createReviewCommand(record: PendingChangeSetReviewRecord): KnowledgeRev
 }
 
 describe("KnowledgeStudioRuntimeReadAdapter", () => {
+  describe("KnowledgeStudioRuntimeReadAdapter", () => {
+    describe("load()", () => {
+      const issue = "https://github.com/yydspanda/obsidian-copilot/issues/7";
+
+      function createConfiguredAdapter(
+        record: PendingChangeSetReviewRecord,
+        reviewSources: NonNullable<KnowledgeStudioRuntimeReadAdapterInput["reviewSources"]>
+      ): KnowledgeStudioRuntimeReadAdapter {
+        const projection = createProjection(7, createQueue(record), createReview([record]));
+        return new KnowledgeStudioRuntimeReadAdapter({
+          runtime: new FakeRuntime([projection]),
+          bundles: [createBundle()],
+          targetResolver: createMissingResolver(),
+          assertCurrent: () => undefined,
+          reviewSources,
+        });
+      }
+
+      it(`keeps an old proposal eligible when its configuration still matches, with a stable empty slice (${issue})`, async () => {
+        const record = createPendingRecord();
+        const adapter = createConfiguredAdapter(record, [
+          { bundleId: BUNDLE_ID, sourceId: "source-1", pipelineFingerprint: PIPELINE_HASH },
+        ]);
+        const first = await adapter.load(BUNDLE_ID, new AbortController().signal);
+        const second = await adapter.load(BUNDLE_ID, new AbortController().signal);
+
+        expect(first.outdatedReviewIds).toEqual([]);
+        expect(second.outdatedReviewIds).toBe(first.outdatedReviewIds);
+        expect(Object.isFrozen(first.outdatedReviewIds)).toBe(true);
+        expect(first.reviews[0].changeSetId).toBe(record.changeSetId);
+      });
+
+      it(`marks a configuration mismatch without hiding or modifying the old proposal (${issue})`, async () => {
+        const record = createPendingRecord();
+        const before = JSON.stringify(record);
+        const snapshot = await createConfiguredAdapter(record, [
+          { bundleId: BUNDLE_ID, sourceId: "source-1", pipelineFingerprint: "d".repeat(64) },
+        ]).load(BUNDLE_ID, new AbortController().signal);
+
+        expect(snapshot.outdatedReviewIds).toEqual([record.changeSetId]);
+        expect(Object.isFrozen(snapshot.outdatedReviewIds)).toBe(true);
+        expect(snapshot.reviews).toHaveLength(1);
+        expect(snapshot.reviews[0]).toMatchObject({
+          changeSetId: record.changeSetId,
+          proposalDigest: record.proposalDigest,
+          files: [{ integrity: "current", capability: "blocks_allowed" }],
+        });
+        expect(JSON.stringify(record)).toBe(before);
+      });
+
+      it.each([
+        ["no registered source", []],
+        [
+          "another Bundle",
+          [{ bundleId: "other", sourceId: "source-1", pipelineFingerprint: PIPELINE_HASH }],
+        ],
+        [
+          "another source",
+          [{ bundleId: BUNDLE_ID, sourceId: "source-2", pipelineFingerprint: PIPELINE_HASH }],
+        ],
+      ])(
+        `marks a proposal outdated with %s instead of borrowing its configuration (${issue})`,
+        async (_condition, sources) => {
+          const record = createPendingRecord();
+          const snapshot = await createConfiguredAdapter(record, sources).load(
+            BUNDLE_ID,
+            new AbortController().signal
+          );
+
+          expect(snapshot.outdatedReviewIds).toEqual([record.changeSetId]);
+          expect(snapshot.reviews[0].changeSetId).toBe(record.changeSetId);
+        }
+      );
+
+      it(`changes the render revision when only current configuration compatibility changes (${issue})`, async () => {
+        const record = createPendingRecord();
+        const current = await createConfiguredAdapter(record, [
+          { bundleId: BUNDLE_ID, sourceId: "source-1", pipelineFingerprint: PIPELINE_HASH },
+        ]).load(BUNDLE_ID, new AbortController().signal);
+        const outdated = await createConfiguredAdapter(record, [
+          { bundleId: BUNDLE_ID, sourceId: "source-1", pipelineFingerprint: "d".repeat(64) },
+        ]).load(BUNDLE_ID, new AbortController().signal);
+
+        expect(current.revisionToken).not.toBe(outdated.revisionToken);
+        expect(current.reviews).toEqual(outdated.reviews);
+      });
+
+      it(`retains captured configuration identities when caller-owned input changes (${issue})`, async () => {
+        const record = createPendingRecord();
+        const sources = [
+          { bundleId: BUNDLE_ID, sourceId: "source-1", pipelineFingerprint: PIPELINE_HASH },
+        ];
+        const adapter = createConfiguredAdapter(record, sources);
+        sources[0].pipelineFingerprint = "d".repeat(64);
+        sources.length = 0;
+        const snapshot = await adapter.load(BUNDLE_ID, new AbortController().signal);
+
+        expect(snapshot.outdatedReviewIds).toEqual([]);
+        expect(snapshot.reviews[0].changeSetId).toBe(record.changeSetId);
+      });
+
+      it(`marks only the outdated proposal when current and old sources share a Bundle (${issue})`, async () => {
+        const outdatedRecord = createPendingRecord();
+        const proposal = createProposal("Wiki/Current.md");
+        proposal.id = "changeset-current";
+        proposal.sourceRefs = ["source-current"];
+        proposal.changes[0].sourceRefs = ["source-current"];
+        const currentRecord = createPendingRecord(proposal);
+        currentRecord.jobClaim.jobId = "job-current";
+        currentRecord.jobClaim.sourceId = "source-current";
+        currentRecord.manifestCommitPlan.sourceId = "source-current";
+        currentRecord.manifestCommitPlanDigest = createManifestCommitPlanDigest(
+          currentRecord.manifestCommitPlan
+        );
+        const queue = createQueue(outdatedRecord);
+        const currentQueue = createQueue(currentRecord);
+        queue.jobs.push(...currentQueue.jobs);
+        queue.sourceHighWatermarks.push(...currentQueue.sourceHighWatermarks);
+        queue.pendingReviews.push(...currentQueue.pendingReviews);
+        const projection = createProjection(
+          7,
+          queue,
+          createReview([outdatedRecord, currentRecord])
+        );
+        const before = JSON.stringify(projection);
+        const snapshot = await new KnowledgeStudioRuntimeReadAdapter({
+          runtime: new FakeRuntime([projection]),
+          bundles: [createBundle()],
+          targetResolver: createMissingResolver(),
+          assertCurrent: () => undefined,
+          commands: await createAcceptEnabledCommands(),
+          reviewSources: [
+            { bundleId: BUNDLE_ID, sourceId: "source-1", pipelineFingerprint: "d".repeat(64) },
+            { bundleId: BUNDLE_ID, sourceId: "source-current", pipelineFingerprint: PIPELINE_HASH },
+          ],
+        }).load(BUNDLE_ID, new AbortController().signal);
+
+        expect(snapshot.outdatedReviewIds).toEqual([outdatedRecord.changeSetId]);
+        expect(snapshot.reviews.map((plan) => plan.changeSetId).sort()).toEqual(
+          [outdatedRecord.changeSetId, currentRecord.changeSetId].sort()
+        );
+        expect(snapshot.commandCapabilities).toMatchObject({
+          reviewAccept: true,
+          reviewReject: true,
+        });
+        expect(JSON.stringify(projection)).toBe(before);
+      });
+    });
+  });
+
   it("publishes only a same-revision source lifecycle model and delegates its exact commands", async () => {
     const loadSources = jest.fn(async () =>
       createKnowledgeSourceLifecycleModel({

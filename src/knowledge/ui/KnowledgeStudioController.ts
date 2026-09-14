@@ -77,6 +77,8 @@ export interface KnowledgeStudioSnapshot {
   commandCapabilities: Readonly<KnowledgeStudioCommandCapabilities>;
   activity: Readonly<KnowledgeActivityModel>;
   reviews: readonly Readonly<KnowledgeReviewPlan>[];
+  /** Pending ordinary proposals incompatible with current source/configuration authority. */
+  outdatedReviewIds?: readonly string[];
   /** Independent forward proposals and accepted-but-unapplied work. */
   forwardRevisionReviews?: readonly Readonly<KnowledgeForwardRevisionStudioReview>[];
   recovery: Readonly<KnowledgeRecoveryModel>;
@@ -247,6 +249,8 @@ export type KnowledgeStudioStateListener = () => void;
 
 const REVIEW_APPLY_PAUSED_MESSAGE =
   "Apply is paused. Your proposal is still awaiting review. Check Activity before continuing.";
+const REVIEW_PROPOSAL_OUTDATED_MESSAGE =
+  "This proposal cannot be verified against the current Knowledge configuration or source. It cannot be applied. You can inspect or reject it, then generate a new proposal.";
 
 const EMPTY_STATUS_COUNTS: Readonly<Record<KnowledgeActivityStatus, number>> = Object.freeze({
   queued: 0,
@@ -1683,6 +1687,13 @@ export class KnowledgeStudioController {
       return;
     }
 
+    // Old proposals remain rejectable, but local choices cannot update their compile authority.
+    // https://github.com/yydspanda/obsidian-copilot/issues/7
+    if (!rejectsWholeProposal && snapshot?.outdatedReviewIds?.includes(current.changeSetId)) {
+      await this.rejectUnavailableAction(REVIEW_PROPOSAL_OUTDATED_MESSAGE);
+      return;
+    }
+
     // A paused queue cannot claim an ordinary Apply; keep the draft pending
     // instead of allowing acceptance to create a recovery item without a write.
     // https://github.com/yydspanda/obsidian-copilot/issues/6
@@ -1724,14 +1735,21 @@ export class KnowledgeStudioController {
           case "blocked":
             return {
               kind: "blocked",
+              // Authority may change after the rendered snapshot; show the safe result
+              // without attributing a failed authority proof to invalid proposed content.
+              // https://github.com/yydspanda/obsidian-copilot/issues/7
               // Pause may arrive after this controller snapshot; the atomic
               // rejection is not a validation failure in the proposed content.
               // https://github.com/yydspanda/obsidian-copilot/issues/6
               message: result.diagnostics.some(
-                (diagnostic) => diagnostic.code === "review_apply_queue_paused"
+                (diagnostic) => diagnostic.code === "review_proposal_outdated"
               )
-                ? REVIEW_APPLY_PAUSED_MESSAGE
-                : "The selected changes did not pass deterministic validation.",
+                ? REVIEW_PROPOSAL_OUTDATED_MESSAGE
+                : result.diagnostics.some(
+                      (diagnostic) => diagnostic.code === "review_apply_queue_paused"
+                    )
+                  ? REVIEW_APPLY_PAUSED_MESSAGE
+                  : "The selected changes did not pass deterministic validation.",
               diagnostics: result.diagnostics.map((diagnostic) => ({ ...diagnostic })),
             };
         }

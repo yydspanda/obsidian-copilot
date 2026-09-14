@@ -79,6 +79,7 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
     plan: KnowledgeReviewPlan;
     busy: boolean;
     applyPaused?: boolean;
+    applyOutdated?: boolean;
     acceptCommandsEnabled: boolean;
     rejectCommandsEnabled: boolean;
     evidenceError?: string;
@@ -91,6 +92,7 @@ jest.mock("@/components/knowledge/KnowledgeReviewPanel", () => ({
       <span>Review plan {props.plan.changeSetId}</span>
       <span>Review busy {String(props.busy)}</span>
       <span>Review apply paused {String(props.applyPaused)}</span>
+      <span>Review apply outdated {String(props.applyOutdated)}</span>
       <span>Review accept {String(props.acceptCommandsEnabled)}</span>
       <span>Review reject {String(props.rejectCommandsEnabled)}</span>
       <span>Review evidence opening {props.openingEvidenceRef ?? "none"}</span>
@@ -977,6 +979,46 @@ describe("KnowledgeStudioRoot", () => {
     expect(controller.calls).toEqual([`forward-submit:${FORWARD_REVIEW_REF}`]);
     expect(controller.submitted).toBeUndefined();
     expect(controller.submittedForward?.changeSetId).toBe(FORWARD_REVIEW_REF);
+  });
+
+  it.each([
+    { outdatedReviewIds: undefined, expected: false },
+    { outdatedReviewIds: [], expected: false },
+    { outdatedReviewIds: ["changeset-1"], expected: false },
+    { outdatedReviewIds: ["changeset-2"], expected: true },
+  ])(
+    "maps outdated IDs $outdatedReviewIds to selected ordinary proposal applyOutdated=$expected — https://github.com/yydspanda/obsidian-copilot/issues/7",
+    ({ outdatedReviewIds, expected }) => {
+      const ready = createReadyState([
+        createReviewPlan("changeset-1"),
+        createReviewPlan("changeset-2"),
+      ]);
+      const controller = new TestKnowledgeStudioController({
+        ...ready,
+        activeTab: "review",
+        selectedReviewChangeSetId: "changeset-2",
+        snapshot: { ...ready.snapshot!, outdatedReviewIds },
+      });
+      renderStudio(controller);
+
+      expect(screen.getByText("Review plan changeset-2")).toBeTruthy();
+      expect(screen.getByText(`Review apply outdated ${expected}`)).toBeTruthy();
+      expect(screen.getByText("Review accept true")).toBeTruthy();
+      expect(screen.getByText("Review reject true")).toBeTruthy();
+    }
+  );
+
+  it("does not gate a forward proposal with ordinary outdated IDs — https://github.com/yydspanda/obsidian-copilot/issues/7", () => {
+    const ready = createForwardReadyState([createForwardPendingReview()]);
+    const controller = new TestKnowledgeStudioController({
+      ...ready,
+      snapshot: { ...ready.snapshot!, outdatedReviewIds: [FORWARD_REVIEW_REF] },
+    });
+    renderStudio(controller);
+
+    expect(screen.getByText("Review apply outdated undefined")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review submit" }));
+    expect(controller.calls).toEqual([`forward-submit:${FORWARD_REVIEW_REF}`]);
   });
 
   it("renders a pending forward row through Review while keeping its submit route distinct", () => {

@@ -16,8 +16,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Resume provider/project/settings migration, reload/unload,
-  Knowledge Studio, and popout acceptance with the verified personal production artifact.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Fix outdated Review compatibility, then resume the frozen
+  Windows Knowledge, provider/project/settings migration, reload/unload and popout acceptance.
 
 ## Upstream Status
 
@@ -108,11 +108,11 @@
   now reports 4.0.8 after refreshing the manifest; instance replacement confirms the new code.
   The deployment command exited successfully without the earlier intermittent esbuild shutdown deadlock;
   copied hashes match the build. Automatic reload still required the plugin-manager fallback.
-- September 14: Studio, local Setup, Project/rules navigation and Review rendering pass; the user paused the Bundle.
-  Four proposals remain. Before pause, counters reached 35 failed / 10 completed; analysis failures remain unresolved.
+- September 14: Studio, local Setup, Project/rules navigation and Review rendering pass; authorized Resume succeeds.
+  Five proposals remain; the two resumed jobs yield one proposal and one analysis rejection (36 failed / 10 completed).
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Review feedback passes; paused Apply repair is deployed. User paused-state check, Apply, analysis/navigation, recovery, migration and popout remain.
+- Issue #7 outdated Review repair: 9 suites / 254 tests and 36 Windows virtual gallery cases pass; deployment pending. Other acceptance findings remain.
 
 ## Archive
 

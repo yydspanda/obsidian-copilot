@@ -412,6 +412,82 @@ describe("KnowledgeProductionObservationComposer", () => {
     }
   });
 
+  describe("KnowledgeProductionObservationComposer", () => {
+    describe("createKnowledgeStudioRuntimeReadAdapter()", () => {
+      it("projects only frozen generation-bound source fingerprints without writes or model calls and rejects an invalidated lease — https://github.com/yydspanda/obsidian-copilot/issues/7", async () => {
+        const fetchPort = createFetchPort();
+        const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+        const file = new KnowledgeExecutionMemoryRuntimeFile();
+        const runtime = await createRuntime(runtimeClaim, file);
+        const vault = new ProductionVaultHarness();
+        vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+        vault.addFile(SOURCE_PATH, encodeText("# Source\n"));
+        const composer = new KnowledgeProductionObservationComposer({
+          app: vault.createApp(),
+          runtime,
+          workflowLease: admission.workflowLease,
+          workflowCompositionClaim: admission.workflowCompositionClaim,
+        });
+        await composer.start(new AbortController().signal);
+        const worker = composer.createCompileReviewWorkerController(
+          admission.modelRouteLease,
+          () => false,
+          createWorkerScheduler(),
+          () => undefined
+        );
+        const before = await file.read();
+        const beforeVault = new Map(vault.files);
+        const process = jest.spyOn(file, "process");
+
+        try {
+          const adapter = composer.createKnowledgeStudioRuntimeReadAdapter(
+            admission.modelRouteLease
+          );
+          const { reviewSources } = (
+            adapter as unknown as { input: { reviewSources: readonly Readonly<object>[] } }
+          ).input;
+          const queue = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+          if (!queue.ok) throw new Error("Expected an observed Queue snapshot");
+          expect(reviewSources).toEqual([
+            {
+              bundleId: "personal",
+              sourceId: "source-1",
+              pipelineFingerprint: queue.value.jobs[0].pipelineFingerprint,
+            },
+          ]);
+          expect(Object.isFrozen(reviewSources)).toBe(true);
+          expect(reviewSources.every(Object.isFrozen)).toBe(true);
+          await expect(
+            adapter.load("personal", new AbortController().signal)
+          ).resolves.toMatchObject({
+            availability: "ready",
+            reviews: [],
+          });
+
+          lifecycle.invalidate();
+
+          await expect(
+            adapter.load("personal", new AbortController().signal)
+          ).rejects.toMatchObject({
+            name: "AbortError",
+          });
+          expect(() =>
+            composer.createKnowledgeStudioRuntimeReadAdapter(admission.modelRouteLease)
+          ).toThrow("The operation was aborted");
+          expect(process).not.toHaveBeenCalled();
+          expect(await file.read()).toBe(before);
+          expect(vault.files).toEqual(beforeVault);
+          expect(fetchPort).not.toHaveBeenCalled();
+        } finally {
+          process.mockRestore();
+          composer.close();
+          await worker.whenSettled();
+          lifecycle.close();
+        }
+      });
+    });
+  });
+
   it("mints one genuine forward recovery runner before observation without fetch or Vault reads", async () => {
     const fetchPort = createFetchPort();
     const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
