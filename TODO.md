@@ -16,14 +16,14 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Verify the merged `61619fe4` build in Windows;
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Continue bounded acceptance on deployed `0c381e68`;
   keep the queue paused. No new model calls or real Wiki writes are authorized.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
 - Last fetched: `2026-09-15` — canonical `61619fe427f27c23fbb08b6a040d18ae73c3b219`
-- Merge: 20 commits, 3 test/documentation conflicts resolved; no manual production-code edits
+- Merge: `0c381e68`, 20 commits; 85 ahead / 0 behind at merge; no manual production-code edits
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
@@ -34,7 +34,7 @@
   marks incompatible old proposals and blocks Apply while preserving explicit rejection.
   9 suites / 254 tests and 36 Windows gallery cases pass; clean `fbc413a0` is deployed.
   Issue #8 repair pushed; fresh isolated retest passes analysis/generation in 19.373 seconds without real writes.
-  Upstream `61619fe4` merged with test/doc-only conflict resolution; 48 suites / 1,238 tests pass.
+  Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests and bounded Windows checks pass (one gallery rerun).
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -68,8 +68,7 @@
 - Treat `origin/master` as the authoritative upstream baseline. Prefer new modules and narrow
   adapters; change upstream-owned files only when the integration requires it, and record the
   reason and regression evidence.
-- Personal builds explicitly set `COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000`; never export this
-  into the default release environment. Keep one plugin and reuse the upstream build pipeline.
+- Personal builds alone set `COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000`; keep one plugin and reuse upstream's build pipeline.
 - Keep exactly one current stage and one in-progress task here. Move future work to the roadmap and
   completed work to the archive for its completion month.
 - Record every model, data, configuration, or performance experiment using the experiment template;
@@ -87,7 +86,7 @@
 - Deterministic regression: 697 suites / 9,876 tests passed in the full sweep; the one suite read
   during test-import migration passed all 11 cases after files were frozen (698 suites / 9,887
   passing tests across the sweep and rerun; 2 existing tests skipped; paid live suite excluded).
-- September 13 gates: production typecheck, formatting, lint (0 errors, 3 existing warnings),
+- September 15 gates: production typecheck, formatting, lint (0 errors, 3 existing warnings),
   progress governance, and the full Obsidian review command pass, including packaged CSS and dependency
   audit (0 vulnerabilities). Existing review warnings remain visible; gallery indexing is not live rendering.
 - Pre-push verification: formatting/lint and 6 focused suites / 84 tests pass. Commit hooks preserve
@@ -103,11 +102,11 @@
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift: current branch includes `61619fe4`; remote master stays behind by explicit user choice, so the aggregate drift workflow can remain red.
-- September 15 Windows deployment: build `00522e4f-dirty-a1b135c7fe9d` is loaded in the test Vault;
-  replacement instance and `workflow_read_ready` confirm activation. Zero uncaught errors/rejections
-  were captured for the earlier frozen build; that listener check was not repeated for this artifact.
-  The deployment command exited successfully without the earlier intermittent esbuild shutdown deadlock;
-  copied hashes match the build. Automatic reload still required the plugin-manager fallback.
+- September 15 Windows deployment: clean `0c381e68-clean-d235147b24f2` is loaded; Studio is ready.
+  CLI reload required the plugin-manager fallback. All 14 scoped files and 12 Reviews are unchanged;
+  only input-observation bookkeeping advances Runtime 1446 → 1467. Queue remains user-paused.
+  36 gallery states render without horizontal overflow (35 first-pass, one isolated rerun).
+  Fake connection feedback passes; zero uncaught errors/rejections. Temporary gallery fully removed.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
@@ -117,4 +116,5 @@
 ## Archive
 
 - [2026-08](./designdocs/progress/archive/2026-08.md)
+- [2026-09](./designdocs/progress/archive/2026-09.md)
 - [Frozen pre-governance snapshot](./designdocs/progress/legacy/TODO-2026-08-26.md)
