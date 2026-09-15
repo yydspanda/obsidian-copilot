@@ -2,6 +2,8 @@ import {
   createKnowledgeProductionCompileInput,
   KnowledgeProductionCompileInputError,
 } from "@/knowledge/compiler/KnowledgeProductionCompileInput";
+import type { CompilerAnalysisRequest } from "@/knowledge/compiler/CompilerModelPort";
+import { KnowledgeCompiler } from "@/knowledge/compiler/KnowledgeCompiler";
 import type { KnowledgeAuthorizedCompilePreparation } from "@/knowledge/ingest/KnowledgeAuthorizedSourcePreparation";
 import {
   KNOWLEDGE_FORWARD_REVISION_OVERLAYS_EXTENSION_KEY,
@@ -195,6 +197,108 @@ describe("createKnowledgeProductionCompileInput", () => {
         expectedContentHash: sharedHash,
       },
     ]);
+  });
+
+  it("rejects a Schema-directed write to another source's managed page before target reads or generation — https://github.com/yydspanda/obsidian-copilot/issues/8", async () => {
+    const targetPath = "Wiki/Existing.md";
+    const schemaContent = `# Knowledge schema\nEvery ingest must write only ${targetPath}.\n`;
+    const preparation = createPreparation([createTextArtifact()]);
+    const manifest: SourceManifest = {
+      ...preparation.manifest,
+      entries: [
+        ...preparation.manifest.entries,
+        {
+          sourceId: "source-other",
+          sourceKey: "sources/other.md",
+          sourcePath: "Sources/Other.md",
+          custody: "user_managed",
+          lastSuccessful: createLastSuccessful([
+            {
+              path: targetPath,
+              ownership: "generated",
+              contentHash: createFileContentHash("Other source's accepted page"),
+            },
+          ]),
+        },
+      ],
+    };
+    const beforeManifest = JSON.stringify(manifest);
+    const input = createKnowledgeProductionCompileInput(
+      {
+        ...preparation,
+        manifest,
+        schema: {
+          ...preparation.schema,
+          content: schemaContent,
+          contentHash: createFileContentHash(schemaContent),
+        },
+      },
+      43
+    );
+    const analyze = jest.fn(async (request: CompilerAnalysisRequest) => ({
+      version: 1,
+      summary: "Follow the schema's required target",
+      concepts: [],
+      entities: [],
+      claims: [{ ref: "claim-primary", text: "Exact primary source text" }],
+      relations: [],
+      citations: [
+        {
+          claimRef: "claim-primary",
+          evidenceId: request.evidence[0].evidenceId,
+          relation: "supports",
+        },
+      ],
+      targets: [
+        {
+          ref: "target-existing",
+          path: targetPath,
+          intent: "write",
+          reason: "The schema requires this target",
+          claimRefs: ["claim-primary"],
+        },
+      ],
+    }));
+    const generate = jest.fn(async () => {
+      throw new Error("Generation must not run without target authority");
+    });
+    const resolve = jest.fn(async () => {
+      throw new Error("Target reads must not run without target authority");
+    });
+    const validate = jest.fn(async () => {
+      throw new Error("Candidate validation must not run without target authority");
+    });
+    const compiler = new KnowledgeCompiler({
+      model: { analyze, generate },
+      targetResolver: { resolve },
+      candidateValidator: { validate },
+    });
+
+    // Schema policy cannot grant one source another source's persisted page authority.
+    // https://github.com/yydspanda/obsidian-copilot/issues/8
+    expect(input.targetAuthorizations).toEqual([]);
+    const result = await compiler.compile(input, new AbortController().signal);
+
+    expect(result).toEqual({
+      kind: "failed",
+      stage: "analysis",
+      retryable: false,
+      diagnostics: [
+        {
+          code: "compiler_target_manifest_authorization_missing",
+          severity: "error",
+          field: "targets[0].path",
+          message:
+            "A Manifest-tracked target requires explicit caller-owned authorization even when its file is missing",
+        },
+      ],
+    });
+    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(analyze.mock.calls[0][0].schema.content).toBe(schemaContent);
+    expect(generate).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(validate).not.toHaveBeenCalled();
+    expect(JSON.stringify(manifest)).toBe(beforeManifest);
   });
 
   it("uses the active forward-revision head without rewriting the source-applied base", () => {

@@ -4,7 +4,10 @@ import type {
   CompilerGenerationRequest,
   CompilerTargetRequest,
   CompilerTargetResolver,
+  KnowledgeCompilerStage,
 } from "@/knowledge/compiler/CompilerModelPort";
+import type { CompilerAnalysisModelOutput } from "@/knowledge/compiler/analysisSchema";
+import { KnowledgeCompiler } from "@/knowledge/compiler/KnowledgeCompiler";
 import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
   createChangeSetTransactionDigest,
@@ -48,7 +51,7 @@ import {
   KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
   parseKnowledgeNoChangesCommitMarker,
 } from "@/knowledge/manifest/NoChangesManifestCommit";
-import type { SourceManifest } from "@/knowledge/model/types";
+import type { KnowledgeDiagnostic, SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
@@ -653,22 +656,274 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
     expect(runtime.activeTransaction).toBeNull();
   });
 
-  it("projects a controlled Compiler failure as a safe nonretryable Queue failure", async () => {
-    const attempt = await runAttempt({
-      invoke: async () => createUnsupportedAnalysisWireOutput(),
-    });
-    const job = requireOnlyJob(attempt.queueSnapshot);
+  describe("KnowledgeProductionCompileReviewHandler", () => {
+    describe("execute()", () => {
+      const issue = "https://github.com/yydspanda/obsidian-copilot/issues/8";
+      const analysisMessage = "The knowledge compiler rejected the analysis result";
 
-    expect(attempt.queueResult).toMatchObject({ kind: "executed", status: "failed" });
-    expect(job).toMatchObject({
-      status: "failed",
-      failure: {
-        code: "knowledge_compiler_analysis_rejected",
-        message: "The knowledge compiler rejected the analysis result",
-        retryable: false,
-      },
+      async function runControlledFailure(
+        stage: KnowledgeCompilerStage,
+        diagnostics: KnowledgeDiagnostic[]
+      ): Promise<AttemptResult> {
+        const invoke = jest.fn<
+          ReturnType<KnowledgePrivateModelInvoke>,
+          Parameters<KnowledgePrivateModelInvoke>
+        >();
+        const compile = jest.spyOn(KnowledgeCompiler.prototype, "compile").mockResolvedValueOnce({
+          kind: "failed",
+          stage,
+          retryable: false,
+          diagnostics,
+        });
+        try {
+          const result = await runAttempt({ invoke });
+          expect(invoke).not.toHaveBeenCalled();
+          return result;
+        } finally {
+          compile.mockRestore();
+        }
+      }
+
+      it(`preserves an ungrounded analysis check in a safe nonretryable Queue failure (${issue})`, async () => {
+        const attempt = await runAttempt({
+          invoke: async () => createUnsupportedAnalysisWireOutput(),
+        });
+
+        expect(attempt.queueResult).toMatchObject({ kind: "executed", status: "failed" });
+        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_compiler_analysis_rejected",
+            message: `${analysisMessage}. Checks: compiler_claim_ungrounded.`,
+            retryable: false,
+          },
+        });
+        expect(attempt.queueSnapshot.control).toEqual({ status: "running" });
+        expect(attempt.reviewSnapshot.records).toEqual([]);
+        expect(JSON.parse(attempt.runtimeContent)).toMatchObject({
+          applyCommits: [],
+          activeTransaction: null,
+        });
+      });
+
+      it(`preserves adapter rejection of unknown analysis fields without retaining their keys or values (${issue})`, async () => {
+        const privateKey = "private-analysis-field-canary";
+        const privateValue = "private-analysis-value-canary";
+        const attempt = await runAttempt({
+          invoke: async () =>
+            JSON.stringify({
+              ...JSON.parse(createAnalysisWireOutput(false)),
+              [privateKey]: privateValue,
+            }),
+        });
+
+        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_model_response_invalid",
+            message: "The knowledge model returned an invalid structured response",
+            retryable: false,
+          },
+        });
+        expect(attempt.runtimeContent).not.toContain(privateKey);
+        expect(attempt.runtimeContent).not.toContain(privateValue);
+        expect(attempt.reviewSnapshot.records).toEqual([]);
+      });
+
+      it(`reports conflicting Windows targets without persisting model-proposed paths or reasons (${issue})`, async () => {
+        const analysis = JSON.parse(createAnalysisWireOutput(true)) as CompilerAnalysisModelOutput;
+        const privatePath = "Wiki/Private-Analysis-Path-Canary.md";
+        const privateReason = "private-analysis-reason-canary";
+        analysis.targets = [
+          { ...analysis.targets[0], path: privatePath, reason: privateReason },
+          { ...analysis.targets[0], ref: "target-second", path: privatePath.toLowerCase() },
+        ];
+        const attempt = await runAttempt({ invoke: async () => JSON.stringify(analysis) });
+
+        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+          status: "failed",
+          failure: {
+            message: `${analysisMessage}. Checks: compiler_target_semantic_duplicate, compiler_target_windows_collision.`,
+          },
+        });
+        expect(attempt.runtimeContent.toLowerCase()).not.toContain(privatePath.toLowerCase());
+        expect(attempt.runtimeContent).not.toContain(privateReason);
+        expect(attempt.reviewSnapshot.records).toEqual([]);
+      });
+
+      it.each([
+        "schema_invalid_type",
+        "schema_invalid_value",
+        "schema_unrecognized_keys",
+        "schema_custom",
+        "compiler_output_limit_exceeded",
+        "compiler_analysis_character_limit_exceeded",
+        "compiler_analysis_ref_duplicate",
+        "compiler_analysis_node_ref_ambiguous",
+        "compiler_analysis_semantic_duplicate",
+        "compiler_relation_endpoint_unknown",
+        "compiler_relation_self_reference",
+        "compiler_relation_semantic_duplicate",
+        "compiler_citation_claim_unknown",
+        "compiler_citation_evidence_unknown",
+        "compiler_citation_duplicate",
+        "compiler_claim_ungrounded",
+        "compiler_target_outside_wiki",
+        "compiler_target_equals_wiki_root",
+        "compiler_target_not_markdown",
+        "compiler_target_inside_source",
+        "compiler_target_is_schema",
+        "compiler_target_claim_duplicate",
+        "compiler_target_claim_unknown",
+        "compiler_target_manifest_authorization_missing",
+        "compiler_target_delete_unauthorized",
+        "compiler_target_write_unauthorized",
+        "compiler_target_claim_required",
+        "compiler_target_semantic_duplicate",
+        "compiler_target_windows_collision",
+        "compiler_target_path_overlap",
+        "path_required",
+        "path_absolute",
+        "path_backslash",
+        "path_empty_segment",
+        "path_traversal",
+        "path_invalid_windows_character",
+        "path_windows_reserved_name",
+        "path_windows_trailing_character",
+      ])(
+        `retains the allowlisted analysis check %s without diagnostic text (${issue})`,
+        async (code) => {
+          const attempt = await runControlledFailure("analysis", [
+            {
+              code,
+              severity: "error",
+              field: "private-diagnostic-field",
+              message: "private-diagnostic-message",
+            },
+          ]);
+
+          expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+            status: "failed",
+            failure: {
+              code: "knowledge_compiler_analysis_rejected",
+              message: `${analysisMessage}. Checks: ${code}.`,
+              retryable: false,
+            },
+          });
+          expect(attempt.runtimeContent).not.toContain("private-diagnostic");
+          expect(attempt.queueSnapshot.control).toEqual({ status: "running" });
+          expect(attempt.reviewSnapshot.records).toEqual([]);
+        }
+      );
+
+      it(`keeps only the first five distinct allowed checks and discards unknown codes (${issue})`, async () => {
+        const codes = [
+          "private-diagnostic-code",
+          "compiler_claim_ungrounded",
+          "compiler_claim_ungrounded",
+          "schema_invalid_type",
+          "path_traversal",
+          "compiler_target_windows_collision",
+          "compiler_target_claim_required",
+          "compiler_target_claim_unknown",
+        ];
+        const attempt = await runControlledFailure(
+          "analysis",
+          codes.map((code) => ({
+            code,
+            severity: "error",
+            field: "private-field",
+            message: "private-message",
+          }))
+        );
+        const job = requireOnlyJob(attempt.queueSnapshot);
+        if (job.status !== "failed") throw new Error("Expected one failed Queue job");
+
+        expect(job.failure.message).toBe(
+          `${analysisMessage}. Checks: compiler_claim_ungrounded, schema_invalid_type, path_traversal, compiler_target_windows_collision, compiler_target_claim_required.`
+        );
+        expect(job.failure.message.length).toBeLessThanOrEqual(1_000);
+        expect(attempt.runtimeContent).not.toContain("private-diagnostic-code");
+        expect(attempt.runtimeContent).not.toContain("private-field");
+        expect(attempt.runtimeContent).not.toContain("private-message");
+      });
+
+      it.each([
+        { codes: [] },
+        {
+          codes: [
+            "compiler_private_code_canary",
+            "schema_private_code_canary",
+            "path_private_code_canary",
+          ],
+        },
+      ])(
+        `keeps the generic analysis failure when no code is allowlisted: $codes (${issue})`,
+        async ({ codes }) => {
+          const attempt = await runControlledFailure(
+            "analysis",
+            codes.map((code) => ({
+              code,
+              severity: "error",
+              field: "private-field",
+              message: "private-message",
+            }))
+          );
+
+          expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+            failure: {
+              code: "knowledge_compiler_analysis_rejected",
+              message: analysisMessage,
+              retryable: false,
+            },
+          });
+          expect(attempt.runtimeContent).not.toContain("private_code_canary");
+        }
+      );
+
+      it.each([
+        [
+          "input",
+          "knowledge_compiler_input_rejected",
+          "The knowledge compiler rejected its derived input",
+        ],
+        [
+          "target_resolution",
+          "knowledge_compiler_target_rejected",
+          "The knowledge compiler rejected the resolved target state",
+        ],
+        [
+          "generation",
+          "knowledge_compiler_generation_rejected",
+          "The knowledge compiler rejected the generated proposal",
+        ],
+        [
+          "candidate_validation",
+          "knowledge_compiler_candidate_rejected",
+          "The knowledge compiler rejected deterministic candidate validation",
+        ],
+      ] as const)(
+        `leaves %s failures unchanged even when they carry an analysis check (${issue})`,
+        async (stage, code, message) => {
+          const attempt = await runControlledFailure(stage, [
+            {
+              code: "compiler_claim_ungrounded",
+              severity: "error",
+              field: "private-field",
+              message: "private-message",
+            },
+          ]);
+
+          expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+            failure: { code, message, retryable: false },
+          });
+          expect(attempt.runtimeContent).not.toContain("compiler_claim_ungrounded");
+          expect(attempt.runtimeContent).not.toContain("private-field");
+          expect(attempt.runtimeContent).not.toContain("private-message");
+          expect(attempt.queueSnapshot.control).toEqual({ status: "running" });
+        }
+      );
     });
-    expect(attempt.reviewSnapshot.records).toEqual([]);
   });
 
   it("preserves an authentic Compiler infrastructure classification and exact Queue policy", async () => {

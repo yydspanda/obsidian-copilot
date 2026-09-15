@@ -16,8 +16,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Resume the frozen Windows acceptance with the deployed
-  outdated Review repair; normal Apply, analysis, navigation, recovery, migration and popout remain.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Resume bounded acceptance after the isolated-tool repair;
+  offline regressions pass. Keep the real queue paused; another model attempt needs approval.
 
 ## Upstream Status
 
@@ -33,7 +33,7 @@
 - 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #7](https://github.com/yydspanda/obsidian-copilot/issues/7)
   marks incompatible old proposals and blocks Apply while preserving explicit rejection.
   9 suites / 254 tests and 36 Windows gallery cases pass; clean `fbc413a0` is deployed.
-  Real Review marks 2 old proposals; records/targets unchanged. No upstream-owned source file changed.
+  Issue #8 diagnostics and approved test Rules now deployed; single-source retest timed out without writes.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -76,7 +76,7 @@
 
 ## Current Verification
 
-- Personal production build passes at 6,398,158 bytes under the explicit 10,000,000-byte ceiling.
+- Personal production build passes at 6,399,547 bytes under the explicit 10,000,000-byte ceiling.
   Default 5,000,000-byte enforcement still rejects this artifact; it is not a default-policy release
   or Sync Standard-compatible delivery. Build inputs are in the September log; current hashes are in the Windows checkpoint.
 - Size-guard regression: 41/41 tests pass after observing 21 intended failures before implementation.
@@ -102,17 +102,17 @@
   resolution, backend configuration, and pre-send validation; provider policy lives in new modules.
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
-- Upstream drift: the working branch remains synced through `9e2594b4`, with no missing upstream commits.
-- September 15 Windows deployment: build `fbc413a0-clean-1e0abdc3fa8a` is loaded in the test Vault;
-  the startup diagnostic captured zero uncaught errors or unhandled rejections. The UI manifest label
-  now reports 4.0.8 after refreshing the manifest; instance replacement confirms the new code.
+- Upstream drift: last checked September 13 through `9e2594b4`, behind 0; not re-fetched during acceptance.
+- September 15 Windows deployment: build `00522e4f-dirty-a1b135c7fe9d` is loaded in the test Vault;
+  replacement instance and `workflow_read_ready` confirm activation. Zero uncaught errors/rejections
+  were captured for the earlier frozen build; that listener check was not repeated for this artifact.
   The deployment command exited successfully without the earlier intermittent esbuild shutdown deadlock;
   copied hashes match the build. Automatic reload still required the plugin-manager fallback.
-- September 14: Studio, local Setup, Project/rules navigation and Review rendering pass; authorized Resume succeeds.
-  Five proposals remain; the two resumed jobs yield one proposal and one analysis rejection (36 failed / 10 completed).
+- September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
+  After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Issue #7 is deployed: 2/5 proposals flagged old, Apply disabled. Startup records one more analysis rejection (37 failed); other acceptance findings remain.
+- Issue #8: retest tool removes statistics waiting and independently aborts requests; 12 new + 107 related tests pass, including mutation checks. No new live call/deployment; `EXP-20260915-001` remains inconclusive.
 
 ## Archive
 

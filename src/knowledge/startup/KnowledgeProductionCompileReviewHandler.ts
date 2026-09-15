@@ -108,6 +108,50 @@ const CONTROLLED_COMPILER_FAILURES: Readonly<
   }),
 });
 
+// Diagnostic messages and fields may contain model-proposed paths or unknown keys.
+// Only these fixed analysis rule identifiers may enter durable failure text.
+// https://github.com/yydspanda/obsidian-copilot/issues/8
+const SAFE_ANALYSIS_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
+  "schema_invalid_type",
+  "schema_invalid_value",
+  "schema_unrecognized_keys",
+  "schema_custom",
+  "compiler_output_limit_exceeded",
+  "compiler_analysis_character_limit_exceeded",
+  "compiler_analysis_ref_duplicate",
+  "compiler_analysis_node_ref_ambiguous",
+  "compiler_analysis_semantic_duplicate",
+  "compiler_relation_endpoint_unknown",
+  "compiler_relation_self_reference",
+  "compiler_relation_semantic_duplicate",
+  "compiler_citation_claim_unknown",
+  "compiler_citation_evidence_unknown",
+  "compiler_citation_duplicate",
+  "compiler_claim_ungrounded",
+  "compiler_target_outside_wiki",
+  "compiler_target_equals_wiki_root",
+  "compiler_target_not_markdown",
+  "compiler_target_inside_source",
+  "compiler_target_is_schema",
+  "compiler_target_claim_duplicate",
+  "compiler_target_claim_unknown",
+  "compiler_target_manifest_authorization_missing",
+  "compiler_target_delete_unauthorized",
+  "compiler_target_write_unauthorized",
+  "compiler_target_claim_required",
+  "compiler_target_semantic_duplicate",
+  "compiler_target_windows_collision",
+  "compiler_target_path_overlap",
+  "path_required",
+  "path_absolute",
+  "path_backslash",
+  "path_empty_segment",
+  "path_traversal",
+  "path_invalid_windows_character",
+  "path_windows_reserved_name",
+  "path_windows_trailing_character",
+]);
+
 const REVIEW_STATE_CONFLICT: Readonly<SafeExecutorFailure> = Object.freeze({
   code: "knowledge_review_state_conflict",
   message: "The compiled proposal cannot enter the current review state",
@@ -312,9 +356,30 @@ function matchesReviewJobClaim(
   );
 }
 
-/** Projects one deterministic Compiler rejection without persisting its diagnostics. */
+/** Projects a Compiler rejection without retaining model-controlled diagnostic text. */
 function projectControlledFailure(result: KnowledgeCompileFailure, signal: AbortSignal): never {
-  throw createExecutorError(CONTROLLED_COMPILER_FAILURES[result.stage], signal);
+  const failure = CONTROLLED_COMPILER_FAILURES[result.stage];
+  // A bounded list preserves actionable analysis failures without changing retry
+  // policy or trusting arbitrary diagnostic codes from another compiler stage.
+  // https://github.com/yydspanda/obsidian-copilot/issues/8
+  const codes =
+    result.stage === "analysis"
+      ? [
+          ...new Set(
+            result.diagnostics
+              .map(({ code }) => code)
+              .filter((code) => SAFE_ANALYSIS_DIAGNOSTIC_CODES.has(code))
+          ),
+        ].slice(0, 5)
+      : [];
+  throw createExecutorError(
+    {
+      ...failure,
+      message:
+        codes.length > 0 ? `${failure.message}. Checks: ${codes.join(", ")}.` : failure.message,
+    },
+    signal
+  );
 }
 
 /** Persists one proposal and returns only its exact durable pending Review receipt. */
