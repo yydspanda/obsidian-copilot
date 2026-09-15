@@ -16,15 +16,15 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Resume bounded acceptance after the isolated-tool repair;
-  offline regressions pass. Keep the real queue paused; another model attempt needs approval.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Continue real Review/Apply acceptance after the isolated compile pass;
+  keep the queue paused. Further model calls or real writes need a separately agreed scope.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
-- Last checked: `2026-09-13T16:08:57+08:00`
-- Baseline: `9e2594b4`
-- Current branch at check: ahead 71, behind 0
+- Last checked: `2026-09-15T14:51:52+08:00` (remote CI / read-only API)
+- Frozen acceptance baseline: `9e2594b4`; observed upstream: `61619fe4`
+- Current branch at check (`b73bbbaf`): ahead 83, behind 20 — drift gate failed; no merge performed
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
 
@@ -33,7 +33,7 @@
 - 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #7](https://github.com/yydspanda/obsidian-copilot/issues/7)
   marks incompatible old proposals and blocks Apply while preserving explicit rejection.
   9 suites / 254 tests and 36 Windows gallery cases pass; clean `fbc413a0` is deployed.
-  Issue #8 diagnostics and approved test Rules now deployed; single-source retest timed out without writes.
+  Issue #8 repair pushed; fresh isolated retest passes analysis/generation in 19.373 seconds without real writes.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -102,7 +102,7 @@
   resolution, backend configuration, and pre-send validation; provider policy lives in new modules.
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
-- Upstream drift: last checked September 13 through `9e2594b4`, behind 0; not re-fetched during acceptance.
+- Upstream drift: September 15 CI reports behind 20; fork master behind 135. Schedule synchronization separately; local acceptance baseline stays frozen.
 - September 15 Windows deployment: build `00522e4f-dirty-a1b135c7fe9d` is loaded in the test Vault;
   replacement instance and `workflow_read_ready` confirm activation. Zero uncaught errors/rejections
   were captured for the earlier frozen build; that listener check was not repeated for this artifact.
@@ -112,7 +112,7 @@
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
   Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Issue #8: retest tool removes statistics waiting and independently aborts requests; 12 new + 107 related tests pass, including mutation checks. No new live call/deployment; `EXP-20260915-001` remains inconclusive.
+- Issue #8: 17 tool + 107 related tests pass. `EXP-20260915-002` reaches an in-memory pending proposal with two requests; 14 real files and all Runtime/Review bytes unchanged. Earlier timeout remains inconclusive.
 
 ## Archive
 

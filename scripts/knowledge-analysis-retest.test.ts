@@ -15,15 +15,29 @@ import {
   type KnowledgeDeepSeekHttpResponse,
 } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { createKnowledgeExecutionOwner } from "@/knowledge/ingest/KnowledgeExecutionOwner";
-import { IngestQueue } from "@/knowledge/ingest/queue/IngestQueue";
-import { createSourceContentHash } from "@/knowledge/model/fingerprint";
+import { IngestExecutorError, IngestQueue } from "@/knowledge/ingest/queue/IngestQueue";
+import type { IngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
+import { createChangeSetTransactionDigest } from "@/knowledge/changeset/TransactionStorage";
+import {
+  createManifestCommitPlan,
+  createManifestCommitPlanDigest,
+} from "@/knowledge/manifest/ManifestCommitIntent";
+import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
+import type {
+  KnowledgeBundleConfig,
+  KnowledgeChangeSet,
+  SourceManifest,
+} from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
 import {
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeQueueStorage,
+  KnowledgeRuntimeReviewStorage,
   KnowledgeRuntimeStore,
+  parseKnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 
@@ -41,51 +55,168 @@ const SCHEMA_PATH = "Schemas/Rules.md";
 const BUNDLE_ID = "retest-bundle";
 const SOURCE_ID = "explicitly-selected-source";
 const SECRET = "sk-local-retest-credential-canary";
+const OTHER_REVIEW_SOURCE_ID = "retained-review-source";
+const PENDING_SOURCE_IDS = [SOURCE_ID, "other-pending-source", "third-pending-source"];
 
-async function fixture(options: { pending?: boolean; paused?: boolean } = {}) {
+async function fixture(
+  options: {
+    pendingSources?: readonly string[];
+    paused?: boolean;
+    reviewSourceId?: string;
+    retrying?: boolean;
+    startupRecovery?: boolean;
+    pipelineFingerprint?: string;
+  } = {}
+) {
   const file = new KnowledgeExecutionMemoryRuntimeFile();
   const runtime = new KnowledgeRuntimeStore(file);
   await runtime.initialize();
-  await new KnowledgeRuntimeManifestStorage(runtime).write(
-    BUNDLE_ID,
-    {
-      version: 1,
-      bundleId: BUNDLE_ID,
-      revision: 1,
-      entries: [
-        {
-          sourceId: SOURCE_ID,
-          sourceKey: toWindowsPathKey(SOURCE_PATH),
-          sourcePath: SOURCE_PATH,
-          custody: "user_managed",
-        },
-      ],
-    },
-    null
+  const bundle: KnowledgeBundleConfig = {
+    version: 1,
+    id: BUNDLE_ID,
+    sourceRoots: ["Sources"],
+    wikiRoot: "Wiki",
+    schemaRef: SCHEMA_PATH,
+    reviewMode: "always",
+  };
+  const sourceIds = new Set([
+    SOURCE_ID,
+    ...(options.pendingSources ?? []),
+    ...(options.reviewSourceId ? [options.reviewSourceId] : []),
+  ]);
+  const manifest: SourceManifest = {
+    version: 1,
+    bundleId: BUNDLE_ID,
+    revision: 1,
+    entries: [...sourceIds].map((sourceId) => {
+      const sourcePath = sourceId === SOURCE_ID ? SOURCE_PATH : `Sources/${sourceId}.txt`;
+      return {
+        sourceId,
+        sourceKey: toWindowsPathKey(sourcePath),
+        sourcePath,
+        custody: "user_managed",
+      };
+    }),
+  };
+  await new KnowledgeRuntimeManifestStorage(runtime).write(BUNDLE_ID, manifest, null);
+  const executionOwner = createKnowledgeExecutionOwner();
+  const reviews = new ChangeSetReviewRepository(
+    new KnowledgeRuntimeReviewStorage(runtime, executionOwner)
   );
   const queue = new IngestQueue(
-    new KnowledgeRuntimeQueueStorage(runtime, createKnowledgeExecutionOwner()),
+    new KnowledgeRuntimeQueueStorage(runtime, executionOwner),
     {
-      execute: async () => {
+      execute: async ({ job, signal }) => {
+        if (job.sourceId === options.reviewSourceId) {
+          const proposal: KnowledgeChangeSet = {
+            id: "retained-proposal",
+            bundleId: BUNDLE_ID,
+            operation: "ingest",
+            sourceRefs: [job.sourceId],
+            changes: [
+              {
+                id: "retained-change",
+                path: "Wiki/Retained.md",
+                sourceRefs: [job.sourceId],
+                reason: "Retained review",
+                operation: "create",
+                expectedAbsent: true,
+                afterContent: "# Retained\n",
+                afterHash: createFileContentHash("# Retained\n"),
+              },
+            ],
+            citations: [],
+            validation: { okfValid: true, citationsValid: true, linksValid: true },
+            status: "proposed",
+            createdAt: Date.now(),
+          };
+          const jobClaim = {
+            jobId: job.id,
+            sourceId: job.sourceId,
+            sourceContentHash: job.sourceContentHash,
+            pipelineFingerprint: job.pipelineFingerprint,
+            inputRevision: job.inputRevision,
+            attempt: job.attempt,
+          };
+          const manifestCommitPlan = createManifestCommitPlan({
+            bundle,
+            manifest,
+            ...jobClaim,
+            changeSet: proposal,
+            mutations: [
+              {
+                changeId: "retained-change",
+                path: "Wiki/Retained.md",
+                operation: "create",
+                access: "create_only",
+                ownership: "generated",
+                wasTrackedByPrimarySource: false,
+              },
+            ],
+          });
+          const record = await reviews.saveProposal(BUNDLE_ID, {
+            proposal,
+            proposalDigest: createChangeSetTransactionDigest(proposal),
+            manifestCommitPlan,
+            manifestCommitPlanDigest: createManifestCommitPlanDigest(manifestCommitPlan),
+            jobClaim,
+          });
+          if (record.outcome !== "pending") throw new Error("Fixture Review must be pending");
+          return {
+            kind: "awaiting_review",
+            changeSetId: record.changeSetId,
+            reviewDecision: {
+              outcome: "pending",
+              bundleId: BUNDLE_ID,
+              changeSetId: record.changeSetId,
+              proposalDigest: record.proposalDigest,
+              recordRevision: record.recordRevision,
+              recordedAt: record.recordedAt,
+              jobClaim,
+            },
+          };
+        }
+        if (options.retrying)
+          throw new IngestExecutorError(
+            {
+              code: "fixture_retry",
+              message: "Retry later",
+              retryable: true,
+              rateLimited: false,
+            },
+            signal
+          );
         throw new Error("The original Queue must never execute");
       },
-    }
+    },
+    { retryPolicy: { decide: () => ({ kind: "retry", delayMs: 60_000 }) } }
   );
-  if (options.pending) {
+  let captureNumber = 0;
+  const enqueue = async (sourceId: string, content = SOURCE_TEXT) => {
     const allocation = await new KnowledgeRuntimeInputRevisionAllocator(runtime).allocate({
       bundleId: BUNDLE_ID,
-      sourceId: SOURCE_ID,
-      captureId: "original-observation",
+      sourceId,
+      captureId: `original-observation-${captureNumber++}`,
     });
     const binding = await new KnowledgeRuntimeInputObservationBinder(runtime).bind({
       observationToken: allocation.observationToken,
-      sourceContentHash: createSourceContentHash(SOURCE_TEXT),
-      pipelineFingerprint: "a".repeat(64),
+      sourceContentHash: createSourceContentHash(content),
+      pipelineFingerprint: options.pipelineFingerprint ?? "a".repeat(64),
     });
     if (binding.kind !== "ready") throw new Error("Fixture observation must be ready");
-    await queue.enqueue(binding.observation);
+    return queue.enqueue(binding.observation);
+  };
+  if (options.reviewSourceId) {
+    await enqueue(options.reviewSourceId);
+    const result = await queue.runNext(BUNDLE_ID);
+    if (result.kind !== "executed" || result.status !== "awaiting_review")
+      throw new Error("Fixture must persist a real pending Review");
+    await enqueue(options.reviewSourceId, `${SOURCE_TEXT} Revised.`);
   }
-  if (options.paused !== false) await queue.pause(BUNDLE_ID);
+  for (const sourceId of options.pendingSources ?? []) await enqueue(sourceId);
+  if (options.retrying) await queue.runNext(BUNDLE_ID);
+  if (options.startupRecovery) await queue.recoverOnStartup(BUNDLE_ID);
+  else if (options.paused !== false) await queue.pause(BUNDLE_ID);
   const runtimeText = await file.read();
   const contents = new Map([
     [SOURCE_PATH, SOURCE_TEXT],
@@ -147,14 +278,7 @@ async function fixture(options: { pending?: boolean; paused?: boolean } = {}) {
     } as unknown as KnowledgeAnalysisRetestInput["modelManagement"],
     owner: {
       projectId: "retest-project",
-      config: {
-        version: 1,
-        id: BUNDLE_ID,
-        sourceRoots: ["Sources"],
-        wikiRoot: "Wiki",
-        schemaRef: SCHEMA_PATH,
-        reviewMode: "always",
-      },
+      config: bundle,
     },
     project: { id: "retest-project", modelSelection: model.configuredModelId, modelConfigs: {} },
   };
@@ -273,21 +397,79 @@ describe("knowledge-analysis-retest", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it.each([{ pending: true }, { paused: false }])(
+    it(`${ISSUE} cancels only other-source unattempted pending jobs in the paused copy while retaining the selected job and Review, rerun, Manifest and ledger records`, async () => {
+      const original = await fixture({
+        pendingSources: PENDING_SOURCE_IDS,
+        reviewSourceId: OTHER_REVIEW_SOURCE_ID,
+      });
+      const before = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(original.input.runtimeText));
+      const beforeQueue = before.queues[0].value as IngestQueueSnapshot;
+      expect(beforeQueue.jobs.filter((job) => job.status === "pending")).toHaveLength(3);
+      expect(beforeQueue.pendingReviews).toHaveLength(1);
+      expect(beforeQueue.reruns).toHaveLength(1);
+      const initialize = jest.spyOn(KnowledgeExecutionMemoryRuntimeFile.prototype, "initialize");
+
+      expect(await prepare(original.input)).toMatchObject({
+        kind: "prepared",
+        requestCount: 0,
+        cancelledClonePendingJobs: 2,
+        existingReviews: 1,
+      });
+      const clone = initialize.mock.contexts[0] as KnowledgeExecutionMemoryRuntimeFile;
+      const after = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await clone.read()));
+      expect({ ...after, revision: before.revision, queues: before.queues }).toEqual(before);
+      const afterQueue = after.queues[0].value as IngestQueueSnapshot;
+      expect(afterQueue).toMatchObject({
+        control: beforeQueue.control,
+        reruns: beforeQueue.reruns,
+        pendingReviews: beforeQueue.pendingReviews,
+      });
+      expect(afterQueue.jobs).toHaveLength(beforeQueue.jobs.length);
+      expect(
+        afterQueue.jobs.filter((job) => job.status === "cancelled").map((job) => job.sourceId)
+      ).toEqual(PENDING_SOURCE_IDS.filter((sourceId) => sourceId !== SOURCE_ID));
+      expect(afterQueue.jobs.find((job) => job.sourceId === SOURCE_ID)).toEqual(
+        beforeQueue.jobs.find((job) => job.sourceId === SOURCE_ID)
+      );
+      expect(afterQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)).toEqual(
+        beforeQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(await original.file.read()).toBe(original.input.runtimeText);
+      expect(original.adapter.write).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { paused: false },
+      { pendingSources: [SOURCE_ID], retrying: true },
+      { pendingSources: [SOURCE_ID], startupRecovery: true },
+    ])(
       `${ISSUE} rejects an unsafe snapshot before credentials or network for %j`,
       async (options) => {
         const original = await fixture(options);
         expect(await prepare(original.input)).toMatchObject({
           kind: "diagnostic",
-          code: options.pending
-            ? "snapshot_contains_runnable_or_unsettled_work"
-            : "snapshot_not_paused",
+          code:
+            options.retrying || options.startupRecovery
+              ? "snapshot_contains_runnable_or_unsettled_work"
+              : "snapshot_not_paused",
         });
         expect(original.getApiKey).not.toHaveBeenCalled();
         expect(fetchMock).not.toHaveBeenCalled();
         expect(await original.file.read()).toBe(original.input.runtimeText);
       }
     );
+
+    it(`${ISSUE} refuses an awaiting-Review selected source without rejecting its proposal or consuming its rerun`, async () => {
+      const original = await fixture({ reviewSourceId: SOURCE_ID });
+      expect(await prepare(original.input)).toMatchObject({
+        kind: "diagnostic",
+        code: "source_already_active",
+      });
+      expect(original.getApiKey).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(await original.file.read()).toBe(original.input.runtimeText);
+    });
 
     it(`${ISSUE} rejects a missing explicit source without falling back to a different source`, async () => {
       const original = await fixture();
@@ -301,7 +483,11 @@ describe("knowledge-analysis-retest", () => {
 
   describe("run()", () => {
     it(`${ISSUE} performs one analysis and one generation on the copied Runtime and cannot run twice`, async () => {
-      const original = await fixture();
+      const original = await fixture({
+        pendingSources: PENDING_SOURCE_IDS,
+        reviewSourceId: OTHER_REVIEW_SOURCE_ID,
+      });
+      const initialize = jest.spyOn(KnowledgeExecutionMemoryRuntimeFile.prototype, "initialize");
       fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
         const wire = JSON.parse(init.body as string) as { messages: { content: string }[] };
         const text = wire.messages[1].content;
@@ -350,6 +536,27 @@ describe("knowledge-analysis-retest", () => {
         priorReviewsUnchanged: true,
       });
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      const clone = initialize.mock.contexts[0] as KnowledgeExecutionMemoryRuntimeFile;
+      const before = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(original.input.runtimeText));
+      const after = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await clone.read()));
+      const beforeQueue = before.queues[0].value as IngestQueueSnapshot;
+      const afterQueue = after.queues[0].value as IngestQueueSnapshot;
+      expect(after.reviews).toEqual(before.reviews);
+      expect(after.applyCommits).toEqual(before.applyCommits);
+      expect(afterQueue.reruns).toEqual(beforeQueue.reruns);
+      expect(afterQueue.pendingReviews).toEqual(beforeQueue.pendingReviews);
+      expect(afterQueue.jobs).toHaveLength(beforeQueue.jobs.length);
+      expect(afterQueue.jobs.filter((job) => job.status === "pending")).toHaveLength(0);
+      expect(afterQueue.jobs.filter((job) => job.status === "completed")).toEqual([
+        expect.objectContaining({
+          id: beforeQueue.jobs.find((job) => job.sourceId === SOURCE_ID)?.id,
+          sourceId: SOURCE_ID,
+          attempt: 1,
+        }),
+      ]);
+      expect(afterQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)).toEqual(
+        beforeQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)
+      );
       expect(result.requests).toEqual([
         expect.objectContaining({ stage: "analysis", responseStatus: 200 }),
         expect.objectContaining({ stage: "generation", responseStatus: 200 }),
@@ -362,6 +569,73 @@ describe("knowledge-analysis-retest", () => {
       expect(original.adapter.remove).not.toHaveBeenCalled();
       expect(JSON.stringify(result)).not.toContain(SECRET);
       expect(JSON.stringify(result)).not.toContain(SOURCE_TEXT);
+    });
+
+    it(`${ISSUE} reuses the selected pending job when source hash and pipeline already match instead of deduplicating a cancelled history row`, async () => {
+      const seed = await fixture();
+      const planned = await prepare(seed.input);
+      expect(planned.kind).toBe("prepared");
+      close();
+      const original = await fixture({
+        pendingSources: PENDING_SOURCE_IDS,
+        reviewSourceId: OTHER_REVIEW_SOURCE_ID,
+        pipelineFingerprint: planned.pipelineFingerprint as string,
+      });
+      const before = await original.queue.load(BUNDLE_ID);
+      const target = before.jobs.find((job) => job.sourceId === SOURCE_ID);
+      expect(target).toMatchObject({
+        sourceContentHash: planned.sourceContentHash,
+        pipelineFingerprint: planned.pipelineFingerprint,
+        status: "pending",
+        attempt: 0,
+      });
+      const initialize = jest.spyOn(KnowledgeExecutionMemoryRuntimeFile.prototype, "initialize");
+      expect(await prepare(original.input)).toMatchObject({ kind: "prepared" });
+      expect(await run()).toMatchObject({
+        kind: "settled",
+        status: "completed",
+        queueResult: { kind: "executed", jobId: target?.id, status: "completed" },
+        priorReviewsUnchanged: true,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const clone = initialize.mock.contexts[0] as KnowledgeExecutionMemoryRuntimeFile;
+      const copied = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await clone.read()));
+      const after = copied.queues[0].value as IngestQueueSnapshot;
+      expect(after.jobs).toHaveLength(before.jobs.length);
+      expect(after.jobs.filter((job) => job.status === "completed")).toEqual([
+        expect.objectContaining({ id: target?.id, sourceId: SOURCE_ID, attempt: 1 }),
+      ]);
+      const completed = after.jobs.find((job) => job.id === target?.id);
+      expect(completed?.inputRevision).toBeGreaterThan(target?.inputRevision ?? 0);
+      expect(completed?.inputRevision).toBe(
+        after.sourceHighWatermarks.find((entry) => entry.sourceId === SOURCE_ID)?.inputRevision
+      );
+      expect(after.reruns).toEqual(before.reruns);
+      expect(after.pendingReviews).toEqual(before.pendingReviews);
+      expect(await original.file.read()).toBe(original.input.runtimeText);
+      expect(original.adapter.write).not.toHaveBeenCalled();
+    });
+
+    it(`${ISSUE} refuses same-input cancelled history with zero HTTP instead of forcing a terminal job back into the queue`, async () => {
+      const seed = await fixture();
+      const planned = await prepare(seed.input);
+      expect(planned.kind).toBe("prepared");
+      close();
+      const original = await fixture({
+        pendingSources: [SOURCE_ID],
+        pipelineFingerprint: planned.pipelineFingerprint as string,
+      });
+      const target = (await original.queue.load(BUNDLE_ID)).jobs[0];
+      await original.queue.cancel(BUNDLE_ID, target.id);
+      original.input.runtimeText = await original.file.read();
+      expect(await prepare(original.input)).toMatchObject({ kind: "prepared" });
+      expect(await run()).toMatchObject({
+        kind: "diagnostic",
+        code: "single_job_enqueue_failed",
+        requests: [],
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(await original.file.read()).toBe(original.input.runtimeText);
     });
 
     it(`${ISSUE} returns the production header failure immediately even when the HTTP 200 body never ends`, async () => {

@@ -18,6 +18,7 @@ import {
   type KnowledgeExactArtifactReaderPort,
 } from "@/knowledge/ingest/KnowledgeSourceWorkflowPlan";
 import { IngestQueue } from "@/knowledge/ingest/queue/IngestQueue";
+import type { IngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
 import { parseSourceManifest } from "@/knowledge/model/schemas";
@@ -130,23 +131,36 @@ export async function prepare(
     const manifest = parsedManifest.value;
     const source = manifest.entries.find((entry) => entry.sourceId === sourceId);
     if (!source) return { kind: "diagnostic", code: "source_missing" };
-    const initialQueue = (await runtime.readQueue(bundleId)) as {
-      control?: { status: string };
-      jobs?: { status: string; sourceId: string }[];
-    } | null;
+    const initialQueue = (await runtime.readQueue(bundleId)) as IngestQueueSnapshot | null;
     // A copied history must retain every Review/Manifest/ledger cross-reference. Never prune it to select a source.
     // https://github.com/yydspanda/obsidian-copilot/issues/8
     if (initialQueue?.control?.status !== "paused" || !Array.isArray(initialQueue.jobs)) {
       return { kind: "diagnostic", code: "snapshot_not_paused" };
     }
+    // Only untouched pending work can be cancelled in the copy. Cancellation also drops a same-source
+    // rerun, so the validated Queue flag must be false; other sources' Review/rerun history stays intact.
+    // https://github.com/yydspanda/obsidian-copilot/issues/8
     if (
-      initialQueue.jobs.some((job) => !TERMINAL.has(job.status) && job.status !== "awaiting_review")
+      initialQueue.control.reason !== "user" ||
+      initialQueue.jobs.some((job) =>
+        job.status === "pending"
+          ? job.attempt !== 0 || job.nextAttemptAt !== undefined || job.rerunRequested
+          : !TERMINAL.has(job.status) && job.status !== "awaiting_review"
+      )
     ) {
       return { kind: "diagnostic", code: "snapshot_contains_runnable_or_unsettled_work" };
     }
-    if (initialQueue.jobs.some((job) => job.sourceId === sourceId && !TERMINAL.has(job.status))) {
+    if (
+      initialQueue.jobs.some((job) => job.sourceId === sourceId && job.status === "awaiting_review")
+    ) {
       return { kind: "diagnostic", code: "source_already_active" };
     }
+    const selectedPending = initialQueue.jobs.find(
+      (job) => job.status === "pending" && job.sourceId === sourceId
+    );
+    const pendingJobs = initialQueue.jobs.filter(
+      (job) => job.status === "pending" && job.sourceId !== sourceId
+    );
 
     const liveVault = input.app.vault;
     const adapter = liveVault.adapter;
@@ -277,7 +291,7 @@ export async function prepare(
     });
     const proof = new KnowledgeRuntimeIngestExecutionProofPort(runtime, queueStorage);
     const executor = new KnowledgeProductionPreparationExecutor(plan, proof, handler);
-    const jobId = `isolated-retest-${crypto.randomUUID()}`;
+    const jobId = selectedPending?.id ?? `isolated-retest-${crypto.randomUUID()}`;
     queue = new IngestQueue(queueStorage, executor, {
       jobIdFactory: () => jobId,
       retryPolicy: { decide: () => ({ kind: "fail", reason: "not_retryable" }) },
@@ -287,6 +301,11 @@ export async function prepare(
     const originalReviewHashes = initialReviews.records.map((record) =>
       sha256(JSON.stringify(record))
     );
+    // Preserve cancelled job history through the public Queue transition, never by pruning Runtime JSON.
+    // Keep the selected pending job: cancelling it would deduplicate identical input against terminal
+    // history. run() rebinds that same job, or creates one when no selected pending job exists.
+    // https://github.com/yydspanda/obsidian-copilot/issues/8
+    for (const job of pendingJobs) await cloneQueue.cancel(bundleId, job.id);
     const pipelineProfile = prepared.profileSource.resolve(owner);
     const summary = {
       sourceId,
@@ -300,6 +319,7 @@ export async function prepare(
       runtimeSnapshotHash: sha256(input.runtimeText),
       manifestDigest: createSourceManifestDigest(manifest),
       existingReviews: originalReviewHashes.length,
+      cancelledClonePendingJobs: pendingJobs.length,
     };
     let queueResult: Awaited<ReturnType<IngestQueue["runNext"]>> | undefined;
     const snapshot = (): Record<string, unknown> =>
@@ -331,15 +351,29 @@ export async function prepare(
         });
         if (binding.kind !== "ready") return { kind: "diagnostic", code: "observation_not_ready" };
         const enqueued = await cloneQueue.enqueue(binding.observation);
-        if (enqueued.kind !== "enqueued" || enqueued.job.id !== jobId)
+        if (
+          (enqueued.kind !== "enqueued" &&
+            enqueued.kind !== "updated" &&
+            enqueued.kind !== "deduplicated") ||
+          enqueued.job.id !== jobId
+        )
           return { kind: "diagnostic", code: "single_job_enqueue_failed" };
         await cloneQueue.resume(bundleId);
         const before = await cloneQueue.load(bundleId);
+        const selectedJob = before.jobs.find((job) => job.id === jobId);
+        // A deduplication result is safe only when it rebinds the selected, unattempted pending job
+        // to this exact observation; terminal history must never become a forced requeue.
+        // https://github.com/yydspanda/obsidian-copilot/issues/8
         if (
           before.jobs.filter((job) => job.status === "pending").length !== 1 ||
-          !before.jobs.some(
-            (job) => job.id === jobId && job.status === "pending" && job.sourceId === sourceId
-          )
+          selectedJob?.status !== "pending" ||
+          selectedJob.bundleId !== bundleId ||
+          selectedJob.sourceId !== sourceId ||
+          selectedJob.sourceContentHash !== binding.observation.sourceContentHash ||
+          selectedJob.pipelineFingerprint !== binding.observation.pipelineFingerprint ||
+          selectedJob.inputRevision !== binding.observation.inputRevision ||
+          selectedJob.attempt !== 0 ||
+          selectedJob.rerunRequested
         )
           return { kind: "diagnostic", code: "single_job_scope_failed" };
         networkReleased = true;

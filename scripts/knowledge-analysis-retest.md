@@ -37,13 +37,23 @@ only exposes `.api.prepare`, `.api.run`, and `.api.close`; loading never calls a
 `prepare` receives an explicit `sourceId`, a complete valid `runtimeText` snapshot,
 the selected Bundle `owner`, its configured `project` model declaration, the current
 `modelManagement` registry API and the test `app`. Runtime contents stay in memory;
-do not print or persist them. The snapshot must already be paused and have no runnable
-jobs; existing awaiting-Review and terminal history stays intact. Do not erase history,
-resume the real queue or tamper with real jobs to manufacture this precondition.
-Awaiting-Review records may belong to other sources, but the selected source itself
-must have no active job; otherwise preparation refuses to turn this attempt into a rerun.
-The currently paused acceptance queue may therefore require a separately planned
-snapshot; the tool does not silently cancel or reprioritize its other pending jobs.
+do not print or persist them. The snapshot must already be user-paused. Preparation
+uses the public Queue cancellation operation **only in the memory copy** for other
+sources' ordinary pending jobs. Every pending job, including the selected source's, must be
+unattempted, with no retry deadline or reserved rerun. The preparation report records
+the count as `cancelledClonePendingJobs`; it does not delete those jobs or rewrite raw
+Runtime JSON. The selected pending job is retained: cancelling it would cause an
+identical input to deduplicate against cancelled history instead of running. The copy
+stays paused until `run` binds the current observation to that exact job, or enqueues a
+new one when none is pending. Before network release, the tool verifies that it is the
+only pending job and matches the selected source, hashes and input revision with zero
+attempts. A same-input terminal history row is still refused, never forcibly requeued.
+
+Existing terminal history, Manifest, Review and Apply ledger records stay intact.
+Other sources' awaiting-Review jobs and their reserved reruns are retained unchanged.
+Preparation rejects a selected source awaiting Review, interrupted or processing work,
+retrying pending work, and non-user pause gates such as recovery or rate limiting.
+Do not erase history, resume the real queue or change real jobs to satisfy these checks.
 
 Verify the zero-request preparation result and source/Schema/pipeline hashes before
 calling `run` once. An attempt permits at most two HTTP requests (analysis and, if
