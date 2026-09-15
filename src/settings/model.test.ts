@@ -138,43 +138,6 @@ describe("sanitizeSettings - autoAddActiveContentToContext migration", () => {
   });
 });
 
-describe("sanitizeSettings - autoAddSelectionToContext migration", () => {
-  it("should migrate from old autoIncludeTextSelection=true", () => {
-    const oldSettings = {
-      ...DEFAULT_SETTINGS,
-      autoAddSelectionToContext: undefined,
-      autoIncludeTextSelection: true,
-    } as unknown as CopilotSettings;
-
-    const sanitized = sanitizeSettings(oldSettings);
-
-    expect(sanitized.autoAddSelectionToContext).toBe(true);
-  });
-
-  it("should migrate from old autoIncludeTextSelection=false", () => {
-    const oldSettings = {
-      ...DEFAULT_SETTINGS,
-      autoAddSelectionToContext: undefined,
-      autoIncludeTextSelection: false,
-    } as unknown as CopilotSettings;
-
-    const sanitized = sanitizeSettings(oldSettings);
-
-    expect(sanitized.autoAddSelectionToContext).toBe(false);
-  });
-
-  it("should use default when no old setting exists", () => {
-    const newSettings = {
-      ...DEFAULT_SETTINGS,
-      autoAddSelectionToContext: undefined,
-    } as unknown as CopilotSettings;
-
-    const sanitized = sanitizeSettings(newSettings);
-
-    expect(sanitized.autoAddSelectionToContext).toBe(DEFAULT_SETTINGS.autoAddSelectionToContext);
-  });
-});
-
 describe("sanitizeSettings - agentMode shape migration", () => {
   it("creates a default agentMode slice when missing", () => {
     const sanitized = sanitizeSettings({
@@ -548,6 +511,28 @@ describe("model", () => {
     });
   });
   describe("sanitizeSettings()", () => {
+    it.each(["http://miyo-home:8742", "http://127.0.0.1:8742"])(
+      "preserves the legacy endpoint %s without requiring local discovery — https://github.com/Brevilabs/obsidian-copilot-private/issues/466",
+      (miyoServerUrl) => {
+        const settings = sanitizeSettings({ ...DEFAULT_SETTINGS, miyoServerUrl });
+        expect(settings.miyoConnectionMode).toBe("remote");
+        expect(settings.miyoServerUrl).toBe(miyoServerUrl);
+      }
+    );
+    it("retains a saved server address while local mode stays selected after reload — https://github.com/Brevilabs/obsidian-copilot-private/issues/466", () => {
+      const settings = sanitizeSettings({
+        ...DEFAULT_SETTINGS,
+        miyoServerUrl: "http://remote:8742",
+        miyoConnectionMode: "local",
+      });
+      expect(settings.miyoConnectionMode).toBe("local");
+      expect(settings.miyoServerUrl).toBe("http://remote:8742");
+      expect(sanitizeSettings(settings)).toEqual(settings);
+    });
+    it("starts a fresh configuration with this computer — https://github.com/Brevilabs/obsidian-copilot-private/issues/466", () => {
+      expect(sanitizeSettings({ ...DEFAULT_SETTINGS }).miyoConnectionMode).toBe("local");
+    });
+
     it("defaults the startup notice marker without inheriting the Agent Home dismissal", () => {
       const persisted = { ...DEFAULT_SETTINGS, lastDismissedVersion: "4.1.0" };
       delete (persisted as Partial<CopilotSettings>).lastShownStartupVersion;

@@ -919,12 +919,6 @@ export default class CopilotPlugin extends Plugin {
    * Only processes selections from markdown editors
    */
   handleSelectionChange() {
-    // Check if auto-inclusion is enabled
-    const settings = getSettings();
-    if (!settings.autoAddSelectionToContext) {
-      return;
-    }
-
     const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!activeView || !activeView.editor) {
       return;
@@ -1000,7 +994,7 @@ export default class CopilotPlugin extends Plugin {
     this.webSelectionTracker = new WebSelectionTracker({
       intervalMs: 500,
       emptySelectionDebounceCount: 2,
-      isEnabled: () => getSettings().autoAddSelectionToContext,
+      isEnabled: () => true,
       getLeaf: () => webViewerService.getActiveLeaf() ?? webViewerService.getLastActiveLeaf(),
       getActiveLeaf: () => webViewerService.getActiveLeaf(),
       onSelectionChange: (context) => {

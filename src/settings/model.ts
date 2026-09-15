@@ -161,6 +161,8 @@ export interface CopilotSettings {
   /** API key for the self-host mode backend (if required) */
   /** Custom Miyo server URL, e.g. "http://192.168.1.10:8742" (empty = use local service discovery) */
   miyoServerUrl: string;
+  /** Selected connection; absent in legacy settings, where a URL selected the server. */
+  miyoConnectionMode?: "local" | "remote";
   /** Which provider to use for self-host web search */
   selfHostSearchProvider: SelfHostSearchProvider;
   /** Firecrawl API key for self-host web search */
@@ -206,9 +208,6 @@ export interface CopilotSettings {
   quickCommandModelKey: string | undefined;
   /** Last checkbox state for including note context in quick command */
   quickCommandIncludeNoteContext: boolean;
-  /** Automatically add text selections to chat context */
-  autoIncludeTextSelection: boolean;
-  autoAddSelectionToContext: boolean;
   /** Automatically accept file edits without showing preview confirmation */
   autoAcceptEdits: boolean;
   /** Preferred diff view mode: side-by-side or split */
@@ -1001,6 +1000,13 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   if (typeof sanitizedSettings.miyoServerUrl !== "string") {
     sanitizedSettings.miyoServerUrl = DEFAULT_SETTINGS.miyoServerUrl;
   }
+  // Preserve existing explicit URLs when introducing the connection selector.
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/466
+  if (!["local", "remote"].includes(sanitizedSettings.miyoConnectionMode || "")) {
+    sanitizedSettings.miyoConnectionMode = sanitizedSettings.miyoServerUrl.trim()
+      ? "remote"
+      : "local";
+  }
 
   // Ensure selfHostSearchProvider is a valid value
   // Persisted Parallel and Exa choices must survive reload instead of silently
@@ -1100,18 +1106,6 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     typeof settingsToSanitize.quickCommandModelKey !== "string"
   ) {
     sanitizedSettings.quickCommandModelKey = DEFAULT_SETTINGS.quickCommandModelKey;
-  }
-
-  // Ensure autoAddSelectionToContext has a default value (migrate from old settings)
-  if (typeof sanitizedSettings.autoAddSelectionToContext !== "boolean") {
-    // Migration: check old setting first (autoIncludeTextSelection)
-    const oldTextSelection = (settingsToSanitize as unknown as Record<string, unknown>)
-      .autoIncludeTextSelection;
-    if (typeof oldTextSelection === "boolean") {
-      sanitizedSettings.autoAddSelectionToContext = oldTextSelection;
-    } else {
-      sanitizedSettings.autoAddSelectionToContext = DEFAULT_SETTINGS.autoAddSelectionToContext;
-    }
   }
 
   // Ensure autoAcceptEdits has a default value

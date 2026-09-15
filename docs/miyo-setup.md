@@ -2,7 +2,7 @@
 
 Miyo is the companion app that powers Copilot's search by meaning. It replaces the old index inside the plugin, helping Copilot find relevant notes even when your question uses different words.
 
-This guide connects the Obsidian vault on your computer to Miyo and walks you through your first search.
+This guide connects the Obsidian vault on your computer to Miyo and walks you through your first search. To share one Miyo server across devices, see [remote Miyo setup with Tailscale](miyo-remote-setup.md).
 
 ## Before you start
 
@@ -35,6 +35,18 @@ If Copilot asks you to register the vault, check that it is the vault you want M
 If the vault is already registered, Copilot can connect directly. If it cannot find Miyo, make sure the app is running and try the connection again.
 
 **What to look for:** a connected status in Copilot's Miyo settings. A running Miyo app and a registered vault are both needed.
+
+### Connecting to a remote server
+
+In **Settings → Copilot → Miyo**, select the remote connection option and enter
+its full HTTP or HTTPS address. Include any path prefix configured by your proxy,
+such as `https://your-server.example/miyo`. Click **Connect**.
+
+For Tailscale Serve on the Mac running Miyo, you can map that path with
+`tailscale serve --bg --https=443 --set-path=/miyo http://127.0.0.1:8742`.
+Use `https://your-machine.your-tailnet.ts.net/miyo` in Copilot. The device running
+Obsidian must have access to that tailnet. Check the mapping with
+`tailscale serve status`.
 
 ## 3. Review which notes are included
 
@@ -87,13 +99,13 @@ The discovered file was a stub, so this example demonstrates finding a file that
 
 ## If something is missing
 
-| What you see | What to check |
-| --- | --- |
-| Miyo is not connected | Open Miyo on the same computer, then reconnect from Copilot settings. |
-| Your vault is not registered | Register the current vault. A connected service does not mean every vault has been added. |
-| A note is still indexing | Let Miyo finish processing it, then try again. |
-| A note is excluded | Review its folder rules in Miyo. |
-| No relevant result | Confirm the expected note is indexed and contains useful text. Try describing the idea with more context. |
-| Registration fails | Review the error and the folders already registered in Miyo, including naming or overlapping-folder conflicts. |
+| What you see                 | What to check                                                                                                  |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Miyo is not connected        | Open Miyo on the same computer, then reconnect from Copilot settings.                                          |
+| Your vault is not registered | Register the current vault. A connected service does not mean every vault has been added.                      |
+| A note is still indexing     | Let Miyo finish processing it, then try again.                                                                 |
+| A note is excluded           | Review its folder rules in Miyo.                                                                               |
+| No relevant result           | Confirm the expected note is indexed and contains useful text. Try describing the idea with more context.      |
+| Registration fails           | Review the error and the folders already registered in Miyo, including naming or overlapping-folder conflicts. |
 
 Keep Miyo running while using these features. Local indexing happens on your computer; when you use a cloud chat model, the context sent to that model follows your chat configuration. Relay is a separate remote-access feature.

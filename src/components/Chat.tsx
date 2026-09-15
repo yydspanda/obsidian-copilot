@@ -151,9 +151,8 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
 
   const [selectedTextContexts] = useSelectedTextContexts();
 
-  // Any selection hides both active note and active web tab
+  // Active web tabs retain selection precedence.
   const hasAnySelection = selectedTextContexts.length > 0;
-  const effectiveIncludeActiveNote = includeActiveNote && !hasAnySelection;
   const effectiveIncludeActiveWebTab = includeActiveWebTab && !hasAnySelection;
 
   const { activeWebTabForMentions: currentActiveWebTab } = useActiveWebTabState();
@@ -386,7 +385,7 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
         displayText,
         context,
         currentChain,
-        effectiveIncludeActiveNote,
+        includeActiveNote,
         effectiveIncludeActiveWebTab,
         content.length > 0 ? content : undefined,
         safeSet.setLoadingMessage
@@ -530,11 +529,13 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       }
 
       try {
+        // Inline edits retain stored attachments; the composer may refer to another note.
+        // https://github.com/Brevilabs/obsidian-copilot-private/issues/465
         const success = await chatUIState.editMessage(
           messageToEdit.id!,
           newMessage,
           currentChain,
-          effectiveIncludeActiveNote
+          false
         );
 
         if (!success) {
@@ -589,7 +590,6 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       chatHistory,
       chatUIState,
       currentChain,
-      effectiveIncludeActiveNote,
       addMessage,
       chainManager,
       settings.debug,

@@ -16,15 +16,15 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Continue real Review/Apply acceptance after the isolated compile pass;
-  keep the queue paused. Further model calls or real writes need a separately agreed scope.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Verify the merged `61619fe4` build in Windows;
+  keep the queue paused. No new model calls or real Wiki writes are authorized.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
-- Last checked: `2026-09-15T14:51:52+08:00` (remote CI / read-only API)
-- Frozen acceptance baseline: `9e2594b4`; observed upstream: `61619fe4`
-- Current branch at check (`b73bbbaf`): ahead 83, behind 20 — drift gate failed; no merge performed
+- Last fetched: `2026-09-15` — canonical `61619fe427f27c23fbb08b6a040d18ae73c3b219`
+- Merge: 20 commits, 3 test/documentation conflicts resolved; no manual production-code edits
+- Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
 
@@ -34,6 +34,7 @@
   marks incompatible old proposals and blocks Apply while preserving explicit rejection.
   9 suites / 254 tests and 36 Windows gallery cases pass; clean `fbc413a0` is deployed.
   Issue #8 repair pushed; fresh isolated retest passes analysis/generation in 19.373 seconds without real writes.
+  Upstream `61619fe4` merged with test/doc-only conflict resolution; 48 suites / 1,238 tests pass.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -76,17 +77,16 @@
 
 ## Current Verification
 
-- Personal production build passes at 6,399,547 bytes under the explicit 10,000,000-byte ceiling.
+- Personal production build passes at 6,427,228 bytes under the explicit 10,000,000-byte ceiling.
   Default 5,000,000-byte enforcement still rejects this artifact; it is not a default-policy release
   or Sync Standard-compatible delivery. Build inputs are in the September log; current hashes are in the Windows checkpoint.
 - Size-guard regression: 41/41 tests pass after observing 21 intended failures before implementation.
   Final artifact syntax and simulated mobile module-load smoke checks pass; these are not live UI tests.
-- September 13 merge checks: typecheck, diff whitespace check, progress governance, and 10 focused
-  suites / 149 tests pass. The earlier full sweep and quality gates below predate this merge.
+- September 15 merge checks: 48 Jest suites / 1,238 tests, 36 Node tests, production typecheck,
+  artifact syntax/mobile-load smoke and Obsidian review pass. The earlier full sweep below predates this merge.
 - Deterministic regression: 697 suites / 9,876 tests passed in the full sweep; the one suite read
   during test-import migration passed all 11 cases after files were frozen (698 suites / 9,887
   passing tests across the sweep and rerun; 2 existing tests skipped; paid live suite excluded).
-- Final focused rerun: session manager and extracted OpenCode policy pass 170/170 tests.
 - September 13 gates: production typecheck, formatting, lint (0 errors, 3 existing warnings),
   progress governance, and the full Obsidian review command pass, including packaged CSS and dependency
   audit (0 vulnerabilities). Existing review warnings remain visible; gallery indexing is not live rendering.
@@ -102,7 +102,7 @@
   resolution, backend configuration, and pre-send validation; provider policy lives in new modules.
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
-- Upstream drift: September 15 CI reports behind 20; fork master behind 135. Schedule synchronization separately; local acceptance baseline stays frozen.
+- Upstream drift: current branch includes `61619fe4`; remote master stays behind by explicit user choice, so the aggregate drift workflow can remain red.
 - September 15 Windows deployment: build `00522e4f-dirty-a1b135c7fe9d` is loaded in the test Vault;
   replacement instance and `workflow_read_ready` confirm activation. Zero uncaught errors/rejections
   were captured for the earlier frozen build; that listener check was not repeated for this artifact.

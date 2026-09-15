@@ -29,6 +29,8 @@ A note mention gives the agent the note's vault path so it can read the current 
 
 A new Agent Chat can start with an **Active Note** badge when that preference is enabled. Remove it when the current note is unrelated. You can add it again on any later turn.
 
+Active Note and selected text are separate attachments in Agent Chat and Quick Chat. You can include either one or both, even when the excerpt comes from the active note. Removing one badge leaves the other attached. Selection badges show the start of the selected text. Hover over a badge to see the full excerpt and its source.
+
 To attach an excerpt from a note:
 
 1. Select the text.
@@ -36,6 +38,8 @@ To attach an excerpt from a note:
 3. Review the removable selection badge before sending.
 
 For text selected in the Web Viewer, run **Add web selection to chat context**. Copilot sends the selected excerpt instead of also attaching the full active web tab.
+
+Selected text in note editors is automatically added to chat context. On desktop, this also works with Web Viewer selections. Review or remove the selection badge before sending.
 
 ## Mention other agents
 
@@ -62,6 +66,8 @@ One-turn attachments remain one-turn attachments inside a Project. Start a new P
 ## Context in Quick Chat
 
 Quick Chat has a separate composer and context state. It can attach the active note and, on desktop, the active Web Viewer tab. Use **Add context** for a note, folder, web tab, or image. You can also type `[[Note title]]` for a note.
+
+Editing a sent Quick Chat message keeps its original attachments. Switching the active note or changing the composer attachments does not add them to the edited message.
 
 Quick Chat attachments apply to the next Quick Chat message. They do not become Agent Chat context, Project context, or `AGENTS.md` instructions.
 
