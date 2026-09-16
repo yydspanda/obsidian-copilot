@@ -16,8 +16,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Commit/push issue #9, then deploy and resume bounded Windows acceptance.
-  Preserve real notes/history and the paused queue; confirm any new paid model request separately.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Issue #9 pushed/deployed as d1e421de; Windows Save remains unverified.
+  First Query had zero hits/no model call; ask permission to reuse the exact old question. Keep the queue paused.
 
 ## Upstream Status
 
