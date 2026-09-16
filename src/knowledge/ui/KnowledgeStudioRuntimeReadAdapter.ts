@@ -746,6 +746,11 @@ function createRevisionToken(
   return `r${projection.runtimeRevision}-q${projection.queue.revision}-v${projection.review.revision}-${digest.slice(0, 12)}`;
 }
 
+interface PendingQueryWritebacks {
+  count: number;
+  hints: Set<() => void>;
+}
+
 /**
  * Production adapter for durable Studio reads, scoped Query, and narrow commands.
  *
@@ -765,6 +770,7 @@ export class KnowledgeStudioRuntimeReadAdapter
   private readonly input: KnowledgeStudioRuntimeReadAdapterInput;
   private readonly bundles: ReadonlyMap<string, KnowledgeBundleConfig>;
   private readonly maxConsistencyAttempts: number;
+  private readonly pendingQueryWritebacks = new Map<string, PendingQueryWritebacks>();
 
   /** Captures one exact Runtime, Bundle, resolver, and lifecycle generation. */
   constructor(input: KnowledgeStudioRuntimeReadAdapterInput) {
@@ -964,6 +970,13 @@ export class KnowledgeStudioRuntimeReadAdapter
     let active = true;
     const handleHint = (): void => {
       if (!active) return;
+      // Capture creation must not let any view revoke a save before registration.
+      // https://github.com/yydspanda/obsidian-copilot/issues/9
+      const pending = this.pendingQueryWritebacks.get(bundleId);
+      if (pending) {
+        pending.hints.add(handleHint);
+        return;
+      }
       try {
         this.input.query?.revokeCurrent(bundleId);
       } catch {
@@ -1005,6 +1018,7 @@ export class KnowledgeStudioRuntimeReadAdapter
     return () => {
       if (!active) return;
       active = false;
+      this.pendingQueryWritebacks.get(bundleId)?.hints.delete(handleHint);
       for (const unsubscribe of unsubscribers) {
         try {
           unsubscribe();
@@ -1161,7 +1175,14 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.query.openCitation(bundleId, queryId, citationRef, signal);
   }
 
-  /** Registers one current grounded answer through the captured generation. */
+  /**
+   * Registers one current answer before publishing its non-authoritative reload hints.
+   *
+   * @param bundleId Bundle whose current answer is being captured.
+   * @param queryId Coordinator-issued identity of the grounded answer.
+   * @param request Reviewed title for the immutable source capture.
+   * @param signal Caller cancellation; explicit lifecycle revocation remains immediate.
+   */
   async saveQueryToWiki(
     bundleId: string,
     queryId: string,
@@ -1171,7 +1192,30 @@ export class KnowledgeStudioRuntimeReadAdapter
     if (!this.input.query?.supportsWriteback?.() || !this.input.query.saveQueryToWiki) {
       throw new KnowledgeStudioAdapterUnavailableError();
     }
-    return this.input.query.saveQueryToWiki(bundleId, queryId, request, signal);
+    const pending = this.pendingQueryWritebacks.get(bundleId) ?? {
+      count: 0,
+      hints: new Set<() => void>(),
+    };
+    this.pendingQueryWritebacks.set(bundleId, pending);
+    pending.count += 1;
+    try {
+      return await this.input.query.saveQueryToWiki(bundleId, queryId, request, signal);
+    } finally {
+      // Same-Bundle views share Query authority, so only the last save may flush.
+      // https://github.com/yydspanda/obsidian-copilot/issues/9
+      pending.count -= 1;
+      if (pending.count === 0) {
+        this.pendingQueryWritebacks.delete(bundleId);
+        for (const hint of pending.hints) {
+          try {
+            hint();
+          } catch {
+            // A view failure cannot replace the durable receipt or starve other views.
+            // https://github.com/yydspanda/obsidian-copilot/issues/9
+          }
+        }
+      }
+    }
   }
 
   /** Revokes the current scoped Query and opaque citation references. */

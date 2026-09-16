@@ -343,6 +343,63 @@ function createReviewCommand(record: PendingChangeSetReviewRecord): KnowledgeRev
   };
 }
 
+interface PendingWriteback {
+  bundleId: string;
+  signal: AbortSignal;
+  resolve(result: KnowledgeStudioQueryWritebackResult): void;
+  reject(error: Error): void;
+}
+
+/** Retains independent Bundle subscriptions and caller-controlled save completions. */
+function createWritebackHintFixture(commands?: KnowledgeStudioRuntimeCommandAdapter) {
+  const subscriptions = {
+    runtime: new Map<string, Set<() => void>>(),
+    vault: new Map<string, Set<() => void>>(),
+  };
+  const subscribe = (
+    kind: keyof typeof subscriptions,
+    bundleId: string,
+    listener: () => void
+  ): (() => void) => {
+    const listeners = subscriptions[kind].get(bundleId) ?? new Set<() => void>();
+    subscriptions[kind].set(bundleId, listeners);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  const saves: PendingWriteback[] = [];
+  const revokeCurrent = jest.fn();
+  const adapter = new KnowledgeStudioRuntimeReadAdapter({
+    runtime: {
+      readStudioBundle: async () => createProjection(4),
+      subscribeStudioBundle: (bundleId, listener) => subscribe("runtime", bundleId, listener),
+    },
+    bundles: [createBundle(), { ...createBundle(), id: "other" }],
+    targetResolver: createMissingResolver(),
+    assertCurrent: () => undefined,
+    subscribeVaultHints: (bundleId, listener) => subscribe("vault", bundleId, listener),
+    ...(commands === undefined ? {} : { commands }),
+    query: {
+      query: async () => createQueryResult(),
+      openCitation: async () => undefined,
+      revokeCurrent,
+      saveQueryToWiki: (bundleId, _queryId, _request, signal) =>
+        new Promise<KnowledgeStudioQueryWritebackResult>((resolve, reject) => {
+          saves.push({ bundleId, signal, resolve, reject });
+        }),
+    },
+  });
+  return {
+    adapter,
+    saves,
+    revokeCurrent,
+    emit: (kind: keyof typeof subscriptions, bundleId = BUNDLE_ID): void => {
+      subscriptions[kind].get(bundleId)?.forEach((listener) => listener());
+    },
+  };
+}
+
 describe("KnowledgeStudioRuntimeReadAdapter", () => {
   describe("KnowledgeStudioRuntimeReadAdapter", () => {
     describe("load()", () => {
@@ -492,6 +549,311 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
         expect(JSON.stringify(projection)).toBe(before);
       });
     });
+
+    describe("subscribe()", () => {
+      it("combines Runtime and Vault hints and cleans both subscriptions idempotently", () => {
+        const projection = createProjection(1);
+        const runtime = new FakeRuntime([projection]);
+        const order: string[] = [];
+        let vaultHint: (() => void) | undefined;
+        let vaultUnsubscribeCount = 0;
+        const subscribeVaultHints: KnowledgeStudioVaultHintPort = (_bundleId, listener) => {
+          vaultHint = listener;
+          return () => {
+            vaultUnsubscribeCount += 1;
+          };
+        };
+        const listener = jest.fn(() => order.push("hint"));
+        const revokeCurrent = jest.fn(() => order.push("revoke"));
+        const unsubscribe = createAdapter(
+          runtime,
+          createMissingResolver(),
+          subscribeVaultHints,
+          () => undefined,
+          undefined,
+          {
+            query: async () => createQueryResult(),
+            openCitation: async () => undefined,
+            revokeCurrent,
+          }
+        ).subscribe(BUNDLE_ID, listener);
+
+        runtime.subscriptions.get(BUNDLE_ID)?.();
+        vaultHint?.();
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(revokeCurrent).toHaveBeenNthCalledWith(1, BUNDLE_ID, undefined);
+        expect(revokeCurrent).toHaveBeenNthCalledWith(2, BUNDLE_ID, undefined);
+        expect(order).toEqual(["revoke", "hint", "revoke", "hint"]);
+
+        unsubscribe();
+        unsubscribe();
+        vaultHint?.();
+        expect(runtime.unsubscribed).toBe(true);
+        expect(vaultUnsubscribeCount).toBe(1);
+        expect(listener).toHaveBeenCalledTimes(2);
+      });
+
+      it("rolls back Runtime subscription and sanitizes a Vault subscription failure", () => {
+        let active = false;
+        let retainedHint: (() => void) | undefined;
+        const unsubscribeRuntime = jest.fn(() => {
+          active = false;
+        });
+        const runtime: KnowledgeStudioRuntimePort = {
+          readStudioBundle: async () => createProjection(1),
+          subscribeStudioBundle: (_bundleId, listener) => {
+            active = true;
+            retainedHint = listener;
+            return unsubscribeRuntime;
+          },
+        };
+        const onHint = jest.fn();
+        const adapter = createAdapter(runtime, createMissingResolver(), () => {
+          throw new Error("secret Vault subscription detail");
+        });
+
+        let captured: unknown;
+        try {
+          adapter.subscribe(BUNDLE_ID, onHint);
+        } catch (error) {
+          captured = error;
+        }
+        expect(captured).toEqual(
+          expect.objectContaining({
+            name: "KnowledgeStudioRuntimeReadError",
+            message: "Knowledge Studio could not construct a consistent Runtime snapshot",
+          })
+        );
+        expect(unsubscribeRuntime).toHaveBeenCalledTimes(1);
+        if (active) retainedHint?.();
+        expect(onHint).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("saveQueryToWiki()", () => {
+      const issue = "https://github.com/yydspanda/obsidian-copilot/issues/9";
+
+      it("publishes and delegates reviewed writeback only when its exact method is captured", async () => {
+        const projection = createProjection(4);
+        const query = jest.fn(async () => createQueryResult());
+        const openCitation = jest.fn(async () => undefined);
+        const revokeCurrent = jest.fn();
+        const saveQueryToWiki = jest.fn(async () => ({ kind: "registered" }) as const);
+        const adapter = createAdapter(
+          new FakeRuntime([projection, projection]),
+          createMissingResolver(),
+          undefined,
+          () => undefined,
+          undefined,
+          { query, openCitation, revokeCurrent, saveQueryToWiki }
+        );
+        const signal = new AbortController().signal;
+
+        const snapshot = await adapter.load(BUNDLE_ID, signal);
+        const receipt = await adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          signal
+        );
+
+        expect(snapshot).toMatchObject({
+          queryAvailable: true,
+          queryWritebackAvailable: true,
+        });
+        expect(receipt).toEqual({ kind: "registered" });
+        expect(saveQueryToWiki).toHaveBeenCalledWith(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          signal
+        );
+      });
+
+      it(`coalesces Runtime, Vault and command hints for every subscriber until registration settles (${issue})`, async () => {
+        const fixture = createWritebackHintFixture(await createAcceptEnabledCommands());
+        const first = jest.fn();
+        const second = jest.fn();
+        const unsubscribeFirst = fixture.adapter.subscribe(BUNDLE_ID, first);
+        const unsubscribeSecond = fixture.adapter.subscribe(BUNDLE_ID, second);
+        const pending = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          new AbortController().signal
+        );
+
+        fixture.emit("vault");
+        fixture.emit("runtime");
+        fixture.emit("vault");
+        await fixture.adapter.pauseBundle(BUNDLE_ID, 0, new AbortController().signal);
+        expect(fixture.revokeCurrent).not.toHaveBeenCalled();
+        expect(first).not.toHaveBeenCalled();
+        expect(second).not.toHaveBeenCalled();
+
+        fixture.saves[0].resolve({ kind: "registered" });
+        await expect(pending).resolves.toEqual({ kind: "registered" });
+        expect(first).toHaveBeenCalledTimes(1);
+        expect(second).toHaveBeenCalledTimes(1);
+        expect(fixture.revokeCurrent).toHaveBeenCalledTimes(2);
+        fixture.emit("runtime");
+        expect(first).toHaveBeenCalledTimes(2);
+        expect(second).toHaveBeenCalledTimes(2);
+        unsubscribeFirst();
+        unsubscribeSecond();
+      });
+
+      it(`keeps a different Bundle's hints live while one Bundle is saving (${issue})`, async () => {
+        const fixture = createWritebackHintFixture();
+        const first = jest.fn();
+        const other = jest.fn();
+        fixture.adapter.subscribe(BUNDLE_ID, first);
+        fixture.adapter.subscribe("other", other);
+        const pending = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          new AbortController().signal
+        );
+
+        fixture.emit("vault");
+        fixture.emit("runtime", "other");
+        expect(first).not.toHaveBeenCalled();
+        expect(other).toHaveBeenCalledTimes(1);
+        expect(fixture.revokeCurrent.mock.calls).toEqual([["other", undefined]]);
+        const otherPending = fixture.adapter.saveQueryToWiki(
+          "other",
+          "query-other",
+          { title: "Another Bundle answer" },
+          new AbortController().signal
+        );
+        fixture.emit("runtime", "other");
+        fixture.saves[0].resolve({ kind: "registered" });
+        await pending;
+        expect(first).toHaveBeenCalledTimes(1);
+        expect(other).toHaveBeenCalledTimes(1);
+        fixture.saves[1].resolve({ kind: "registered" });
+        await otherPending;
+        expect(first).toHaveBeenCalledTimes(1);
+        expect(other).toHaveBeenCalledTimes(2);
+      });
+
+      it(`waits for the last overlapping save in a Bundle before delivering its hints (${issue})`, async () => {
+        const fixture = createWritebackHintFixture();
+        const onHint = jest.fn();
+        fixture.adapter.subscribe(BUNDLE_ID, onHint);
+        const first = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "First answer" },
+          new AbortController().signal
+        );
+        const second = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Second answer" },
+          new AbortController().signal
+        );
+        fixture.emit("vault");
+
+        fixture.saves[0].resolve({ kind: "registered" });
+        await first;
+        expect(onHint).not.toHaveBeenCalled();
+        expect(fixture.revokeCurrent).not.toHaveBeenCalled();
+        fixture.emit("runtime");
+        fixture.saves[1].resolve({ kind: "registered" });
+        await second;
+        expect(onHint).toHaveBeenCalledTimes(1);
+        expect(fixture.revokeCurrent).toHaveBeenCalledTimes(1);
+      });
+
+      it(`delivers a deferred hint after a failed save without replacing the save failure (${issue})`, async () => {
+        const fixture = createWritebackHintFixture();
+        const onHint = jest.fn();
+        fixture.adapter.subscribe(BUNDLE_ID, onHint);
+        const failure = new Error("Registration failed");
+        const pending = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          new AbortController().signal
+        );
+        const rejected = expect(pending).rejects.toBe(failure);
+        fixture.emit("vault");
+        expect(onHint).not.toHaveBeenCalled();
+
+        fixture.saves[0].reject(failure);
+        await rejected;
+        expect(onHint).toHaveBeenCalledTimes(1);
+        fixture.emit("runtime");
+        expect(onHint).toHaveBeenCalledTimes(2);
+      });
+
+      it(`does not deliver a retained hint to an unsubscribed view (${issue})`, async () => {
+        const fixture = createWritebackHintFixture();
+        const closed = jest.fn();
+        const active = jest.fn();
+        const unsubscribe = fixture.adapter.subscribe(BUNDLE_ID, closed);
+        fixture.adapter.subscribe(BUNDLE_ID, active);
+        const pending = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          new AbortController().signal
+        );
+        fixture.emit("vault");
+        unsubscribe();
+        fixture.saves[0].resolve({ kind: "registered" });
+        await pending;
+
+        expect(closed).not.toHaveBeenCalled();
+        expect(active).toHaveBeenCalledTimes(1);
+        expect(fixture.revokeCurrent).toHaveBeenCalledTimes(1);
+      });
+
+      it(`isolates a failing deferred observer from the receipt and other views (${issue})`, async () => {
+        const fixture = createWritebackHintFixture();
+        fixture.adapter.subscribe(BUNDLE_ID, () => {
+          throw new Error("View failed");
+        });
+        const active = jest.fn();
+        fixture.adapter.subscribe(BUNDLE_ID, active);
+        const pending = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          new AbortController().signal
+        );
+        fixture.emit("vault");
+        fixture.saves[0].resolve({ kind: "registered" });
+
+        await expect(pending).resolves.toEqual({ kind: "registered" });
+        expect(active).toHaveBeenCalledTimes(1);
+      });
+
+      it(`forwards explicit Query revocation immediately while non-authoritative hints wait (${issue})`, async () => {
+        const fixture = createWritebackHintFixture();
+        const onHint = jest.fn();
+        fixture.adapter.subscribe(BUNDLE_ID, onHint);
+        const pending = fixture.adapter.saveQueryToWiki(
+          BUNDLE_ID,
+          "query-1",
+          { title: "Durable answer" },
+          new AbortController().signal
+        );
+        fixture.emit("vault");
+        fixture.adapter.revokeCurrent(BUNDLE_ID, "query-1");
+        expect(fixture.revokeCurrent.mock.calls).toEqual([[BUNDLE_ID, "query-1"]]);
+        expect(onHint).not.toHaveBeenCalled();
+
+        fixture.saves[0].resolve({ kind: "registered" });
+        await pending;
+        expect(fixture.revokeCurrent.mock.calls).toEqual([
+          [BUNDLE_ID, "query-1"],
+          [BUNDLE_ID, undefined],
+        ]);
+      });
+    });
   });
 
   it("publishes only a same-revision source lifecycle model and delegates its exact commands", async () => {
@@ -639,43 +1001,6 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
     await expect(
       adapter.saveQueryToWiki(BUNDLE_ID, "query-1", { title: "Unavailable" }, signal)
     ).rejects.toMatchObject({ name: "KnowledgeStudioAdapterUnavailableError" });
-  });
-
-  it("publishes and delegates reviewed writeback only when its exact method is captured", async () => {
-    const projection = createProjection(4);
-    const query = jest.fn(async () => createQueryResult());
-    const openCitation = jest.fn(async () => undefined);
-    const revokeCurrent = jest.fn();
-    const saveQueryToWiki = jest.fn(async () => ({ kind: "registered" }) as const);
-    const adapter = createAdapter(
-      new FakeRuntime([projection, projection]),
-      createMissingResolver(),
-      undefined,
-      () => undefined,
-      undefined,
-      { query, openCitation, revokeCurrent, saveQueryToWiki }
-    );
-    const signal = new AbortController().signal;
-
-    const snapshot = await adapter.load(BUNDLE_ID, signal);
-    const receipt = await adapter.saveQueryToWiki(
-      BUNDLE_ID,
-      "query-1",
-      { title: "Durable answer" },
-      signal
-    );
-
-    expect(snapshot).toMatchObject({
-      queryAvailable: true,
-      queryWritebackAvailable: true,
-    });
-    expect(receipt).toEqual({ kind: "registered" });
-    expect(saveQueryToWiki).toHaveBeenCalledWith(
-      BUNDLE_ID,
-      "query-1",
-      { title: "Durable answer" },
-      signal
-    );
   });
 
   it("captures one immutable Query generation instead of following caller substitution", async () => {
@@ -1066,84 +1391,6 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
       ).rejects.toBeInstanceOf(KnowledgeStudioRuntimeReadError);
     }
     expect(getterCalls).toBe(0);
-  });
-
-  it("combines Runtime and Vault hints and cleans both subscriptions idempotently", () => {
-    const projection = createProjection(1);
-    const runtime = new FakeRuntime([projection]);
-    const order: string[] = [];
-    let vaultHint: (() => void) | undefined;
-    let vaultUnsubscribeCount = 0;
-    const subscribeVaultHints: KnowledgeStudioVaultHintPort = (_bundleId, listener) => {
-      vaultHint = listener;
-      return () => {
-        vaultUnsubscribeCount += 1;
-      };
-    };
-    const listener = jest.fn(() => order.push("hint"));
-    const revokeCurrent = jest.fn(() => order.push("revoke"));
-    const unsubscribe = createAdapter(
-      runtime,
-      createMissingResolver(),
-      subscribeVaultHints,
-      () => undefined,
-      undefined,
-      {
-        query: async () => createQueryResult(),
-        openCitation: async () => undefined,
-        revokeCurrent,
-      }
-    ).subscribe(BUNDLE_ID, listener);
-
-    runtime.subscriptions.get(BUNDLE_ID)?.();
-    vaultHint?.();
-    expect(listener).toHaveBeenCalledTimes(2);
-    expect(revokeCurrent).toHaveBeenNthCalledWith(1, BUNDLE_ID, undefined);
-    expect(revokeCurrent).toHaveBeenNthCalledWith(2, BUNDLE_ID, undefined);
-    expect(order).toEqual(["revoke", "hint", "revoke", "hint"]);
-
-    unsubscribe();
-    unsubscribe();
-    vaultHint?.();
-    expect(runtime.unsubscribed).toBe(true);
-    expect(vaultUnsubscribeCount).toBe(1);
-    expect(listener).toHaveBeenCalledTimes(2);
-  });
-
-  it("rolls back Runtime subscription and sanitizes a Vault subscription failure", () => {
-    let active = false;
-    let retainedHint: (() => void) | undefined;
-    const unsubscribeRuntime = jest.fn(() => {
-      active = false;
-    });
-    const runtime: KnowledgeStudioRuntimePort = {
-      readStudioBundle: async () => createProjection(1),
-      subscribeStudioBundle: (_bundleId, listener) => {
-        active = true;
-        retainedHint = listener;
-        return unsubscribeRuntime;
-      },
-    };
-    const onHint = jest.fn();
-    const adapter = createAdapter(runtime, createMissingResolver(), () => {
-      throw new Error("secret Vault subscription detail");
-    });
-
-    let captured: unknown;
-    try {
-      adapter.subscribe(BUNDLE_ID, onHint);
-    } catch (error) {
-      captured = error;
-    }
-    expect(captured).toEqual(
-      expect.objectContaining({
-        name: "KnowledgeStudioRuntimeReadError",
-        message: "Knowledge Studio could not construct a consistent Runtime snapshot",
-      })
-    );
-    expect(unsubscribeRuntime).toHaveBeenCalledTimes(1);
-    if (active) retainedHint?.();
-    expect(onHint).not.toHaveBeenCalled();
   });
 
   it("keeps every mutation command fail-closed in the read-only generation", async () => {

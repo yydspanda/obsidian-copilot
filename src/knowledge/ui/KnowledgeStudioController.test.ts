@@ -1054,68 +1054,6 @@ describe("KnowledgeStudioController", () => {
     });
   });
 
-  it("registers a current grounded answer only through the published reviewed-writeback capability", async () => {
-    const snapshot = {
-      ...createSnapshot(),
-      queryAvailable: true,
-      queryWritebackAvailable: true,
-    };
-    const port = new FakeKnowledgeStudioPort(async () => snapshot);
-    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
-    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort();
-    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
-    controller.start("personal");
-    await flushAsync();
-    await controller.runQuery("grounded answer");
-
-    await controller.saveCurrentQueryToWiki("  Durable answer  ");
-
-    expect(writebackPort.calls).toHaveLength(1);
-    expect(writebackPort.calls[0]).toMatchObject({
-      bundleId: "personal",
-      queryId: "knowledge-query-answer-1",
-      request: { title: "Durable answer" },
-    });
-    expect(writebackPort.calls[0].signal.aborted).toBe(false);
-    const state = controller.getState();
-    expect(state).toMatchObject({
-      query: {
-        status: "ready",
-        savingToWiki: false,
-        error: undefined,
-        result: { queryId: "knowledge-query-answer-1" },
-      },
-      feedback: {
-        kind: "success",
-      },
-    });
-    expect(state.feedback?.message).toContain("Review proposal");
-  });
-
-  it("keeps answer writeback unavailable unless the current snapshot publishes it", async () => {
-    const snapshot = {
-      ...createSnapshot(),
-      queryAvailable: true,
-      queryWritebackAvailable: false,
-    };
-    const port = new FakeKnowledgeStudioPort(async () => snapshot);
-    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
-    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort();
-    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
-    controller.start("personal");
-    await flushAsync();
-    await controller.runQuery("grounded answer");
-
-    await controller.saveCurrentQueryToWiki("Blocked answer");
-
-    expect(writebackPort.calls).toHaveLength(0);
-    expect(controller.getState().query).toMatchObject({
-      status: "ready",
-      savingToWiki: false,
-      error: "Only a current source-grounded answer can be sent to reviewed Wiki writeback.",
-    });
-  });
-
   it("rejects a writeback snapshot capability that is not backed by scoped Query", async () => {
     const invalid = {
       ...createSnapshot(),
@@ -1133,89 +1071,6 @@ describe("KnowledgeStudioController", () => {
       error: "Knowledge Studio could not load its durable state.",
     });
     expect(controller.getState().snapshot).toBeUndefined();
-  });
-
-  it("aborts an in-flight answer writeback and ignores its late old-generation receipt", async () => {
-    const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
-    const snapshots = [
-      {
-        ...createSnapshot("before"),
-        queryAvailable: true,
-        queryWritebackAvailable: true,
-      },
-      {
-        ...createSnapshot("after"),
-        queryAvailable: true,
-        queryWritebackAvailable: true,
-      },
-    ];
-    const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
-    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
-    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(
-      async () => registration.promise
-    );
-    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
-    controller.start("personal");
-    await flushAsync();
-    await controller.runQuery("grounded answer");
-
-    const pending = controller.saveCurrentQueryToWiki("Durable answer");
-    await flushAsync();
-    await controller.refresh();
-
-    expect(writebackPort.calls[0].signal.aborted).toBe(true);
-    expect(queryPort.revokeCalls).toEqual([
-      { bundleId: "personal", queryId: "knowledge-query-answer-1" },
-    ]);
-    expect(controller.getState()).toMatchObject({
-      snapshot: { revisionToken: "after" },
-      query: { status: "idle" },
-    });
-
-    registration.resolve({ kind: "registered" });
-    await pending;
-    expect(controller.getState()).toMatchObject({
-      snapshot: { revisionToken: "after" },
-      query: { status: "idle" },
-    });
-    expect(controller.getState().feedback).toBeUndefined();
-  });
-
-  it("rejects an accessor-backed writeback receipt without invoking its getter", async () => {
-    let getterCalls = 0;
-    const receipt = {};
-    Object.defineProperty(receipt, "kind", {
-      enumerable: true,
-      get: () => {
-        getterCalls += 1;
-        throw new Error("private getter payload");
-      },
-    });
-    const snapshot = {
-      ...createSnapshot(),
-      queryAvailable: true,
-      queryWritebackAvailable: true,
-    };
-    const port = new FakeKnowledgeStudioPort(async () => snapshot);
-    const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
-    const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(async () =>
-      Promise.resolve(receipt as unknown as KnowledgeStudioQueryWritebackResult)
-    );
-    const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
-    controller.start("personal");
-    await flushAsync();
-    await controller.runQuery("grounded answer");
-
-    await controller.saveCurrentQueryToWiki("Durable answer");
-
-    expect(getterCalls).toBe(0);
-    expect(controller.getState().query).toMatchObject({
-      status: "ready",
-      savingToWiki: false,
-      error:
-        "The grounded answer could not be registered. No Wiki file was changed; retry from a fresh query.",
-    });
-    expect(controller.getState().feedback).toBeUndefined();
   });
 
   it("keeps Query fail-closed when the current snapshot did not publish the adapter", async () => {
@@ -2135,6 +1990,409 @@ describe("KnowledgeStudioController", () => {
   });
 
   describe("KnowledgeStudioController", () => {
+    describe("openQueryCitation()", () => {
+      it("ignores citation clicks while a hinted save is pending so registration completes and refreshes normally (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+        const snapshot = {
+          ...createSnapshot(),
+          queryAvailable: true,
+          queryWritebackAvailable: true,
+        };
+        const port = new FakeKnowledgeStudioPort(async () => snapshot);
+        const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+        const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(
+          async () => registration.promise
+        );
+        const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+        controller.start("personal");
+        await flushAsync();
+        await controller.runQuery("grounded answer");
+        const pending = controller.saveCurrentQueryToWiki("Durable answer");
+        port.hint?.();
+
+        await controller.openQueryCitation("knowledge-citation-1");
+
+        expect(queryPort.citationCalls).toEqual([]);
+        expect(writebackPort.calls[0].signal.aborted).toBe(false);
+        expect(queryPort.revokeCalls).toEqual([]);
+        expect(port.loadCalls).toHaveLength(1);
+        expect(controller.getState().query).toMatchObject({
+          status: "ready",
+          savingToWiki: true,
+          result: { queryId: "knowledge-query-answer-1" },
+        });
+
+        registration.resolve({ kind: "registered" });
+        await pending;
+        await flushAsync();
+
+        expect(port.loadCalls).toHaveLength(2);
+        expect(controller.getState()).toMatchObject({
+          query: { status: "idle" },
+          feedback: { kind: "success" },
+        });
+        expect(controller.getState().feedback?.message).toContain("registered");
+      });
+    });
+
+    describe("saveCurrentQueryToWiki()", () => {
+      it("registers a current grounded answer only through the published reviewed-writeback capability", async () => {
+        const snapshot = {
+          ...createSnapshot(),
+          queryAvailable: true,
+          queryWritebackAvailable: true,
+        };
+        const port = new FakeKnowledgeStudioPort(async () => snapshot);
+        const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+        const writebackPort = new FakeKnowledgeStudioQueryWritebackPort();
+        const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+        controller.start("personal");
+        await flushAsync();
+        await controller.runQuery("grounded answer");
+
+        await controller.saveCurrentQueryToWiki("  Durable answer  ");
+
+        expect(writebackPort.calls).toHaveLength(1);
+        expect(writebackPort.calls[0]).toMatchObject({
+          bundleId: "personal",
+          queryId: "knowledge-query-answer-1",
+          request: { title: "Durable answer" },
+        });
+        expect(writebackPort.calls[0].signal.aborted).toBe(false);
+        const state = controller.getState();
+        expect(state).toMatchObject({
+          query: {
+            status: "ready",
+            savingToWiki: false,
+            error: undefined,
+            result: { queryId: "knowledge-query-answer-1" },
+          },
+          feedback: {
+            kind: "success",
+          },
+        });
+        expect(state.feedback?.message).toContain("Review proposal");
+      });
+
+      it("keeps answer writeback unavailable unless the current snapshot publishes it", async () => {
+        const snapshot = {
+          ...createSnapshot(),
+          queryAvailable: true,
+          queryWritebackAvailable: false,
+        };
+        const port = new FakeKnowledgeStudioPort(async () => snapshot);
+        const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+        const writebackPort = new FakeKnowledgeStudioQueryWritebackPort();
+        const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+        controller.start("personal");
+        await flushAsync();
+        await controller.runQuery("grounded answer");
+
+        await controller.saveCurrentQueryToWiki("Blocked answer");
+
+        expect(writebackPort.calls).toHaveLength(0);
+        expect(controller.getState().query).toMatchObject({
+          status: "ready",
+          savingToWiki: false,
+          error: "Only a current source-grounded answer can be sent to reviewed Wiki writeback.",
+        });
+      });
+
+      it("aborts an in-flight answer writeback and ignores its late old-generation receipt", async () => {
+        const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+        const snapshots = [
+          {
+            ...createSnapshot("before"),
+            queryAvailable: true,
+            queryWritebackAvailable: true,
+          },
+          {
+            ...createSnapshot("after"),
+            queryAvailable: true,
+            queryWritebackAvailable: true,
+          },
+        ];
+        const port = new FakeKnowledgeStudioPort(async () => snapshots.shift()!);
+        const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+        const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(
+          async () => registration.promise
+        );
+        const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+        controller.start("personal");
+        await flushAsync();
+        await controller.runQuery("grounded answer");
+
+        const pending = controller.saveCurrentQueryToWiki("Durable answer");
+        await flushAsync();
+        await controller.refresh();
+
+        expect(writebackPort.calls[0].signal.aborted).toBe(true);
+        expect(queryPort.revokeCalls).toEqual([
+          { bundleId: "personal", queryId: "knowledge-query-answer-1" },
+        ]);
+        expect(controller.getState()).toMatchObject({
+          snapshot: { revisionToken: "after" },
+          query: { status: "idle" },
+        });
+
+        registration.resolve({ kind: "registered" });
+        await pending;
+        expect(controller.getState()).toMatchObject({
+          snapshot: { revisionToken: "after" },
+          query: { status: "idle" },
+        });
+        expect(controller.getState().feedback).toBeUndefined();
+      });
+
+      it("rejects an accessor-backed writeback receipt without invoking its getter", async () => {
+        let getterCalls = 0;
+        const receipt = {};
+        Object.defineProperty(receipt, "kind", {
+          enumerable: true,
+          get: () => {
+            getterCalls += 1;
+            throw new Error("private getter payload");
+          },
+        });
+        const snapshot = {
+          ...createSnapshot(),
+          queryAvailable: true,
+          queryWritebackAvailable: true,
+        };
+        const port = new FakeKnowledgeStudioPort(async () => snapshot);
+        const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+        const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(async () =>
+          Promise.resolve(receipt as unknown as KnowledgeStudioQueryWritebackResult)
+        );
+        const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+        controller.start("personal");
+        await flushAsync();
+        await controller.runQuery("grounded answer");
+
+        await controller.saveCurrentQueryToWiki("Durable answer");
+
+        expect(getterCalls).toBe(0);
+        expect(controller.getState().query).toMatchObject({
+          status: "ready",
+          savingToWiki: false,
+          error:
+            "The grounded answer could not be registered. No Wiki file was changed; retry from a fresh query.",
+        });
+        expect(controller.getState().feedback).toBeUndefined();
+      });
+
+      async function prepareWriteback(
+        handler: (call: RecordedQueryWritebackCall) => Promise<KnowledgeStudioQueryWritebackResult>
+      ) {
+        const port: FakeKnowledgeStudioPort = new FakeKnowledgeStudioPort(async (bundleId) => {
+          const snapshot = createSnapshot(`revision-${port.loadCalls.length}`, []);
+          return {
+            ...snapshot,
+            bundleId,
+            activity: { ...snapshot.activity, bundleId },
+            recovery: { ...snapshot.recovery, bundleId },
+            queryAvailable: true,
+            queryWritebackAvailable: true,
+          };
+        });
+        const queryPort: FakeKnowledgeStudioQueryPort = new FakeKnowledgeStudioQueryPort(
+          async (call) => ({
+            ...createAnswerQueryResult(`knowledge-query-answer-${queryPort.queryCalls.length}`),
+            bundleId: call.bundleId,
+          })
+        );
+        const writebackPort = new FakeKnowledgeStudioQueryWritebackPort(handler);
+        const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+        controller.start("personal");
+        await flushAsync();
+        await controller.runQuery("grounded answer");
+        return { port, queryPort, writebackPort, controller };
+      }
+
+      it("defers repeated reload hints until saving completes, then refreshes once without losing success feedback (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+        const { port, queryPort, writebackPort, controller } = await prepareWriteback(
+          async () => registration.promise
+        );
+
+        const pending = controller.saveCurrentQueryToWiki("Durable answer");
+        port.hint?.();
+        port.hint?.();
+        port.hint?.();
+        await flushAsync();
+
+        expect(writebackPort.calls[0].signal.aborted).toBe(false);
+        expect(queryPort.revokeCalls).toEqual([]);
+        expect(port.loadCalls).toHaveLength(1);
+        expect(controller.getState()).toMatchObject({
+          refreshing: false,
+          snapshot: { revisionToken: "revision-1" },
+          query: {
+            status: "ready",
+            savingToWiki: true,
+            result: { queryId: "knowledge-query-answer-1" },
+          },
+        });
+
+        registration.resolve({ kind: "registered" });
+        await pending;
+        await flushAsync();
+
+        expect(port.loadCalls).toHaveLength(2);
+        expect(writebackPort.calls).toHaveLength(1);
+        expect(queryPort.revokeCalls).toContainEqual({ bundleId: "personal" });
+        expect(controller.getState()).toMatchObject({
+          snapshot: { revisionToken: "revision-2" },
+          query: { status: "idle" },
+          feedback: { kind: "success" },
+        });
+        expect(controller.getState().feedback?.message).toContain("registered");
+      });
+
+      it("clears stale query authority after hinted registration failure while keeping durable error feedback (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+        const { port, writebackPort, controller } = await prepareWriteback(
+          async () => registration.promise
+        );
+        const pending = controller.saveCurrentQueryToWiki("Durable answer");
+
+        port.hint?.();
+        registration.reject(new Error("registration failed"));
+        await pending;
+        await flushAsync();
+
+        expect(port.loadCalls).toHaveLength(2);
+        expect(writebackPort.calls).toHaveLength(1);
+        expect(controller.getState()).toMatchObject({
+          snapshot: { revisionToken: "revision-2" },
+          query: { status: "idle" },
+          feedback: { kind: "error" },
+        });
+        expect(controller.getState().feedback?.message).toContain("registered");
+        expect(controller.getState().query?.result).toBeUndefined();
+      });
+
+      it("ignores second and third save requests without clearing the original saving state or aborting registration (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+        const { writebackPort, controller } = await prepareWriteback(
+          async () => registration.promise
+        );
+        const pending = controller.saveCurrentQueryToWiki("Durable answer");
+
+        await controller.saveCurrentQueryToWiki("Second answer");
+        expect(controller.getState().query).toMatchObject({
+          status: "ready",
+          savingToWiki: true,
+          error: undefined,
+        });
+        await controller.saveCurrentQueryToWiki("Third answer");
+
+        expect(writebackPort.calls).toHaveLength(1);
+        expect(writebackPort.calls[0].signal.aborted).toBe(false);
+        expect(controller.getState().query?.savingToWiki).toBe(true);
+
+        registration.resolve({ kind: "registered" });
+        await pending;
+        expect(controller.getState()).toMatchObject({
+          query: { status: "ready", savingToWiki: false },
+          feedback: { kind: "success" },
+        });
+      });
+
+      it.each(["refresh", "start", "stop"] as const)(
+        "cancels hinted saving on explicit %s without leaking its deferred refresh or late receipt into the next state (https://github.com/yydspanda/obsidian-copilot/issues/9)",
+        async (action) => {
+          const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+          const { port, writebackPort, controller } = await prepareWriteback(
+            async () => registration.promise
+          );
+          const pending = controller.saveCurrentQueryToWiki("Durable answer");
+          port.hint?.();
+          expect(port.loadCalls).toHaveLength(1);
+
+          if (action === "refresh") {
+            await controller.refresh();
+          } else {
+            if (action === "stop") {
+              controller.stop();
+              expect(controller.getState()).toEqual({
+                status: "idle",
+                activeTab: "activity",
+                refreshing: false,
+              });
+            }
+            controller.start("other");
+            await flushAsync();
+          }
+
+          expect(writebackPort.calls[0].signal.aborted).toBe(true);
+          expect(port.loadCalls).toHaveLength(2);
+          const nextState = controller.getState();
+          expect(nextState).toMatchObject({
+            status: "ready",
+            bundleId: action === "refresh" ? "personal" : "other",
+            snapshot: { revisionToken: "revision-2" },
+            query: { status: "idle" },
+          });
+
+          registration.resolve({ kind: "registered" });
+          await pending;
+          await flushAsync();
+
+          expect(port.loadCalls).toHaveLength(2);
+          expect(controller.getState()).toBe(nextState);
+          expect(controller.getState().feedback).toBeUndefined();
+        }
+      );
+
+      it("does not let a cancelled save's late finally clear or refresh the next save's pending hints (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const firstRegistration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+        const secondRegistration = createDeferred<KnowledgeStudioQueryWritebackResult>();
+        const registrations = [firstRegistration, secondRegistration];
+        const { port, queryPort, writebackPort, controller } = await prepareWriteback(
+          async () => registrations.shift()!.promise
+        );
+        const firstPending = controller.saveCurrentQueryToWiki("First answer");
+        port.hint?.();
+        await controller.refresh();
+        await controller.runQuery("fresh grounded answer");
+        const secondPending = controller.saveCurrentQueryToWiki("Second answer");
+        const revocationsBeforeHints = queryPort.revokeCalls.length;
+        port.hint?.();
+        port.hint?.();
+
+        firstRegistration.resolve({ kind: "registered" });
+        await firstPending;
+        await flushAsync();
+
+        expect(writebackPort.calls).toHaveLength(2);
+        expect(writebackPort.calls[0].signal.aborted).toBe(true);
+        expect(writebackPort.calls[1].signal.aborted).toBe(false);
+        expect(port.loadCalls).toHaveLength(2);
+        expect(queryPort.revokeCalls).toHaveLength(revocationsBeforeHints);
+        expect(controller.getState()).toMatchObject({
+          query: {
+            status: "ready",
+            savingToWiki: true,
+            result: { queryId: "knowledge-query-answer-2" },
+          },
+        });
+        expect(controller.getState().feedback).toBeUndefined();
+
+        secondRegistration.resolve({ kind: "registered" });
+        await secondPending;
+        await flushAsync();
+
+        expect(port.loadCalls).toHaveLength(3);
+        expect(controller.getState()).toMatchObject({
+          snapshot: { revisionToken: "revision-3" },
+          query: { status: "idle" },
+          feedback: { kind: "success" },
+        });
+        expect(controller.getState().feedback?.message).toContain("registered");
+      });
+    });
+
     describe("submitReview()", () => {
       it.each(["accept_exact", "reject"] as const)(
         "keeps a current proposal eligible for %s even when a different proposal is outdated (https://github.com/yydspanda/obsidian-copilot/issues/7)",

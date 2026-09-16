@@ -16,8 +16,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Continue bounded acceptance on deployed `0c381e68`;
-  keep the queue paused. No new model calls or real Wiki writes are authorized.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Commit/push issue #9, then deploy and resume bounded Windows acceptance.
+  Preserve real notes/history and the paused queue; confirm any new paid model request separately.
 
 ## Upstream Status
 
@@ -33,7 +33,7 @@
 - 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #7](https://github.com/yydspanda/obsidian-copilot/issues/7)
   marks incompatible old proposals and blocks Apply while preserving explicit rejection.
   9 suites / 254 tests and 36 Windows gallery cases pass; clean `fbc413a0` is deployed.
-  Issue #8 repair pushed; fresh isolated retest passes analysis/generation in 19.373 seconds without real writes.
+  Query/citation/return pass; September 16 Save race is locally repaired under issue #9; real revalidation remains pending.
   Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests and bounded Windows checks pass (one gallery rerun).
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
@@ -76,9 +76,9 @@
 
 ## Current Verification
 
-- Personal production build passes at 6,427,228 bytes under the explicit 10,000,000-byte ceiling.
-  Default 5,000,000-byte enforcement still rejects this artifact; it is not a default-policy release
-  or Sync Standard-compatible delivery. Build inputs are in the September log; current hashes are in the Windows checkpoint.
+- September 16 issue #9: 45 suites / 554 tests pass; production edits touch only two fork-owned modules.
+  Personal production build passes at 6,428,121 bytes under the explicit 10,000,000-byte ceiling;
+  typecheck, syntax and mobile-load smoke pass. Default 5 MB policy is unchanged; see the Windows checkpoint for hashes.
 - Size-guard regression: 41/41 tests pass after observing 21 intended failures before implementation.
   Final artifact syntax and simulated mobile module-load smoke checks pass; these are not live UI tests.
 - September 15 merge checks: 48 Jest suites / 1,238 tests, 36 Node tests, production typecheck,
@@ -104,12 +104,12 @@
 - Upstream drift: current branch includes `61619fe4`; remote master stays behind by explicit user choice, so the aggregate drift workflow can remain red.
 - September 15 Windows deployment: clean `0c381e68-clean-d235147b24f2` is loaded; Studio is ready.
   CLI reload required the plugin-manager fallback. All 14 scoped files and 12 Reviews are unchanged;
-  only input-observation bookkeeping advances Runtime 1446 → 1467. Queue remains user-paused.
+  Query/Save checks retain Runtime 1488; later renderer restart shows 1509, still paused with capture unregistered.
   36 gallery states render without horizontal overflow (35 first-pass, one isolated rerun).
-  Fake connection feedback passes; zero uncaught errors/rejections. Temporary gallery fully removed.
+  Fake connection feedback and Studio popout/Activity/close/reopen pass; temporary gallery is removed.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
-  Evidence opens its source but Live Preview omits the first five YAML lines from the required exact selection.
+  Evidence: source-mode selection and reading-mode Ctrl+C both preserve all 3,769 characters; Live Preview highlighting differs.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
 - Issue #8: 17 tool + 107 related tests pass. `EXP-20260915-002` reaches an in-memory pending proposal with two requests; 14 real files and all Runtime/Review bytes unchanged. Earlier timeout remains inconclusive.
 

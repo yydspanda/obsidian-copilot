@@ -607,6 +607,7 @@ export class KnowledgeStudioController {
   private queryGeneration = 0;
   private reviewEvidenceGeneration = 0;
   private refreshQueued = false;
+  private queryWritebackRefreshQueued = false;
   private pendingForwardRevisionFocusRef?: string;
   private readonly reviewDrafts = new KnowledgeReviewDraftStore();
 
@@ -831,6 +832,10 @@ export class KnowledgeStudioController {
   async openQueryCitation(citationRef: string): Promise<void> {
     const bundleId = this.state.bundleId;
     const currentQuery = this.state.query;
+    // Citation navigation shares the Query cancellation slot; it must not leave
+    // registration cancelled while its copied state still says it is saving.
+    // https://github.com/yydspanda/obsidian-copilot/issues/9
+    if (currentQuery?.savingToWiki === true) return;
     const result = currentQuery?.result;
     const knownReference = result?.hits.some((hit) =>
       hit.citations.some((citation) => citation.citationRef === citationRef)
@@ -900,6 +905,9 @@ export class KnowledgeStudioController {
   async saveCurrentQueryToWiki(title: string): Promise<void> {
     const bundleId = this.state.bundleId;
     const currentQuery = this.state.query;
+    // Repeated clicks must not clear the busy state or replace an active registration.
+    // https://github.com/yydspanda/obsidian-copilot/issues/9
+    if (currentQuery?.savingToWiki === true) return;
     const result = currentQuery?.result;
     const answer = result?.mode === "grounded_answer" ? result.answer : undefined;
     if (
@@ -907,7 +915,6 @@ export class KnowledgeStudioController {
       !this.queryWritebackPort ||
       this.state.snapshot?.queryWritebackAvailable !== true ||
       this.state.pendingAction !== undefined ||
-      currentQuery?.savingToWiki === true ||
       !result ||
       !answer ||
       (answer.status !== "answered" && answer.status !== "partial") ||
@@ -931,6 +938,7 @@ export class KnowledgeStudioController {
     const abort = new AbortController();
     this.queryAbort = abort;
     const generation = ++this.queryGeneration;
+    this.queryWritebackRefreshQueued = false;
     this.state = {
       ...this.state,
       query: { ...currentQuery, error: undefined, savingToWiki: true },
@@ -977,7 +985,22 @@ export class KnowledgeStudioController {
       };
       this.emit();
     } finally {
-      if (generation === this.queryGeneration) this.queryAbort = undefined;
+      if (generation === this.queryGeneration) {
+        this.queryAbort = undefined;
+        // Reconcile delayed hints only after registration settles; keep its outcome
+        // visible when the stale answer is cleared, including registration failures.
+        // https://github.com/yydspanda/obsidian-copilot/issues/9
+        if (this.queryWritebackRefreshQueued) {
+          const error = this.state.query?.error;
+          this.cancelQueryWork(true);
+          this.state = {
+            ...this.state,
+            query: { status: "idle" },
+            feedback: error ? { kind: "error", message: error } : this.state.feedback,
+          };
+          await this.refresh();
+        }
+      }
     }
   }
 
@@ -2072,6 +2095,13 @@ export class KnowledgeStudioController {
 
   /** Treats a runtime event as a request to reload durable truth. */
   private handleReloadHint(): void {
+    // Capture creation emits hints before registration finishes. Defer these hints,
+    // not explicit refresh/close cancellation or the coordinator's snapshot checks.
+    // https://github.com/yydspanda/obsidian-copilot/issues/9
+    if (this.state.query?.savingToWiki === true) {
+      this.queryWritebackRefreshQueued = true;
+      return;
+    }
     const hadQueryState = this.state.query !== undefined && this.state.query.status !== "idle";
     this.cancelQueryWork(true);
     this.cancelReviewEvidenceWork();
@@ -2114,6 +2144,7 @@ export class KnowledgeStudioController {
     this.queryGeneration += 1;
     this.reviewEvidenceGeneration += 1;
     this.refreshQueued = false;
+    this.queryWritebackRefreshQueued = false;
     this.reviewDrafts.clear();
   }
 
@@ -2123,6 +2154,7 @@ export class KnowledgeStudioController {
     this.queryAbort = undefined;
     this.revokeCurrentQueryCapability(bundleWide);
     this.queryGeneration += 1;
+    this.queryWritebackRefreshQueued = false;
   }
 
   /** Cancels only ephemeral Review evidence navigation and revokes late publication. */
