@@ -16,14 +16,14 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Issue #9: feedback/tab repair 414b05ae is pushed and loaded in Windows.
-  One authorized live Query/Save now passes persistence and feedback/tab continuity; continue the remaining Windows checklist, queue paused.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Five authorized sources are applied; extra model-request upper bound 8/20.
+  Minimal migration/logging repairs are pushed as 4bf81d7b; final full suite, new deployment and lifecycle checks remain.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
-- Last fetched: `2026-09-15` — canonical `61619fe427f27c23fbb08b6a040d18ae73c3b219`
-- Merge: `0c381e68`, 20 commits; 85 ahead / 0 behind at merge; no manual production-code edits
+- Last fetched: `2026-09-18` — latest canonical `37bf6a12`; current branch 92 ahead / 11 behind before regression fixes.
+- Frozen baseline: `61619fe427f27c23fbb08b6a040d18ae73c3b219`, merge `0c381e68`; no new merge during live acceptance.
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
@@ -102,9 +102,9 @@
   the September experiment log.
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
-- Upstream drift: current branch includes `61619fe4`; remote master stays behind by explicit user choice, so the aggregate drift workflow can remain red.
-- Current Windows deployment: clean `4.0.8+dev.414b05ae.clean.daa7f5fe750b`; Studio is ready on Query with success feedback.
-  Runtime 1652 / Manifest 18 contains 9 entries; 62 jobs include 5 pending; original user-pause timestamp remains.
+- Upstream drift now exceeds the 10-commit limit (11 behind); do not report this gate green. Remote master remains untouched.
+- Current Windows deployment: clean `4.0.8+dev.414b05ae.clean.daa7f5fe750b`; five valid proposals applied, queue paused.
+  Runtime 1932 / Manifest 23 contains 9 entries; 66 jobs, no pending; [latest checkpoint](./designdocs/progress/acceptance/2026-09-18-unattended.md).
   Gallery preserves all 69 files and Runtime/settings; plugin removed, but strict style cleanup does not pass (one retained editor style).
   Earlier 36 gallery states and fake connection/Studio popout/Activity/close/reopen checks pass; gallery is removed.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
