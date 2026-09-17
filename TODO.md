@@ -7,22 +7,20 @@
 
 ## Current Stage
 
-- Stage ID: `PK-H3`
-- Outcome: validate the current upstream merge and Personal Knowledge flow in real Windows
-  Obsidian without weakening upstream behavior.
-- Exit gate: provider/project/settings migration, reload/unload, Knowledge Studio, and popout pass
-  the bounded Windows checklist against a frozen artifact that passes the approved personal
-  production budget; the default upstream 5 MB release policy remains unchanged.
+- Stage ID: `OPS-MAINTENANCE`
+- Outcome: keep the development branch current while preserving the verified Windows artifact.
+- Exit gate: inspect canonical drift, integrate with minimal upstream changes, and verify the
+  resulting artifact before replacing the accepted test deployment; remote master is out of scope.
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Five authorized sources are applied; extra model-request upper bound 8/20.
-  Minimal migration/logging repairs are pushed as 4bf81d7b; final full suite, new deployment and lifecycle checks remain.
+- [ ] `OPS-UPSTREAM-SYNC` — Next task: resolve the observed 11-commit canonical drift after the
+  completed frozen-artifact regression. No new merge has started; the current test build is accepted.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
-- Last fetched: `2026-09-18` — latest canonical `37bf6a12`; current branch 92 ahead / 11 behind before regression fixes.
+- Last fetched: `2026-09-18` — canonical `37bf6a12`; verified artifact `05903630` is 95 ahead / 11 behind.
 - Frozen baseline: `61619fe427f27c23fbb08b6a040d18ae73c3b219`, merge `0c381e68`; no new merge during live acceptance.
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
@@ -30,6 +28,9 @@
 
 ## Recent Activity
 
+- 2026-09-18 — `PK-H3-UPSTREAM-V4-WIN` — Bounded regression complete: five authorized Apply outcomes,
+  722 suites / 10,472 tests pass; final Windows reload/popout/Query/citation and 18/18 preservation checks pass.
+  Two minimal repairs are pushed/deployed; extra requests 9/20. [Evidence and exceptions](./designdocs/progress/acceptance/2026-09-18-unattended.md).
 - 2026-09-17 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #9](https://github.com/yydspanda/obsidian-copilot/issues/9):
   authorized 1 Query + 1 Save created exactly one capture, Manifest entry and pending job; no Wiki writes.
   The earlier build lost feedback after 7 ms; repair 414b05ae is pushed/deployed, with no stale Query authority retained.
@@ -59,8 +60,6 @@
   the old Flash selection compatible, blocks Pro before I/O, and passes 2/2 live scenarios.
 - 2026-08-26 — `OPS-PROGRESS-GOVERNANCE` — Replaced the mixed 600-line tracker with a bounded live
   pointer, frozen migration snapshot, monthly archive, experiment contract, and CI validation.
-- 2026-08-26 — `OPS-UPSTREAM-SYNC` — Merged upstream `054dc69b`; retained the new upstream user
-  message folding behavior and only reapplied the narrow Knowledge Draft extension.
 
 ## Working Agreements
 
@@ -75,6 +74,9 @@
 
 ## Current Verification
 
+- September 18 final artifact: clean `4.0.8+dev.05903630.clean.9281d3d8cf94`, 6,428,807 bytes;
+  full sweep 722/722 suites, 10,472 passed, 0 failed, 2 existing skips. Format/lint/build/review pass.
+  All five current Apply outputs appear in final retrieval; no Save/retry or persistent Query writes.
 - September 17 presentation repair: 8 suites / 210 tests pass, including red/green receipt continuity regressions.
   Personal build, syntax/mobile-load, format/lint and Obsidian review pass; gallery builds and 4 story DOM tests pass.
   Only 2 fork-owned runtime modules changed; 8 Windows story cases and the separately authorized live Save continuity check pass.
@@ -87,24 +89,19 @@
   Final artifact syntax and simulated mobile module-load smoke checks pass; these are not live UI tests.
 - September 15 merge checks: 48 Jest suites / 1,238 tests, 36 Node tests, production typecheck,
   artifact syntax/mobile-load smoke and Obsidian review pass. The earlier full sweep below predates this merge.
-- Deterministic regression: 697 suites / 9,876 tests passed in the full sweep; the one suite read
-  during test-import migration passed all 11 cases after files were frozen (698 suites / 9,887
-  passing tests across the sweep and rerun; 2 existing tests skipped; paid live suite excluded).
 - September 15 gates: production typecheck, formatting, lint (0 errors, 3 existing warnings),
   progress governance, and the full Obsidian review command pass, including packaged CSS and dependency
   audit (0 vulnerabilities). Existing review warnings remain visible; gallery indexing is not live rendering.
-- Pre-push verification: formatting/lint and 6 focused suites / 84 tests pass. Commit hooks preserve
-  the verified source/config hashes; no common credential patterns were found in outgoing added lines.
 - Windows acceptance: stale proposal Continue reproduced without a write journal; explicit Abandon
   cleared the claim, resumed the queue, and left source, target, and project files unchanged.
 - Earlier live DeepSeek check: 2/2 scenarios passed with three exact `deepseek-flash` responses;
   this final refactor did not rerun paid requests. Historical evidence limitations are recorded in
   the September experiment log.
-- Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
+- Against frozen upstream `61619fe4`, 38 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift now exceeds the 10-commit limit (11 behind); do not report this gate green. Remote master remains untouched.
-- Current Windows deployment: clean `4.0.8+dev.414b05ae.clean.daa7f5fe750b`; five valid proposals applied, queue paused.
-  Runtime 1932 / Manifest 23 contains 9 entries; 66 jobs, no pending; [latest checkpoint](./designdocs/progress/acceptance/2026-09-18-unattended.md).
+- Current Windows deployment: clean `4.0.8+dev.05903630.clean.9281d3d8cf94`; five valid proposals applied, queue paused.
+  Runtime 1959 / Manifest 23 contains 9 entries; 66 jobs, no pending; [latest checkpoint](./designdocs/progress/acceptance/2026-09-18-unattended.md).
   Gallery preserves all 69 files and Runtime/settings; plugin removed, but strict style cleanup does not pass (one retained editor style).
   Earlier 36 gallery states and fake connection/Studio popout/Activity/close/reopen checks pass; gallery is removed.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
