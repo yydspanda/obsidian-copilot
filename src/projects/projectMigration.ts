@@ -43,8 +43,9 @@ function normalizeLineEndings(content: string): string {
  * @param vault - Vault instance
  * @param project - Original project config
  * @param reason - Failure reason
+ * @param projectsFolder - Captured root for project files and recovery copies
  * @param assertOwnerActive - Assertion bound to the lifecycle that started migration
- * @returns true if a new backup was created, false if it already existed or backup failed
+ * @returns Whether a complete recovery copy was verified, newly created or already present
  */
 async function saveFailedProjectToUnsupported(
   vault: Vault,
@@ -88,7 +89,9 @@ async function saveFailedProjectToUnsupported(
           if (jsonMatch) {
             const backedUpProject = JSON.parse(jsonMatch[1]);
             // Reason: compare full JSON to detect same-id but different-content duplicates.
-            if (JSON.stringify(backedUpProject) === JSON.stringify(project)) return false;
+            // An existing complete copy also permits clearing the legacy entry on retry.
+            // https://github.com/yydspanda/obsidian-copilot/issues/10
+            if (JSON.stringify(backedUpProject) === JSON.stringify(project)) return true;
           }
         } catch {
           assertOwnerActive();
@@ -118,7 +121,11 @@ async function saveFailedProjectToUnsupported(
     assertOwnerActive();
     await vault.create(filePath, content);
     assertOwnerActive();
-    return true;
+    // Never discard the only original merely because a backup write resolved.
+    // https://github.com/yydspanda/obsidian-copilot/issues/10
+    const savedContent = await vault.adapter.read(filePath);
+    assertOwnerActive();
+    return savedContent === content;
   } catch (backupError) {
     // A superseded lifecycle must stop without logging or initiating recovery work.
     assertOwnerActive();
@@ -331,7 +338,7 @@ function getMigrationFolderName(projectId: string, projectName?: string): string
  * - unsupported/ backup: failed items are backed up for manual recovery
  * - dirty data defense: skip duplicate ids, empty ids
  * - retry-safe: already-migrated projects (target file exists with matching id) are skipped
- * - clear-on-success: projectList entries are removed only for successfully migrated projects
+ * - clear-after-preservation: remove entries only after verifying a target or recovery copy
  *
  * @param app - Obsidian App instance
  * @param owner - Active Projects state lifecycle owner
@@ -360,11 +367,25 @@ export async function migrateProjectsFromSettingsToVault(
   logInfo(`[Projects] Migrating ${legacyProjects.length} legacy projects to vault files...`);
 
   const migratedEntries: ProjectConfig[] = [];
+  const retainedEntries: ProjectConfig[] = [];
   const seenIds = new Set<string>();
   // Reason: track sanitized folder names (case-insensitive) to detect collisions where
   // different ids map to the same folder. Case-insensitive because macOS/Windows vaults
   // have case-insensitive filesystems (e.g. "MyProject" and "myproject" collide on disk).
   const seenFolderNames = new Map<string, string>(); // lowercase folderName -> first project id
+
+  async function backUpOrRetain(project: ProjectConfig, reason: string): Promise<void> {
+    const backedUp = await saveFailedProjectToUnsupported(
+      vault,
+      project,
+      reason,
+      passProjectsFolder,
+      assertOwnerActive
+    );
+    // Storage failure must not erase the only recoverable project configuration.
+    // https://github.com/yydspanda/obsidian-copilot/issues/10
+    if (!backedUp) retainedEntries.push(project);
+  }
 
   for (const project of legacyProjects) {
     assertOwnerActive();
@@ -373,13 +394,7 @@ export async function migrateProjectsFromSettingsToVault(
     // Dirty data defense: skip empty ids
     if (!id) {
       logWarn("[Projects] Skip migrating project with empty id");
-      await saveFailedProjectToUnsupported(
-        vault,
-        project,
-        "empty project id",
-        passProjectsFolder,
-        assertOwnerActive
-      );
+      await backUpOrRetain(project, "empty project id");
       assertOwnerActive();
       continue;
     }
@@ -387,13 +402,7 @@ export async function migrateProjectsFromSettingsToVault(
     // Dirty data defense: skip duplicate ids
     if (seenIds.has(id)) {
       logWarn(`[Projects] Skip migrating duplicate project id: ${id}`);
-      await saveFailedProjectToUnsupported(
-        vault,
-        project,
-        `duplicate project id: ${id}`,
-        passProjectsFolder,
-        assertOwnerActive
-      );
+      await backUpOrRetain(project, `duplicate project id: ${id}`);
       assertOwnerActive();
       continue;
     }
@@ -409,12 +418,9 @@ export async function migrateProjectsFromSettingsToVault(
         `[Projects] Skip migrating project id="${id}": folder name "${folderName}" ` +
           `collides with id="${firstIdForFolder}"`
       );
-      await saveFailedProjectToUnsupported(
-        vault,
+      await backUpOrRetain(
         project,
-        `folder name collision: "${folderName}" already used by id="${firstIdForFolder}"`,
-        passProjectsFolder,
-        assertOwnerActive
+        `folder name collision: "${folderName}" already used by id="${firstIdForFolder}"`
       );
       assertOwnerActive();
       continue;
@@ -513,12 +519,9 @@ export async function migrateProjectsFromSettingsToVault(
         }
 
         logWarn(`[Projects] Migration verify failed on existing file for id=${id} at ${filePath}`);
-        await saveFailedProjectToUnsupported(
-          vault,
+        await backUpOrRetain(
           project,
-          `existing file content mismatch at ${filePath} (delete/rename the file and re-run migration)`,
-          passProjectsFolder,
-          assertOwnerActive
+          `existing file content mismatch at ${filePath} (delete/rename the file and re-run migration)`
         );
         assertOwnerActive();
         continue;
@@ -528,12 +531,9 @@ export async function migrateProjectsFromSettingsToVault(
       logWarn(
         `[Projects] Migration conflict: ${filePath} exists with id="${existingId}" but expected "${id}"`
       );
-      await saveFailedProjectToUnsupported(
-        vault,
+      await backUpOrRetain(
         project,
-        `target file exists at ${filePath} with mismatched id="${existingId}"`,
-        passProjectsFolder,
-        assertOwnerActive
+        `target file exists at ${filePath} with mismatched id="${existingId}"`
       );
       assertOwnerActive();
       continue;
@@ -564,13 +564,7 @@ export async function migrateProjectsFromSettingsToVault(
         const folderPath = `${passProjectsFolder}/${folderName}`;
         await rollbackCreatedFile(app, file.path, folderPath, assertOwnerActive);
         assertOwnerActive();
-        await saveFailedProjectToUnsupported(
-          vault,
-          project,
-          "content verification mismatch",
-          passProjectsFolder,
-          assertOwnerActive
-        );
+        await backUpOrRetain(project, "content verification mismatch");
         assertOwnerActive();
       } else {
         migratedEntries.push(project);
@@ -579,29 +573,16 @@ export async function migrateProjectsFromSettingsToVault(
       assertOwnerActive();
       const msg = error instanceof Error ? error.message : String(error);
       logError(`[Projects] Failed to migrate project id=${id}`, error);
-      await saveFailedProjectToUnsupported(
-        vault,
-        project,
-        msg,
-        passProjectsFolder,
-        assertOwnerActive
-      );
+      await backUpOrRetain(project, msg);
       assertOwnerActive();
     }
   }
 
-  // Reason: unconditionally clear ALL legacy entries from projectList.
-  // This follows the same pattern as custom command migration (commands/migrator.ts):
-  //   - Failed projects are already backed up to unsupported/ for manual recovery
-  //   - Keeping failed entries would create a dual source of truth (settings + vault files)
-  //     which causes: startup dialog spam on every launch, stale-state bugs when users
-  //     edit/delete merged projects, and sync conflicts across devices
-  //   - The unsupported/ folder is the single recovery path for failed migrations
-  //   - If backup itself fails (extremely rare — requires filesystem write failure),
-  //     data loss is accepted as an edge case not worth the complexity of tracking
-  //     per-entry backup outcomes and retaining partial projectList state
+  // Verified targets and recovery copies replace legacy settings; unprotected
+  // entries must stay available for a later retry rather than being lost.
+  // https://github.com/yydspanda/obsidian-copilot/issues/10
   assertOwnerActive();
-  updateSetting("projectList", []);
+  updateSetting("projectList", retainedEntries);
   assertOwnerActive();
 
   const successCount = migratedEntries.length;
@@ -610,6 +591,19 @@ export async function migrateProjectsFromSettingsToVault(
   const unsupportedFolder = normalizePath(
     `${passProjectsFolder}/${PROJECTS_UNSUPPORTED_FOLDER_NAME}`
   );
+  const recoveryDetails: string[] = [];
+  // Only direct the user to recovery copies that were actually verified.
+  // https://github.com/yydspanda/obsidian-copilot/issues/10
+  if (failedCount > retainedEntries.length) {
+    recoveryDetails.push(`Recover backed-up projects from ${unsupportedFolder}.`);
+  }
+  // A failed backup leaves the legacy entry intact, not a promised recovery file.
+  // https://github.com/yydspanda/obsidian-copilot/issues/10
+  if (retainedEntries.length > 0) {
+    recoveryDetails.push(
+      `${retainedEntries.length} project(s) could not be backed up and remain in legacy settings for retry.`
+    );
+  }
 
   assertOwnerActive();
   if (failedCount === 0) {
@@ -632,10 +626,7 @@ export async function migrateProjectsFromSettingsToVault(
       title: "Projects",
       status: "action-required",
       summary: `${successCount} project${successCount === 1 ? " was" : "s were"} migrated; ${failedCount} could not be migrated.`,
-      details: [
-        `Migrated projects are in ${projectsFolder}.`,
-        `Recover the remaining projects from ${unsupportedFolder}.`,
-      ],
+      details: [`Migrated projects are in ${projectsFolder}.`, ...recoveryDetails],
     };
   } else {
     logWarn("[Projects] Migration failed: no projects were migrated");
@@ -643,8 +634,8 @@ export async function migrateProjectsFromSettingsToVault(
       id: "projects",
       title: "Projects",
       status: "error",
-      summary: "No projects could be migrated, but recovery copies were created.",
-      details: [`Recover the projects from ${unsupportedFolder}.`],
+      summary: "No projects could be migrated.",
+      details: recoveryDetails,
     };
   }
 }

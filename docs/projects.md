@@ -16,6 +16,10 @@ Copilot opens the new Project immediately. Creation asks only for a name. Use **
 
 Each Project has a folder under `<Copilot folder>/projects/`. The default root is `copilot/projects/`. Its `project.md` file stores Project details and the context list. Its `AGENTS.md` file contains the instructions you own and edit.
 
+### Upgrading older Projects
+
+Copilot moves older Project settings into note files when needed. It clears an old entry only after verifying the new file or a recovery copy in the Projects `unsupported` folder. If neither can be saved, the old settings remain available for retry. Check the migration message and resolve the storage problem before trying again; do not delete the remaining settings or recovery copies.
+
 ## Add Project instructions
 
 Open the Project info menu beside the name and select **AGENTS.md**. You can also choose **Edit project** from the Projects list and edit **Project instructions**. Both open the same Project file.
