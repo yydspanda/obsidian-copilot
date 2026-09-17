@@ -1990,6 +1990,176 @@ describe("KnowledgeStudioController", () => {
   });
 
   describe("KnowledgeStudioController", () => {
+    async function prepareSavedQuery() {
+      const snapshot = {
+        ...createSnapshot(),
+        queryAvailable: true,
+        queryWritebackAvailable: true,
+      };
+      const port = new FakeKnowledgeStudioPort(async () => snapshot);
+      const queryPort = new FakeKnowledgeStudioQueryPort(async () => createAnswerQueryResult());
+      const writebackPort = new FakeKnowledgeStudioQueryWritebackPort();
+      const controller = new KnowledgeStudioController(port, port, queryPort, writebackPort);
+      controller.start("personal");
+      await flushAsync();
+      await controller.runQuery("grounded answer");
+      await controller.saveCurrentQueryToWiki("Durable answer");
+      return { controller, port, queryPort, writebackPort, snapshot };
+    }
+
+    describe("showRefreshing()", () => {
+      it("shows an action-free transient refresh state and revokes the prior generation", () => {
+        const load = createDeferred<KnowledgeStudioSnapshot>();
+        const port = new FakeKnowledgeStudioPort(async () => load.promise);
+        const controller = new KnowledgeStudioController(port, port);
+        controller.start("personal");
+        const signal = port.loadCalls[0].signal;
+
+        controller.showRefreshing();
+
+        expect(signal.aborted).toBe(true);
+        expect(port.unsubscribed).toBe(true);
+        expect(controller.getState()).toEqual({
+          status: "refreshing",
+          activeTab: "activity",
+          refreshing: true,
+        });
+      });
+
+      it("retains the completed Save notice and Query tab across repeated refresh signals without exposing the old generation (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const { controller, queryPort, port, writebackPort } = await prepareSavedQuery();
+        const feedback = controller.getState().feedback;
+
+        controller.showRefreshing();
+        controller.showRefreshing();
+
+        expect(controller.getState()).toEqual({
+          status: "refreshing",
+          activeTab: "query",
+          refreshing: true,
+          feedback,
+        });
+        expect(feedback).toMatchObject({ kind: "success" });
+        expect(queryPort.revokeCalls).toContainEqual({
+          bundleId: "personal",
+          queryId: "knowledge-query-answer-1",
+        });
+        expect(port.unsubscribed).toBe(true);
+        expect(port.loadCalls).toHaveLength(1);
+        expect(writebackPort.calls).toHaveLength(1);
+      });
+    });
+
+    describe("start()", () => {
+      it("restores only the tab and completed Save feedback while the same Bundle loads a fresh generation (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const { controller, port, snapshot, writebackPort } = await prepareSavedQuery();
+        const feedback = controller.getState().feedback;
+        const fresh = createDeferred<KnowledgeStudioSnapshot>();
+        jest.spyOn(port, "load").mockImplementationOnce(async () => fresh.promise);
+        controller.showRefreshing();
+        controller.showRefreshing();
+
+        controller.start("personal");
+
+        expect(controller.getState()).toEqual({
+          status: "loading",
+          activeTab: "query",
+          refreshing: true,
+          bundleId: "personal",
+          query: { status: "idle" },
+          feedback,
+        });
+        fresh.resolve({ ...snapshot, revisionToken: "after-save" });
+        await flushAsync();
+        expect(controller.getState()).toMatchObject({
+          status: "ready",
+          activeTab: "query",
+          query: { status: "idle" },
+          snapshot: { revisionToken: "after-save" },
+          feedback,
+        });
+        expect(writebackPort.calls).toHaveLength(1);
+      });
+
+      it.each(["stop", "unavailable", "different Bundle"] as const)(
+        "does not restore saved presentation after %s ends the refreshing session (https://github.com/yydspanda/obsidian-copilot/issues/9)",
+        async (boundary) => {
+          const { controller } = await prepareSavedQuery();
+          controller.showRefreshing();
+          if (boundary === "stop") controller.stop();
+          else if (boundary === "unavailable") controller.showUnavailable("Bundle unavailable.");
+          else controller.start("other");
+
+          controller.start("personal");
+          await flushAsync();
+
+          expect(controller.getState()).toMatchObject({
+            status: "ready",
+            activeTab: "activity",
+            query: { status: "idle" },
+          });
+          expect(controller.getState().feedback).toBeUndefined();
+        }
+      );
+
+      it("resets tab and feedback on an explicit same-Bundle restart without a refresh handoff (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const { controller } = await prepareSavedQuery();
+
+        controller.start("personal");
+        await flushAsync();
+
+        expect(controller.getState().activeTab).toBe("activity");
+        expect(controller.getState().feedback).toBeUndefined();
+        expect(controller.getState().query).toEqual({ status: "idle" });
+      });
+
+      it.each([
+        ["unavailable Query", "activity", () => createSnapshot()],
+        ["recovery required", "recovery", () => createRecoverySnapshot()],
+        [
+          "source-only generation",
+          "sources",
+          () => ({ ...createSourceSnapshot("source-only"), preferredTab: "sources" as const }),
+        ],
+      ] as const)(
+        "keeps the Save receipt but follows fresh routing for %s (https://github.com/yydspanda/obsidian-copilot/issues/9)",
+        async (_reason, activeTab, freshSnapshot) => {
+          const { controller, port } = await prepareSavedQuery();
+          const feedback = controller.getState().feedback;
+          jest.spyOn(port, "load").mockResolvedValueOnce(freshSnapshot());
+          controller.showRefreshing();
+
+          controller.start("personal");
+          await flushAsync();
+
+          expect(controller.getState()).toMatchObject({
+            status: "ready",
+            activeTab,
+            feedback,
+            query: { status: "idle" },
+          });
+        }
+      );
+
+      it("keeps the successful Save receipt when the subsequent same-Bundle load fails (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
+        const { controller, port } = await prepareSavedQuery();
+        const feedback = controller.getState().feedback;
+        jest.spyOn(port, "load").mockRejectedValueOnce(new Error("private load failure"));
+        controller.showRefreshing();
+
+        controller.start("personal");
+        await flushAsync();
+
+        expect(controller.getState()).toMatchObject({
+          status: "error",
+          feedback,
+          query: { status: "idle" },
+          error: "Knowledge Studio could not load its durable state.",
+        });
+        expect(controller.getState().snapshot).toBeUndefined();
+      });
+    });
+
     describe("openQueryCitation()", () => {
       it("ignores citation clicks while a hinted save is pending so registration completes and refreshes normally (https://github.com/yydspanda/obsidian-copilot/issues/9)", async () => {
         const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
@@ -2299,7 +2469,7 @@ describe("KnowledgeStudioController", () => {
         });
       });
 
-      it.each(["refresh", "start", "stop"] as const)(
+      it.each(["refresh", "start", "stop", "showRefreshing", "showUnavailable"] as const)(
         "cancels hinted saving on explicit %s without leaking its deferred refresh or late receipt into the next state (https://github.com/yydspanda/obsidian-copilot/issues/9)",
         async (action) => {
           const registration = createDeferred<KnowledgeStudioQueryWritebackResult>();
@@ -2320,6 +2490,14 @@ describe("KnowledgeStudioController", () => {
                 activeTab: "activity",
                 refreshing: false,
               });
+            }
+            if (action === "showRefreshing") {
+              controller.showRefreshing();
+              expect(writebackPort.calls[0].signal.aborted).toBe(true);
+            }
+            if (action === "showUnavailable") {
+              controller.showUnavailable("Bundle unavailable.");
+              expect(writebackPort.calls[0].signal.aborted).toBe(true);
             }
             controller.start("other");
             await flushAsync();
@@ -2916,24 +3094,6 @@ describe("KnowledgeStudioController", () => {
       unavailableNotice: "No project has a valid Knowledge Bundle configuration.",
     });
     expect(() => controller.showUnavailable(" ")).toThrow(TypeError);
-  });
-
-  it("shows an action-free transient refresh state and revokes the prior generation", () => {
-    const load = createDeferred<KnowledgeStudioSnapshot>();
-    const port = new FakeKnowledgeStudioPort(async () => load.promise);
-    const controller = new KnowledgeStudioController(port, port);
-    controller.start("personal");
-    const signal = port.loadCalls[0].signal;
-
-    controller.showRefreshing();
-
-    expect(signal.aborted).toBe(true);
-    expect(port.unsubscribed).toBe(true);
-    expect(controller.getState()).toEqual({
-      status: "refreshing",
-      activeTab: "activity",
-      refreshing: true,
-    });
   });
 
   it("aborts work and removes hint subscriptions when stopped", async () => {

@@ -676,7 +676,10 @@ export function KnowledgeStudioRoot({
 
   if (state.status === "refreshing") {
     return (
-      <main className="tw-flex tw-h-full tw-items-center tw-justify-center tw-p-6">
+      <main className="tw-flex tw-h-full tw-flex-col tw-items-center tw-justify-center tw-gap-4 tw-p-6">
+        {/* A generation refresh must not hide a completed command's receipt.
+            https://github.com/yydspanda/obsidian-copilot/issues/9 */}
+        <FeedbackBanner feedback={state.feedback} />
         <section
           className="tw-max-w-xl tw-rounded-xl tw-border tw-border-solid tw-border-border tw-bg-secondary-alt tw-p-5 tw-text-muted"
           role="status"
@@ -732,19 +735,27 @@ export function KnowledgeStudioRoot({
 
   if (state.status === "loading" && !state.snapshot) {
     return (
-      <div
-        className="tw-flex tw-h-full tw-items-center tw-justify-center tw-gap-2 tw-p-6 tw-text-sm tw-text-muted"
-        role="status"
-      >
-        <Loader2 aria-hidden="true" className="tw-size-4 tw-animate-spin" />
-        Loading durable knowledge state…
-      </div>
+      <main className="tw-flex tw-h-full tw-flex-col tw-items-center tw-justify-center tw-gap-4 tw-p-6">
+        {/* Reloading the read model does not invalidate a completed command's receipt.
+            https://github.com/yydspanda/obsidian-copilot/issues/9 */}
+        <FeedbackBanner feedback={state.feedback} />
+        <div
+          className="tw-flex tw-items-center tw-justify-center tw-gap-2 tw-text-sm tw-text-muted"
+          role="status"
+        >
+          <Loader2 aria-hidden="true" className="tw-size-4 tw-animate-spin" />
+          Loading durable knowledge state…
+        </div>
+      </main>
     );
   }
 
   if (state.status === "error" && !state.snapshot) {
     return (
-      <div className="tw-flex tw-h-full tw-p-6">
+      <div className="tw-flex tw-h-full tw-flex-col tw-gap-4 tw-p-6">
+        {/* A read failure must remain distinct from the completed command's outcome.
+            https://github.com/yydspanda/obsidian-copilot/issues/9 */}
+        <FeedbackBanner feedback={state.feedback} />
         <LoadError
           controller={controller}
           fullPage={true}

@@ -608,6 +608,7 @@ export class KnowledgeStudioController {
   private reviewEvidenceGeneration = 0;
   private refreshQueued = false;
   private queryWritebackRefreshQueued = false;
+  private refreshingBundleId?: string;
   private pendingForwardRevisionFocusRef?: string;
   private readonly reviewDrafts = new KnowledgeReviewDraftStore();
 
@@ -656,13 +657,18 @@ export class KnowledgeStudioController {
     if (typeof bundleId !== "string" || bundleId.trim().length === 0) {
       throw new TypeError("bundleId must be a non-empty string");
     }
+    // Only a same-Bundle generation handoff may retain the completed action's UI;
+    // explicit restarts must not inherit another session's receipt or navigation.
+    // https://github.com/yydspanda/obsidian-copilot/issues/9
+    const refreshingState = this.refreshingBundleId === bundleId ? this.state : undefined;
     this.cancelSessionWork();
     this.state = {
       status: "loading",
-      activeTab: "activity",
+      activeTab: refreshingState?.activeTab ?? "activity",
       refreshing: true,
       bundleId,
       query: { status: "idle" },
+      feedback: refreshingState?.feedback,
     };
     this.emit();
     try {
@@ -700,11 +706,18 @@ export class KnowledgeStudioController {
    * the Studio exposes durable state again.
    */
   showRefreshing(): void {
+    // Keep the receipt visible while admission rebuilds, but never retain the
+    // old snapshot or Query authority. Repeated refresh signals share this handoff.
+    // https://github.com/yydspanda/obsidian-copilot/issues/9
+    const { activeTab, feedback } = this.state;
+    const bundleId = this.state.bundleId ?? this.refreshingBundleId;
     this.cancelSessionWork();
+    this.refreshingBundleId = bundleId;
     this.state = {
       status: "refreshing",
-      activeTab: "activity",
+      activeTab,
       refreshing: true,
+      feedback,
     };
     this.emit();
   }
@@ -2128,6 +2141,7 @@ export class KnowledgeStudioController {
 
   /** Cancels reads, commands, and hint subscriptions for the current session. */
   private cancelSessionWork(): void {
+    this.refreshingBundleId = undefined;
     this.unsubscribeHints?.();
     this.unsubscribeHints = undefined;
     this.loadAbort?.abort();

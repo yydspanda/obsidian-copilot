@@ -2,6 +2,12 @@ import * as React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
 import { KnowledgeStudioRoot } from "@/components/knowledge/KnowledgeStudioRoot";
+import {
+  LoadingAfterSave,
+  RefreshingAfterSave,
+  RefreshingAfterSaveFailure,
+  ReloadFailedAfterSave,
+} from "@/components/knowledge/KnowledgeStudioRoot.stories";
 import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
 import type {
   KnowledgeReviewCommand,
@@ -675,6 +681,84 @@ describe("KnowledgeStudioRoot", () => {
     expect(screen.queryByTestId("activity-panel")).toBeNull();
     expect(screen.queryByText("Knowledge Studio unavailable")).toBeNull();
   });
+
+  it.each(["refreshing", "loading", "error"] as const)(
+    "keeps the saved-source receipt visible without stale actions while %s — https://github.com/yydspanda/obsidian-copilot/issues/9",
+    (status) => {
+      const controller = new TestKnowledgeStudioController({
+        status,
+        activeTab: "query",
+        refreshing: status !== "error",
+        bundleId: status === "refreshing" ? undefined : "personal",
+        feedback: {
+          kind: "success",
+          message: "The query answer was registered as a managed source.",
+        },
+        error:
+          status === "error" ? "Knowledge Studio could not load its durable state." : undefined,
+      });
+      renderStudio(controller);
+
+      expect(
+        screen
+          .getByText("The query answer was registered as a managed source.")
+          .closest('[role="status"]')
+      ).toBeTruthy();
+      expect(screen.queryByTestId("query-panel")).toBeNull();
+      expect(screen.queryByTestId("activity-panel")).toBeNull();
+      expect(screen.queryByRole("tab")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Import folder" })).toBeNull();
+      if (status === "error") {
+        expect(screen.getByRole("button", { name: "Retry load" })).toBeTruthy();
+      } else {
+        expect(screen.queryByRole("button")).toBeNull();
+      }
+    }
+  );
+
+  it.each([
+    ["refreshing", RefreshingAfterSave, "The query answer was registered as a managed source."],
+    ["loading", LoadingAfterSave, "The query answer was registered as a managed source."],
+    [
+      "reload failed",
+      ReloadFailedAfterSave,
+      "The query answer was registered as a managed source.",
+    ],
+    ["save failed", RefreshingAfterSaveFailure, "The answer could not be registered as a source."],
+  ] as const)(
+    "renders the %s gallery story with its completed operation feedback — https://github.com/yydspanda/obsidian-copilot/issues/9",
+    (_name, story, message) => {
+      render(
+        <KnowledgeStudioRoot
+          {...(story.args as React.ComponentProps<typeof KnowledgeStudioRoot>)}
+        />
+      );
+
+      expect(screen.getByText(message)).toBeTruthy();
+      expect(screen.queryByTestId("query-panel")).toBeNull();
+    }
+  );
+
+  it.each(["refreshing", "loading", "error"] as const)(
+    "keeps a writeback failure visible while %s without a snapshot — https://github.com/yydspanda/obsidian-copilot/issues/9",
+    (status) => {
+      const controller = new TestKnowledgeStudioController({
+        status,
+        activeTab: "query",
+        refreshing: status !== "error",
+        bundleId: status === "refreshing" ? undefined : "personal",
+        feedback: { kind: "error", message: "The answer could not be registered as a source." },
+      });
+      renderStudio(controller);
+
+      expect(
+        screen
+          .getByText("The answer could not be registered as a source.")
+          .closest('[role="alert"]')
+      ).toBeTruthy();
+      expect(screen.queryByTestId("query-panel")).toBeNull();
+    }
+  );
 
   it("renders guided startup setup without displaying a fabricated Bundle identity", () => {
     const controller = new TestKnowledgeStudioController({

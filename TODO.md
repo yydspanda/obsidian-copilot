@@ -16,8 +16,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Issue #9 pushed/deployed as d1e421de; Windows Save remains unverified.
-  First Query had zero hits/no model call; ask permission to reuse the exact old question. Keep the queue paused.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Issue #9: Windows Save persistence passes; feedback/tab continuity is repaired locally.
+  Local checks pass; deployment and Windows UI acceptance remain pending. Keep the queue paused; no new model run.
 
 ## Upstream Status
 
@@ -30,11 +30,12 @@
 
 ## Recent Activity
 
-- 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #7](https://github.com/yydspanda/obsidian-copilot/issues/7)
-  marks incompatible old proposals and blocks Apply while preserving explicit rejection.
-  9 suites / 254 tests and 36 Windows gallery cases pass; clean `fbc413a0` is deployed.
-  Query/citation/return pass; September 16 Save race is locally repaired under issue #9; real revalidation remains pending.
-  Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests and bounded Windows checks pass (one gallery rerun).
+- 2026-09-17 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #9](https://github.com/yydspanda/obsidian-copilot/issues/9):
+  authorized 1 Query + 1 Save created exactly one capture, Manifest entry and pending job; no Wiki writes.
+  The deployed build loses feedback after 7 ms; the authorized local fix preserves feedback/tab, not stale Query authority.
+  `EXP-20260917-001` records the live result; follow-up local tests use no model, Review action or queue resume.
+- 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests pass.
+  Issue #7 blocks incompatible proposals; 36 Windows gallery cases and Query/citation/return checks pass.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
   (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
   the restored working-tree content exactly matched the isolated merge preflight. The user approved
@@ -60,8 +61,6 @@
   pointer, frozen migration snapshot, monthly archive, experiment contract, and CI validation.
 - 2026-08-26 — `OPS-UPSTREAM-SYNC` — Merged upstream `054dc69b`; retained the new upstream user
   message folding behavior and only reapplied the narrow Knowledge Draft extension.
-- 2026-08-25 — `PK-H3-FORWARD-REVISION-WIN` — Automated and release gates completed; bounded
-  Windows acceptance remains on the roadmap.
 
 ## Working Agreements
 
@@ -76,6 +75,11 @@
 
 ## Current Verification
 
+- September 17 presentation repair: 8 suites / 210 tests pass, including red/green receipt continuity regressions.
+  Personal build, syntax/mobile-load, format/lint and Obsidian review pass; gallery builds and 4 story DOM tests pass.
+  Only 2 fork-owned runtime modules changed; browser layout/Windows UI remain unverified. No model or Vault operations.
+  Independent read-only verification passes all 18 receipt checks, including origin/hash/path/sourceId consistency.
+  Save-to-Activity-ready takes 18,653 ms; no error/rejection is observed. These results do not complete issue #9.
 - September 16 issue #9: 45 suites / 554 tests pass; production edits touch only two fork-owned modules.
   Personal production build passes at 6,428,121 bytes under the explicit 10,000,000-byte ceiling;
   typecheck, syntax and mobile-load smoke pass. Default 5 MB policy is unchanged; see the Windows checkpoint for hashes.
@@ -96,17 +100,13 @@
 - Earlier live DeepSeek check: 2/2 scenarios passed with three exact `deepseek-flash` responses;
   this final refactor did not rerun paid requests. Historical evidence limitations are recorded in
   the September experiment log.
-- The September 11 repair batch touched 16 upstream-owned production files, but extraction reduced their
-  diff from +672/-82 to +398/-81. The remaining seams handle model defaults, registry/picker
-  resolution, backend configuration, and pre-send validation; provider policy lives in new modules.
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift: current branch includes `61619fe4`; remote master stays behind by explicit user choice, so the aggregate drift workflow can remain red.
-- September 15 Windows deployment: clean `0c381e68-clean-d235147b24f2` is loaded; Studio is ready.
-  CLI reload required the plugin-manager fallback. All 14 scoped files and 12 Reviews are unchanged;
-  Query/Save checks retain Runtime 1488; later renderer restart shows 1509, still paused with capture unregistered.
-  36 gallery states render without horizontal overflow (35 first-pass, one isolated rerun).
-  Fake connection feedback and Studio popout/Activity/close/reopen pass; temporary gallery is removed.
+- Current Windows deployment: clean `4.0.8+dev.d1e421de.clean.51e5aef15ac7`; Studio is ready on Activity.
+  Runtime 1576 / Manifest 17 contains 8 entries; 61 jobs include 4 pending; original user-pause timestamp remains.
+  All 60 original jobs retain their fields except 7 jobs' inputRevision/updatedAt; all 7 old Manifest entries are unchanged.
+  Earlier 36 gallery states and fake connection/Studio popout/Activity/close/reopen checks pass; gallery is removed.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
   Evidence: source-mode selection and reading-mode Ctrl+C both preserve all 3,769 characters; Live Preview highlighting differs.
