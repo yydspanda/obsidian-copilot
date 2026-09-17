@@ -17,7 +17,7 @@
 ## In Progress
 
 - [ ] `PK-H3-UPSTREAM-V4-WIN` — Issue #9: feedback/tab repair 414b05ae is pushed and loaded in Windows.
-  Studio and data-preservation checks pass; real Save UI acceptance remains pending. Keep the queue paused; no new model run.
+  Eight Windows story checks and full data preservation pass; real Save UI acceptance remains pending. Queue stays paused.
 
 ## Upstream Status
 
@@ -33,7 +33,7 @@
 - 2026-09-17 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #9](https://github.com/yydspanda/obsidian-copilot/issues/9):
   authorized 1 Query + 1 Save created exactly one capture, Manifest entry and pending job; no Wiki writes.
   The earlier build lost feedback after 7 ms; repair 414b05ae is pushed/deployed, with no stale Query authority retained.
-  `EXP-20260917-001` records the earlier live result; deployment preserves notes/settings/history and keeps the queue paused.
+  `EXP-20260917-001` records the earlier live result; 8 Windows story checks pass without a new Query/Save or data changes.
 - 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests pass.
   Issue #7 blocks incompatible proposals; 36 Windows gallery cases and Query/citation/return checks pass.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
@@ -77,7 +77,7 @@
 
 - September 17 presentation repair: 8 suites / 210 tests pass, including red/green receipt continuity regressions.
   Personal build, syntax/mobile-load, format/lint and Obsidian review pass; gallery builds and 4 story DOM tests pass.
-  Only 2 fork-owned runtime modules changed; browser layout/Windows UI remain unverified. No model or Vault operations.
+  Only 2 fork-owned runtime modules changed; 4 inert stories pass at 300/600 px in Windows. Real Save continuity is still pending.
   Independent read-only verification passes all 18 receipt checks, including origin/hash/path/sourceId consistency.
   Save-to-Activity-ready takes 18,653 ms; no error/rejection is observed. These results do not complete issue #9.
 - September 16 issue #9: 45 suites / 554 tests pass; production edits touch only two fork-owned modules.
@@ -104,8 +104,8 @@
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift: current branch includes `61619fe4`; remote master stays behind by explicit user choice, so the aggregate drift workflow can remain red.
 - Current Windows deployment: clean `4.0.8+dev.414b05ae.clean.daa7f5fe750b`; Studio is ready on Activity.
-  Runtime 1600 / Manifest 17 contains 8 entries; 61 jobs include 4 pending; original user-pause timestamp remains.
-  Deployment preserves all notes/settings/Manifest/Reviews; 8 jobs only update revision/time metadata. Gallery bootstrap failed cleanly.
+  Runtime 1624 / Manifest 17 contains 8 entries; 61 jobs include 4 pending; original user-pause timestamp remains.
+  Gallery preserves all 69 files and Runtime/settings; plugin removed, but strict style cleanup does not pass (one retained editor style).
   Earlier 36 gallery states and fake connection/Studio popout/Activity/close/reopen checks pass; gallery is removed.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
