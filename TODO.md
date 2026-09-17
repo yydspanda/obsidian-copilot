@@ -16,8 +16,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-UPSTREAM-V4-WIN` — Issue #9: Windows Save persistence passes; feedback/tab continuity is repaired locally.
-  Local checks pass; deployment and Windows UI acceptance remain pending. Keep the queue paused; no new model run.
+- [ ] `PK-H3-UPSTREAM-V4-WIN` — Issue #9: feedback/tab repair 414b05ae is pushed and loaded in Windows.
+  Studio and data-preservation checks pass; real Save UI acceptance remains pending. Keep the queue paused; no new model run.
 
 ## Upstream Status
 
@@ -32,8 +32,8 @@
 
 - 2026-09-17 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #9](https://github.com/yydspanda/obsidian-copilot/issues/9):
   authorized 1 Query + 1 Save created exactly one capture, Manifest entry and pending job; no Wiki writes.
-  The deployed build loses feedback after 7 ms; the authorized local fix preserves feedback/tab, not stale Query authority.
-  `EXP-20260917-001` records the live result; follow-up local tests use no model, Review action or queue resume.
+  The earlier build lost feedback after 7 ms; repair 414b05ae is pushed/deployed, with no stale Query authority retained.
+  `EXP-20260917-001` records the earlier live result; deployment preserves notes/settings/history and keeps the queue paused.
 - 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests pass.
   Issue #7 blocks incompatible proposals; 36 Windows gallery cases and Query/citation/return checks pass.
 - 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
@@ -103,9 +103,9 @@
 - Across the whole fork, 37 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift: current branch includes `61619fe4`; remote master stays behind by explicit user choice, so the aggregate drift workflow can remain red.
-- Current Windows deployment: clean `4.0.8+dev.d1e421de.clean.51e5aef15ac7`; Studio is ready on Activity.
-  Runtime 1576 / Manifest 17 contains 8 entries; 61 jobs include 4 pending; original user-pause timestamp remains.
-  All 60 original jobs retain their fields except 7 jobs' inputRevision/updatedAt; all 7 old Manifest entries are unchanged.
+- Current Windows deployment: clean `4.0.8+dev.414b05ae.clean.daa7f5fe750b`; Studio is ready on Activity.
+  Runtime 1600 / Manifest 17 contains 8 entries; 61 jobs include 4 pending; original user-pause timestamp remains.
+  Deployment preserves all notes/settings/Manifest/Reviews; 8 jobs only update revision/time metadata. Gallery bootstrap failed cleanly.
   Earlier 36 gallery states and fake connection/Studio popout/Activity/close/reopen checks pass; gallery is removed.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
