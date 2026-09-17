@@ -2,6 +2,15 @@ import { redactAddressRun, redactLogText } from "@/utils/redactLog";
 
 describe("redactLog", () => {
   describe("redactLogText()", () => {
+    const unboundedSecretCases = [
+      { shape: "provider API key", prefix: "sk-", minimum: 12, redacted: "<secret>" },
+      { shape: "Google API key", prefix: "AIza", minimum: 20, redacted: "<secret>" },
+      { shape: "GitHub token", prefix: "ghp_", minimum: 20, redacted: "<secret>" },
+      { shape: "Slack token", prefix: "xoxb-", minimum: 10, redacted: "<secret>" },
+      { shape: "bearer token", prefix: "bearer ", minimum: 12, redacted: "bearer <token>" },
+      { shape: "password field", prefix: "password=", minimum: 6, redacted: "password=<redacted>" },
+    ];
+
     it("replaces a home-directory username in a Unix path but keeps the path shape", () => {
       expect(redactLogText('{"file":"/Users/chaoyang/vault/note.md"}')).toBe(
         '{"file":"/Users/<user>/vault/note.md"}'
@@ -183,6 +192,23 @@ describe("redactLog", () => {
 
       expect(redactLogText(huge)).toBe("Authorization: Basic <redacted>");
     });
+
+    it.each(unboundedSecretCases)(
+      "keeps a $shape below its $minimum-character minimum and redacts it whole at and above that minimum (https://github.com/Brevilabs/obsidian-copilot-private/issues/202)",
+      ({ prefix, minimum, redacted }) => {
+        for (const length of [minimum - 1, minimum, minimum + 1]) {
+          const input = `${prefix}${"A".repeat(length)}`;
+          expect(redactLogText(input)).toBe(length < minimum ? input : redacted);
+        }
+      }
+    );
+
+    it.each(unboundedSecretCases)(
+      "redacts an unbroken 16 MiB $shape without overflowing the regexp stack or retaining its secret (https://github.com/Brevilabs/obsidian-copilot-private/issues/202)",
+      ({ prefix, redacted }) => {
+        expect(redactLogText(`${prefix}${"A".repeat(16 * 1024 * 1024)}`)).toBe(redacted);
+      }
+    );
 
     it("removes AWS secret and session values, whose field names the key/secret rule misses (https://github.com/Brevilabs/obsidian-copilot-private/issues/202)", () => {
       expect(redactLogText("aws_secret_access_key=0123456789abcdefghijklmnopqrstuv")).toBe(

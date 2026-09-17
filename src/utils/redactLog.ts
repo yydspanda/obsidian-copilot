@@ -142,15 +142,19 @@ const RULES: RedactionRule[] = [
   // — from surviving as a leftover.
   { pattern: /[A-Za-z0-9._%+@-]+/g, replacement: redactAddressRun },
 
+  // A fixed minimum followed by a simple run preserves the full secret match
+  // without V8's open-ended counted loop exhausting the regexp stack on a
+  // multi-megabyte credential. This also applies to bearer and field values.
+  // https://github.com/Brevilabs/obsidian-copilot-private/issues/202
   // Provider API keys with a recognizable prefix.
-  { pattern: /\bsk-[A-Za-z0-9_-]{12,}/g, replacement: "<secret>" },
-  { pattern: /\bAIza[A-Za-z0-9_-]{20,}/g, replacement: "<secret>" },
+  { pattern: /\bsk-[A-Za-z0-9_-]{12}[A-Za-z0-9_-]*/g, replacement: "<secret>" },
+  { pattern: /\bAIza[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*/g, replacement: "<secret>" },
   { pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: "<secret>" },
-  { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}/g, replacement: "<secret>" },
-  { pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}/g, replacement: "<secret>" },
+  { pattern: /\bgh[pousr]_[A-Za-z0-9]{20}[A-Za-z0-9]*/g, replacement: "<secret>" },
+  { pattern: /\bxox[baprs]-[A-Za-z0-9-]{10}[A-Za-z0-9-]*/g, replacement: "<secret>" },
 
   // Bearer tokens.
-  { pattern: /(bearer\s+)[A-Za-z0-9._-]{12,}/gi, replacement: "$1<token>" },
+  { pattern: /(bearer\s+)[A-Za-z0-9._-]{12}[A-Za-z0-9._-]*/gi, replacement: "$1<token>" },
 
   // Basic credentials, which the field rule below cannot reach: its value
   // pattern starts after the `:`, where it finds the five-character scheme word
@@ -191,7 +195,7 @@ const RULES: RedactionRule[] = [
   // https://github.com/Brevilabs/obsidian-copilot-private/issues/202
   {
     pattern:
-      /("?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|authorization|license[_-]?key|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?session[_-]?token)"?\s*[:=]\s*"?)[^"'\s,}]{6,}/gi,
+      /("?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|authorization|license[_-]?key|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?session[_-]?token)"?\s*[:=]\s*"?)[^"'\s,}]{6}[^"'\s,}]*/gi,
     replacement: "$1<redacted>",
   },
 ];
