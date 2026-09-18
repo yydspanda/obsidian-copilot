@@ -7,14 +7,14 @@
 
 ## Current Stage
 
-- Stage ID: `OPS-MAINTENANCE`
-- Outcome: keep the current development branch aligned with canonical upstream.
-- Exit gate: verify drift and affected regressions at each sync; remote master stays unchanged.
+- Stage ID: `PK-H3`
+- Outcome: verify real-use answers and citations on an isolated copy of the selected management notes.
+- Exit gate: preserve the original Vault and distinguish retrieval quality from later authorized Wiki writes.
 
 ## In Progress
 
-- [ ] `OPS-UPSTREAM-SYNC` — Recurring maintenance pointer: check the next canonical drift.
-  September 18 sync, failed-history audit and authorized test-Vault deployment are complete; no model retries.
+- [ ] `PK-H3-MANAGEMENT-REALUSE` — Isolated material copy prepared; next open it and configure the runtime.
+  No plugin/credentials copied, model request made, or Wiki write authorized by this preparation.
 
 ## Upstream Status
 
@@ -27,15 +27,14 @@
 
 ## Recent Activity
 
+- 2026-09-18 — `PK-H3-MANAGEMENT-REALUSE` — Copied 163 Markdown notes and one graph JSON into a new Vault folder.
+  All 164 copies match; all 171 original files remain unchanged. [Preparation checkpoint](./designdocs/progress/acceptance/2026-09-18-management-realuse.md).
 - 2026-09-18 — `OPS-UPSTREAM-SYNC` — Synced 12 upstream commits with 1 conflict file; 56 suites / 1,623 tests pass.
   Build/lint/review pass; `b1328a7d` subsequently deployed to the Windows test Vault. All 38 Failed tags remain historical.
   [Merge reconciliation and retest scope](./designdocs/progress/acceptance/2026-09-18-upstream-sync.md).
 - 2026-09-18 — `PK-LOG-REDACTION-WIN` — 724 suites / 10,498 tests pass; repair `3806657e` pushed/deployed.
   Windows isolated checks 14/14 and actual Studio ready/paused pass; no model calls or live Wiki Apply.
   [Delivery evidence and preserved limitations](./designdocs/progress/acceptance/2026-09-18-redaction-delivery.md).
-- 2026-09-18 — `PK-H3-REVIEW11-FIX` — Four repairs pass 10 relevant suites / 175 tests.
-  Build/lint/review pass; full sweep has 7 failures in unchanged log redaction. No commit/deployment.
-  [Regression evidence and limits](./designdocs/progress/acceptance/2026-09-18-review11.md).
 - 2026-09-18 — `PK-H3-UPSTREAM-V4-WIN` — Bounded regression complete: five authorized Apply outcomes,
   722 suites / 10,472 tests pass; final Windows reload/popout/Query/citation and 18/18 preservation checks pass.
   Two minimal repairs are pushed/deployed; extra requests 9/20. [Evidence and exceptions](./designdocs/progress/acceptance/2026-09-18-unattended.md).
