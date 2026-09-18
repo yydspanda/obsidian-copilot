@@ -8,7 +8,7 @@ describe("constants", () => {
       ).map((model) => model.name);
 
       expect(directDeepSeekModels).toContain(ChatModels.DEEPSEEK_FLASH);
-      expect(directDeepSeekModels).not.toContain(ChatModels.COPILOT_PLUS_DEEPSEEK_V4_PRO);
+      expect(directDeepSeekModels).not.toContain("deepseek-v4-pro");
     });
   });
 

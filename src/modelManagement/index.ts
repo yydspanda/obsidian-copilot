@@ -13,6 +13,7 @@ export type {
   BackendConfig,
   BackendType,
   ConfiguredModel,
+  PersistedCopilotPlusCatalog,
   Provider,
   ProviderOrigin,
 } from "./types/persisted";
@@ -95,12 +96,10 @@ export type {
 
 export { CopilotPlusSetupApi } from "./setup/CopilotPlusSetupApi";
 export type { PlusSetupResult, RegisterPlusProviderInput } from "./setup/CopilotPlusSetupApi";
-export {
-  COPILOT_PLUS_DEFAULT_ENABLED_MODELS,
-  COPILOT_PLUS_MODELS,
-  plusSyncNeeded,
-  syncCopilotPlusProvider,
-} from "./setup/copilotPlusSync";
+export { plusSyncNeeded, syncCopilotPlusProvider } from "./setup/copilotPlusSync";
+export type { CopilotPlusModelsFetcher } from "./setup/copilotPlusSync";
+export { readCopilotPlusCatalog, parseContextLength } from "./setup/copilotPlusCatalog";
+export type { CopilotPlusCatalog } from "./setup/copilotPlusCatalog";
 
 // ---------------------------------------------------------------------------
 // Top-level factory + coordinator
@@ -122,6 +121,7 @@ export {
   backendsAtom,
   byokProvidersAtom,
   configuredModelsAtom,
+  copilotPlusCatalogAtom,
   copilotPlusProvidersAtom,
   providersAtom,
   selfHostModeAtom,

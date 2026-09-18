@@ -8,25 +8,28 @@
 ## Current Stage
 
 - Stage ID: `OPS-MAINTENANCE`
-- Outcome: review canonical upstream drift after the completed repair delivery.
-- Exit gate: agree the current-branch merge window and verify alignment; remote master stays unchanged.
+- Outcome: keep the current development branch aligned with canonical upstream.
+- Exit gate: verify drift and affected regressions at each sync; remote master stays unchanged.
 
 ## In Progress
 
-- [ ] `OPS-UPSTREAM-SYNC` — Next maintenance pointer: inspect canonical drift and plan synchronization.
-  No upstream merge is included or newly authorized by the completed repair delivery.
+- [ ] `OPS-UPSTREAM-SYNC` — Recurring maintenance pointer: check the next canonical drift.
+  September 18 sync and failed-history audit are complete; no Vault deployment or model retries in this delivery.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
-- Last fetched: `2026-09-18` — canonical `37bf6a12`; verified artifact `3806657e` is 97 ahead / 11 behind.
-- Frozen baseline: `61619fe427f27c23fbb08b6a040d18ae73c3b219`, merge `0c381e68`; no new merge during live acceptance.
+- Last fetched: `2026-09-18` — canonical `996a088c`; merged into the current branch, 0 behind.
+- Incorporated baseline: `996a088c59a2ae123852d8e542f354b1eba72cee`; previous baseline was `61619fe4`.
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
 
 ## Recent Activity
 
+- 2026-09-18 — `OPS-UPSTREAM-SYNC` — Synced 12 upstream commits with 1 conflict file; 56 suites / 1,623 tests pass.
+  Build/lint/review pass. All 38 Failed tags are unchanged history; no deployment, model calls or Vault writes.
+  [Merge reconciliation and retest scope](./designdocs/progress/acceptance/2026-09-18-upstream-sync.md).
 - 2026-09-18 — `PK-LOG-REDACTION-WIN` — 724 suites / 10,498 tests pass; repair `3806657e` pushed/deployed.
   Windows isolated checks 14/14 and actual Studio ready/paused pass; no model calls or live Wiki Apply.
   [Delivery evidence and preserved limitations](./designdocs/progress/acceptance/2026-09-18-redaction-delivery.md).
@@ -56,10 +59,6 @@
   live sessions when a supported model switch fails; same-tick invalid defaults stop before I/O.
 - 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — Merged upstream `20837e19`; resolved three conflict
   files by retaining upstream behavior and reapplying only the required Knowledge integration seams.
-- 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — Windows acceptance confirmed safe Abandon behavior and
-  exposed a stale-Manifest recovery loop before any target file was written; the recovery contract
-  is corrected under [issue #2](https://github.com/yydspanda/obsidian-copilot/issues/2), pending a
-  fresh Windows artifact check.
 
 ## Working Agreements
 
@@ -74,12 +73,13 @@
 
 ## Current Verification
 
+- September 18 upstream sync: 56/56 affected suites and 1,623 tests pass (0 failures/skips), plus 20 governance tests.
+  Production build/typecheck, artifact syntax/mobile-load smoke, format/lint and full Obsidian review pass.
+  One session-manager compatibility check preserves retired-model refusal; large-log regression stays enabled.
+  This is targeted post-merge coverage, not a repeat of the older full sweep or live Windows acceptance.
 - September 18 review/redaction repairs: 724/724 suites and 10,498 tests pass, 0 failures, 2 existing skips.
   Source hash stays frozen; normal commit hooks and format/lint/build/review pass, with retained warnings.
   Source `3806657e` is pushed and deployed; no real model requests or upstream merge in this delivery.
-- Earlier September 18 artifact: clean `4.0.8+dev.05903630.clean.9281d3d8cf94`, 6,428,807 bytes;
-  full sweep 722/722 suites, 10,472 passed, 0 failed, 2 existing skips. Format/lint/build/review pass.
-  All five current Apply outputs appear in final retrieval; no Save/retry or persistent Query writes.
 - September 17 presentation repair: 8 suites / 210 tests pass, including red/green receipt continuity regressions.
   Personal build, syntax/mobile-load, format/lint and Obsidian review pass; gallery builds and 4 story DOM tests pass.
   Only 2 fork-owned runtime modules changed; 8 Windows story cases and the separately authorized live Save continuity check pass.
@@ -102,7 +102,7 @@
   the September experiment log.
 - Against frozen upstream `61619fe4`, 38 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
-- Upstream drift now exceeds the 10-commit limit (11 behind); do not report this gate green. Remote master remains untouched.
+- Upstream drift is resolved at canonical `996a088c`; remote master remains untouched.
 - Current Windows deployment: clean `4.0.8+dev.3806657e.clean.3dbe2a0fe726`; Studio ready, queue paused.
   Runtime 2013 / Queue 960; all 66 job identities/states and settings preserved, no pending; 14 isolated checks pass.
   All 74 files retained; only the unload-time diagnostic log changes. [Latest checkpoint](./designdocs/progress/acceptance/2026-09-18-redaction-delivery.md).

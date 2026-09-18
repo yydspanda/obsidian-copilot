@@ -136,21 +136,21 @@ You can send an image without adding text, for example when the agent asks for a
 
 Attachments apply to the next message. For instructions and context that should be reused, create a [Project](projects.md) or add rules to [`AGENTS.md`](system-prompts.md). See [Context and Mentions](context-and-mentions.md) for every context option.
 
-Uploaded images are embedded in saved conversation notes. Copilot stores the image files using your vault attachment setting and reuses them when the conversation is saved again.
+Uploaded images are embedded in saved conversation notes. Copilot stores the image files under `<Copilot folder>/copilot-conversations/attachments/`, not in your vault attachment folder, and reuses them when the conversation is saved again.
 
 Type `/` to insert an enabled Skill or [Copilot command](custom-commands.md). For a quick question or rewrite beside the current selection, use [Quick Ask](custom-commands.md#quick-ask).
 
 ## Multi-agent answers
 
-With active Plus access, type `@`, open **Agents**, and mention one or more other installed agents in the same prompt. Copilot sends the same question, that turn's attachments, and a bounded slice of the visible conversation to each mentioned agent in parallel. The current agent summarizes their answers; it does not automatically produce a separate answer of its own.
+With active Plus access, type `@`, open **Agents**, and mention one or more other installed agents in the same prompt. Copilot sends the same question, that turn's attachments, and a bounded slice of the visible conversation to each mentioned agent. With one other agent mentioned, only that agent responds and its answer is shown directly. With two or more, they answer in parallel and the current agent summarizes their answers without producing a separate answer of its own.
 
 This is useful for research, second opinions, and reviews. Mentioning only the current agent behaves like a normal turn.
 
-Each answer appears in its own tab, with **Summary** first. If one answerer fails, Copilot keeps the successful answers and summarizes what completed.
+Each answer appears in its own tab. A direct one-agent turn shows only that agent. A turn with two or more answerers opens with **Summary** first. If one answerer fails in a multi-agent turn, Copilot keeps the successful answers and summarizes what completed.
 
 Multi-agent answers are designed for read-only research, not edits. Copilot denies explicit vault edit, delete, and move tools, along with tools it cannot classify. Retrieval Skills can still run their own scripts under the agent's permissions, so multi-agent answers are not a security sandbox. Use only trusted Skills, and use a regular single-agent turn when you want files changed.
 
-The default model and effort saved for each mentioned agent are used for its answer. If the summary fails, its tab shows the error and any partial summary; the individual answers remain available. If an agent is not installed or ready, configure it before adding it to the prompt.
+The default model and effort saved for each mentioned agent are used for its answer. If a multi-agent summary fails, its tab shows the error and any partial summary; the individual answers remain available. If an agent is not installed or ready, configure it before adding it to the prompt.
 
 ## Skills across agents
 
@@ -172,6 +172,16 @@ In Self-Host Mode with OpenCode selected, Agent Chat's built-in web-search Skill
 
 On Windows, creating the folder links may require **Developer Mode** or administrator access. If a sync service replaces a link, toggle that Skill off and on for the affected agent to recreate it.
 
+## Applying a settings change
+
+Agents read their configuration when they start: API keys, enabled models, instructions, and skills. A change you make while a chat is open does not reach the agent already running. Agent Chat says so with a **config has changed** notice and a **Reload** action, and the chat keeps working in the meantime.
+
+The notice names the agent that needs to reload. Changing Claude's enabled models does not ask you to reload OpenCode. Settings an agent can apply without restarting do not need a reload notice.
+
+Choose **Reload** when you want the change to take effect. The agent restarts and reopens every chat using that agent, keeping each chat’s history and anything you had typed but not sent. During a running turn the reload waits for that turn to finish. If the agent cannot reopen a conversation, that tab starts a fresh chat and the old one remains under Recent Chats. If a chat failed to start, correct its settings and choose **Retry** to apply them.
+
+Two changes never wait. Narrowing Miyo's **Search scope** and turning on Self-Host Mode both restart the agent straight away, so no later step in the conversation can search or browse outside the new boundary.
+
 ## Related
 
 - [Getting Started](getting-started.md)
@@ -185,7 +195,7 @@ On Windows, creating the folder links may require **Developer Mode** or administ
 
 Copilot ships an `openartifacts-publish` skill to Claude Code, Codex, and OpenCode. Publishing needs a Copilot Plus license key in Copilot settings. Copilot passes that key to the agent process, and the skill's bundled wrapper script sends it to `api.openartifacts.ai` over HTTPS. The wrapper needs only the shell tools already on your system: `sh`, `curl`, and `awk` on macOS and Linux, PowerShell on Windows.
 
-Ask the agent to publish a note. It renders the note to HTML, writes the file under `.openartifacts/handoffs/` in your vault, tells you the path, and stops. Open that file in your browser to see the page as it will be uploaded; OpenArtifacts adds its own header and footer bylines when it serves the page. Reply that it should publish, or describe changes and the agent revises the same file and asks again. The agent never publishes in the same turn that produced the HTML.
+Ask the agent to publish a note. It renders the note to HTML, using the note's file name without `.md`, converted to title case, as both the browser title and a visible heading above the note body. If the note already starts with the same heading, Copilot keeps that heading instead of adding a duplicate. If you explicitly ask for no title, Copilot does not add the visible heading but keeps the browser title. Long titles wrap on narrow screens instead of being cut off. Copilot writes the complete page under `.openartifacts/handoffs/` in your vault, tells you the path, and stops. Open that file in your browser to see the page as it will be uploaded; OpenArtifacts adds its own header and footer bylines when it serves the page. Reply that it should publish, or describe changes and the agent revises the same file and asks again. The agent never publishes in the same turn that produced the HTML.
 
 After publishing, the agent saves the public link in the note's `openartifacts` property, so publishing the note again updates the same page and the regular **Publish file to OpenArtifacts** command recognizes it as published. Notes published under the older `symposium` property keep working and move to `openartifacts` the next time they are published. If a property already holds something other than an OpenArtifacts link, the agent asks before touching it. Ask the agent to withdraw a page to take it down; it confirms first and removes the property afterwards.
 
