@@ -2,7 +2,7 @@
 
 Task: `PK-LOG-REDACTION-WIN`.
 Issue: <https://github.com/yydspanda/obsidian-copilot/issues/12>.
-Status: full non-paid sweep and static gates pass; commit/push and Windows delivery pending.
+Status: full non-paid sweep and bounded Windows checks pass; source repairs pushed and deployed.
 
 ## Scope and repair
 
@@ -135,5 +135,76 @@ Runtime 1986 / Queue 951, no active transaction, and a user-paused queue with
 66 jobs (38 failed, 8 cancelled, 16 completed, 4 awaiting review). No job is
 pending or processing. Settings and note hashes were captured before delivery.
 
-Commit/push, final deployment identity, preservation comparison and targeted
-Windows results will be appended after the full sweep completes successfully.
+### Commit and loaded artifact
+
+- Repair commit: `3806657e1bee4c4ef974e973e6db312ead8ae06a`, pushed to
+  `fork/knowledge-h3-personal-flow` and verified with `git ls-remote`.
+  Normal Prettier/ESLint commit hooks pass; source identity is unchanged afterward.
+- Canonical deployment command:
+  `COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000 COPILOT_TEST_VAULT_PATH=/mnt/c/Users/yydsp/Obsidian-Copilot-Test OBSIDIAN_BIN='/mnt/c/Program Files/Obsidian/Obsidian.exe' npm run test:vault`.
+  Dependency installation leaves the worktree clean. The rebuilt main.js matches
+  the verified 6,429,741-byte artifact and SHA-256 recorded above exactly.
+- Loaded version: `4.0.8+dev.3806657e.clean.3dbe2a0fe726`, built at
+  `20260918-104457`. Deployed CSS is 77,654 bytes, SHA-256
+  `af35750f263a4192ac0aefcbc0c7c65ed69716c42ce330f25de6151aa5c18003`.
+- The deployment script copies successfully but reports a CLI reload failure;
+  the old instance is still running. A bounded, explicitly targeted test-Vault
+  disable → manifest refresh → enable replaces the instance and verifies its
+  actual loaded version. A disk manifest alone is not used as proof of loading.
+  The three old plugin artifacts are backed up under `/tmp/copilot-review12-old-plugin`.
+
+### Windows results and evidence boundary
+
+Windows 10 x64, Obsidian 1.13.4 / Electron 43.1.1 / Chromium 150.
+The two diagnostic bundles contain the frozen repository modules and use real
+Obsidian file/adapter classes. Their Vault operations are isolated fixtures,
+not the loaded plugin's live Wiki Apply call chain.
+
+- **12/12 memory checks pass**: complete 16 MiB redaction for seven credential
+  forms; email punctuation/ordinary text; detached exact bytes at the inclusive
+  read limit; oversized Markdown/PDF rejected before reading; growth after stat
+  rejected using actual byte length despite a spoofed length property.
+- **2/2 physical-filesystem checks pass**: ordinary Unicode/CRLF updates persist
+  exact bytes; a real Windows junction leading outside the fixture Vault is
+  rejected as `KnowledgeFileParentUnavailableError`, with zero `process` calls
+  and unchanged external fixture bytes. Only a new owned Windows TEMP directory
+  is used, and it is removed after unlinking its junction.
+- The initial diagnostic attempt passes redaction but fails to construct its
+  four reader fixtures: Obsidian's runtime `TFile` constructor needs a Vault and
+  path, omitted by its public type declarations. Correcting only the temporary
+  fixtures to supply those arguments resolves it. No repository code or real
+  Vault file is changed, and that attempt never reaches the junction test.
+- Actual deployed Studio opens visibly on Activity: controller/snapshot `ready`,
+  user-paused control, no pending action, no controller error, Recovery 0.
+  Reload-through-UI monitoring records zero uncaught errors and rejections.
+  Owned diagnostic handles/listeners are removed afterward; Studio stays open.
+- Source bundle identities: memory `d99f56e4c6360148df8aff8ba4ef41bb0174cd9762ffedfe37f161f44938be66`;
+  junction `94438e1fabd8b86a0ce4c2394ac16abcaad300fd646e460a27ef1765bd9f8c57`;
+  runner `2a82eab0a47158f50d4423728292e818bea7c99715dd932d750cbdccaeb246fb`.
+  `/tmp/copilot-review12-windows-final.json` retains the result detail, SHA-256
+  `aa829977179c8e7a8d4eee753ceb23bcb42da00f53283113976b86c4577f7123`.
+
+### Preservation and remaining scope
+
+The final test Vault still has 74 files: no additions or deletions, and all bytes
+are unchanged except the existing `copilot/copilot-log.md` diagnostic export
+refreshed during unload. Settings remain byte-identical, SHA-256
+`c686ea3763d2708bccf6b1f757effea4cfb5aff4e47be93cc83ed3def9aeb217`.
+All 66 job IDs, statuses, stages and attempts, the pause reason, and pause time
+are unchanged. There are zero pending/processing jobs and no active transaction.
+Runtime revision advances 1986 → 2013 and Queue revision 951 → 960 during startup;
+the report does not claim the whole Runtime file is byte-identical.
+An independent read-only comparison confirms the file/settings/job-summary
+preservation. The snapshots do not retain every Runtime metadata field, so they
+do not establish that observation metadata is its only difference.
+Final snapshot: `/tmp/copilot-review12-vault-final.json`, SHA-256
+`5ed80a0b880c6d649741d92c49d9a4db0bd72eacab518a8136cfc45afe0bb941`.
+
+There are no real model requests, new live proposals, Wiki Apply, or changes to
+other Vaults. Case-distinct Chat paths are covered by the automated hook tests,
+not by changing Windows filesystem case-sensitivity. Real-provider integration
+tests, atomic protection against hostile path swaps, and earlier deferred gallery
+style cleanup/physical-picker gates are not newly claimed complete.
+Against the previously fetched `37bf6a12`, deployed source `3806657e` is
+97 ahead / 11 behind. No upstream merge or remote-master update occurred; the
+drift gate remains red and is the separate next maintenance pointer.

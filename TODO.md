@@ -7,19 +7,19 @@
 
 ## Current Stage
 
-- Stage ID: `PK-RELIABILITY`
-- Outcome: close log-redaction failures and deliver the reviewed repairs to the Windows test Vault.
-- Exit gate: full non-paid suite and gates pass; current branch pushed; bounded Windows checks pass.
+- Stage ID: `OPS-MAINTENANCE`
+- Outcome: review canonical upstream drift after the completed repair delivery.
+- Exit gate: agree the current-branch merge window and verify alignment; remote master stays unchanged.
 
 ## In Progress
 
-- [ ] `PK-LOG-REDACTION-WIN` — Fix [issue #12](https://github.com/yydspanda/obsidian-copilot/issues/12).
-  Scope: current development branch and Obsidian-Copilot-Test only; no real model requests or upstream merge.
+- [ ] `OPS-UPSTREAM-SYNC` — Next maintenance pointer: inspect canonical drift and plan synchronization.
+  No upstream merge is included or newly authorized by the completed repair delivery.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
-- Last fetched: `2026-09-18` — canonical `37bf6a12`; verified artifact `05903630` is 95 ahead / 11 behind.
+- Last fetched: `2026-09-18` — canonical `37bf6a12`; verified artifact `3806657e` is 97 ahead / 11 behind.
 - Frozen baseline: `61619fe427f27c23fbb08b6a040d18ae73c3b219`, merge `0c381e68`; no new merge during live acceptance.
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
@@ -27,6 +27,9 @@
 
 ## Recent Activity
 
+- 2026-09-18 — `PK-LOG-REDACTION-WIN` — 724 suites / 10,498 tests pass; repair `3806657e` pushed/deployed.
+  Windows isolated checks 14/14 and actual Studio ready/paused pass; no model calls or live Wiki Apply.
+  [Delivery evidence and preserved limitations](./designdocs/progress/acceptance/2026-09-18-redaction-delivery.md).
 - 2026-09-18 — `PK-H3-REVIEW11-FIX` — Four repairs pass 10 relevant suites / 175 tests.
   Build/lint/review pass; full sweep has 7 failures in unchanged log redaction. No commit/deployment.
   [Regression evidence and limits](./designdocs/progress/acceptance/2026-09-18-review11.md).
@@ -57,9 +60,6 @@
   exposed a stale-Manifest recovery loop before any target file was written; the recovery contract
   is corrected under [issue #2](https://github.com/yydspanda/obsidian-copilot/issues/2), pending a
   fresh Windows artifact check.
-- 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — DeepSeek's canonical model rename broke both live
-  Knowledge scenarios; [issue #3](https://github.com/yydspanda/obsidian-copilot/issues/3) now keeps
-  the old Flash selection compatible, blocks Pro before I/O, and passes 2/2 live scenarios.
 
 ## Working Agreements
 
@@ -75,7 +75,8 @@
 ## Current Verification
 
 - September 18 review/redaction repairs: 724/724 suites and 10,498 tests pass, 0 failures, 2 existing skips.
-  Source hash stays frozen; Jest retains a worker teardown warning. Commit and Windows delivery pending.
+  Source hash stays frozen; normal commit hooks and format/lint/build/review pass, with retained warnings.
+  Source `3806657e` is pushed and deployed; no real model requests or upstream merge in this delivery.
 - Earlier September 18 artifact: clean `4.0.8+dev.05903630.clean.9281d3d8cf94`, 6,428,807 bytes;
   full sweep 722/722 suites, 10,472 passed, 0 failed, 2 existing skips. Format/lint/build/review pass.
   All five current Apply outputs appear in final retrieval; no Save/retry or persistent Query writes.
@@ -102,10 +103,10 @@
 - Against frozen upstream `61619fe4`, 38 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift now exceeds the 10-commit limit (11 behind); do not report this gate green. Remote master remains untouched.
-- Current Windows deployment: clean `4.0.8+dev.05903630.clean.9281d3d8cf94`; five valid proposals applied, queue paused.
-  Runtime 1959 / Manifest 23 contains 9 entries; 66 jobs, no pending; [latest checkpoint](./designdocs/progress/acceptance/2026-09-18-unattended.md).
-  Gallery preserves all 69 files and Runtime/settings; plugin removed, but strict style cleanup does not pass (one retained editor style).
-  Earlier 36 gallery states and fake connection/Studio popout/Activity/close/reopen checks pass; gallery is removed.
+- Current Windows deployment: clean `4.0.8+dev.3806657e.clean.3dbe2a0fe726`; Studio ready, queue paused.
+  Runtime 2013 / Queue 960; all 66 job identities/states and settings preserved, no pending; 14 isolated checks pass.
+  All 74 files retained; only the unload-time diagnostic log changes. [Latest checkpoint](./designdocs/progress/acceptance/2026-09-18-redaction-delivery.md).
+  Earlier Gallery plugin is removed; its shared-editor-style cleanup exception remains in the prior checkpoint.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
   Evidence: source-mode selection and reading-mode Ctrl+C both preserve all 3,769 characters; Live Preview highlighting differs.
