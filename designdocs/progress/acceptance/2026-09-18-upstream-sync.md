@@ -5,7 +5,7 @@ Task: `OPS-UPSTREAM-SYNC`.
 ## Scope and baseline
 
 The user requested canonical upstream synchronization and an explanation of the
-many Knowledge Studio Failed tags. This run only changes the development branch
+many Knowledge Studio Failed tags. The initial sync only changes the development branch
 `knowledge-h3-personal-flow`; it does not update remote master, deploy/reload the
 plugin, change a Vault, retry jobs, Apply proposals, or invoke a model.
 
@@ -108,10 +108,65 @@ do not occupy worker slots; the paused control, not the failed count, currently
 prevents processing. Existing review/dedup constraints may still affect the same
 material. There is no reason to delete history or batch-retry these failures.
 
-Windows still runs the previously verified
+At the end of that sync, Windows still ran the previously verified
 `4.0.8+dev.3806657e.clean.3dbe2a0fe726`. After a separate deployment, the appropriate
 next check is a short smoke test of the loaded version, Studio, model selector
 and preserved paused queue, not the entire acceptance click sequence. Upstream
 may now cache the public Plus model catalog even while signed out; that is not
 model inference, and expected catalog-cache changes should be distinguished from
 unexpected changes to provider credentials, user model choices or project data.
+
+## Authorized Windows deployment
+
+The user subsequently requested deployment. Source/merge commit
+`b1328a7dd91267b2e229912cd2c87478ecc79298` is already pushed; only
+`Obsidian-Copilot-Test` at `C:\Users\yydsp\Obsidian-Copilot-Test` is targeted.
+Both name and actual adapter path were checked before live operations.
+
+The canonical command used the existing personal build budget and explicit
+Windows CLI override:
+
+```bash
+COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000 \
+COPILOT_TEST_VAULT_PATH=/mnt/c/Users/yydsp/Obsidian-Copilot-Test \
+OBSIDIAN_BIN='/mnt/c/Program Files/Obsidian/Obsidian.exe' npm run test:vault
+```
+
+The deployed and actually loaded version is
+`4.0.9+dev.b1328a7d.clean.fec5d39dc7b3`. The script exits zero and copies the
+artifacts, but its esbuild child prints a shutdown deadlock diagnostic after
+build completion. The main artifact is byte-identical to the previously verified
+build above (6,437,283 bytes and the same SHA-256); syntax/mobile-load checks
+pass again. Styles are 77,805 bytes, SHA-256
+`83f1b894ad7da14c8c3b4b26ee8367e225553ebb554babd4408abb1e3f421b2e`.
+Both deployed artifacts match their local files. The diagnostic is retained,
+not described as a clean build-tool shutdown or repaired here.
+
+The script's CLI toggle did not reload the old instance. A scoped, sequential
+`disablePlugin` → `loadManifests` → `enablePlugin` completed successfully.
+Both the actual instance identity and its manifest version changed, rather
+than merely the disk manifest label. Studio remains visible on Activity with
+`ready` availability, no pending action, no controller error and zero recovery
+items. Workspace, Knowledge model and Chat model report locally ready; network
+verification remains `not_tested`. Temporary error/rejection observers captured
+zero events and were removed, including their old-plugin reference.
+
+Independent before/after preservation comparison:
+
+- All 74 Vault files remain, with no additions/deletions; 73 are byte-identical.
+  Only `copilot/copilot-log.md` changes through the normal unload diagnostic export.
+- All 103 existing top-level settings have identical value hashes. Only the
+  expected `copilotPlusCatalog` public-preview cache is added.
+- All 66 job IDs, order, statuses, stages and attempts are identical. The queue
+  stays user-paused at the same timestamp; failed 38, cancelled 8, completed 16,
+  awaiting review 4; no queued or processing work and no active write transaction.
+- Runtime revision advances 2013 → 2040 and Queue revision 960 → 969 during
+  startup; the runtime file is therefore not byte-identical. An initial snapshot
+  read overlapped a startup write and saw incomplete JSON; the settled snapshot
+  succeeded. The comparison does not claim every internal runtime field unchanged.
+
+Local evidence: `/tmp/copilot-syncdeploy-build.log`, the UI/readiness/final `.txt`
+receipts, `/tmp/copilot-review12-syncdeploy-{before,after-reload}.json` and
+`/tmp/copilot-syncdeploy-settings-{before,final}.json`. No model inference,
+retry, Query, Save, Apply, other-Vault operation or remote-master update occurs.
+This is deployment smoke verification, not another full Windows or paid-model run.

@@ -14,7 +14,7 @@
 ## In Progress
 
 - [ ] `OPS-UPSTREAM-SYNC` — Recurring maintenance pointer: check the next canonical drift.
-  September 18 sync and failed-history audit are complete; no Vault deployment or model retries in this delivery.
+  September 18 sync, failed-history audit and authorized test-Vault deployment are complete; no model retries.
 
 ## Upstream Status
 
@@ -28,7 +28,7 @@
 ## Recent Activity
 
 - 2026-09-18 — `OPS-UPSTREAM-SYNC` — Synced 12 upstream commits with 1 conflict file; 56 suites / 1,623 tests pass.
-  Build/lint/review pass. All 38 Failed tags are unchanged history; no deployment, model calls or Vault writes.
+  Build/lint/review pass; `b1328a7d` subsequently deployed to the Windows test Vault. All 38 Failed tags remain historical.
   [Merge reconciliation and retest scope](./designdocs/progress/acceptance/2026-09-18-upstream-sync.md).
 - 2026-09-18 — `PK-LOG-REDACTION-WIN` — 724 suites / 10,498 tests pass; repair `3806657e` pushed/deployed.
   Windows isolated checks 14/14 and actual Studio ready/paused pass; no model calls or live Wiki Apply.
@@ -103,9 +103,9 @@
 - Against frozen upstream `61619fe4`, 38 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
 - Upstream drift is resolved at canonical `996a088c`; remote master remains untouched.
-- Current Windows deployment: clean `4.0.8+dev.3806657e.clean.3dbe2a0fe726`; Studio ready, queue paused.
-  Runtime 2013 / Queue 960; all 66 job identities/states and settings preserved, no pending; 14 isolated checks pass.
-  All 74 files retained; only the unload-time diagnostic log changes. [Latest checkpoint](./designdocs/progress/acceptance/2026-09-18-redaction-delivery.md).
+- Current Windows deployment: clean `4.0.9+dev.b1328a7d.clean.fec5d39dc7b3`; new instance and Studio ready/paused verified.
+  Runtime 2040 / Queue 969; all 66 job identities/states preserved, no pending; local model readiness passes, no model calls.
+  All 74 files retained; only diagnostic log changes. All 103 old settings unchanged; public catalog cache added. [Checkpoint](./designdocs/progress/acceptance/2026-09-18-upstream-sync.md#authorized-windows-deployment).
   Earlier Gallery plugin is removed; its shared-editor-style cleanup exception remains in the prior checkpoint.
 - September 15: explicit old-proposal rejection and fresh Apply pass with exact target hash and Manifest/ledger proof.
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
