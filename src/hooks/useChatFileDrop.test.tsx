@@ -2,7 +2,7 @@ import { useChatFileDrop } from "@/hooks/useChatFileDrop";
 import { createEvent, fireEvent, render, waitFor } from "@testing-library/react";
 import type { App, TFile } from "obsidian";
 import { TFile as ObsidianTFile } from "obsidian";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 const TestTFile = ObsidianTFile as unknown as new (sourcePath: string) => TFile;
 
@@ -17,25 +17,41 @@ function DropHarness({
   onKnowledgeFileDrop?: jest.Mock;
 }): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [contextNotes, updateContextNotes] = useState<TFile[]>([]);
   useChatFileDrop({
     app,
-    contextNotes: [],
-    setContextNotes,
+    contextNotes,
+    setContextNotes: (notes) => {
+      setContextNotes(notes);
+      updateContextNotes(notes);
+    },
     selectedImages: [],
     onAddImage: jest.fn(),
     onKnowledgeFileDrop,
     containerRef,
   });
-  return <div data-testid="drop-target" ref={containerRef} />;
+  return (
+    <div data-testid="drop-target" ref={containerRef}>
+      {contextNotes.map((file) => (
+        <span key={file.path}>{file.path}</span>
+      ))}
+    </div>
+  );
 }
 
 /** Creates one Obsidian URI DataTransfer projection for a Vault nav drag. */
-function createUriDataTransfer(sourcePath: string, vaultName = "Test"): DataTransfer {
+function createUriDataTransfer(sourcePaths: string | string[], vaultName = "Test"): DataTransfer {
+  const paths = typeof sourcePaths === "string" ? [sourcePaths] : sourcePaths;
   const item = {
     kind: "string",
     getAsString: (callback: (value: string) => void) =>
       callback(
-        `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(sourcePath)}`
+        paths
+          .map(
+            (sourcePath) =>
+              `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(sourcePath)}`
+          )
+          .join("\n")
       ),
   } as DataTransferItem;
   return {
@@ -45,12 +61,12 @@ function createUriDataTransfer(sourcePath: string, vaultName = "Test"): DataTran
   } as unknown as DataTransfer;
 }
 
-/** Creates a minimal App whose Vault resolves exactly one file. */
-function createApp(file: TFile): App {
+/** Creates a minimal App whose Vault resolves each file by its exact path. */
+function createApp(...files: TFile[]): App {
   return {
     vault: {
-      getAbstractFileByPath: jest.fn((sourcePath: string) =>
-        sourcePath === file.path ? file : null
+      getAbstractFileByPath: jest.fn(
+        (sourcePath: string) => files.find((file) => sourcePath === file.path) ?? null
       ),
       getName: jest.fn(() => "Test"),
     },
@@ -111,94 +127,138 @@ function OverlayHarness({ app }: { app: App }): React.ReactElement {
 }
 
 describe("useChatFileDrop", () => {
-  it("clears the overlay when an inner drop zone stops bubble propagation", () => {
-    const { getByTestId } = render(<OverlayHarness app={{} as App} />);
-    const overlay = getByTestId("overlay");
+  describe("useChatFileDrop()", () => {
+    it("clears the overlay when an inner drop zone stops bubble propagation", () => {
+      const { getByTestId } = render(<OverlayHarness app={{} as App} />);
+      const overlay = getByTestId("overlay");
 
-    dispatchOverlayDrag("dragOver", overlay, [{ kind: "file" }]);
-    expect(overlay.textContent).toBe("active");
+      dispatchOverlayDrag("dragOver", overlay, [{ kind: "file" }]);
+      expect(overlay.textContent).toBe("active");
 
-    dispatchOverlayDrag("drop", getByTestId("inner-zone"), [{ kind: "file" }]);
-    expect(overlay.textContent).toBe("idle");
-  });
-
-  it.each([
-    "Sources/Note.md",
-    "Sources/Note.markdown",
-    "Sources/Note.txt",
-    "Sources/研究 Paper.pdf",
-  ])("holds %s for an explicit choice instead of mutating Chat context", async (sourcePath) => {
-    const file = new TestTFile(sourcePath);
-    const setContextNotes = jest.fn();
-    const onKnowledgeFileDrop = jest.fn();
-    const { getByTestId } = render(
-      <DropHarness
-        app={createApp(file)}
-        setContextNotes={setContextNotes}
-        onKnowledgeFileDrop={onKnowledgeFileDrop}
-      />
-    );
-
-    fireEvent.drop(getByTestId("drop-target"), {
-      dataTransfer: createUriDataTransfer(sourcePath),
+      dispatchOverlayDrag("drop", getByTestId("inner-zone"), [{ kind: "file" }]);
+      expect(overlay.textContent).toBe("idle");
     });
 
-    await waitFor(() => expect(onKnowledgeFileDrop).toHaveBeenCalledWith([file]));
-    expect(setContextNotes).not.toHaveBeenCalled();
-  });
+    it.each([
+      "Sources/Note.md",
+      "Sources/Note.markdown",
+      "Sources/Note.txt",
+      "Sources/研究 Paper.pdf",
+    ])("holds %s for an explicit choice instead of mutating Chat context", async (sourcePath) => {
+      const file = new TestTFile(sourcePath);
+      const setContextNotes = jest.fn();
+      const onKnowledgeFileDrop = jest.fn();
+      const { getByTestId } = render(
+        <DropHarness
+          app={createApp(file)}
+          setContextNotes={setContextNotes}
+          onKnowledgeFileDrop={onKnowledgeFileDrop}
+        />
+      );
 
-  it("preserves direct Chat-context behavior for a non-Knowledge Vault canvas", async () => {
-    const file = new TestTFile("Sources/Reference.canvas");
-    const setContextNotes = jest.fn();
-    const onKnowledgeFileDrop = jest.fn();
-    const { getByTestId } = render(
-      <DropHarness
-        app={createApp(file)}
-        setContextNotes={setContextNotes}
-        onKnowledgeFileDrop={onKnowledgeFileDrop}
-      />
-    );
+      fireEvent.drop(getByTestId("drop-target"), {
+        dataTransfer: createUriDataTransfer(sourcePath),
+      });
 
-    fireEvent.drop(getByTestId("drop-target"), {
-      dataTransfer: createUriDataTransfer(file.path),
+      await waitFor(() => expect(onKnowledgeFileDrop).toHaveBeenCalledWith([file]));
+      expect(setContextNotes).not.toHaveBeenCalled();
     });
 
-    await waitFor(() => expect(setContextNotes).toHaveBeenCalledTimes(1));
-    expect(onKnowledgeFileDrop).not.toHaveBeenCalled();
-  });
+    it("preserves direct Chat-context behavior for a non-Knowledge Vault canvas", async () => {
+      const file = new TestTFile("Sources/Reference.canvas");
+      const setContextNotes = jest.fn();
+      const onKnowledgeFileDrop = jest.fn();
+      const { getByTestId } = render(
+        <DropHarness
+          app={createApp(file)}
+          setContextNotes={setContextNotes}
+          onKnowledgeFileDrop={onKnowledgeFileDrop}
+        />
+      );
 
-  it("preserves direct Chat-context behavior when no Knowledge callback is installed", async () => {
-    const file = new TestTFile("Sources/Note.md");
-    const setContextNotes = jest.fn();
-    const { getByTestId } = render(
-      <DropHarness app={createApp(file)} setContextNotes={setContextNotes} />
-    );
+      fireEvent.drop(getByTestId("drop-target"), {
+        dataTransfer: createUriDataTransfer(file.path),
+      });
 
-    fireEvent.drop(getByTestId("drop-target"), {
-      dataTransfer: createUriDataTransfer(file.path),
+      await waitFor(() => expect(setContextNotes).toHaveBeenCalledTimes(1));
+      expect(onKnowledgeFileDrop).not.toHaveBeenCalled();
     });
 
-    await waitFor(() => expect(setContextNotes).toHaveBeenCalledTimes(1));
-  });
+    it("preserves direct Chat-context behavior when no Knowledge callback is installed", async () => {
+      const file = new TestTFile("Sources/Note.md");
+      const setContextNotes = jest.fn();
+      const { getByTestId } = render(
+        <DropHarness app={createApp(file)} setContextNotes={setContextNotes} />
+      );
 
-  it("ignores an Obsidian URI from another Vault", async () => {
-    const file = new TestTFile("Sources/Note.md");
-    const setContextNotes = jest.fn();
-    const onKnowledgeFileDrop = jest.fn();
-    const { getByTestId } = render(
-      <DropHarness
-        app={createApp(file)}
-        setContextNotes={setContextNotes}
-        onKnowledgeFileDrop={onKnowledgeFileDrop}
-      />
-    );
+      fireEvent.drop(getByTestId("drop-target"), {
+        dataTransfer: createUriDataTransfer(file.path),
+      });
 
-    fireEvent.drop(getByTestId("drop-target"), {
-      dataTransfer: createUriDataTransfer(file.path, "Another Vault"),
+      await waitFor(() => expect(setContextNotes).toHaveBeenCalledTimes(1));
     });
-    await Promise.resolve();
 
-    expect(onKnowledgeFileDrop).not.toHaveBeenCalled();
-    expect(setContextNotes).not.toHaveBeenCalled();
+    it("keeps case-distinct Vault attachments and removes exact duplicates without a Knowledge callback (https://github.com/yydspanda/obsidian-copilot/issues/11)", async () => {
+      const upper = new TestTFile("Notes/Foo.md");
+      const lower = new TestTFile("Notes/foo.md");
+      const setContextNotes = jest.fn();
+      const { getByTestId } = render(
+        <DropHarness app={createApp(upper, lower)} setContextNotes={setContextNotes} />
+      );
+
+      fireEvent.drop(getByTestId("drop-target"), {
+        dataTransfer: createUriDataTransfer([upper.path, lower.path, upper.path]),
+      });
+
+      await waitFor(() =>
+        expect(
+          Array.from(getByTestId("drop-target").children, (child) => child.textContent)
+        ).toEqual([upper.path, lower.path])
+      );
+    });
+
+    it("offers both case-distinct files once to the Knowledge chooser without adding Chat attachments (https://github.com/yydspanda/obsidian-copilot/issues/11)", async () => {
+      const upper = new TestTFile("Notes/Foo.md");
+      const lower = new TestTFile("Notes/foo.md");
+      const setContextNotes = jest.fn();
+      const onKnowledgeFileDrop = jest.fn();
+      const { getByTestId } = render(
+        <DropHarness
+          app={createApp(upper, lower)}
+          setContextNotes={setContextNotes}
+          onKnowledgeFileDrop={onKnowledgeFileDrop}
+        />
+      );
+
+      fireEvent.drop(getByTestId("drop-target"), {
+        dataTransfer: createUriDataTransfer([upper.path, lower.path, upper.path]),
+      });
+
+      await waitFor(() => expect(onKnowledgeFileDrop).toHaveBeenCalledWith([upper, lower]));
+      expect(onKnowledgeFileDrop).toHaveBeenCalledTimes(1);
+      expect(getByTestId("drop-target").childElementCount).toBe(0);
+      expect(setContextNotes).not.toHaveBeenCalled();
+    });
+
+    it("ignores an Obsidian URI from another Vault", async () => {
+      const file = new TestTFile("Sources/Note.md");
+      const setContextNotes = jest.fn();
+      const onKnowledgeFileDrop = jest.fn();
+      const { getByTestId } = render(
+        <DropHarness
+          app={createApp(file)}
+          setContextNotes={setContextNotes}
+          onKnowledgeFileDrop={onKnowledgeFileDrop}
+        />
+      );
+
+      fireEvent.drop(getByTestId("drop-target"), {
+        dataTransfer: createUriDataTransfer(file.path, "Another Vault"),
+      });
+      await Promise.resolve();
+
+      expect(onKnowledgeFileDrop).not.toHaveBeenCalled();
+      expect(setContextNotes).not.toHaveBeenCalled();
+    });
   });
 });

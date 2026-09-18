@@ -7,15 +7,14 @@
 
 ## Current Stage
 
-- Stage ID: `OPS-MAINTENANCE`
-- Outcome: keep the development branch current while preserving the verified Windows artifact.
-- Exit gate: inspect canonical drift, integrate with minimal upstream changes, and verify the
-  resulting artifact before replacing the accepted test deployment; remote master is out of scope.
+- Stage ID: `PK-RELIABILITY`
+- Outcome: close log-redaction failures and deliver the reviewed repairs to the Windows test Vault.
+- Exit gate: full non-paid suite and gates pass; current branch pushed; bounded Windows checks pass.
 
 ## In Progress
 
-- [ ] `OPS-UPSTREAM-SYNC` — Next task: resolve the observed 11-commit canonical drift after the
-  completed frozen-artifact regression. No new merge has started; the current test build is accepted.
+- [ ] `PK-LOG-REDACTION-WIN` — Fix [issue #12](https://github.com/yydspanda/obsidian-copilot/issues/12).
+  Scope: current development branch and Obsidian-Copilot-Test only; no real model requests or upstream merge.
 
 ## Upstream Status
 
@@ -28,6 +27,9 @@
 
 ## Recent Activity
 
+- 2026-09-18 — `PK-H3-REVIEW11-FIX` — Four repairs pass 10 relevant suites / 175 tests.
+  Build/lint/review pass; full sweep has 7 failures in unchanged log redaction. No commit/deployment.
+  [Regression evidence and limits](./designdocs/progress/acceptance/2026-09-18-review11.md).
 - 2026-09-18 — `PK-H3-UPSTREAM-V4-WIN` — Bounded regression complete: five authorized Apply outcomes,
   722 suites / 10,472 tests pass; final Windows reload/popout/Query/citation and 18/18 preservation checks pass.
   Two minimal repairs are pushed/deployed; extra requests 9/20. [Evidence and exceptions](./designdocs/progress/acceptance/2026-09-18-unattended.md).
@@ -58,8 +60,6 @@
 - 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — DeepSeek's canonical model rename broke both live
   Knowledge scenarios; [issue #3](https://github.com/yydspanda/obsidian-copilot/issues/3) now keeps
   the old Flash selection compatible, blocks Pro before I/O, and passes 2/2 live scenarios.
-- 2026-08-26 — `OPS-PROGRESS-GOVERNANCE` — Replaced the mixed 600-line tracker with a bounded live
-  pointer, frozen migration snapshot, monthly archive, experiment contract, and CI validation.
 
 ## Working Agreements
 
@@ -74,7 +74,9 @@
 
 ## Current Verification
 
-- September 18 final artifact: clean `4.0.8+dev.05903630.clean.9281d3d8cf94`, 6,428,807 bytes;
+- September 18 review/redaction repairs: 724/724 suites and 10,498 tests pass, 0 failures, 2 existing skips.
+  Source hash stays frozen; Jest retains a worker teardown warning. Commit and Windows delivery pending.
+- Earlier September 18 artifact: clean `4.0.8+dev.05903630.clean.9281d3d8cf94`, 6,428,807 bytes;
   full sweep 722/722 suites, 10,472 passed, 0 failed, 2 existing skips. Format/lint/build/review pass.
   All five current Apply outputs appear in final retrieval; no Save/retry or persistent Query writes.
 - September 17 presentation repair: 8 suites / 210 tests pass, including red/green receipt continuity regressions.

@@ -24,6 +24,13 @@ jest.mock("obsidian", () => {
   return { FileSystemAdapter, TFile };
 });
 
+jest.mock("@/knowledge/runtime/ObsidianNodeRuntime", () => ({
+  loadObsidianNodeRuntimeModules: () => ({
+    fs: { realpath: async (targetPath: string) => targetPath },
+    path: jest.requireActual<typeof import("node:path")>("node:path"),
+  }),
+}));
+
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
@@ -61,6 +68,11 @@ function createTestFile(targetPath: string): TFile {
   return new TestFileConstructor(targetPath);
 }
 
+function createMemoryAdapter(): FileSystemAdapter {
+  const Adapter = FileSystemAdapter as unknown as new (rootPath: string) => FileSystemAdapter;
+  return new Adapter("/memory-vault");
+}
+
 /** Creates one exact journal file state. */
 function fileState(content: string) {
   return { kind: "file" as const, content, contentHash: createFileContentHash(content) };
@@ -79,7 +91,7 @@ class MemoryVaultHarness {
   processFailure?: Error;
   processReturnOverride?: string;
 
-  readonly adapter = {
+  readonly adapter = Object.assign(createMemoryAdapter(), {
     /** Observes one in-memory file or folder. */
     stat: async (targetPath: string) => {
       if (this.malformedStat) {
@@ -107,7 +119,7 @@ class MemoryVaultHarness {
       }
       return content;
     },
-  };
+  });
 
   readonly vault = {
     adapter: this.adapter,

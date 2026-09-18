@@ -12,6 +12,7 @@ import {
 } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import type { CommitSourceInputObservationResult } from "@/knowledge/ingest/SourceObservationHandoff";
 import { createSourceContentHash, isExactUint8Array } from "@/knowledge/model/fingerprint";
+import { MAX_KNOWLEDGE_SOURCE_BYTES } from "@/knowledge/parser/KnowledgeByteParser";
 import { parseVaultPath, toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -170,6 +171,14 @@ export class SourceArtifactAdapterPayloadError extends Error {
   constructor() {
     super("The source artifact adapter returned an invalid payload");
     this.name = "SourceArtifactAdapterPayloadError";
+  }
+}
+
+/** Reports a source beyond the parser byte budget without retaining its path or contents. */
+export class SourceArtifactSizeLimitError extends Error {
+  constructor() {
+    super("The source artifact exceeds the byte limit");
+    this.name = "SourceArtifactSizeLimitError";
   }
 }
 
@@ -586,12 +595,24 @@ export class ObsidianExactSourceArtifactReader {
   private readonly app: App;
   private readonly vault: Vault;
   private readonly adapter: Vault["adapter"];
+  private readonly maxBytes: number;
 
-  /** Captures one exact App/Vault owner for all future reads. */
-  constructor(app: App) {
+  /**
+   * Captures one exact App/Vault owner and its source byte budget.
+   *
+   * @param app - App whose Vault supplies all source reads
+   * @param maxBytes - Inclusive raw-byte budget, defaulting to the production parsers' ceiling
+   */
+  constructor(app: App, maxBytes = MAX_KNOWLEDGE_SOURCE_BYTES) {
+    // Invalid budgets must not silently disable the read boundary.
+    // https://github.com/yydspanda/obsidian-copilot/issues/11
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new TypeError("Source byte limit must be a positive safe integer");
+    }
     this.app = app;
     this.vault = app.vault;
     this.adapter = app.vault.adapter;
+    this.maxBytes = maxBytes;
   }
 
   /** Returns whether this reader belongs to the supplied exact App/Vault/adapter. */
@@ -617,6 +638,20 @@ export class ObsidianExactSourceArtifactReader {
       throw new SourceArtifactUnavailableError();
     }
 
+    // Cached TFile stats can predate a large replacement; bound the fresh source before loading it.
+    // https://github.com/yydspanda/obsidian-copilot/issues/11
+    const stat = await this.adapter.stat(parsed.path);
+    throwIfAborted(signal);
+    if (!stat || stat.type !== "file") {
+      throw new SourceArtifactUnavailableError();
+    }
+    if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+      throw new SourceArtifactAdapterPayloadError();
+    }
+    if (stat.size > this.maxBytes) {
+      throw new SourceArtifactSizeLimitError();
+    }
+
     const payload: unknown = await this.adapter.readBinary(parsed.path);
     throwIfAborted(signal);
     if (!isArrayBuffer(payload)) {
@@ -625,10 +660,16 @@ export class ObsidianExactSourceArtifactReader {
 
     let bytes: Uint8Array;
     try {
-      bytes = new Uint8Array(new Uint8Array(payload));
+      bytes = new Uint8Array(payload);
     } catch {
       throw new SourceArtifactAdapterPayloadError();
     }
+    // A source can grow after stat. Check the view's actual length before copying or hashing it.
+    // https://github.com/yydspanda/obsidian-copilot/issues/11
+    if (bytes.byteLength > this.maxBytes) {
+      throw new SourceArtifactSizeLimitError();
+    }
+    bytes = new Uint8Array(bytes);
     return {
       sourcePath: parsed.path,
       bytes,
@@ -1581,6 +1622,9 @@ export class ObsidianVaultSourceWatcher {
         lastError = error;
         if (
           !this.isAuthorityCurrent(work) ||
+          // Retrying a known oversized source can repeat the same expensive adapter read.
+          // https://github.com/yydspanda/obsidian-copilot/issues/11
+          error instanceof SourceArtifactSizeLimitError ||
           error instanceof SourceArtifactAdapterPayloadError ||
           error instanceof SourceArtifactHashMismatchError ||
           error instanceof VaultSourceObservationContractError

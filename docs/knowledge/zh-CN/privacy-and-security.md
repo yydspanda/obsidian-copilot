@@ -89,6 +89,7 @@ Knowledge 的 PDF 导入和页引用使用本地、按原始字节验证的解�
 - 后台 worker 没有 Apply 权限。
 - Review 不会自动接受。
 - `Apply` 会在写入前重新验证目标、提案和持久状态。
+- 更新已有 Wiki 文件前，还会检查它在磁盘上的真实位置；文件或父目录通过符号链接／Windows junction 指向 Vault 外时，会拒绝更新，不修改外部文件。这不保证抵御其他进程在检查后瞬间替换路径。
 - 冲突文件不会静默覆盖。
 - Delete 当前保持禁用。
 - `Save to Wiki` 先创建 managed source，再经过正常编译；结果可能是 `no_changes`，也可能进入 Review→Apply，它不是直接写 Wiki。

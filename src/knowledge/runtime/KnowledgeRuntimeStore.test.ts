@@ -1,9 +1,23 @@
 jest.mock("obsidian", () => {
   const mock = jest.requireActual<Record<string, unknown>>("../../../__mocks__/obsidian.js");
   /** Minimal desktop adapter brand required by the genuine update-only recovery store. */
-  class FileSystemAdapter {}
+  class FileSystemAdapter {
+    getBasePath(): string {
+      return "/memory-vault";
+    }
+    getFullPath(relativePath: string): string {
+      return `/memory-vault/${relativePath}`;
+    }
+  }
   return { ...mock, FileSystemAdapter };
 });
+
+jest.mock("@/knowledge/runtime/ObsidianNodeRuntime", () => ({
+  loadObsidianNodeRuntimeModules: () => ({
+    fs: { realpath: async (targetPath: string) => targetPath },
+    path: jest.requireActual<typeof import("node:path")>("node:path"),
+  }),
+}));
 
 import {
   ChangeSetTransaction,

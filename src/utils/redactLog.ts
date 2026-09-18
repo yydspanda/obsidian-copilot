@@ -140,7 +140,10 @@ const RULES: RedactionRule[] = [
   // ambiguity to backtrack through, and replacing the run whole is what stops a
   // second address glued to the first — `a@b.com.c@d.com`, or an `@handle@host`
   // — from surviving as a leftover.
-  { pattern: /[A-Za-z0-9._%+@-]+/g, replacement: redactAddressRun },
+  // A required first character plus a simple run avoids the per-character stack
+  // growth of V8's unoptimized `+` loop on multi-megabyte addresses or tokens.
+  // https://github.com/yydspanda/obsidian-copilot/issues/12
+  { pattern: /[A-Za-z0-9._%+@-][A-Za-z0-9._%+@-]*/g, replacement: redactAddressRun },
 
   // A fixed minimum followed by a simple run preserves the full secret match
   // without V8's open-ended counted loop exhausting the regexp stack on a
@@ -167,7 +170,7 @@ const RULES: RedactionRule[] = [
   // it stores SDK and ACP payloads as NDJSON, so a request's headers arrive as
   // `"authorization": "Basic ..."` rather than as a raw header line.
   //
-  // The credential is matched with `+` rather than a minimum length. Once the
+  // The credential requires just one character followed by a simple run. Once the
   // header name and scheme are established there is nothing left to qualify —
   // `dTpw` is four characters and decodes to `u:p` — and a counted lower bound
   // costs more than it buys: V8 walks `{n,}` in a way that exhausts the regexp
@@ -182,8 +185,10 @@ const RULES: RedactionRule[] = [
   // word costs a marker on a line already shaped like a credential; missing one
   // leaves a password in a file that leaves the machine.
   // https://github.com/Brevilabs/obsidian-copilot-private/issues/202
+  // Separating the first character also avoids unoptimized `+` stack growth.
+  // https://github.com/yydspanda/obsidian-copilot/issues/12
   {
-    pattern: /(authorization"?\s*[:=]\s*"?basic[ \t]+)[A-Za-z0-9+/]+={0,2}/gi,
+    pattern: /(authorization"?\s*[:=]\s*"?basic[ \t]+)[A-Za-z0-9+/][A-Za-z0-9+/]*={0,2}/gi,
     replacement: "$1<redacted>",
   },
 

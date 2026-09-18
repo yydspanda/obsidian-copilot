@@ -1,6 +1,5 @@
 import { isAllowedFileForNoteContext } from "@/utils";
 import { isKnowledgeChatCapturePath } from "@/knowledge/capture/KnowledgeChatCapturePort";
-import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { App, Notice, TFile } from "obsidian";
 import { RefObject, useEffect, useState } from "react";
 
@@ -218,12 +217,13 @@ export function useChatFileDrop(props: UseChatFileDropProps): UseChatFileDropRet
 
         const uriStrings = await Promise.all(uriStringPromises);
 
-        // Parse all URIs and collect unique files (deduplicate by path)
+        // Resolved Vault paths preserve distinct attachments on case-sensitive filesystems.
+        // https://github.com/yydspanda/obsidian-copilot/issues/11
         const fileMap = new Map<string, TFile>();
         for (const uriString of uriStrings) {
           const files = parseObsidianUris(app, uriString);
           for (const file of files) {
-            fileMap.set(toWindowsPathKey(file.path), file);
+            fileMap.set(file.path, file);
           }
         }
 

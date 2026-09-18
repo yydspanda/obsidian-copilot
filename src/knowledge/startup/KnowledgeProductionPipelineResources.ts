@@ -5,6 +5,7 @@ import { KNOWLEDGE_DEEPSEEK_PRIVATE_ROUTE_IDENTITY } from "@/knowledge/compiler/
 import type { ProjectKnowledgePipelineProfileSourceOptions } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 import {
   MAX_KNOWLEDGE_PARSED_PDF_PAGES,
+  MAX_KNOWLEDGE_SOURCE_BYTES,
   type KnowledgeByteParser,
 } from "@/knowledge/parser/KnowledgeByteParser";
 import { PdfPageKnowledgeByteParser } from "@/knowledge/parser/PdfPageKnowledgeByteParser";
@@ -15,13 +16,13 @@ export const KNOWLEDGE_PRODUCTION_COMPILER_VERSION = "knowledge-compiler-v2" as 
 
 /** Current bounded UTF-8 source policy for the first Windows production generation. */
 export const KNOWLEDGE_PRODUCTION_UTF8_SOURCE_LIMITS = Object.freeze({
-  maxBytes: 8_388_608,
+  maxBytes: MAX_KNOWLEDGE_SOURCE_BYTES,
   maxCharacters: 8_000_000,
 });
 
 /** Current bounded PDF source policy for the Windows production generation. */
 export const KNOWLEDGE_PRODUCTION_PDF_SOURCE_LIMITS = Object.freeze({
-  maxBytes: 8_388_608,
+  maxBytes: MAX_KNOWLEDGE_SOURCE_BYTES,
   maxPages: MAX_KNOWLEDGE_PARSED_PDF_PAGES,
   maxCharacters: 8_000_000,
 });

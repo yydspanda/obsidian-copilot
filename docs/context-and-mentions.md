@@ -71,6 +71,10 @@ Editing a sent Quick Chat message keeps its original attachments. Switching the 
 
 Quick Chat attachments apply to the next Quick Chat message. They do not become Agent Chat context, Project context, or `AGENTS.md` instructions.
 
+Dragging the same Vault file more than once adds it only once. On a case-sensitive
+Vault, files such as `Notes/Foo.md` and `Notes/foo.md` remain separate attachments;
+neither replaces the other.
+
 ## Add sources to Personal Knowledge Studio
 
 Knowledge sources are durable inputs to a review-gated Wiki workflow; they are not chat attachments. This workflow is currently scoped to Windows and one live Knowledge Bundle with one configured source folder.

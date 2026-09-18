@@ -12,6 +12,9 @@ import { parseVaultPath } from "@/knowledge/paths/vaultPath";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
+/** Shared raw-byte ceiling for production source reads and byte parsers. */
+export const MAX_KNOWLEDGE_SOURCE_BYTES = 8_388_608;
+
 /** Hard parser-output ceiling aligned with the production evidence-item budget. */
 export const MAX_KNOWLEDGE_PARSED_PDF_PAGES = 2_048;
 

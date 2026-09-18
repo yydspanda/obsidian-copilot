@@ -65,6 +65,11 @@ The object is strict: it accepts only the six fields shown above, requires at le
 
 All paths must be canonical Vault-relative paths using `/`. Absolute paths, drive letters, UNC paths, backslashes, `.` or `..`, Windows-reserved names, invalid characters, and trailing dots or spaces are rejected rather than rewritten. Source roots must be unique under Windows case-insensitive comparison and must not overlap their Wiki root. A schema cannot live inside a generated Wiki.
 
+Before updating an existing Wiki file, Knowledge also checks where its path
+actually resolves on disk. A symbolic link or Windows junction leading outside
+the Vault is rejected without updating the external file. This check does not
+make concurrent path replacement by another process safe.
+
 Validation covers all configured projects together. Bundle IDs must be unique; Wiki roots cannot overlap one another; no Bundle's Wiki may overlap another Bundle's source roots; and no Bundle's schema may live inside another Bundle's Wiki. One invalid configuration keeps the whole knowledge workflow unavailable so two projects can never acquire ambiguous write ownership. If no project has this field, the Workspace lane reports the Bundle as unconfigured. If several valid Bundles exist, validation succeeds but the current milestone has no Bundle selector and does not choose one implicitly; keep the Bundle block in exactly one Project before Studio can be admitted. A settings or Project change synchronously invalidates the captured generation, closes its watcher/worker and exact Queue signal, and automatically starts a fresh startup generation while the plugin lifecycle remains active; a plugin reload is not required for this revalidation. During this ordinary hand-off, Studio shows a neutral, action-free **Refreshing Knowledge Studio…** state: prior load, command, Query, and citation authority has already been revoked, but the transition does not mean the preceding operation failed. Persistent configuration or Runtime startup problems remain fail-closed and appear on the guided Setup surface; durable Recovery and recoverable Sources states retain their dedicated surfaces.
 
 ## Import an external folder
@@ -74,6 +79,12 @@ Choose **Import folder** in the Knowledge Studio header to take a one-time snaps
 The selected root name and its nested relative paths are preserved below the Bundle source root. For example, selecting a folder named `Research` copies an eligible nested file to `<source root>/Research/<nested path>`. The picker does not provide or persist the external absolute path. Import only reads the selected originals; it never edits, renames, deletes, or synchronizes them. The resulting Vault files are exact `managed_copy` sources and are the durable source of record after import.
 
 The complete selection is validated before its first file read, then eligible files are copied and registered sequentially. The current bounds are 1,000 selected files, 8 MiB per eligible file, 128 MiB across eligible files, and a 240-character Vault destination path. The per-file bound matches the current production parser policy. Windows case collisions and unsafe relative paths reject the selection. An absent destination is published with exact bytes; an existing exact-byte file is reused; an existing different file or directory is reported as a conflict and is never overwritten.
+
+The same 8 MiB source limit applies when an already registered file is read again,
+not just when it is imported. Knowledge checks its current size before loading
+the bytes and checks the returned size again before copying or hashing them.
+Oversized sources are rejected, not truncated. Reduce or split the source and
+reload the plugin to let it check the corrected file.
 
 Each successful file remains durable if a later file conflicts or fails, so the receipt may be partial and an exact retry can resume safely. A batch that added registrations requests one Knowledge generation refresh after the pass rather than restarting once per file. The watcher then creates normal **Activity** work. When compilation proposes changes, it stops at **Review**, and only explicit acceptance can **Apply** generated Wiki changes; a proven `no_changes` result completes without fabricating a Review.
 

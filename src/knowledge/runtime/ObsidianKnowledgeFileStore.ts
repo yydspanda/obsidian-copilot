@@ -90,7 +90,7 @@ export class KnowledgeFileMutationUnsupportedError extends Error {
   }
 }
 
-/** Reports an invalid or unavailable parent directory for an exclusive create. */
+/** Reports an unavailable file target or one that resolves outside the Vault. */
 export class KnowledgeFileParentUnavailableError extends Error {
   /** Creates a sanitized missing-parent error. */
   constructor() {
@@ -579,6 +579,33 @@ export class ObsidianKnowledgeFileStore implements KnowledgeFileStore {
         ? { kind: "already_after" }
         : { kind: "conflict", observation };
     }
+
+    // Existing files can escape through a file symlink or parent junction just as creates can.
+    // This precheck is not atomic against hostile filesystem namespace swaps.
+    // https://github.com/yydspanda/obsidian-copilot/issues/11
+    const adapter = this.vault.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) throw new KnowledgeFileAdapterPayloadError();
+    const { fs, path: pathModule } = loadObsidianNodeRuntimeModules();
+    const vaultRoot = await fs.realpath(adapter.getBasePath());
+    this.assertForwardOwnerCurrent();
+    let realTarget: string;
+    try {
+      realTarget = await fs.realpath(adapter.getFullPath(path));
+    } catch {
+      throw new KnowledgeFileParentUnavailableError();
+    }
+    this.assertForwardOwnerCurrent();
+    const relativeTarget = pathModule.relative(vaultRoot, realTarget);
+    if (
+      relativeTarget === ".." ||
+      relativeTarget.startsWith(`..${pathModule.sep}`) ||
+      pathModule.isAbsolute(relativeTarget)
+    ) {
+      throw new KnowledgeFileParentUnavailableError();
+    }
+    // A rename while realpath was pending must not redirect the already-validated update.
+    // https://github.com/yydspanda/obsidian-copilot/issues/11
+    if (file.path !== path) throw new KnowledgeFileAdapterPayloadError();
     try {
       const written = await this.vault.process(file, (current) => {
         if (current === after.content) {

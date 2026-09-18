@@ -357,7 +357,10 @@ class VaultHarness {
   readonly order: string[] = [];
   readonly cachedRead = jest.fn();
   readonly read = jest.fn();
-  readonly stat = jest.fn();
+  readonly stat = jest.fn(async (path: string) => {
+    const bytes = this.files.get(path);
+    return bytes ? { type: "file", size: bytes.byteLength, ctime: 1, mtime: 1 } : null;
+  });
   readBinaryImplementation?: (path: string) => Promise<unknown>;
   failOnEventRegistration?: VaultEventName;
   private nextRef = 0;
@@ -581,7 +584,7 @@ describe("ObsidianExactSourceArtifactReader", () => {
     expect(harness.adapter.readBinary).toHaveBeenCalledWith("Sources/研究.md");
     expect(harness.cachedRead).not.toHaveBeenCalled();
     expect(harness.read).not.toHaveBeenCalled();
-    expect(harness.stat).not.toHaveBeenCalled();
+    expect(harness.stat).toHaveBeenCalledWith("Sources/研究.md");
   });
 
   it("rejects missing files, malformed adapter success, stale hashes, and cancellation", async () => {
@@ -643,6 +646,51 @@ describe("ObsidianExactSourceArtifactReader", () => {
 });
 
 describe("ObsidianVaultSourceWatcher", () => {
+  describe("start()", () => {
+    it.each([
+      { stage: "before read", size: 9 * 1024 * 1024, bytes: createBuffer(1), reads: 0 },
+      { stage: "after growth", size: 1, bytes: createBuffer(1, 2, 3, 4, 5), reads: 1 },
+    ])(
+      "blocks oversized registered sources $stage without repeated reads or queue handoff (https://github.com/yydspanda/obsidian-copilot/issues/11)",
+      async ({ size, bytes, reads }) => {
+        const harness = new VaultHarness();
+        harness.addFile("Sources/研究.md", bytes);
+        harness.stat.mockResolvedValue({ type: "file", size, ctime: 1, mtime: 1 });
+        const handoff = new RecordingHandoff();
+        const sink = new RecordingSink();
+        const app = harness.createApp();
+        const watcher = new ObsidianVaultSourceWatcher(
+          app,
+          createWatchPlan([createSource()]),
+          new Map([["personal", handoff]]),
+          {
+            notificationSink: sink,
+            artifactReader: new ObsidianExactSourceArtifactReader(app, 4),
+            captureIdFactory: () => "bounded-source-capture",
+          }
+        );
+
+        watcher.start();
+        await watcher.waitForIdle();
+
+        expect(harness.stat).toHaveBeenCalledTimes(1);
+        expect(harness.adapter.readBinary).toHaveBeenCalledTimes(reads);
+        expect(handoff.allocateCalls).toHaveLength(1);
+        expect(handoff.commitCalls).toHaveLength(0);
+        expect(watcher.getStartupBlockers()).toContainEqual({
+          kind: "capture_failed",
+          stage: "read",
+          bundleId: "personal",
+          sourceId: "source-1",
+        });
+        expect(sink.notifications).toContainEqual(
+          expect.objectContaining({ kind: "capture_failed", stage: "read" })
+        );
+        watcher.close();
+      }
+    );
+  });
+
   it("registers listeners before scanning and performs captureId → allocate → read → commit", async () => {
     const harness = new VaultHarness();
     const bytes = encodeText("\ufeff标题\r\n内容 🦌\r\n");

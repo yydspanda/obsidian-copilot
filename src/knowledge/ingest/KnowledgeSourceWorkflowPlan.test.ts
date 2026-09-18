@@ -19,7 +19,10 @@ import type {
   KnowledgeBundlePipelineProfile,
   KnowledgeSourceParserProfile,
 } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
-import type { ExactSourceArtifact } from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
+import {
+  SourceArtifactSizeLimitError,
+  type ExactSourceArtifact,
+} from "@/knowledge/ingest/ObsidianVaultSourceWatcher";
 import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
 import type { KnowledgeBundleConfig, SourceManifest } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
@@ -925,6 +928,24 @@ describe("KnowledgeSourceExecutionPlan.prepare", () => {
     expect(harness.state.manifestCalls).toBe(4);
     expect(harness.state.schemaReadCalls).toBe(4);
     expect(harness.state.profileCalls).toBe(4);
+  });
+
+  it("stops oversized execution re-reads before the parser and preserves the sanitized job failure (https://github.com/yydspanda/obsidian-copilot/issues/11)", async () => {
+    const harness = createHarness();
+    const { plan, job } = await loadPlanAndJob(harness);
+    const sourceReadCalls = harness.state.sourceReadCalls;
+    harness.state.readSource = () => {
+      throw new SourceArtifactSizeLimitError();
+    };
+
+    await expectWorkflowError(
+      () => plan.prepare(job, new AbortController().signal),
+      "artifact_invalid",
+      "job"
+    );
+
+    expect(harness.state.sourceReadCalls).toBe(sourceReadCalls + 1);
+    expect(harness.state.parserCalls).toBe(0);
   });
 
   it("rejects a reader payload accessor without invoking it or the parser", async () => {

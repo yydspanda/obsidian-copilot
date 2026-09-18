@@ -28,6 +28,8 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
 
 ### Windows acceptance
 
+- Task ID: `PK-H3-REVIEW11-FIX` — fix the cumulative review findings for Vault update containment,
+  case-sensitive Chat attachment identity, bounded source reads, and obsolete model policy.
 - Task ID: `PK-H3-UPSTREAM-V4-WIN` — validate provider/project/settings migration, reload/unload,
   Knowledge Studio, and popout behavior against the merged V4 baseline.
 - Task ID: `PK-H3-FORWARD-REVISION-WIN` — validate Source/Forward origin, supersession, recovery,
@@ -50,6 +52,8 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
 
 ### Runtime reliability and scale
 
+- Task ID: `PK-LOG-REDACTION-WIN` — repair unoptimized-regexp log redaction failures, verify the
+  full non-paid suite, commit/push the reviewed repairs and validate the Windows test deployment.
 - Task ID: `PK-RUNTIME-TERMINAL-COMPACTION` — define atomic terminal Queue/Review/observation
   compaction while retaining replay floors and non-revival tombstones.
 - Task ID: `PK-RUNTIME-COMPARE-DELETE` — prove safe compare-and-delete before enabling the delete

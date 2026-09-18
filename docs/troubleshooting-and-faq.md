@@ -115,6 +115,8 @@ Use **Advanced → Debugging & support → Report an issue** for any Copilot pro
 
 Before anything is written into the zip, Copilot cleans every log and your own description on this device: usernames taken from home-folder paths, email addresses, and recognizable credentials such as API keys and tokens are replaced with visible markers so you can see that something was removed. This is a best-effort pass over the formats Copilot knows, so an unfamiliar secret can still slip through — which is exactly what the review step is for.
 
+Recognized long addresses and credentials are removed as whole values, rather than shortened in a way that leaves their tail visible. The log size limits below still apply.
+
 **The screenshot is not cleaned at all.** It is a picture, so nothing can be found and removed in it. Look at it before you upload.
 
 A log too large for the report keeps its newest entries rather than being dropped, and the file itself opens with a banner identifying it as a truncated log and naming the original size. Cleaning always runs over the whole log before anything is cut, so a log too large to clean whole (over 64 MB) is left out and listed with that reason.
