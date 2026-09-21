@@ -28,7 +28,7 @@
 ## Recent Activity
 
 - 2026-09-21 — `PK-STUDIO-ONBOARDING` — [Issue #13](https://github.com/yydspanda/obsidian-copilot/issues/13):
-  setup/material UI repaired and deployed; 376 tests / 64 gallery checks pass, 185 files preserved. [Evidence](./designdocs/progress/acceptance/2026-09-21-studio-onboarding.md).
+  repair pushed as `5777c92d`; 376 tests, 64 gallery and 17 Windows preview/status checks pass. [Evidence](./designdocs/progress/acceptance/2026-09-21-studio-onboarding.md).
 - 2026-09-20 — `PK-DEEPSEEK-PRO-RESTORE` — User paused reading practice to fix stale Pro rejection; exact Pro routing is restored locally.
   19 suites / 715 tests and personal build pass; practice deployment verified without live requests. [Repair and delivery evidence](./designdocs/progress/acceptance/2026-09-20-pro-restore.md).
 - 2026-09-18 — `OPS-UPSTREAM-SYNC` — Synced 12 upstream commits with 1 conflict file; 56 suites / 1,623 tests pass.
@@ -73,7 +73,7 @@
 ## Current Verification
 
 - September 21 Studio onboarding: 376 targeted tests, build, format/lint and review pass; 64 isolated gallery checks pass.
-  Practice build `1f25176e-dirty-92d174d8715d` loaded, Add materials enabled, queue empty, 185 files unchanged; actual submission awaits the user.
+  Pushed source `5777c92d` rebuild matches deployed artifacts; 17 Windows checks pass, 185 files/92 settings/runtime unchanged; real submission awaits the user.
 - September 20 Pro repair: 715 tests and local gates pass; practice build `1f25176e-dirty-ebf5a93c7d53` loaded, 13 messages / 3 attachments / 165 files preserved; no live Pro call or full-suite rerun.
 - September 18 upstream sync: 56/56 affected suites and 1,623 tests pass (0 failures/skips), plus 20 governance tests.
   Production build/typecheck, artifact syntax/mobile-load smoke, format/lint and full Obsidian review pass.

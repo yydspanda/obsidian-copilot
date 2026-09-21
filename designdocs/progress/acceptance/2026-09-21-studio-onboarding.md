@@ -120,3 +120,67 @@ remain untested on Windows; the assistant has not performed those actions on the
 user's behalf. Existing `reading` configuration needs no setup rerun. Next
 checkpoint: the user opens **Add materials** and previews their personal note,
 without immediately confirming a paid ingest.
+
+## User-authorized commit/push and post-push verification
+
+The user then requested committing/pushing before verification. The previously
+deployed Pro repair is isolated in `fda5ce92`; Studio setup/material entry is
+`5777c92d69522b01249a9c009c4a19449756274f`. Both were pushed to
+`fork/knowledge-h3-personal-flow`, including the already-local documentation
+checkpoint `1f25176e`. Remote `master` was not changed. Normal commit hooks ran;
+the mixed documentation hunks were separated without discarding working changes.
+The installation guide now recommends the Studio setup form consistently.
+
+After push, an independent run from clean `5777c92d` confirms:
+
+- 27 suites / 376 tests pass again, zero skips/failures.
+- Personal production build, artifact syntax and mobile-load smoke pass.
+- Full Obsidian review passes, audit reports zero vulnerabilities, warnings
+  remain unsuppressed. Full format/lint also passed before committing.
+- Both rebuilt artifact SHA-256 values exactly match the deployed values above.
+  The old development manifest tag remains truthful to its original build;
+  equivalent code was verified without another disruptive plugin reload.
+
+Actual Windows checks used the existing practice Vault and actual plugin React
+tree through scoped synthetic DOM events; they are not trusted mouse-input or
+performance measurements. The CLI debugger command returned unavailable, so
+temporary renderer `error` and `unhandledrejection` listeners observed only this
+preview sequence. Both counts stayed zero; this is not a claim that all historical
+console errors were inspected. Background-window timer throttling delayed the
+probe, not the feature's measured runtime; all callbacks finished and listeners
+and result markers were removed.
+
+Fourteen material-entry checks pass:
+
+1. Add materials is enabled.
+2. Opening the chooser does not submit anything.
+3. An empty selection cannot submit.
+4. Configuration, Copilot-owned files, Wiki and the active rules file are excluded
+   from the displayed inventory (164 eligible files).
+5. A search with no matches stays non-submittable.
+6. The user's existing personal note can be found by search.
+7. Selecting it previews **Copy snapshot** and the exact destination under
+   `Sources/Reading/Vault/`.
+8. Running-queue cost and explicit Review/Apply warnings are visible.
+9. Snapshot selection cannot submit before separate consent.
+10. Consent enables Add; Add itself is never clicked.
+11. Revoking consent disables Add again.
+12. Cancel closes the chooser.
+13. Reopening clears search, selection and prior consent.
+14. A second cancellation returns to unchanged empty Activity.
+
+Three existing-setup checks pass: all three readiness cards remain configured
+locally; the existing Bundle exposes no replacement setup form; the Project
+action is labeled **Open Project configuration**. Back to Studio succeeds.
+
+A fresh before/after preservation audit for this verification proves all 185
+note/material hashes and all 92 setting hashes unchanged, with no added files or
+settings. The entire runtime file is byte-identical:
+`4174ecc66c858cd6e2cd3386bd95428e62776a31b7fa01cefe8a84896e3a1215`.
+It still has revision zero, no sources/jobs and no active write transaction.
+The earlier startup settings exception is not confused with this fresh audit.
+
+No model inference, real Add, setup creation, queue Resume or Wiki Apply was
+performed. First-use writes and successful ingest remain covered by local tests,
+not claimed as completed native Windows scenarios. The user-operated next step
+remains choosing their note in Add materials before confirming a real ingest.
