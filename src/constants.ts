@@ -265,6 +265,7 @@ export enum ChatModels {
   // https://github.com/yydspanda/obsidian-copilot/issues/3
   DEEPSEEK_V4_FLASH = "deepseek-v4-flash",
   DEEPSEEK_FLASH = "deepseek-flash",
+  DEEPSEEK_V4_PRO = "deepseek-v4-pro",
   DEEPSEEK_REASONER = "deepseek-reasoner",
   DEEPSEEK_CHAT = "deepseek-chat",
   OPENROUTER_GEMINI_3_5_FLASH = "google/gemini-3.5-flash",
@@ -472,6 +473,14 @@ export const BUILTIN_CHAT_MODELS: CustomModel[] = [
   },
   {
     name: ChatModels.DEEPSEEK_FLASH,
+    provider: ChatModelProviders.DEEPSEEK,
+    enabled: false,
+    isBuiltIn: true,
+    reasoningEffort: ReasoningEffort.MINIMAL,
+    capabilities: [ModelCapability.REASONING],
+  },
+  {
+    name: ChatModels.DEEPSEEK_V4_PRO,
     provider: ChatModelProviders.DEEPSEEK,
     enabled: false,
     isBuiltIn: true,

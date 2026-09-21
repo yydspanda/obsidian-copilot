@@ -229,7 +229,7 @@ describe("buildOpencodeConfig — provider/model injection", () => {
     expect(cfg.provider.anthropic.models).toEqual({ "claude-sonnet-4-6": {} });
   });
 
-  it("https://github.com/yydspanda/obsidian-copilot/issues/3 injects canonical Flash and omits Pro for the official DeepSeek provider", async () => {
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 injects canonical Flash and V4 Pro separately for the official DeepSeek provider", async () => {
     const provider = makeProvider(
       "p-deepseek",
       { kind: "byok", catalogProviderId: "deepseek" },
@@ -250,7 +250,7 @@ describe("buildOpencodeConfig — provider/model injection", () => {
       >;
     };
     expect(cfg.provider.deepseek.options?.baseURL).toBeUndefined();
-    expect(cfg.provider.deepseek.models).toEqual({ "deepseek-flash": {} });
+    expect(cfg.provider.deepseek.models).toEqual({ "deepseek-flash": {}, "deepseek-v4-pro": {} });
   });
 
   it("https://github.com/yydspanda/obsidian-copilot/issues/3 keeps a custom DeepSeek-compatible endpoint's model namespace", async () => {

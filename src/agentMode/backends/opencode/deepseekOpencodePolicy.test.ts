@@ -76,7 +76,7 @@ describe("deepseekOpencodePolicy", () => {
   });
 
   describe("resolveOpencodeConfiguredModelIdentity()", () => {
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes Flash and rejects Pro on the official route", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes Flash and preserves V4 Pro on the official route", () => {
       const official = provider(
         "official",
         { kind: "byok", catalogProviderId: "deepseek" },
@@ -94,7 +94,7 @@ describe("deepseekOpencodePolicy", () => {
           official,
           model("pro", "official", "deepseek-v4-pro")
         )
-      ).toBeNull();
+      ).toBe("deepseek-v4-pro");
     });
 
     it("https://github.com/yydspanda/obsidian-copilot/issues/3 applies the official identity policy to native DeepSeek only", () => {
@@ -116,7 +116,7 @@ describe("deepseekOpencodePolicy", () => {
           native,
           model("pro", "opencode", "deepseek/deepseek-v4-pro")
         )
-      ).toBeNull();
+      ).toBe("deepseek/deepseek-v4-pro");
       expect(
         resolveOpencodeConfiguredModelIdentity(
           native,
@@ -133,7 +133,7 @@ describe("deepseekOpencodePolicy", () => {
   });
 
   describe("normalizeOpencodeSelectionBaseId()", () => {
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes official Flash and rejects retired Pro", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes official Flash and preserves V4 Pro without downgrading it", () => {
       const official = provider(
         "official",
         { kind: "byok", catalogProviderId: "deepseek" },
@@ -150,7 +150,9 @@ describe("deepseekOpencodePolicy", () => {
       expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-flash", snapshot)).toBe(
         "deepseek/deepseek-flash"
       );
-      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", snapshot)).toBeNull();
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", snapshot)).toBe(
+        "deepseek/deepseek-v4-pro"
+      );
       expect(normalizeOpencodeSelectionBaseId("openrouter/deepseek-v4-pro", snapshot)).toBe(
         "openrouter/deepseek-v4-pro"
       );
@@ -296,9 +298,15 @@ describe("deepseekOpencodePolicy", () => {
       ).toBe(true);
       expect(
         hasAmbiguousDeepSeekOpencodeRoute([
+          ok(first, model("flash", "first", "deepseek-flash")),
+          ok(second, model("pro", "second", "deepseek-v4-pro")),
+        ])
+      ).toBe(true);
+      expect(
+        hasAmbiguousDeepSeekOpencodeRoute([
           ok(first, model("alias", "first", "deepseek-v4-flash")),
           ok(first, model("canonical", "first", "deepseek-flash")),
-          ok(second, model("retired", "second", "deepseek-v4-pro")),
+          ok(second, model("unsupported", "second", "deepseek-unknown")),
           ok(proxy, model("proxy", "proxy", "deepseek-v4-flash")),
           { configuredModelId: "broken", state: "broken" },
         ])

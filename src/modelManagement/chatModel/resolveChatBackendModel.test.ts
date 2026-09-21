@@ -137,7 +137,7 @@ describe("resolveChatBackendModel", () => {
       expect(result).toEqual({ ok: false, reason: "empty" });
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 does not replace a retired direct DeepSeek selection or read another provider credential", async () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 does not replace an unavailable direct DeepSeek selection or read another provider credential", async () => {
       const safeProvider = provider("safe", {
         providerType: "openai-compatible",
         origin: { kind: "byok", catalogProviderId: "openai" },
@@ -154,7 +154,7 @@ describe("resolveChatBackendModel", () => {
       expect(getApiKey).not.toHaveBeenCalled();
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 does not replace a disabled Pro configured-model id or read another provider credential", async () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 does not replace disabled Pro with enabled Flash or read a credential", async () => {
       const deepseek = provider("deepseek-official", {
         providerType: "openai-compatible",
         origin: { kind: "byok", catalogProviderId: "deepseek" },
@@ -165,16 +165,19 @@ describe("resolveChatBackendModel", () => {
         origin: { kind: "byok", catalogProviderId: "openai" },
       });
       const api = makeApi(
-        [okEntry("safe-model", safeProvider, "gpt-5")],
+        [
+          okEntry("flash", deepseek, "deepseek-flash"),
+          okEntry("safe-model", safeProvider, "gpt-5"),
+        ],
         { safe: "safe-key", "deepseek-official": "deepseek-key" },
         {
-          configuredModels: [configuredModel("retired-pro", deepseek, "deepseek-v4-pro")],
+          configuredModels: [configuredModel("disabled-pro", deepseek, "deepseek-v4-pro")],
           providers: [deepseek],
         }
       );
       const getApiKey = jest.spyOn(api.providerRegistry, "getApiKey");
 
-      await expect(resolveChatBackendModel(api, "retired-pro")).resolves.toEqual({
+      await expect(resolveChatBackendModel(api, "disabled-pro")).resolves.toEqual({
         ok: false,
         reason: "selection_unavailable",
       });

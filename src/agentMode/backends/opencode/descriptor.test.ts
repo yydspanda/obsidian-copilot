@@ -30,7 +30,7 @@ jest.mock("@/logger", () => ({
 describe("descriptor", () => {
   describe("OpencodeBackendDescriptor", () => {
     describe("normalizeSelection()", () => {
-      it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes legacy Flash, preserves current Flash, and rejects retired Pro", () => {
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes legacy Flash and preserves current Flash and V4 Pro", () => {
         const provider: Provider = {
           providerId: "deepseek-official",
           providerType: "openai-compatible",
@@ -71,7 +71,7 @@ describe("descriptor", () => {
             { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
             settings
           )
-        ).toBeNull();
+        ).toEqual({ baseModelId: "deepseek/deepseek-v4-pro", effort: null });
       });
     });
 
@@ -422,25 +422,23 @@ describe("descriptor", () => {
         }
       });
 
-      it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks a persisted Pro default before OpenCode I/O", async () => {
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 applies a persisted V4 Pro default without silently switching to Flash", async () => {
         const restore = installDeepSeekSettings("deepseek-v4-pro");
         const { session, applyModelWireId } = makeSession({
           model: {
             current: { baseModelId: "openai/gpt-5", effort: null },
-            availableModels: [],
+            availableModels: [entryOffering("deepseek/deepseek-v4-pro", [])],
             apply: { kind: "setModel" },
           },
           mode: null,
         });
 
         try {
-          await expect(
-            OpencodeBackendDescriptor.applySelection(session, {
-              baseModelId: "deepseek/deepseek-v4-pro",
-              effort: null,
-            })
-          ).rejects.toThrow("no longer supported");
-          expect(applyModelWireId).not.toHaveBeenCalled();
+          await OpencodeBackendDescriptor.applySelection(session, {
+            baseModelId: "deepseek/deepseek-v4-pro",
+            effort: null,
+          });
+          expect(applyModelWireId).toHaveBeenCalledWith("deepseek/deepseek-v4-pro");
         } finally {
           restore();
         }

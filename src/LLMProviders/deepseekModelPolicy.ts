@@ -10,7 +10,10 @@ export const DEEPSEEK_FLASH_WIRE_IDENTITY = "deepseek-flash" as const;
  */
 export const CURRENT_DEEPSEEK_MODEL_IDENTITIES = Object.freeze([
   DEEPSEEK_FLASH_WIRE_IDENTITY,
+  "deepseek-v4-pro",
 ] as const);
+
+export type DeepSeekWireModelIdentity = (typeof CURRENT_DEEPSEEK_MODEL_IDENTITIES)[number];
 
 /**
  * DeepSeek identities accepted from current or already-persisted configuration.
@@ -20,12 +23,11 @@ export const CURRENT_DEEPSEEK_MODEL_IDENTITIES = Object.freeze([
  * https://github.com/yydspanda/obsidian-copilot/issues/3
  */
 export const SUPPORTED_DEEPSEEK_MODEL_IDENTITIES = Object.freeze([
-  DEEPSEEK_FLASH_WIRE_IDENTITY,
+  ...CURRENT_DEEPSEEK_MODEL_IDENTITIES,
   "deepseek-v4-flash",
 ] as const);
 
 const CURRENT_DEEPSEEK_MODELS = new Set<string>(CURRENT_DEEPSEEK_MODEL_IDENTITIES);
-const SUPPORTED_DEEPSEEK_MODELS = new Set<string>(SUPPORTED_DEEPSEEK_MODEL_IDENTITIES);
 
 /** Stable configuration failures raised before a direct DeepSeek request is created. */
 export type DeepSeekModelPolicyErrorCode =
@@ -54,7 +56,7 @@ export interface DeepSeekModelPolicyInput {
 
 /** Explicit wire fields consumed by ChatDeepSeek without provider-default thinking. */
 export interface DeepSeekChatModelPolicy {
-  wireModelIdentity: typeof DEEPSEEK_FLASH_WIRE_IDENTITY;
+  wireModelIdentity: DeepSeekWireModelIdentity;
   thinkingEnabled: boolean;
   temperature?: number;
   topP?: number;
@@ -65,7 +67,7 @@ export interface DeepSeekChatModelPolicy {
 }
 
 /** Returns whether one identity is in the reviewed current DeepSeek catalog. */
-export function isCurrentDeepSeekModelIdentity(value: string): boolean {
+export function isCurrentDeepSeekModelIdentity(value: string): value is DeepSeekWireModelIdentity {
   return CURRENT_DEEPSEEK_MODELS.has(value);
 }
 
@@ -77,8 +79,11 @@ export function isCurrentDeepSeekModelIdentity(value: string): boolean {
  */
 export function resolveDeepSeekWireModelIdentity(
   value: string
-): typeof DEEPSEEK_FLASH_WIRE_IDENTITY | undefined {
-  return SUPPORTED_DEEPSEEK_MODELS.has(value) ? DEEPSEEK_FLASH_WIRE_IDENTITY : undefined;
+): DeepSeekWireModelIdentity | undefined {
+  // Only Flash has an alias: continued Pro service must keep its own model identity.
+  // https://github.com/yydspanda/obsidian-copilot/issues/3
+  if (value === "deepseek-v4-flash") return DEEPSEEK_FLASH_WIRE_IDENTITY;
+  return isCurrentDeepSeekModelIdentity(value) ? value : undefined;
 }
 
 /** Returns whether one plugin reasoning setting explicitly enables DeepSeek thinking. */
@@ -130,7 +135,7 @@ export function shouldBlockDeepSeekThinkingAgentTools(
 export function createDeepSeekChatModelPolicy(
   input: DeepSeekModelPolicyInput
 ): DeepSeekChatModelPolicy {
-  // Persisted Flash configurations remain routable only through the reviewed canonical identity.
+  // Resolve only the reviewed Flash alias; never replace the user's selected model tier.
   // https://github.com/yydspanda/obsidian-copilot/issues/3
   const wireModelIdentity = resolveDeepSeekWireModelIdentity(input.model);
   if (!wireModelIdentity) {

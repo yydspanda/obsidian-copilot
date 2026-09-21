@@ -722,7 +722,7 @@ describe("AgentSessionManager", () => {
       it.each([false, true])(
         "https://github.com/yydspanda/obsidian-copilot/issues/3 rejects a retired persisted selection before starting a backend session even with an offered replacement (%s)",
         async (hasReplacement) => {
-          const persisted = { baseModelId: "deepseek/deepseek-v4-pro", effort: null };
+          const persisted = { baseModelId: "deepseek/deepseek-unsupported-model", effort: null };
           const normalizeSelection: NonNullable<BackendDescriptor["normalizeSelection"]> = jest.fn(
             (selection) => (selection.baseModelId === persisted.baseModelId ? null : selection)
           );
@@ -804,12 +804,12 @@ describe("AgentSessionManager", () => {
     });
 
     describe("getDefaultSelection()", () => {
-      it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes a compatible Flash alias but preserves rejected Pro for fail-closed callers", () => {
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes a compatible Flash alias but preserves a rejected model for fail-closed callers", () => {
         const getSettingsMock = mockedGetSettings as jest.Mock;
         const previousImplementation = getSettingsMock.getMockImplementation();
         const normalizeSelection = jest.fn(
           (selection: { baseModelId: string; effort: string | null }) => {
-            if (selection.baseModelId.endsWith("deepseek-v4-pro")) return null;
+            if (selection.baseModelId.endsWith("deepseek-unsupported-model")) return null;
             return {
               ...selection,
               baseModelId: selection.baseModelId.replace("deepseek-v4-flash", "deepseek-flash"),
@@ -841,7 +841,7 @@ describe("AgentSessionManager", () => {
               backends: {
                 opencode: {
                   defaultModel: {
-                    baseModelId: "deepseek/deepseek-v4-pro",
+                    baseModelId: "deepseek/deepseek-unsupported-model",
                     effort: null,
                   },
                 },
@@ -849,7 +849,7 @@ describe("AgentSessionManager", () => {
             },
           });
           expect(mgr.getDefaultSelection("opencode")).toEqual({
-            baseModelId: "deepseek/deepseek-v4-pro",
+            baseModelId: "deepseek/deepseek-unsupported-model",
             effort: null,
           });
         } finally {
@@ -1132,7 +1132,7 @@ describe("AgentSessionManager", () => {
       });
 
       it("preserves a policy-rejected default for fail-closed callers despite an offered replacement (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
-        const saved = { baseModelId: "deepseek/deepseek-v4-pro", effort: null };
+        const saved = { baseModelId: "deepseek/deepseek-unsupported-model", effort: null };
         savedDefault(saved);
         const mgr = buildManager({}, undefined, {
           normalizeSelection: (selection) =>
@@ -3757,7 +3757,7 @@ describe("AgentSessionManager chat history aggregation", () => {
           sessionId,
           state: {
             model: {
-              current: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+              current: { baseModelId: "deepseek/deepseek-unsupported-model", effort: null },
               availableModels: [],
               apply: { kind: "setModel" as const },
             },
@@ -3776,7 +3776,7 @@ describe("AgentSessionManager chat history aggregation", () => {
       ).rejects.toThrow("no longer supported");
 
       expect(normalizeSelection).toHaveBeenCalledWith(
-        { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+        { baseModelId: "deepseek/deepseek-unsupported-model", effort: null },
         expect.any(Object)
       );
       expect(backend.registerSessionHandler).not.toHaveBeenCalled();

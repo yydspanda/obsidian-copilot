@@ -4,7 +4,10 @@ import type { CopilotSettings } from "@/settings/model";
 
 const CURRENT: ModelSelection = { baseModelId: "deepseek/deepseek-flash", effort: null };
 const LEGACY: ModelSelection = { baseModelId: "deepseek/deepseek-v4-flash", effort: null };
-const RETIRED: ModelSelection = { baseModelId: "deepseek/deepseek-v4-pro", effort: null };
+const RETIRED: ModelSelection = {
+  baseModelId: "deepseek/deepseek-unsupported-model",
+  effort: null,
+};
 const POLICY: Pick<BackendDescriptor, "normalizeSelection"> = {
   normalizeSelection: (selection) => {
     if (selection.baseModelId === RETIRED.baseModelId) return null;

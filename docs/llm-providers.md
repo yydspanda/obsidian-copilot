@@ -77,10 +77,10 @@ curate each list independently:
 - **Basic → Agents → opencode** controls the models opencode can use and its
   **Default model**.
 
-For the official DeepSeek provider, use `deepseek-flash` for new setups. An
-existing `deepseek-v4-flash` model or saved selection continues through the
-current Flash route, while `deepseek-v4-pro` is stopped instead of silently
-falling back to Flash. This compatibility rule applies only to DeepSeek's
+For the official DeepSeek provider, use `deepseek-flash` or `deepseek-v4-pro`.
+An existing `deepseek-v4-flash` model or saved selection continues through the
+current Flash route. A Pro selection stays `deepseek-v4-pro`; it is never
+replaced with Flash. This compatibility rule applies only to DeepSeek's
 official endpoint; a custom DeepSeek-compatible endpoint keeps its own provider
 and model names.
 

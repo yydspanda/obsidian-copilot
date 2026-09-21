@@ -17,9 +17,10 @@ import {
 import { createKnowledgeGroundedAnswerModelPort } from "@/knowledge/query/KnowledgeGroundedAnswerModelRoute";
 
 const MODEL = "deepseek-flash";
+const PRO_MODEL = "deepseek-v4-pro";
 
 /** Creates the exact admitted profile shared with the Compiler preflight. */
-function createProfile(): KnowledgeBundlePipelineProfile {
+function createProfile(model = MODEL): KnowledgeBundlePipelineProfile {
   return {
     version: 1,
     bundleId: "personal",
@@ -34,7 +35,7 @@ function createProfile(): KnowledgeBundlePipelineProfile {
     ],
     model: {
       provider: "deepseek",
-      model: MODEL,
+      model,
       configuration: {
         behaviorContractVersion: 1,
         routeContractVersion: 1,
@@ -88,13 +89,13 @@ function createRequest() {
 /** Creates a native-fetch-compatible DeepSeek JSON response. */
 function createResponse(
   content: string,
-  options: { status?: number; body?: ReadableStream<Uint8Array> | null } = {}
+  options: { status?: number; model?: string; body?: ReadableStream<Uint8Array> | null } = {}
 ): KnowledgeDeepSeekHttpResponse {
   const bytes = new TextEncoder().encode(
     JSON.stringify({
       id: "answer-1",
       object: "chat.completion",
-      model: MODEL,
+      model: options.model ?? MODEL,
       choices: [
         {
           index: 0,
@@ -129,53 +130,72 @@ function createResponse(
 }
 
 describe("KnowledgeDeepSeekGroundedAnswerRoute", () => {
-  it("https://github.com/yydspanda/obsidian-copilot/issues/3 sends canonical Flash in one non-streaming JSON request and returns strict answer content", async () => {
-    const request = createRequest();
-    const fetchPort = jest.fn(async (_url: string, init: RequestInit) => {
-      if (typeof init.body !== "string") throw new Error("Expected encoded request text");
-      const body = JSON.parse(init.body) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        model: MODEL,
-        response_format: { type: "json_object" },
-        stream: false,
-        max_tokens: 8192,
-        thinking: { type: "enabled" },
-        reasoning_effort: "high",
+  it.each([MODEL, PRO_MODEL])(
+    "https://github.com/yydspanda/obsidian-copilot/issues/3 sends %s unchanged in one non-streaming JSON request and returns strict answer content",
+    async (model) => {
+      const request = createRequest();
+      const fetchPort = jest.fn(async (_url: string, init: RequestInit) => {
+        if (typeof init.body !== "string") throw new Error("Expected encoded request text");
+        const body = JSON.parse(init.body) as Record<string, unknown>;
+        expect(body).toMatchObject({
+          model,
+          response_format: { type: "json_object" },
+          stream: false,
+          max_tokens: 8192,
+          thinking: { type: "enabled" },
+          reasoning_effort: "high",
+        });
+        expect(body).not.toHaveProperty("tools");
+        expect(JSON.stringify(body)).toContain("Review state survives application restart.");
+        expect(init.signal?.aborted).toBe(false);
+        expect(typeof init.signal?.addEventListener).toBe("function");
+        return createResponse(
+          JSON.stringify({
+            version: 1,
+            contextDigest: request.contextDigest,
+            status: "answered",
+            claims: [
+              {
+                claimId: "claim-1",
+                kind: "source_fact",
+                text: "Review state survives restart.",
+                evidenceIds: ["evidence-1"],
+              },
+            ],
+            insufficientEvidence: [],
+          }),
+          { model }
+        );
       });
-      expect(body).not.toHaveProperty("tools");
-      expect(JSON.stringify(body)).toContain("Review state survives application restart.");
-      expect(init.signal?.aborted).toBe(false);
-      expect(typeof init.signal?.addEventListener).toBe("function");
-      return createResponse(
-        JSON.stringify({
-          version: 1,
-          contextDigest: request.contextDigest,
-          status: "answered",
-          claims: [
-            {
-              claimId: "claim-1",
-              kind: "source_fact",
-              text: "Review state survives restart.",
-              evidenceIds: ["evidence-1"],
-            },
-          ],
-          insufficientEvidence: [],
-        })
+      const route = createKnowledgeDeepSeekGroundedAnswerModelRoute(
+        createProfile(model),
+        "sk-test",
+        fetchPort
       );
-    });
+      const port = createKnowledgeGroundedAnswerModelPort(route, jest.fn());
+      const signal = new AbortController().signal;
+
+      const output = await port.generate(request, signal);
+
+      expect(fetchPort).toHaveBeenCalledTimes(1);
+      expect(fetchPort.mock.calls[0][0]).toBe(KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT);
+      expect(parseKnowledgeGroundedAnswerModelOutput(output, request).status).toBe("answered");
+    }
+  );
+
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 refuses a Flash answer to a V4 Pro query without retrying", async () => {
+    const fetchPort = jest.fn(async () => createResponse("{}", { model: MODEL }));
     const route = createKnowledgeDeepSeekGroundedAnswerModelRoute(
-      createProfile(),
+      createProfile(PRO_MODEL),
       "sk-test",
       fetchPort
     );
     const port = createKnowledgeGroundedAnswerModelPort(route, jest.fn());
-    const signal = new AbortController().signal;
 
-    const output = await port.generate(request, signal);
-
+    await expect(
+      port.generate(createRequest(), new AbortController().signal)
+    ).rejects.toMatchObject({ code: "response_invalid" });
     expect(fetchPort).toHaveBeenCalledTimes(1);
-    expect(fetchPort.mock.calls[0][0]).toBe(KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT);
-    expect(parseKnowledgeGroundedAnswerModelOutput(output, request).status).toBe("answered");
   });
 
   it("rejects copied requests before network and honors pre-aborted signals", async () => {

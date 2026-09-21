@@ -2,13 +2,13 @@ import { BUILTIN_CHAT_MODELS, ChatModelProviders, ChatModels, ProviderInfo } fro
 
 describe("constants", () => {
   describe("BUILTIN_CHAT_MODELS", () => {
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 offers canonical Flash but not retiring Pro for direct DeepSeek", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 offers canonical Flash and V4 Pro for direct DeepSeek", () => {
       const directDeepSeekModels = BUILTIN_CHAT_MODELS.filter(
         (model) => String(model.provider) === String(ChatModelProviders.DEEPSEEK)
       ).map((model) => model.name);
 
       expect(directDeepSeekModels).toContain(ChatModels.DEEPSEEK_FLASH);
-      expect(directDeepSeekModels).not.toContain("deepseek-v4-pro");
+      expect(directDeepSeekModels).toContain("deepseek-v4-pro");
     });
   });
 

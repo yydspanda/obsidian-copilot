@@ -148,7 +148,7 @@ describe("opencodeModelResolve", () => {
   });
 
   describe("resolveOpencodeConfiguredModelIdentity()", () => {
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes legacy Flash and rejects Pro only for official DeepSeek", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes legacy Flash while preserving Pro on official and custom DeepSeek routes", () => {
       const official = makeProvider(
         "official",
         { kind: "byok", catalogProviderId: "deepseek" },
@@ -173,7 +173,7 @@ describe("opencodeModelResolve", () => {
           official,
           makeModel("pro", "official", "deepseek-v4-pro")
         )
-      ).toBeNull();
+      ).toBe("deepseek-v4-pro");
       expect(
         resolveOpencodeConfiguredModelIdentity(
           proxy,
@@ -182,7 +182,7 @@ describe("opencodeModelResolve", () => {
       ).toBe("deepseek-v4-pro");
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes Flash and rejects Pro in OpenCode's native DeepSeek namespace", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes Flash and preserves Pro in OpenCode's native DeepSeek namespace", () => {
       const native = makeProvider("opencode", { kind: "agent", agentType: "opencode" });
 
       expect(
@@ -196,7 +196,7 @@ describe("opencodeModelResolve", () => {
           native,
           makeModel("pro", "opencode", "deepseek/deepseek-v4-pro")
         )
-      ).toBeNull();
+      ).toBe("deepseek/deepseek-v4-pro");
       expect(
         resolveOpencodeConfiguredModelIdentity(
           native,
@@ -207,7 +207,7 @@ describe("opencodeModelResolve", () => {
   });
 
   describe("normalizeOpencodeSelectionBaseId()", () => {
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes persisted Flash and blocks Pro before OpenCode applies them", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes persisted Flash and preserves Pro before OpenCode applies them", () => {
       const official = makeProvider(
         "official",
         { kind: "byok", catalogProviderId: "deepseek" },
@@ -225,7 +225,9 @@ describe("opencodeModelResolve", () => {
       expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-flash", settings)).toBe(
         "deepseek/deepseek-flash"
       );
-      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", settings)).toBeNull();
+      expect(normalizeOpencodeSelectionBaseId("deepseek/deepseek-v4-pro", settings)).toBe(
+        "deepseek/deepseek-v4-pro"
+      );
     });
 
     it("https://github.com/yydspanda/obsidian-copilot/issues/3 preserves custom endpoints only in their unique namespace and fails closed on orphaned official selections", () => {
@@ -326,7 +328,7 @@ describe("opencodeModelResolve", () => {
       }
     );
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes native Flash and blocks native Pro even when a custom proxy row has the same bare id", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 normalizes native Flash and blocks an ambiguous Pro selection shared with a custom proxy", () => {
       const native = makeProvider("opencode", { kind: "agent", agentType: "opencode" });
       const proxy = makeProvider(
         "proxy",
@@ -413,7 +415,7 @@ describe("opencodeModelResolve", () => {
       expect(entry.name).toBe("Big X");
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 exposes canonical Flash and omits retiring Pro for official DeepSeek", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 exposes canonical Flash and V4 Pro as distinct official DeepSeek options", () => {
       const deepseek = makeProvider(
         "deepseek-official",
         { kind: "byok", catalogProviderId: "deepseek" },
@@ -431,6 +433,7 @@ describe("opencodeModelResolve", () => {
 
       expect(opencodeEnabledModelEntries(settings).map((entry) => entry.baseModelId)).toEqual([
         "deepseek/deepseek-flash",
+        "deepseek/deepseek-v4-pro",
       ]);
     });
 
@@ -664,10 +667,10 @@ describe("opencodeModelResolve", () => {
       });
 
       expect(opencodeWireBaseIdFor("flash", settings)).toBe("deepseek/deepseek-flash");
-      expect(opencodeWireBaseIdFor("pro", settings)).toBeNull();
+      expect(opencodeWireBaseIdFor("pro", settings)).toBe("deepseek/deepseek-v4-pro");
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes native Flash and omits native Pro", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 canonicalizes native Flash and retains native Pro", () => {
       const native = makeProvider("opencode", { kind: "agent", agentType: "opencode" });
       const settings = makeSettings({
         providers: { opencode: native },
@@ -678,7 +681,7 @@ describe("opencodeModelResolve", () => {
       });
 
       expect(opencodeWireBaseIdFor("flash", settings)).toBe("deepseek/deepseek-flash");
-      expect(opencodeWireBaseIdFor("pro", settings)).toBeNull();
+      expect(opencodeWireBaseIdFor("pro", settings)).toBe("deepseek/deepseek-v4-pro");
     });
 
     it("https://github.com/yydspanda/obsidian-copilot/issues/3 preserves a custom DeepSeek-compatible endpoint's model namespace", () => {

@@ -152,7 +152,30 @@ describe("chatModelManager", () => {
         }
       });
 
-      it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks DeepSeek V4 Pro before provider I/O", async () => {
+      it.each([
+        [ReasoningEffort.MINIMAL, { thinking: { type: "disabled" } }],
+        [ReasoningEffort.HIGH, { thinking: { type: "enabled" }, reasoning_effort: "high" }],
+        [ReasoningEffort.XHIGH, { thinking: { type: "enabled" }, reasoning_effort: "max" }],
+      ])(
+        "https://github.com/yydspanda/obsidian-copilot/issues/3 sends Pro unchanged with %s effort",
+        async (reasoningEffort, thinking) => {
+          const body = captureRequestBody(OPENAI_RESPONSE);
+          await send(
+            wireModel({
+              name: "deepseek-v4-pro",
+              provider: ChatModelProviders.DEEPSEEK,
+              baseUrl: "https://api.deepseek.com",
+              reasoningEffort,
+            })
+          );
+          expect(body()).toMatchObject({ model: "deepseek-v4-pro", ...thinking });
+          for (const param of RETIRED_SAMPLING_PARAMS) {
+            expect(body()).not.toHaveProperty(param);
+          }
+        }
+      );
+
+      it("https://github.com/yydspanda/obsidian-copilot/issues/3 blocks unknown DeepSeek models before provider I/O", async () => {
         let requestCount = 0;
         setRequestUrlImpl(() => {
           requestCount += 1;
@@ -162,7 +185,7 @@ describe("chatModelManager", () => {
         await expect(
           ChatModelManager.getInstance().createModelInstanceFromBridged(
             wireModel({
-              name: "deepseek-v4-pro",
+              name: "unknown-model",
               provider: ChatModelProviders.DEEPSEEK,
               baseUrl: "https://api.deepseek.com",
             })

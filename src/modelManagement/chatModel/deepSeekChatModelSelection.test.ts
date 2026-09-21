@@ -88,7 +88,7 @@ describe("deepSeekChatModelSelection", () => {
       expect(resolution.mustFailClosed).toBe(false);
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 fails closed for retired direct identities without a reviewed replacement", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 fails closed for an unavailable direct model instead of selecting another provider", () => {
       const safe = entry(
         "safe",
         "gpt-5",
@@ -99,6 +99,32 @@ describe("deepSeekChatModelSelection", () => {
 
       expect(resolution.matches).toEqual([]);
       expect(resolution.mustFailClosed).toBe(true);
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 preserves enabled Pro selections even when Flash is the first enabled model", () => {
+      const official = provider("official");
+      const flash = entry("flash", "deepseek-flash", official);
+      const pro = entry("pro", "deepseek-v4-pro", official);
+
+      for (const selection of ["pro", `deepseek-v4-pro|${ChatModelProviders.DEEPSEEK}`]) {
+        const resolution = resolve([flash, pro], selection, inventory([flash, pro]));
+
+        expect(resolution.matches).toEqual([pro]);
+        expect(resolution.mustFailClosed).toBe(false);
+      }
+    });
+
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 never replaces disabled Pro with enabled Flash on the same account", () => {
+      const official = provider("official");
+      const flash = entry("flash", "deepseek-flash", official);
+      const pro = entry("pro", "deepseek-v4-pro", official);
+
+      for (const selection of ["pro", `deepseek-v4-pro|${ChatModelProviders.DEEPSEEK}`]) {
+        const resolution = resolve([flash], selection, inventory([flash, pro]));
+
+        expect(resolution.matches).toEqual([]);
+        expect(resolution.mustFailClosed).toBe(true);
+      }
     });
 
     it("https://github.com/yydspanda/obsidian-copilot/issues/3 counts aliases on one account once and rejects enabled matches across accounts", () => {

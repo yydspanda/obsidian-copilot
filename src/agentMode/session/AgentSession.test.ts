@@ -2575,12 +2575,12 @@ describe("AgentSession.create (via start)", () => {
       const mock = makeMockBackend();
       const retiredState: BackendState = {
         model: {
-          current: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+          current: { baseModelId: "deepseek/deepseek-unsupported-model", effort: null },
           apply: { kind: "setModel" },
           availableModels: [
             {
-              baseModelId: "deepseek/deepseek-v4-pro",
-              name: "DeepSeek Pro",
+              baseModelId: "deepseek/deepseek-unsupported-model",
+              name: "Unsupported DeepSeek model",
               provider: "deepseek",
               effortOptions: [],
             },
@@ -2598,7 +2598,7 @@ describe("AgentSession.create (via start)", () => {
       const descriptor = {
         ...makeWireOnlyDescriptor(),
         normalizeSelection: (selection: { baseModelId: string; effort: string | null }) =>
-          selection.baseModelId === "deepseek/deepseek-v4-pro" ? null : selection,
+          selection.baseModelId === "deepseek/deepseek-unsupported-model" ? null : selection,
         applySelection: jest.fn(async () => {
           throw new TypeError("retired model");
         }),
@@ -3166,7 +3166,7 @@ describe("AgentSession state_changed event", () => {
     const descriptor = {
       applySelection: jest.fn(async () => undefined),
       normalizeSelection: (selection: { baseModelId: string; effort: string | null }) =>
-        selection.baseModelId === "deepseek/deepseek-v4-pro" ? null : selection,
+        selection.baseModelId === "deepseek/deepseek-unsupported-model" ? null : selection,
     } as unknown as BackendDescriptor;
     const settings = getSettings();
     const session = new AgentSession({
@@ -3188,7 +3188,7 @@ describe("AgentSession state_changed event", () => {
           ...settings.agentMode,
           backends: {
             opencode: {
-              defaultModel: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+              defaultModel: { baseModelId: "deepseek/deepseek-unsupported-model", effort: null },
             },
           },
         },
@@ -3246,7 +3246,7 @@ describe("AgentSession state_changed event", () => {
     const descriptor = {
       applySelection: jest.fn(async () => undefined),
       normalizeSelection: (selection: { baseModelId: string; effort: string | null }) =>
-        selection.baseModelId === "deepseek/deepseek-v4-pro" ? null : selection,
+        selection.baseModelId === "deepseek/deepseek-unsupported-model" ? null : selection,
     } as unknown as BackendDescriptor;
     const session = new AgentSession({
       backend: mock.asBackend,
@@ -3266,7 +3266,7 @@ describe("AgentSession state_changed event", () => {
           ...safeState,
           model: {
             ...safeState.model!,
-            current: { baseModelId: "deepseek/deepseek-v4-pro", effort: null },
+            current: { baseModelId: "deepseek/deepseek-unsupported-model", effort: null },
           },
         },
       },

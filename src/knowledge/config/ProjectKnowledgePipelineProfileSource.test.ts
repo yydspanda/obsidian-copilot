@@ -629,11 +629,12 @@ describe("ProjectKnowledgePipelineProfileSource", () => {
       );
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects V4 Pro before route construction", () => {
-      expectProfileError(
-        () => resolveDeepSeekProfile({ name: "deepseek-v4-pro" }),
-        "model_unsupported"
-      );
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 keeps V4 Pro distinct from Flash in both profile and fingerprint", () => {
+      const pro = resolveDeepSeekProfile({ name: "deepseek-v4-pro" });
+      const flash = resolveDeepSeekProfile();
+
+      expect(pro.model.model).toBe("deepseek-v4-pro");
+      expect(createProfileDigest(pro)).not.toBe(createProfileDigest(flash));
     });
 
     it.each([

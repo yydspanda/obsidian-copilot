@@ -6,7 +6,7 @@
 
 安装或升级当前定制版插件，安全保存 DeepSeek API Key，并启用一个能被 Knowledge Compiler 使用的 DeepSeek V4 模型。
 
-完成本页后，你应该能在命令面板中找到 **Open Knowledge Studio**，在当前 BYOK / Quick Chat 设置中启用 `deepseek-flash`，并在 Project 的 `project.md` 中为 Knowledge 绑定这个模型。
+完成本页后，你应该能在命令面板中找到 **Open Knowledge Studio**，在当前 BYOK / Quick Chat 设置中启用 `deepseek-flash` 或 `deepseek-v4-pro`，并在 Project 的 `project.md` 中为 Knowledge 绑定所选模型。
 
 ## 前置条件
 
@@ -60,7 +60,7 @@ COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000 npm run build
 1. 打开 **设置 → Copilot → BYOK**。
 2. 点击 **Add a provider**，选择 **DeepSeek**。
 3. 在 **API key** 中粘贴密钥。保留 DeepSeek 的默认 **Base URL**；Knowledge 不接受自定义 endpoint。
-4. 在 **Models** 中选择 `deepseek-flash`。可以先点击 **Test** 验证密钥并刷新模型列表；如果服务没有返回列表，在 **Model ID** 中手工输入 `deepseek-flash` 并点击 **Add**。
+4. 在 **Models** 中选择 `deepseek-flash` 或 `deepseek-v4-pro`。可以先点击 **Test** 验证密钥并刷新模型列表；如果服务没有返回列表，在 **Model ID** 中手工输入所选模型的完整名称并点击 **Add**。
 5. 点击 **Save**。
 6. 新安装默认使用 Obsidian Keychain。升级仍在 `data.json` 中保存密钥的旧安装时，插件首次启动会先创建凭证备份，再从 `data.json` 中移除密钥，并显示备份路径；请在 **BYOK** 中重新输入 DeepSeek Key。确认新 Key 可用后，安全删除该凭证备份。**Advanced → API Key Storage** 只显示 Keychain 状态并提供 **Delete All Keys**，没有手工迁移按钮。
 
@@ -70,16 +70,17 @@ COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000 npm run build
 
 1. 打开 **设置 → Copilot → Basic**。
 2. 在 **Agents** 区域选择 **Quick Chat**。
-3. 在 **Quick Chat models** 中确认刚添加的 `deepseek-flash` 已启用。BYOK 新模型默认会启用，但这里仍是 Knowledge 读取已配置模型的列表。
+3. 在 **Quick Chat models** 中确认刚添加的 Flash 或 Pro 模型已启用。BYOK 新模型默认会启用，但这里仍是 Knowledge 读取已配置模型的列表。
 4. **Default model** 只决定普通 Quick Chat 新对话的默认值；可按需选择，不会代替下一步的 Knowledge Project 绑定。
 
-当前 Knowledge 路径只向 DeepSeek 官方端点发送规范模型名 `deepseek-flash`。已有 Vault 如果仍保存旧 Flash 名称 `deepseek-v4-flash`，可以继续使用：插件只把这个兼容名称规范化为 `deepseek-flash` 后再发送请求，不会切换 provider 或其他模型。新的 Project 应按下一节直接绑定 `deepseek-flash`，不必先创建旧名称。
+当前 Knowledge 路径只接受 DeepSeek 官方端点，支持 `deepseek-flash` 和 `deepseek-v4-pro`。已有 Vault 如果仍保存旧 Flash 名称 `deepseek-v4-flash`，可以继续使用：插件只把这个兼容名称规范化为 `deepseek-flash` 后再发送请求，不会切换 provider 或其他模型。选择 Pro 时，请求中的模型名保持为 `deepseek-v4-pro`，不会替换成 Flash。
 
-`deepseek-v4-pro` 已不再受支持，会在发出 provider 请求前停止。根据 [DeepSeek 模型更新](https://api-docs.deepseek.com/updates/)，该名称将由服务端转到 Flash；提前停止可以避免这个变化成为静默降级。旧的 `deepseek-chat`、`deepseek-reasoner` 仍作为已退役记录保留，也不会自动改成当前模型。
+根据 [DeepSeek 模型更新](https://api-docs.deepseek.com/updates/)，V4 Pro 在 2026 年 9 月 14 日后继续提供 API 服务。插件不再按旧的停用预期拒绝 Pro。旧的 `deepseek-chat`、`deepseek-reasoner` 配置仍不在本插件当前支持范围内，也不会自动改成当前模型。
 
-| 模型             | Knowledge 思考设置 | 首次使用建议                           |
-| ---------------- | ------------------ | -------------------------------------- |
-| `deepseek-flash` | Minimal            | 保留默认参数，适合作为最简单的首次配置 |
+| 模型              | Knowledge 思考设置 | 首次使用建议                              |
+| ----------------- | ------------------ | ----------------------------------------- |
+| `deepseek-flash`  | Minimal            | 保留默认参数，适合作为最简单的首次配置    |
+| `deepseek-v4-pro` | Minimal            | 保留默认参数，并在 Project 中明确绑定 Pro |
 
 High 或 XHigh 思考模式下，Temperature 和 Top P 不会作为采样参数发送；Frequency Penalty 当前不受直接 DeepSeek 模型支持。自定义 DeepSeek-compatible endpoint 仍可在普通 Chat 中保留自己的模型名称，但不能用于只接受官方端点的 Knowledge 路径；插件不会把自定义端点的模型名改成 `deepseek-flash`。
 
@@ -96,7 +97,7 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Know
    copilot-project-model-key: deepseek-flash|deepseek
    ```
 
-5. 保存文件。已有 Project 如果仍是 `deepseek-v4-flash|deepseek`，可以继续使用，不必手工改写。
+5. 如果选择 Pro，把上面的值改为 `deepseek-v4-pro|deepseek`，然后保存文件。已有 Project 如果仍是 `deepseek-v4-flash|deepseek`，可以继续使用，不必手工改写。
 
 下一步在这个 Project 的 `project.md` 中加入 Bundle 配置，详见 [Bundle 配置](bundle-configuration.md)。
 
@@ -116,8 +117,8 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Know
 
 ## 预期结果
 
-- **设置 → Copilot → BYOK** 中已有官方 DeepSeek provider 和 `deepseek-flash`，并且 **Basic → Agents → Quick Chat** 的 **Quick Chat models** 中已启用它。
-- Project 的 `project.md` 中有 `copilot-project-model-key: deepseek-flash|deepseek`，或已有 Vault 继续使用兼容的 `deepseek-v4-flash|deepseek`。
+- **设置 → Copilot → BYOK** 中已有官方 DeepSeek provider 和所选的 `deepseek-flash` 或 `deepseek-v4-pro`，并且 **Basic → Agents → Quick Chat** 的 **Quick Chat models** 中已启用它。
+- Project 的 `project.md` 中有与所选模型一致的 `copilot-project-model-key`：`deepseek-flash|deepseek` 或 `deepseek-v4-pro|deepseek`；已有 Vault 也可继续使用兼容的 `deepseek-v4-flash|deepseek`。
 - 命令面板能找到 **Open Knowledge Studio**。
 - 尚未配置 Bundle 时，打开 Studio 会显示三卡引导页，`Workspace` 提示先完成 Project / Bundle；这不是模型服务失败。
 - 完成 Bundle 后，`Workspace` 与 `Knowledge model` 应显示 **Configured locally**；`Chat model (optional)` 单独反映普通 Chat，不决定 Knowledge 是否可用。
@@ -134,14 +135,14 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Know
 
 ### 找不到 DeepSeek V4 模型
 
-- 在 **BYOK** 中重新打开 DeepSeek provider，填写 **API key** 后点击 **Test**；如果模型列表仍为空，在 **Model ID** 中手工输入 `deepseek-flash`，点击 **Add**，再点击 **Save**。
+- 在 **BYOK** 中重新打开 DeepSeek provider，填写 **API key** 后点击 **Test**；如果模型列表仍为空，在 **Model ID** 中手工输入 `deepseek-flash` 或 `deepseek-v4-pro`，点击 **Add**，再点击 **Save**。
 - 到 **Basic → Agents → Quick Chat**，确认 **Quick Chat models** 中已启用这个模型。
 - 不要把 SiliconFlow 的 DeepSeek V3/R1 或 OpenAI-compatible 自定义模型当成当前 Knowledge 模型。
-- 如果只看到已退役的 `deepseek-chat`、`deepseek-reasoner` 或不再受支持的 `deepseek-v4-pro`，必须在 DeepSeek provider 中明确添加 `deepseek-flash`。
+- 如果只看到本插件不支持的 `deepseek-chat` 或 `deepseek-reasoner`，请在 DeepSeek provider 中明确添加 `deepseek-flash` 或 `deepseek-v4-pro`。
 
 ### Knowledge model 仍显示 Needs setup
 
-- 在源码模式检查 Project 的 `project.md`，确认 `copilot-project-model-key` 是 `deepseek-flash|deepseek`，或已有兼容值 `deepseek-v4-flash|deepseek`。
+- 在源码模式检查 Project 的 `project.md`，确认 `copilot-project-model-key` 是 `deepseek-flash|deepseek`、`deepseek-v4-pro|deepseek`，或已有兼容值 `deepseek-v4-flash|deepseek`。
 - 确认 BYOK 中只有一个能够匹配该绑定的官方 DeepSeek provider，并且模型已在 **Quick Chat models** 中启用。
 - 保存 `project.md` 后等待 Studio 自动刷新。不要把自定义 endpoint 的同名模型当成官方 DeepSeek 绑定。
 
@@ -149,8 +150,8 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Know
 
 - 回到 **BYOK**，编辑 DeepSeek provider，重新保存 **API key**；需要时先点击 **Test**。
 - 检查 DeepSeek 账户余额、API 权限和网络连接。
-- 检查 `project.md` 绑定的是 `deepseek-flash|deepseek` 或已有的兼容 Flash 配置，不是 `deepseek-v4-pro` 或默认 Chat 中的另一个模型。
-- 保留 Flash 默认参数后重试失败任务；不要反复导入同一文件来绕过配置错误。
+- 检查 `project.md` 明确绑定了所选的 Flash 或 Pro 模型，而不是只修改普通 Chat 的默认模型。
+- 保留所选模型的默认参数后重试失败任务；不要反复导入同一文件来绕过配置错误。
 
 更多状态对应关系见 [故障排查](troubleshooting.md)。
 

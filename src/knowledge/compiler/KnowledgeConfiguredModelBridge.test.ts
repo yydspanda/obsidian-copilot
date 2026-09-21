@@ -321,15 +321,18 @@ describe("KnowledgeConfiguredModelBridge", () => {
       });
     });
 
-    it("https://github.com/yydspanda/obsidian-copilot/issues/3 rejects V4 Pro instead of silently projecting it as Flash", () => {
+    it("https://github.com/yydspanda/obsidian-copilot/issues/3 preserves the selected V4 Pro identity instead of projecting it as Flash", () => {
+      const owner = createOwner();
       const result = projectConfiguredModels({
-        owners: [createOwner()],
+        owners: [owner],
         projects: [createProject("configured-pro")],
         enabledChatModels: [createEntry(PRO, "configured-pro")],
         profileOptions: createProfileOptions(),
       });
 
-      expect(result).toEqual({ kind: "diagnostic", code: "model_unsupported" });
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") return;
+      expect(result.projection.profileSource.resolve(owner).model.model).toBe(PRO);
     });
 
     it.each([

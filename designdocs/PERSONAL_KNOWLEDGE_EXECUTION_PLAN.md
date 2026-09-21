@@ -28,6 +28,8 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
 
 ### Windows acceptance
 
+- Task ID: `PK-DEEPSEEK-PRO-RESTORE` — restore continued official V4 Pro service with exact model
+  identity across Chat and Knowledge, preserve Flash aliases and fail-closed boundaries, and verify locally.
 - Task ID: `PK-H3-MANAGEMENT-REALUSE` — prepare an isolated copy of the user-selected management
   notes and verify real-use query/citation quality before any separately authorized Wiki writes.
 - Task ID: `PK-H3-REVIEW11-FIX` — fix the cumulative review findings for Vault update containment,

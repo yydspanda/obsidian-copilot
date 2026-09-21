@@ -63,7 +63,7 @@
 - 开发用 `.env.test` 只适合本地测试，不是日常用户配置入口。
 - 如果 Key 曾出现在聊天、日志、提交或截图中，应立即到提供商控制台吊销并重新生成。
 
-Knowledge 路由只向官方 endpoint 发送当前审核过的 `deepseek-flash` 身份。已有的 `deepseek-v4-flash` 配置只会规范化为这个同一模型；`deepseek-v4-pro` 会在 provider 请求发出前停止，其他旧身份也不会被静默替代。自定义 DeepSeek-compatible endpoint 只保留在普通 Chat 自己的模型命名空间中，不能用于 Knowledge。
+Knowledge 路由只向官方 endpoint 发送所选的 `deepseek-flash` 或 `deepseek-v4-pro` 身份。已有的 `deepseek-v4-flash` 配置只会规范化为同一 Flash 模型；Pro 始终使用 `deepseek-v4-pro`，不会静默替换成 Flash。其他不受支持的旧身份也不会被静默替代。自定义 DeepSeek-compatible endpoint 只保留在普通 Chat 自己的模型命名空间中，不能用于 Knowledge。
 
 ## 文件夹导入的安全边界
 

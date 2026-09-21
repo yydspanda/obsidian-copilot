@@ -5,7 +5,6 @@ import {
   type KnowledgePrivateModelStage,
 } from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 import {
-  DEEPSEEK_FLASH_WIRE_IDENTITY,
   resolveDeepSeekWireModelIdentity,
   SUPPORTED_DEEPSEEK_MODEL_IDENTITIES,
 } from "@/LLMProviders/deepseekModelPolicy";
@@ -74,10 +73,12 @@ const REQUIRED_CONFIGURATION_KEYS = [
 ] as const;
 const OPTIONAL_CONFIGURATION_KEYS = ["topP", "endpointIdentity"] as const;
 const REFLECT_APPLY = Reflect.apply;
+// Fingerprints must preserve the requested tier; Pro is not a Flash alias.
+// https://github.com/yydspanda/obsidian-copilot/issues/3
 const DEEPSEEK_MODEL_IDENTITY_POLICY = SUPPORTED_DEEPSEEK_MODEL_IDENTITIES.map(
   (profileIdentity) => ({
     profileIdentity,
-    wireIdentity: DEEPSEEK_FLASH_WIRE_IDENTITY,
+    wireIdentity: resolveDeepSeekWireModelIdentity(profileIdentity)!,
   })
 );
 
@@ -516,9 +517,8 @@ function captureProfile(profileValue: KnowledgeBundlePipelineProfile): CapturedD
     ) {
       throw new TypeError("Unsupported profile");
     }
-    // DeepSeek now reports only the canonical Flash identity. Resolve the one
-    // documented persisted alias explicitly and reject Pro before provider I/O
-    // rather than accepting its scheduled silent server-side reroute.
+    // Resolve the persisted Flash alias while preserving Pro; response validation
+    // must reject a provider-side model substitution instead of accepting fallback.
     // https://github.com/yydspanda/obsidian-copilot/issues/3
     const wireModelIdentity =
       typeof model === "string" ? resolveDeepSeekWireModelIdentity(model) : undefined;

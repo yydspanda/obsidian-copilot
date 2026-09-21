@@ -31,10 +31,10 @@ There are three ways to provide model access:
 - **Local:** add an OpenAI-compatible endpoint from software such as Ollama or LM Studio under **BYOK**.
 
 For DeepSeek's official BYOK provider, opencode carries an existing
-`deepseek-v4-flash` selection forward as `deepseek-flash`. A saved
-`deepseek-v4-pro` selection no longer starts a chat or falls back to another
-model; choose Flash under **Basic → Agents → opencode** instead. Custom
-DeepSeek-compatible endpoints keep their configured model names.
+`deepseek-v4-flash` selection forward as `deepseek-flash`. A
+`deepseek-v4-pro` selection keeps its exact Pro model identity and does not
+fall back to Flash. Custom DeepSeek-compatible endpoints keep their configured
+model names.
 
 ### Claude
 

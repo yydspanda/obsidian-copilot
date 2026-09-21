@@ -11,10 +11,10 @@ import {
 
 describe("deepseekModelPolicy", () => {
   describe("isCurrentDeepSeekModelIdentity()", () => {
-    it("recognizes only the canonical Flash identity (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
+    it("recognizes canonical Flash and continued V4 Pro without treating a Flash alias as current (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
       expect(isCurrentDeepSeekModelIdentity("deepseek-flash")).toBe(true);
       expect(isCurrentDeepSeekModelIdentity("deepseek-v4-flash")).toBe(false);
-      expect(isCurrentDeepSeekModelIdentity("deepseek-v4-pro")).toBe(false);
+      expect(isCurrentDeepSeekModelIdentity("deepseek-v4-pro")).toBe(true);
       expect(isCurrentDeepSeekModelIdentity("deepseek-chat")).toBe(false);
     });
   });
@@ -30,10 +30,14 @@ describe("deepseekModelPolicy", () => {
       );
     });
 
-    it("rejects retired Pro and unrelated identities instead of substituting a model (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
-      expect(resolveDeepSeekWireModelIdentity("deepseek-v4-pro")).toBeUndefined();
+    it("preserves continued Pro instead of substituting Flash (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
+      expect(resolveDeepSeekWireModelIdentity("deepseek-v4-pro")).toBe("deepseek-v4-pro");
+    });
+
+    it("rejects retired and unknown identities instead of substituting a model (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
       expect(resolveDeepSeekWireModelIdentity("deepseek-chat")).toBeUndefined();
       expect(resolveDeepSeekWireModelIdentity("deepseek-reasoner")).toBeUndefined();
+      expect(resolveDeepSeekWireModelIdentity("unknown-model")).toBeUndefined();
     });
   });
 
@@ -157,10 +161,30 @@ describe("deepseekModelPolicy", () => {
       }
     });
 
-    it("rejects retired Pro before request creation (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
+    it.each([
+      ["minimal", 0.2, { thinking: { type: "disabled" } }],
+      ["high", 0, { thinking: { type: "enabled" }, reasoning_effort: "high" }],
+      ["xhigh", 0, { thinking: { type: "enabled" }, reasoning_effort: "max" }],
+    ] as const)(
+      "preserves Pro with %s thinking instead of downgrading to Flash (https://github.com/yydspanda/obsidian-copilot/issues/3)",
+      (reasoningEffort, temperature, modelKwargs) => {
+        const policy = createDeepSeekChatModelPolicy({
+          model: "deepseek-v4-pro",
+          reasoningEffort,
+          temperature,
+        });
+        expect(policy).toMatchObject({ wireModelIdentity: "deepseek-v4-pro", modelKwargs });
+        if (reasoningEffort !== "minimal") {
+          expect(policy).not.toHaveProperty("temperature");
+          expect(policy).not.toHaveProperty("topP");
+        }
+      }
+    );
+
+    it("rejects an unknown model before request creation (https://github.com/yydspanda/obsidian-copilot/issues/3)", () => {
       try {
         createDeepSeekChatModelPolicy({
-          model: "deepseek-v4-pro",
+          model: "unknown-model",
           reasoningEffort: "high",
           temperature: 0,
         });
