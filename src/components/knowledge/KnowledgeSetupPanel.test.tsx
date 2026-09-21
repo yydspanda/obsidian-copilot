@@ -8,6 +8,16 @@ import {
   type KnowledgeSetupReadinessProjection,
 } from "@/knowledge/setup/KnowledgeSetupReadiness";
 import { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
+import type { KnowledgeSetupPort } from "@/knowledge/setup/KnowledgeSetupPort";
+
+const SETUP_PORT: KnowledgeSetupPort = {
+  getOptions: () => ({
+    availability: "available",
+    projects: [{ id: "p", name: "Reading" }],
+    models: [],
+  }),
+  configure: jest.fn(),
+};
 
 const READY_PROJECTION: KnowledgeSetupReadinessProjection = {
   startupStatus: "workflow_read_ready",
@@ -26,15 +36,32 @@ function createNavigation(): KnowledgeSetupNavigationPort & {
     openProjectFile: jest.fn(),
     openSchema: jest.fn(),
     openChat: jest.fn(),
+    openProjects: jest.fn(),
     refreshDisplayedStatus: jest.fn(),
   };
 }
 
 describe("KnowledgeSetupPanel", () => {
+  it("routes missing-Project setup to Agent Chat Projects, not ordinary Chat — https://github.com/yydspanda/obsidian-copilot/issues/13", () => {
+    const navigation = createNavigation();
+    const readiness = new KnowledgeSetupReadinessStore(
+      projectKnowledgeSetupReadiness(
+        { generation: 1, status: "bundle_unconfigured" },
+        { projectCount: 0, chatModel: { reason: "configured" } }
+      )
+    );
+    render(
+      <KnowledgeSetupPanel setupPort={SETUP_PORT} navigation={navigation} readiness={readiness} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open Projects in Agent Chat" }));
+    expect(navigation.openProjects).toHaveBeenCalledTimes(1);
+    expect(navigation.openChat).not.toHaveBeenCalled();
+  });
   it("explains the three separate local readiness lanes without claiming a network test", () => {
     const navigation = createNavigation();
     render(
       <KnowledgeSetupPanel
+        setupPort={SETUP_PORT}
         navigation={navigation}
         readiness={new KnowledgeSetupReadinessStore(READY_PROJECTION)}
       />
@@ -56,7 +83,9 @@ describe("KnowledgeSetupPanel", () => {
       knowledgeModel: { level: "needs_action", reason: "knowledge_model_credential_missing" },
       chatModel: { level: "needs_action", reason: "chat_model_credential_missing" },
     });
-    render(<KnowledgeSetupPanel navigation={navigation} readiness={readiness} />);
+    render(
+      <KnowledgeSetupPanel setupPort={SETUP_PORT} navigation={navigation} readiness={readiness} />
+    );
 
     const settingsButtons = screen.getAllByRole("button", { name: "Open Copilot settings" });
     expect(settingsButtons).toHaveLength(2);
@@ -82,11 +111,18 @@ describe("KnowledgeSetupPanel", () => {
       chatModel: { level: "locally_ready", reason: "chat_model_configured" },
       networkVerification: "not_tested",
     });
-    render(<KnowledgeSetupPanel navigation={createNavigation()} readiness={readiness} />);
+    render(
+      <KnowledgeSetupPanel
+        setupPort={SETUP_PORT}
+        navigation={createNavigation()}
+        readiness={readiness}
+      />
+    );
 
     expect(screen.getByText(/none contains one complete Knowledge Bundle/)).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Open Chat" })).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Open selected Project file" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Project configuration" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Finish Knowledge setup" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open Knowledge rules" })).toBeNull();
     expect(screen.getAllByText("Configured locally")).toHaveLength(1);
 
@@ -107,7 +143,11 @@ describe("KnowledgeSetupPanel", () => {
     );
 
     const { container } = render(
-      <KnowledgeSetupPanel navigation={createNavigation()} readiness={readiness} />
+      <KnowledgeSetupPanel
+        setupPort={SETUP_PORT}
+        navigation={createNavigation()}
+        readiness={readiness}
+      />
     );
 
     expect(container.textContent).not.toContain(privateDiagnostic);
@@ -126,6 +166,7 @@ describe("KnowledgeSetupPanel", () => {
     });
     render(
       <KnowledgeSetupPanel
+        setupPort={SETUP_PORT}
         navigation={navigation}
         readiness={readiness}
         unavailableNotice="Durable recovery is blocked."
@@ -135,7 +176,7 @@ describe("KnowledgeSetupPanel", () => {
     expect(screen.getByRole("heading", { name: "Knowledge Studio needs attention" })).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toBe("Durable recovery is blocked.");
     expect(screen.getByText(/no automatic repair was attempted/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Open Project file" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Project configuration" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open Knowledge rules" })).toBeNull();
   });
 
@@ -143,6 +184,7 @@ describe("KnowledgeSetupPanel", () => {
     const onBack = jest.fn();
     render(
       <KnowledgeSetupPanel
+        setupPort={SETUP_PORT}
         navigation={createNavigation()}
         readiness={new KnowledgeSetupReadinessStore(READY_PROJECTION)}
         onBack={onBack}
@@ -165,6 +207,7 @@ describe("KnowledgeSetupPanel", () => {
 
     render(
       <KnowledgeSetupPanel
+        setupPort={SETUP_PORT}
         navigation={navigation}
         onBack={jest.fn()}
         readiness={readiness}

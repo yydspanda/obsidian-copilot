@@ -7,7 +7,8 @@
 本页帮助你区分“把文件放到允许的目录”和“把它登记为 Knowledge Source”，并选择正确的入口：
 
 - 外部资料文件夹：在 Knowledge Studio 使用 `Import folder`（导入文件夹）。
-- 已经位于唯一 `sourceRoot` 内的 Vault 文件：从 Obsidian 文件列表拖进 Chat，再选择 `Add to Knowledge`（加入知识库）。
+- 已有 Vault 笔记：在 Knowledge Studio 使用 `Add materials`，选择一份文件并确认。
+- 已经位于唯一 `sourceRoot` 内的 Vault 文件也可拖进普通 Quick Chat，再选择 `Add to Knowledge`；Agent Chat 当前没有这个拖拽入口。
 - 只想让当前对话临时阅读文件：选择 `Use in this chat`（仅用于本次聊天）。
 - 想把一条已经完成的 AI 回答整理成长期来源：在回答操作栏选择 `Create Knowledge Draft`，编辑并核对后创建。
 - 已注册来源丢失或不再需要：在 Knowledge Studio 打开 `Sources` 页（来源）。
@@ -30,11 +31,26 @@
 | 你的目的                                  | 使用入口                              | 是否复制到 `sourceRoot` | 是否登记为 Knowledge Source | 是否加入当前 Chat | 是否直接改 Wiki |
 | ----------------------------------------- | ------------------------------------- | ----------------------- | --------------------------- | ----------------- | --------------- |
 | 导入 Windows 上的一个外部资料目录         | Knowledge Studio → `Import folder`    | 是                      | 是                          | 否                | 否              |
-| 注册已在唯一 `sourceRoot` 内的 Vault 文件 | 拖入 Chat → `Add to Knowledge`        | 否；文件已经在那里      | 是                          | 否                | 否              |
+| 注册已在唯一 `sourceRoot` 内的 Vault 文件 | Studio → `Add materials`              | 否；文件已经在那里      | 是                          | 否                | 否              |
+| 添加材料目录以外的 Vault 文件             | Studio → `Add materials` → 确认快照   | 是；原件保留            | 是                          | 否                | 否              |
 | 只让当前对话读取一个 Vault 文件           | 拖入 Chat → `Use in this chat`        | 否                      | 否                          | 是                | 否              |
 | 把一条已完成 AI 回答整理成长期来源        | 回答操作栏 → `Create Knowledge Draft` | 是；创建内容寻址 `.md`  | 是                          | 不改变当前 Chat   | 否              |
 
 Knowledge 不提供独立的 URL、浏览器或单文件 Windows Explorer 导入口。外部资料请以文件夹为单位导入。
+
+## 操作步骤：直接添加一份 Vault 材料
+
+1. 点击 Studio 顶部 **Add materials**，按文件名或完整路径搜索，选择一个文件。
+2. 核对 **Original file**、**Knowledge source path** 和 **Mode**。
+3. `Register existing file` 表示文件已在授权材料目录内，只登记，不移动或复制；后续修改该文件会被观察。
+4. `Copy snapshot` 表示文件在材料目录以外。目的地为 `<sourceRoot>/Vault/<原 Vault 相对路径>`，先勾选同意复制快照，再点击 **Add**。原文保留不动，后续修改原文不会自动同步这份副本。
+5. 查看成功回执，然后打开 **Activity** 看处理进度。Wiki 仍需 Review 和 Apply。
+
+一次只添加一个文件，支持 `.md`、`.markdown`、`.txt` 和 `.pdf`；快照复制最多 8 MiB。Wiki 输出、当前规则及插件/Project 数据目录不会作为候选。原文件改变、目录权限变化或运行代过期时，应关闭后重新选择，不能沿用旧确认。选择或取消不会登记材料。
+
+重复添加相同文件/相同快照会复用登记；同一目的地已有不同内容时会报告冲突，绝不覆盖。不要通过删除旧副本解决冲突。失败时可能已有持久步骤完成，先检查 Sources/Activity 再重试。
+
+队列运行中，点击 **Add** 后可能开始付费模型分析；暂停的队列保持暂停，不会自动 Resume。原有文件夹导入和普通 Chat 入口仍保留。
 
 ## 操作步骤：导入外部文件夹
 

@@ -11,11 +11,29 @@
 - 已按 [安装、升级与 DeepSeek V4](installation-and-model.md) 启用一个 DeepSeek V4 模型。
 - 已备份 Vault。
 - 当前只准备启用一个个人知识库 Bundle。
-- 你可以在 Obsidian 中编辑 Markdown 源文件和 YAML frontmatter。
+- 已创建一个 Copilot Project；没有时先在 Agent Chat 的 Projects 中创建。
 
 如果 Vault 中已经存在多个 Project，可以保留它们；但当前只有一个 Project 可以包含 `copilot-project-knowledge-bundle`。多 Bundle 选择器尚未接通。
 
-## 操作步骤
+## 推荐：在 Studio 完成首次设置
+
+1. 打开 **Knowledge Studio**。没有 Bundle 时，设置页会显示 **Finish Knowledge setup**。
+2. 选择已有的 **Copilot Project** 和 **Knowledge model**。模型列表仅显示当前已启用、符合 Knowledge 要求的官方 DeepSeek 配置；这里的选择与 Agent Chat 的订阅模型分开。
+3. 查看 **Source folder**（材料目录）、**Wiki folder**（审核后输出目录）和 **Rules file**（整理规则）。默认位置可以修改；缺少的文件夹会在确认时自动创建。
+4. 查看并按需编辑 **Rules content**。已有规则文件时，勾选 **Use existing rules file without changing it**，不要覆盖原文件。
+5. 点击 **Create Knowledge setup**，等待 Studio 重新检查配置。不必手写 YAML，也不必重载插件。
+
+这一步只写入选中 Project 的 Knowledge 配置及所选模型，保留正文、其他字段和现有文件；新建 Bundle 使用新身份。不会登记目录内的任何材料，也不会调用模型。Wiki 修改始终需要 Review 和 Apply。
+
+已有 Bundle（即使配置损坏）不会被首次设置覆盖。多 Bundle、Recovery 或来源故障也不会通过此表单自动修复。模型或密钥缺失时，先到 Copilot 设置补全；本地配置成功不等于服务、余额或密钥已联网验证。
+
+如果保存失败，已新建的目录或规则可能保留，原有文件不会被删除。先检查提示；保留规则时改用“使用现有规则”，不要反复创建或删文件重来。
+
+完成后直接使用 Studio 的 **Add materials** 选择一份已有笔记，无需绕到 Chat。详见[知识来源与导入](sources-and-import.md)。
+
+## 手动配置参考（已有配置维护）
+
+下面保留文件格式说明，首次使用优先采用上面的设置表单。
 
 ### 1. 规划三个互不重叠的位置
 
@@ -51,8 +69,9 @@ Schema 必须是非空、严格 UTF-8 的普通文件，最多 1,000,000 bytes�
 
 ## 当前页面约定
 
-- 有明确、受来源支持的新事实时，创建或更新 Wiki 根目录下的 `facts.md`。
-- `facts.md` 必须使用 YAML frontmatter，并包含 `type: knowledge`。
+- 有明确、受来源支持的新事实时，在 Wiki 根目录下创建独立命名的 Markdown 页面。
+- 只有当前来源获授权的已有页面可以更新；否则另建页面，不覆盖其他来源的页面。
+- 每个知识页必须使用 YAML frontmatter，并包含 `type: knowledge`。
 - 可以维护根目录下的 `index.md`；如使用 frontmatter，只允许 `okfVersion: "0.1"`。
 - 可以维护根目录下的 `log.md`；`log.md` 不使用 frontmatter。
 - 只写有来源证据支持的事实；推断必须明确标成推断。

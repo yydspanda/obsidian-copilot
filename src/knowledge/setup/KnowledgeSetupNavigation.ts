@@ -15,6 +15,7 @@ export interface KnowledgeSetupNavigationDependencies {
   openCopilotSettings(): void | Promise<void>;
   openVaultFile(path: string): void | Promise<void>;
   openChat(): void | Promise<void>;
+  openProjects(): void | Promise<void>;
   refreshDisplayedStatus(): void | Promise<void>;
   notify(message: string): void;
 }
@@ -88,6 +89,11 @@ export class KnowledgeSetupNavigation implements KnowledgeSetupNavigationPort {
   /** Opens ordinary Copilot Chat without changing its model or Project. */
   openChat(): void | Promise<void> {
     return this.dependencies.openChat();
+  }
+
+  /** Opens the native Project workspace without changing optional Quick Chat navigation. */
+  openProjects(): void | Promise<void> {
+    return this.dependencies.openProjects();
   }
 
   /** Refreshes the displayed local projection without testing a provider connection. */

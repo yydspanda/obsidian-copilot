@@ -86,20 +86,14 @@ High 或 XHigh 思考模式下，Temperature 和 Top P 不会作为采样参数�
 
 ### 4. 让 Project 使用这个模型
 
-Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Knowledge 模型绑定，而不是 Quick Chat 的 **Default model**。当前 Agent Project 本身跟随每个对话选择的模型，因此新建 / 编辑弹窗不再显示旧版 **Default Model**。请按当前界面和兼容 frontmatter 配置：
+Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Knowledge 模型绑定，而不是 Quick Chat 的 **Default model**。当前 Agent Project 本身跟随每个对话选择的模型，因此新建 / 编辑弹窗不再显示旧版 **Default Model**。首次配置直接在 Studio 完成：
 
 1. 从功能区打开 **Agent Chat**，或在命令面板运行 **Open Copilot Agent Chat Window**。
-2. 在 Agent Chat 首页打开 **Projects**，选择 **New project**，输入名称后点击 **Create**。
-3. 创建后选择 **Leave project** 返回首页；在 Project 列表中使用 **Reveal in vault**，打开该 Project 文件夹中的 `project.md`，并切换到源码模式。
-4. 保留已有 frontmatter，把其中现有的 `copilot-project-model-key` 值改为以下内容；只有该字段确实不存在时才在同一个 `---` 块中加入，不要保留两个同名字段：
+2. 在 Agent Chat 首页打开 **Projects**，选择 **New project**，输入名称后点击 **Create**；已有 Project 可以直接复用。
+3. 打开 **Knowledge Studio**，在 **Finish Knowledge setup** 中选择这个 Project 和所需的 **Knowledge model**。
+4. 检查材料目录、Wiki 目录和规则内容，点击 **Create Knowledge setup**。模型绑定和 Bundle 配置会一起保存，不必编辑 YAML 或提前创建目录。
 
-   ```yaml
-   copilot-project-model-key: deepseek-flash|deepseek
-   ```
-
-5. 如果选择 Pro，把上面的值改为 `deepseek-v4-pro|deepseek`，然后保存文件。已有 Project 如果仍是 `deepseek-v4-flash|deepseek`，可以继续使用，不必手工改写。
-
-下一步在这个 Project 的 `project.md` 中加入 Bundle 配置，详见 [Bundle 配置](bundle-configuration.md)。
+已有 Bundle 不会被首次设置覆盖，也不需要重做。需要维护旧配置时，手动格式与路径说明保留在 [Bundle 配置](bundle-configuration.md)。
 
 ### 5. 用 Setup & status 核对三条独立状态
 
@@ -111,14 +105,14 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Know
 - `Knowledge model` 检查 Project 为 Knowledge 单独选择的模型、受支持配置和凭证存在性。
 - `Chat model (optional)` 检查当前普通 Chat 模型。它与 Knowledge 模型相互独立，未配置不会阻断 Knowledge 主流程。
 
-如果你还没完成 Bundle 配置，`Workspace` 显示 **Needs setup**、`Knowledge model` 显示等待上一步是正常的。卡片会提供打开现有 Chat、Copilot 设置、Project 文件或 Schema 等安全入口；它不会创建目录、Schema、Project 或 Key，也不会改写 `project.md` 中的 Bundle YAML。
+如果你还没完成 Bundle 配置，`Workspace` 显示 **Needs setup**、`Knowledge model` 显示等待上一步是正常的。打开状态页、点击导航或刷新状态都不会改文件；只有在首次设置表单中明确点击 **Create Knowledge setup** 才会保存模型、Bundle 和所需目录/规则。创建 Project 和保存密钥仍使用原有入口。
 
 配置完成后的 **Configured locally** 只证明本机设置能够通过当前预检，不证明 API Key 真能登录、账户有余额、DeepSeek 在线或网络可达。真正的联网验证仍发生在你明确启动 Chat、来源编译或 Query 等在线工作时。
 
 ## 预期结果
 
 - **设置 → Copilot → BYOK** 中已有官方 DeepSeek provider 和所选的 `deepseek-flash` 或 `deepseek-v4-pro`，并且 **Basic → Agents → Quick Chat** 的 **Quick Chat models** 中已启用它。
-- Project 的 `project.md` 中有与所选模型一致的 `copilot-project-model-key`：`deepseek-flash|deepseek` 或 `deepseek-v4-pro|deepseek`；已有 Vault 也可继续使用兼容的 `deepseek-v4-flash|deepseek`。
+- Studio 已将所选模型绑定保存到 Project；不必检查或手改其内部标识。已有 Vault 的旧模型绑定仍可继续使用。
 - 命令面板能找到 **Open Knowledge Studio**。
 - 尚未配置 Bundle 时，打开 Studio 会显示三卡引导页，`Workspace` 提示先完成 Project / Bundle；这不是模型服务失败。
 - 完成 Bundle 后，`Workspace` 与 `Knowledge model` 应显示 **Configured locally**；`Chat model (optional)` 单独反映普通 Chat，不决定 Knowledge 是否可用。
@@ -142,7 +136,7 @@ Knowledge Compiler 读取的是拥有 Bundle 的 Project 中单独保存的 Know
 
 ### Knowledge model 仍显示 Needs setup
 
-- 在源码模式检查 Project 的 `project.md`，确认 `copilot-project-model-key` 是 `deepseek-flash|deepseek`、`deepseek-v4-pro|deepseek`，或已有兼容值 `deepseek-v4-flash|deepseek`。
+- 首次配置使用 Studio 的 **Knowledge model** 选择模型并确认保存；已有配置先检查状态卡提示，必要时按 [Bundle 配置](bundle-configuration.md) 的手动维护说明核对绑定。
 - 确认 BYOK 中只有一个能够匹配该绑定的官方 DeepSeek provider，并且模型已在 **Quick Chat models** 中启用。
 - 保存 `project.md` 后等待 Studio 自动刷新。不要把自定义 endpoint 的同名模型当成官方 DeepSeek 绑定。
 

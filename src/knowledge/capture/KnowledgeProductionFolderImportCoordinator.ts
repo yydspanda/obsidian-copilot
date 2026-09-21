@@ -2,6 +2,7 @@ import {
   KNOWLEDGE_FOLDER_IMPORT_SUFFIXES,
   KnowledgeFolderImportError,
   type KnowledgeFolderImportPort,
+  type KnowledgeFolderImportFile,
   type KnowledgeFolderImportReceipt,
   type KnowledgeFolderImportRequest,
 } from "@/knowledge/capture/KnowledgeFolderImportPort";
@@ -56,8 +57,8 @@ export interface KnowledgeProductionFolderImportCoordinatorInput {
 }
 
 interface SelectedFolderFile {
-  readonly file: File;
-  readonly arrayBuffer: File["arrayBuffer"];
+  readonly file: KnowledgeFolderImportFile;
+  readonly arrayBuffer: KnowledgeFolderImportFile["arrayBuffer"];
   readonly relativePath: string;
   readonly destinationPath: string;
   readonly size: number;
@@ -65,8 +66,8 @@ interface SelectedFolderFile {
 }
 
 interface CapturedBrowserFile {
-  readonly file: File;
-  readonly arrayBuffer: File["arrayBuffer"];
+  readonly file: KnowledgeFolderImportFile;
+  readonly arrayBuffer: KnowledgeFolderImportFile["arrayBuffer"];
 }
 
 interface FolderImportPlan {
@@ -142,7 +143,7 @@ function readDataProperty(value: object, key: string): unknown {
 }
 
 /** Reads one browser-selected relative path without retaining an external absolute path. */
-function captureWebkitRelativePath(file: File): string {
+function captureWebkitRelativePath(file: KnowledgeFolderImportFile): string {
   let value: unknown;
   try {
     value = file.webkitRelativePath;
@@ -160,7 +161,7 @@ function captureWebkitRelativePath(file: File): string {
 }
 
 /** Reads one exact, bounded browser File size before any byte allocation. */
-function captureFileSize(file: File): number {
+function captureFileSize(file: KnowledgeFolderImportFile): number {
   let value: unknown;
   try {
     value = file.size;
@@ -232,7 +233,10 @@ function createFolderImportPlan(
       throw new KnowledgeFolderImportError("invalid_selection");
     }
     files.push(
-      Object.freeze({ file: file as File, arrayBuffer: arrayBuffer as File["arrayBuffer"] })
+      Object.freeze({
+        file: file as KnowledgeFolderImportFile,
+        arrayBuffer: arrayBuffer as KnowledgeFolderImportFile["arrayBuffer"],
+      })
     );
   }
   let selectedKeys: PropertyKey[];

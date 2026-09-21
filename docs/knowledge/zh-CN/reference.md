@@ -40,13 +40,17 @@
 
 这些卡片是只读投影。被动检查不会调用模型或向 provider 发请求；**Configured locally** 不代表 Online、Connected、Key 有效、有余额或本地模型服务可达。
 
-| Setup 动作                                     | 作用                                                                     | 不会做什么                                                    |
-| ---------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| Open Chat                                      | 打开已有 Chat                                                            | 不创建 Project，不自动选择模型                                |
-| Open Copilot settings                          | 打开已有 Copilot 设置                                                    | 不写 Key、不验证 provider；设置页本身可能做插件版本更新检查   |
-| Open Project file / Open selected Project file | 打开唯一 Bundle 所属、唯一 Project 或 Chat 中当前精确选中的 Project 文件 | 不改 Bundle YAML；没有精确当前选择时不在多个 Project 中猜一个 |
-| Open Knowledge rules                           | 仅在当前有效 Bundle 可唯一确定时打开 Schema                              | 不创建或修复 Schema                                           |
-| Refresh displayed status                       | 刷新当前本地状态展示                                                     | 不 ping provider，不自动建目录、写配置或修复持久状态          |
+| Setup 动作                  | 作用                                                                   | 不会做什么                                                  |
+| --------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Open Chat                   | 打开已有 Chat                                                          | 不创建 Project，不自动选择模型                              |
+| Open Projects in Agent Chat | 打开原生 Agent Chat 的 Project 使用入口                                | 不自动创建 Project、不发送消息                              |
+| Open Copilot settings       | 打开已有 Copilot 设置                                                  | 不写 Key、不验证 provider；设置页本身可能做插件版本更新检查 |
+| Open Project configuration  | 打开唯一 Bundle 所属、唯一 Project 或当前精确选中的 `project.md` 文件  | 不打开章节目录；不自动修改配置，没有唯一目标时不会猜一个    |
+| Open Knowledge rules        | 仅在当前有效 Bundle 可唯一确定时打开 Schema                            | 不创建或修复 Schema                                         |
+| Refresh displayed status    | 刷新当前本地状态展示                                                   | 不 ping provider，不自动建目录、写配置或修复持久状态        |
+| Create Knowledge setup      | 确认首次设置后创建缺少的目录/规则，并保存选中 Project 的 Bundle 和模型 | 不覆盖现有规则/Bundle，不导入材料，不调用模型               |
+
+Studio 的 **Add materials** 直接选择一份 Vault 文件。来源目录内只登记原文件；目录外需明确确认快照，原文保留。队列运行中可能开始付费分析，暂停状态不变，Wiki 仍需 Review 和 Apply。
 
 正常 generation 换代继续显示中性的 `Refreshing Knowledge Studio…`。Recovery 与 Sources 缺失继续使用各自的专用面板，不由 Setup 卡片替代。
 

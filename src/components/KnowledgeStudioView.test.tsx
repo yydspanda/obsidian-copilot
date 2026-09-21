@@ -58,6 +58,18 @@ import type { KnowledgeStudioController } from "@/knowledge/ui/KnowledgeStudioCo
 import { KnowledgeStudioSessionStore } from "@/knowledge/ui/KnowledgeStudioSessionStore";
 import { createPluginRoot } from "@/utils/react/createPluginRoot";
 import type { WorkspaceLeaf } from "obsidian";
+import type { KnowledgeSetupPort } from "@/knowledge/setup/KnowledgeSetupPort";
+import type { KnowledgeStudioMaterialPort } from "@/knowledge/capture/KnowledgeStudioMaterialPort";
+
+const SETUP_PORT: KnowledgeSetupPort = {
+  getOptions: () => ({ availability: "available", projects: [], models: [] }),
+  configure: jest.fn(),
+};
+const MATERIAL_PORT: KnowledgeStudioMaterialPort = {
+  prepare: jest.fn(),
+  select: jest.fn(),
+  add: jest.fn(),
+};
 
 interface TestContainer extends HTMLElement {
   migrationCallback?: () => void;
@@ -108,6 +120,7 @@ function createSetupProps(): {
       openProjectFile: jest.fn(),
       openSchema: jest.fn(),
       openChat: jest.fn(),
+      openProjects: jest.fn(),
       refreshDisplayedStatus: jest.fn(),
     },
   };
@@ -141,7 +154,9 @@ describe("KnowledgeStudioView", () => {
       sessionStore,
       folderImportPort,
       setup.readiness,
-      setup.navigation
+      setup.navigation,
+      SETUP_PORT,
+      MATERIAL_PORT
     );
 
     await view.onOpen();
@@ -158,6 +173,8 @@ describe("KnowledgeStudioView", () => {
         folderImportPort,
         setupReadiness: setup.readiness,
         setupNavigation: setup.navigation,
+        setupPort: SETUP_PORT,
+        materialPort: MATERIAL_PORT,
       },
     });
   });
@@ -172,7 +189,9 @@ describe("KnowledgeStudioView", () => {
       sessionStore,
       createFolderImportPort(),
       setup.readiness,
-      setup.navigation
+      setup.navigation,
+      SETUP_PORT,
+      MATERIAL_PORT
     );
 
     await view.onOpen();
@@ -213,7 +232,9 @@ describe("KnowledgeStudioView", () => {
       sessionStore,
       folderImportPort,
       setup.readiness,
-      setup.navigation
+      setup.navigation,
+      SETUP_PORT,
+      MATERIAL_PORT
     );
     const container = view.containerEl as TestContainer;
     await view.onOpen();
@@ -231,6 +252,8 @@ describe("KnowledgeStudioView", () => {
         folderImportPort,
         setupReadiness: setup.readiness,
         setupNavigation: setup.navigation,
+        setupPort: SETUP_PORT,
+        materialPort: MATERIAL_PORT,
       },
     });
 
@@ -252,7 +275,9 @@ describe("KnowledgeStudioView", () => {
       sessionStore,
       createFolderImportPort(),
       setup.readiness,
-      setup.navigation
+      setup.navigation,
+      SETUP_PORT,
+      MATERIAL_PORT
     );
     await view.onOpen();
 

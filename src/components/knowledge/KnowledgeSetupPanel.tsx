@@ -15,6 +15,8 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { KnowledgeSetupForm } from "@/components/knowledge/KnowledgeSetupForm";
+import type { KnowledgeSetupPort } from "@/knowledge/setup/KnowledgeSetupPort";
 import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
 import type {
   KnowledgeSetupChatModelReason,
@@ -30,6 +32,8 @@ import type { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSe
 export interface KnowledgeSetupPanelProps {
   readiness: KnowledgeSetupReadinessStore;
   navigation: KnowledgeSetupNavigationPort;
+  setupPort: KnowledgeSetupPort;
+  onConfigured?: () => void;
   /** Safe startup notice retained for context when Studio cannot open. */
   unavailableNotice?: string;
   /** Presence turns the full-page setup surface into a reversible Studio overlay. */
@@ -242,31 +246,41 @@ function getWorkspaceActions(
 ): readonly SetupAction[] {
   switch (item.reason) {
     case "no_project":
+      // Native Projects live in Agent Chat; ordinary Chat cannot complete this step.
+      // https://github.com/yydspanda/obsidian-copilot/issues/13
       return [
         {
-          label: "Open Chat",
+          label: "Open Projects in Agent Chat",
           icon: MessageSquare,
-          run: () => navigation.openChat(),
+          run: () => navigation.openProjects(),
         },
       ];
     case "bundle_configuration_invalid":
     case "configuration_needs_attention":
       return [
-        { label: "Open Project file", icon: FolderCog, run: () => navigation.openProjectFile() },
+        {
+          label: "Open Project configuration",
+          icon: FolderCog,
+          run: () => navigation.openProjectFile(),
+        },
       ];
     case "bundle_missing":
     case "multiple_bundles":
       return [
         { label: "Open Chat", icon: MessageSquare, run: () => navigation.openChat() },
         {
-          label: "Open selected Project file",
+          label: "Open Project configuration",
           icon: FolderCog,
           run: () => navigation.openProjectFile(),
         },
       ];
     case "workspace_ready":
       return [
-        { label: "Open Project file", icon: FolderCog, run: () => navigation.openProjectFile() },
+        {
+          label: "Open Project configuration",
+          icon: FolderCog,
+          run: () => navigation.openProjectFile(),
+        },
         { label: "Open Knowledge rules", icon: FileCog, run: () => navigation.openSchema() },
       ];
     case "startup_checking":
@@ -306,7 +320,11 @@ function getKnowledgeModelActions(
     case "knowledge_model_endpoint_invalid":
     case "configuration_needs_attention":
       return [
-        { label: "Open Project file", icon: FolderCog, run: () => navigation.openProjectFile() },
+        {
+          label: "Open Project configuration",
+          icon: FolderCog,
+          run: () => navigation.openProjectFile(),
+        },
         {
           label: "Open Copilot settings",
           icon: Settings2,
@@ -346,14 +364,16 @@ function getChatModelActions(
 }
 
 /**
- * Renders a guided, read-only view of local Knowledge and Chat readiness.
+ * Renders local readiness plus an explicit first-time configuration form.
  *
- * The component never creates files, changes settings, reads credentials, or
- * contacts a provider. All outbound capabilities are explicit navigation only.
+ * Viewing status performs no writes; setup has separate user-confirmed authority.
+ * Neither surface contacts a provider.
  */
 export function KnowledgeSetupPanel({
   readiness,
   navigation,
+  setupPort,
+  onConfigured,
   unavailableNotice,
   onBack,
 }: KnowledgeSetupPanelProps): React.ReactElement {
@@ -385,8 +405,8 @@ export function KnowledgeSetupPanel({
               {title}
             </h1>
             <p className="tw-m-0 tw-mt-1 tw-max-w-2xl tw-text-sm tw-text-muted">
-              See what is ready and open the right place to finish setup. This page does not change
-              settings or create files.
+              Check local readiness or finish first-time setup below. Viewing this page does not
+              change files; setup writes only after you confirm.
             </p>
           </div>
           {interactionsDisabled ? null : (
@@ -410,6 +430,22 @@ export function KnowledgeSetupPanel({
           >
             {unavailableNotice}
           </aside>
+        ) : null}
+
+        {/* First-use configuration belongs here rather than in hand-edited YAML.
+            Existing Bundles and recovery state are never replaced by setup.
+            https://github.com/yydspanda/obsidian-copilot/issues/13 */}
+        {!interactionsDisabled && snapshot.workspace.reason === "bundle_missing" ? (
+          <div className="tw-space-y-2">
+            <KnowledgeSetupForm port={setupPort} onConfigured={onConfigured} />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => invokeNavigation(() => navigation.openCopilotSettings())}
+            >
+              Open Copilot settings
+            </Button>
+          </div>
         ) : null}
 
         <div aria-live="polite" className="tw-grid tw-gap-3">

@@ -23,6 +23,21 @@ function createProps(state: KnowledgeStudioState): Props {
         throw new Error("Folder import is unavailable in this story.");
       },
     },
+    setupPort: {
+      getOptions: () => ({ availability: "unavailable", projects: [], models: [] }),
+      configure: async () => {
+        throw new Error("Setup is unavailable in this story.");
+      },
+    },
+    materialPort: {
+      prepare: () => null,
+      select: () => {
+        throw new Error("Material selection is unavailable in this story.");
+      },
+      add: async () => {
+        throw new Error("Material addition is unavailable in this story.");
+      },
+    },
     setupReadiness: {
       subscribe: () => noop,
     } as unknown as Props["setupReadiness"],
@@ -31,6 +46,7 @@ function createProps(state: KnowledgeStudioState): Props {
       openProjectFile: noop,
       openSchema: noop,
       openChat: noop,
+      openProjects: noop,
       refreshDisplayedStatus: noop,
     },
   };

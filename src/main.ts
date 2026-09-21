@@ -221,6 +221,9 @@ export default class CopilotPlugin extends Plugin {
       subscribeCurrentProjectChange: (listener) =>
         this.agentSessionManager?.subscribe(listener) ?? (() => {}),
       openChat: () => this.activateView(),
+      // Project creation lives in Agent Chat, not the optional Quick Chat surface.
+      // https://github.com/yydspanda/obsidian-copilot/issues/13
+      openProjects: () => this.activateAgentView().then(() => undefined),
     });
     // Register/unregister the Copilot Plus provider (and its models) to match
     // Plus state, so Plus models surface in the chat + opencode pickers. The

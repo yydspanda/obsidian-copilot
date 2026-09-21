@@ -28,10 +28,14 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
 
 ### Windows acceptance
 
+- Task ID: `PK-STUDIO-ONBOARDING` — finish local Studio setup and explicit single-Vault-material
+  addition inside Knowledge UI, preserving Project content, existing rules and source permissions;
+  verify without paid requests before returning to user-operated reading practice.
 - Task ID: `PK-DEEPSEEK-PRO-RESTORE` — restore continued official V4 Pro service with exact model
   identity across Chat and Knowledge, preserve Flash aliases and fail-closed boundaries, and verify locally.
-- Task ID: `PK-H3-MANAGEMENT-REALUSE` — prepare an isolated copy of the user-selected management
-  notes and verify real-use query/citation quality before any separately authorized Wiki writes.
+- Task ID: `PK-H3-MANAGEMENT-REALUSE` — coach the user through self-operated reading, viewpoint
+  comparison, source checking and personal note-taking in the prepared copy; explain one useful
+  step at a time and wait for feedback, without substituting assistant-run UI or model operations.
 - Task ID: `PK-H3-REVIEW11-FIX` — fix the cumulative review findings for Vault update containment,
   case-sensitive Chat attachment identity, bounded source reads, and obsolete model policy.
 - Task ID: `PK-H3-UPSTREAM-V4-WIN` — validate provider/project/settings migration, reload/unload,

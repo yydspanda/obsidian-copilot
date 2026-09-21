@@ -64,7 +64,9 @@ Knowledge 的 Sources → Activity → Review → Apply 主流程仍可使用。
 
 ### 点击卡片动作后没有自动修好
 
-这是预期行为。`Open Chat`、`Open Copilot settings`、`Open Project file` 和 `Open Knowledge rules` 都只是导航或打开文件。多个 Project 时，**Open selected Project file** 只会使用你在 Chat 中当前精确选择的 Project；没有这种唯一选择时，插件不会猜。`Refresh displayed status` 只刷新展示。你仍需自己完成配置并保存。
+导航按钮不会自动修复：`Open Chat` 打开普通 Chat，`Open Projects in Agent Chat` 打开原生 Project 入口，`Open Copilot settings`、`Open Project configuration` 和 `Open Knowledge rules` 打开对应设置或文件。Project 配置优先使用唯一 Bundle 的所属 Project，其次是唯一 Project，再次是当前精确选中的 Project；没有唯一目标时不会猜。`Refresh displayed status` 只刷新展示。
+
+没有 Bundle 时，用 **Finish Knowledge setup → Create Knowledge setup** 完成首次配置，不再需要手写 YAML 或预先建目录。已有配置和 Recovery 不会被向导替换。`rules file already exists` 表示原规则得到保护：选择复用现有规则，或改用新路径。失败后可能保留刚创建的目录/规则，先检查再重试。
 
 打开 Copilot 设置页时，已有设置界面可能执行插件版本更新检查；这不是模型连通性测试，也不会验证 API Key。
 

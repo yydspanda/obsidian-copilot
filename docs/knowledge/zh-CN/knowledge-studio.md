@@ -33,6 +33,7 @@ Knowledge Studio 是个人知识库的控制台；`Activity` 是其中的持久�
 | ----------------------- | -------------- | ---------------------------------------------------- |
 | `Knowledge Studio`      | 知识工作台     | 管理 Knowledge 全流程                                |
 | `Setup & status`        | 设置与状态     | 分开查看本地 Workspace/模型就绪度                    |
+| `Add materials`         | 添加材料       | 选择一份已有 Vault 文件，确认登记原文件或复制快照    |
 | `Import folder`         | 导入文件夹     | 把外部文件夹复制为 Vault 来源快照                    |
 | `Query`                 | 查询           | 只查询已接受、已应用的 Wiki                          |
 | `Activity`              | 活动/任务      | 查看后台摄入、编译与应用状态                         |
@@ -57,7 +58,11 @@ Studio 还不能打开主界面时，会先显示三张本地诊断卡；主界�
 
 卡片之间互不冒充。例如，普通 Chat 模型缺 Key，不会把已经就绪的 Knowledge 模型判成失败；Knowledge 模型已配置，也不会替普通 Chat 选择模型。
 
-**Configured locally** 的准确含义是“当前本地配置通过检查”，不是 **Online** 或 **Connected**。Setup 页不会 ping provider、验证 Key 真伪、查询余额、检查网络或探测本地模型服务器，也不会调用模型。卡片上的动作只打开现有 Chat、Copilot 设置、当前可唯一确定的 Project 文件或 Schema，或者刷新页面状态；不会自动创建 Project、目录或 Schema，不会修改 Bundle YAML、切换模型或写 API Key。打开现有 Copilot 设置页可能触发插件自己的版本更新检查，这与模型 provider 检查无关。
+**Configured locally** 的准确含义是“当前本地配置通过检查”，不是 **Online** 或 **Connected**。Setup 页不会 ping provider、验证 Key 真伪、查询余额、检查网络或探测本地模型服务器，也不会调用模型。查看状态不写文件；没有 Bundle 时，可以在 **Finish Knowledge setup** 表单中选择已有 Project、Knowledge 模型、目录和规则，明确点击 **Create Knowledge setup** 后再保存。表单自动创建缺少的目录，保留现有规则、笔记和 Project 正文，不登记任何来源，也不替换已有 Bundle。
+
+卡片的导航按钮仍只打开现有 Chat、Copilot 设置、Project 配置或规则。**Open Project configuration** 打开的是 `project.md`，不是阅读章节文件夹。新建 Copilot Project 和填写 API Key 继续使用 Copilot 原生入口。打开现有 Copilot 设置页可能触发插件自己的版本更新检查，这与模型 provider 检查无关。
+
+配置完成后，顶部的 **Add materials** 可以直接选择一份 Vault 笔记，不再需要拖进普通 Chat。目录内登记原文件；目录外先展示快照目的地，勾选确认后复制。运行中队列可能开始付费分析，暂停状态不会被这一步解除。添加成功的回执在正常刷新期间仍保留；它表示材料已登记，不表示已经生成或应用 Wiki。
 
 `Recovery` 和 Sources 缺失属于持久操作/来源处理，不是首配向导。出现时仍使用 Studio 原有的 Recovery 或 Sources 专用面板；Setup 页不会把它们改写成普通配置错误，也不会自动修复。
 

@@ -9,6 +9,8 @@ import {
   ReloadFailedAfterSave,
 } from "@/components/knowledge/KnowledgeStudioRoot.stories";
 import type { KnowledgeFolderImportPort } from "@/knowledge/capture/KnowledgeFolderImportPort";
+import type { KnowledgeSetupPort } from "@/knowledge/setup/KnowledgeSetupPort";
+import type { KnowledgeStudioMaterialPort } from "@/knowledge/capture/KnowledgeStudioMaterialPort";
 import type {
   KnowledgeReviewCommand,
   KnowledgeReviewPlan,
@@ -627,6 +629,15 @@ function asController(controller: TestKnowledgeStudioController): KnowledgeStudi
 const FOLDER_IMPORT_PORT: KnowledgeFolderImportPort = {
   importFolder: jest.fn(),
 };
+const SETUP_PORT: KnowledgeSetupPort = {
+  getOptions: () => ({ availability: "available", projects: [], models: [] }),
+  configure: jest.fn(),
+};
+const MATERIAL_PORT: KnowledgeStudioMaterialPort = {
+  prepare: jest.fn(() => null),
+  select: jest.fn(),
+  add: jest.fn(),
+};
 
 const READY_SETUP_PROJECTION: KnowledgeSetupReadinessProjection = {
   startupStatus: "workflow_read_ready",
@@ -643,6 +654,7 @@ function createSetupNavigation(): KnowledgeSetupNavigationPort {
     openProjectFile: jest.fn(),
     openSchema: jest.fn(),
     openChat: jest.fn(),
+    openProjects: jest.fn(),
     refreshDisplayedStatus: jest.fn(),
   };
 }
@@ -651,7 +663,8 @@ function createSetupNavigation(): KnowledgeSetupNavigationPort {
 function renderStudio(
   controller: TestKnowledgeStudioController,
   setupReadiness = new KnowledgeSetupReadinessStore(READY_SETUP_PROJECTION),
-  setupNavigation = createSetupNavigation()
+  setupNavigation = createSetupNavigation(),
+  materialPort = MATERIAL_PORT
 ): ReturnType<typeof render> {
   return render(
     <KnowledgeStudioRoot
@@ -659,11 +672,56 @@ function renderStudio(
       folderImportPort={FOLDER_IMPORT_PORT}
       setupNavigation={setupNavigation}
       setupReadiness={setupReadiness}
+      setupPort={SETUP_PORT}
+      materialPort={materialPort}
     />
   );
 }
 
 describe("KnowledgeStudioRoot", () => {
+  it("keeps the material receipt through its own generation refresh without changing tabs — https://github.com/yydspanda/obsidian-copilot/issues/13", async () => {
+    const state = createReadyState();
+    const controller = new TestKnowledgeStudioController(state);
+    const selection = {
+      bundleId: state.bundleId!,
+      sourcePath: "Notes/Idea.md",
+      destinationPath: "Sources/Vault/Notes/Idea.md",
+      mode: "snapshot" as const,
+    };
+    const materialPort: KnowledgeStudioMaterialPort = {
+      prepare: () => ({
+        bundleId: state.bundleId!,
+        sourceRoot: "Sources",
+        choices: [{ path: selection.sourcePath, size: 25 }],
+      }),
+      select: () => selection,
+      add: async () => ({ ...selection, status: "added" }),
+    };
+    renderStudio(controller, undefined, undefined, materialPort);
+    fireEvent.click(screen.getByRole("button", { name: "Add materials" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Notes\/Idea.md/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /I understand this copies a snapshot/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    });
+    expect(screen.getByText(/A snapshot was copied and registered/)).toBeTruthy();
+    act(() =>
+      controller.publish({ status: "refreshing", activeTab: state.activeTab, refreshing: true })
+    );
+    expect(screen.getByText(/A snapshot was copied and registered/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add materials" })).toBeNull();
+    act(() => controller.publish(state));
+    expect(screen.getByText(/A snapshot was copied and registered/)).toBeTruthy();
+    expect(controller.getState().activeTab).toBe(state.activeTab);
+    act(() =>
+      controller.publish({
+        ...state,
+        bundleId: "another",
+        snapshot: { ...state.snapshot!, bundleId: "another" },
+      })
+    );
+    expect(screen.queryByText(/A snapshot was copied and registered/)).toBeNull();
+  });
   it("renders a neutral action-free page during transient Studio refresh", () => {
     const controller = new TestKnowledgeStudioController({
       status: "refreshing",

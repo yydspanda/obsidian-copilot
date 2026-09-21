@@ -13,6 +13,7 @@ import {
 
 import { KnowledgeActivityPanel } from "@/components/knowledge/KnowledgeActivityPanel";
 import { KnowledgeFolderImportButton } from "@/components/knowledge/KnowledgeFolderImportButton";
+import { KnowledgeAddMaterialButton } from "@/components/knowledge/KnowledgeAddMaterialButton";
 import { KnowledgeRecoveryPanel } from "@/components/knowledge/KnowledgeRecoveryPanel";
 import { KnowledgeReviewPanel } from "@/components/knowledge/KnowledgeReviewPanel";
 import { KnowledgeQueryPanel } from "@/components/knowledge/KnowledgeQueryPanel";
@@ -26,6 +27,11 @@ import type { KnowledgeReviewPlan } from "@/knowledge/review/ReviewDecision";
 import type { KnowledgeForwardRevisionStudioReview } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionStudioPort";
 import type { KnowledgeSetupNavigationPort } from "@/knowledge/setup/KnowledgeSetupNavigationPort";
 import type { KnowledgeSetupReadinessStore } from "@/knowledge/setup/KnowledgeSetupReadinessStore";
+import type { KnowledgeSetupPort } from "@/knowledge/setup/KnowledgeSetupPort";
+import type {
+  KnowledgeStudioMaterialPort,
+  KnowledgeStudioMaterialReceipt,
+} from "@/knowledge/capture/KnowledgeStudioMaterialPort";
 import type {
   KnowledgeStudioController,
   KnowledgeStudioFeedback,
@@ -40,6 +46,65 @@ export interface KnowledgeStudioRootProps {
   folderImportPort: KnowledgeFolderImportPort;
   setupReadiness: KnowledgeSetupReadinessStore;
   setupNavigation: KnowledgeSetupNavigationPort;
+  setupPort: KnowledgeSetupPort;
+  materialPort: KnowledgeStudioMaterialPort;
+}
+
+interface KnowledgeStudioContentProps extends KnowledgeStudioRootProps {
+  state: KnowledgeStudioState;
+  onMaterialReceipt: (receipt: Readonly<KnowledgeStudioMaterialReceipt>) => void;
+  onConfigured: () => void;
+}
+
+/** Keeps entry receipts visible while configuration or source registration rebuilds Studio. */
+export function KnowledgeStudioRoot(props: KnowledgeStudioRootProps): React.ReactElement {
+  const state = useKnowledgeStudioState(props.controller);
+  const [entryFeedback, setEntryFeedback] = React.useState<
+    KnowledgeStudioFeedback & { bundleId?: string }
+  >();
+  // Registration intentionally refreshes the runtime. Its completed receipt must
+  // outlive the chooser that initiated it, including a failed subsequent read.
+  // https://github.com/yydspanda/obsidian-copilot/issues/13
+  const onMaterialReceipt = React.useCallback(
+    (receipt: Readonly<KnowledgeStudioMaterialReceipt>) => {
+      setEntryFeedback({
+        kind: "success",
+        bundleId: receipt.bundleId,
+        message:
+          `Bundle ${receipt.bundleId}: ` +
+          (receipt.status === "already_added"
+            ? "This material is already registered. Check Activity for its processing status."
+            : receipt.mode === "snapshot"
+              ? "A snapshot was copied and registered. The original was not changed. Check Activity; no Wiki page has been applied."
+              : "The original file was registered without moving it. Check Activity; no Wiki page has been applied."),
+      });
+    },
+    []
+  );
+  const onConfigured = React.useCallback(() => {
+    setEntryFeedback({
+      kind: "success",
+      message: "Knowledge setup saved. No material was imported and setup made no model request.",
+    });
+  }, []);
+  return (
+    <div className="tw-flex tw-h-full tw-min-h-0 tw-flex-col">
+      {entryFeedback &&
+      (!entryFeedback.bundleId || !state.bundleId || entryFeedback.bundleId === state.bundleId) ? (
+        <div className="tw-shrink-0 tw-px-4 tw-pt-4">
+          <FeedbackBanner feedback={entryFeedback} />
+        </div>
+      ) : null}
+      <div className="tw-min-h-0 tw-flex-1">
+        <KnowledgeStudioContent
+          {...props}
+          state={state}
+          onMaterialReceipt={onMaterialReceipt}
+          onConfigured={onConfigured}
+        />
+      </div>
+    </div>
+  );
 }
 
 interface TabDefinition {
@@ -653,13 +718,17 @@ function openJobReview(controller: KnowledgeStudioController, jobId: string): vo
  * @param props - Knowledge Studio controller boundary
  * @returns Controller-backed Knowledge Studio surface
  */
-export function KnowledgeStudioRoot({
+function KnowledgeStudioContent({
   controller,
   folderImportPort,
   setupReadiness,
   setupNavigation,
-}: KnowledgeStudioRootProps): React.ReactElement {
-  const state = useKnowledgeStudioState(controller);
+  setupPort,
+  materialPort,
+  state,
+  onMaterialReceipt,
+  onConfigured,
+}: KnowledgeStudioContentProps): React.ReactElement {
   const [setupOpen, setSetupOpen] = React.useState(false);
   const activityTabId = React.useId();
   const queryTabId = React.useId();
@@ -706,6 +775,8 @@ export function KnowledgeStudioRoot({
     return (
       <KnowledgeSetupPanel
         navigation={setupNavigation}
+        setupPort={setupPort}
+        onConfigured={onConfigured}
         readiness={setupReadiness}
         unavailableNotice={
           state.unavailableNotice ??
@@ -719,6 +790,8 @@ export function KnowledgeStudioRoot({
     return (
       <KnowledgeSetupPanel
         navigation={setupNavigation}
+        setupPort={setupPort}
+        onConfigured={onConfigured}
         readiness={setupReadiness}
         onBack={() => setSetupOpen(false)}
       />
@@ -793,6 +866,24 @@ export function KnowledgeStudioRoot({
             Setup &amp; status
           </Button>
           <KnowledgeFolderImportButton port={folderImportPort} />
+          <KnowledgeAddMaterialButton
+            port={materialPort}
+            bundleId={snapshot.bundleId}
+            queueState={
+              snapshot.activity.controls.state === "paused"
+                ? "paused"
+                : snapshot.activity.controls.state === "running"
+                  ? "running"
+                  : "unknown"
+            }
+            disabled={
+              state.status !== "ready" ||
+              state.refreshing ||
+              state.pendingAction !== undefined ||
+              snapshot.availability === "adapter_unavailable"
+            }
+            onReceipt={onMaterialReceipt}
+          />
           <div aria-label="Knowledge Studio sections" className="tw-flex tw-gap-1" role="tablist">
             {STUDIO_TABS.filter(
               (tab) =>

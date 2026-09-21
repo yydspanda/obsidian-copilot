@@ -14,6 +14,8 @@ export interface KnowledgeSetupNavigationPort {
   openSchema(): void | Promise<void>;
   /** Opens the ordinary Copilot Chat workspace. */
   openChat(): void | Promise<void>;
+  /** Opens native Agent Chat, where Projects are created and selected. */
+  openProjects(): void | Promise<void>;
   /** Refreshes the displayed local projection without testing a model connection. */
   refreshDisplayedStatus(): void | Promise<void>;
 }

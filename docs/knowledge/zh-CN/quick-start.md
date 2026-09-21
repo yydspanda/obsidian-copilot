@@ -29,11 +29,20 @@
 - `Knowledge model`：这个 Project 专用于 Knowledge 的模型与凭证是否已在本地配置。
 - `Chat model (optional)`：普通 Chat 是否已配置。它用于临时解释、对话和 Chat → Source，但即使未配置，也不阻断本页的 Knowledge 主流程。
 
-**Configured locally 不等于联网成功。** 这个页面不会 ping DeepSeek、验证余额或调用模型；第一次来源编译才会真正验证服务可达性并可能产生费用。卡片按钮只会带你去现有设置、Chat、Project 文件或 Schema，或者刷新显示；它不会自动创建 Project、文件夹、Schema 或 API Key，也不会替你修改 Bundle YAML。
+**Configured locally 不等于联网成功。** 这个页面不会 ping DeepSeek、验证余额或调用模型；第一次来源编译才会真正验证服务可达性并可能产生费用。没有 Bundle 时，使用 **Finish Knowledge setup** 选择已有 Project、模型和位置，再点击 **Create Knowledge setup**，即可创建缺少的目录/规则并保存配置，不必手写 YAML。查看状态本身不写文件；已有 Bundle 不会被表单替换。Project 创建和模型密钥仍使用 Copilot 的原生入口。
 
 修正配置后，等待正常的 `Refreshing Knowledge Studio…` 结束。若 Studio 已就绪，点击 **Back to Studio**；若出现 Recovery 或 Sources 缺失界面，先按原面板处理，不要继续导入。
 
-### 1. 准备一个可人工核对的来源文件夹
+### 1. 选择一份已有的小笔记（推荐）
+
+在 Studio 点击 **Add materials**，搜索并选择当前 Vault 中的一份笔记。确认来源路径与模式：
+
+- 已在材料目录内：登记原文件，位置不变。
+- 在材料目录之外：明确勾选同意复制快照，原文保留不动，后续编辑原文不会同步副本。
+
+点击 **Add** 后查看成功回执，再打开 **Activity**。队列运行中可能启动付费模型分析；暂停的队列会保持暂停。不要因为 Studio 暂时刷新就重复添加。使用这条路径时，跳过下面的外部文件夹步骤，直接看第 3 步。
+
+### 1a. 如果材料在 Vault 外：准备来源文件夹
 
 在 Vault 外创建一个临时文件夹，例如 `Knowledge Acceptance`，并在里面新建 `first-source.md`：
 
@@ -47,7 +56,7 @@
 
 你可以换成自己的真实小笔记，但最好包含清楚的事实、决定或定义。第一次不要使用扫描版 PDF、加密 PDF、超大文件、URL、电子邮件地址或复杂附件。
 
-如果你使用 [Bundle 配置](bundle-configuration.md) 中的首次 Schema，它会要求模型在有明确事实时提出根目录下的 `facts.md`，因此更容易观察到非空 Review；模型和严格校验仍可能合法返回 `no_changes`，本手册不会承诺某个概率性输出。
+首次规则要求在材料有依据时提出独立命名的平级页面，不能覆盖别的来源拥有的页面。模型和严格校验仍可能合法返回 `no_changes`，本手册不会承诺一定产生非空 Review。
 
 ### 2. 导入文件夹
 

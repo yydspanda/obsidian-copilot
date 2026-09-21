@@ -21,6 +21,7 @@ function createHarness() {
     openCopilotSettings: jest.fn(),
     openVaultFile: jest.fn(),
     openChat: jest.fn(),
+    openProjects: jest.fn(),
     refreshDisplayedStatus: jest.fn(),
     notify: jest.fn(),
   };
@@ -28,6 +29,16 @@ function createHarness() {
 }
 
 describe("KnowledgeSetupNavigation", () => {
+  describe("KnowledgeSetupNavigation", () => {
+    describe("openProjects()", () => {
+      it("opens native Projects without opening ordinary Chat — https://github.com/yydspanda/obsidian-copilot/issues/13", () => {
+        const { dependencies, navigation } = createHarness();
+        void navigation.openProjects();
+        expect(dependencies.openProjects).toHaveBeenCalledTimes(1);
+        expect(dependencies.openChat).not.toHaveBeenCalled();
+      });
+    });
+  });
   it("delegates only the existing settings, Chat, and local recheck actions", () => {
     const { dependencies, navigation } = createHarness();
 

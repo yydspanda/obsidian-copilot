@@ -8,13 +8,13 @@
 ## Current Stage
 
 - Stage ID: `PK-H3`
-- Outcome: verify real-use answers and citations on an isolated copy of the selected management notes.
-- Exit gate: preserve the original Vault and distinguish retrieval quality from later authorized Wiki writes.
+- Outcome: user experiences reading, comparing evidence and building personal notes with Copilot and Knowledge Studio.
+- Exit gate: user-operated material preview, confirmed import and Review demonstrate value; the assistant does not substitute scripted imports or model calls.
 
 ## In Progress
 
-- [ ] `PK-H3-MANAGEMENT-REALUSE` — Isolated material copy prepared; next open it and configure the runtime.
-  No plugin/credentials copied, model request made, or Wiki write authorized by this preparation.
+- [ ] `PK-H3-MANAGEMENT-REALUSE` — Resume hands-on reading practice in the prepared management copy.
+  Next: user opens Studio Add materials and previews their personal note; no assistant-run import, model call or Apply.
 
 ## Upstream Status
 
@@ -27,8 +27,10 @@
 
 ## Recent Activity
 
-- 2026-09-18 — `PK-H3-MANAGEMENT-REALUSE` — Copied 163 Markdown notes and one graph JSON into a new Vault folder.
-  All 164 copies match; all 171 original files remain unchanged. [Preparation checkpoint](./designdocs/progress/acceptance/2026-09-18-management-realuse.md).
+- 2026-09-21 — `PK-STUDIO-ONBOARDING` — [Issue #13](https://github.com/yydspanda/obsidian-copilot/issues/13):
+  setup/material UI repaired and deployed; 376 tests / 64 gallery checks pass, 185 files preserved. [Evidence](./designdocs/progress/acceptance/2026-09-21-studio-onboarding.md).
+- 2026-09-20 — `PK-DEEPSEEK-PRO-RESTORE` — User paused reading practice to fix stale Pro rejection; exact Pro routing is restored locally.
+  19 suites / 715 tests and personal build pass; practice deployment verified without live requests. [Repair and delivery evidence](./designdocs/progress/acceptance/2026-09-20-pro-restore.md).
 - 2026-09-18 — `OPS-UPSTREAM-SYNC` — Synced 12 upstream commits with 1 conflict file; 56 suites / 1,623 tests pass.
   Build/lint/review pass; `b1328a7d` subsequently deployed to the Windows test Vault. All 38 Failed tags remain historical.
   [Merge reconciliation and retest scope](./designdocs/progress/acceptance/2026-09-18-upstream-sync.md).
@@ -56,8 +58,6 @@
 - 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — Isolated DeepSeek compatibility and send-time guards
   in fork-owned modules. Necessary upstream seams preserve ordinary-provider fallback and retain
   live sessions when a supported model switch fails; same-tick invalid defaults stop before I/O.
-- 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — Merged upstream `20837e19`; resolved three conflict
-  files by retaining upstream behavior and reapplying only the required Knowledge integration seams.
 
 ## Working Agreements
 
@@ -72,6 +72,9 @@
 
 ## Current Verification
 
+- September 21 Studio onboarding: 376 targeted tests, build, format/lint and review pass; 64 isolated gallery checks pass.
+  Practice build `1f25176e-dirty-92d174d8715d` loaded, Add materials enabled, queue empty, 185 files unchanged; actual submission awaits the user.
+- September 20 Pro repair: 715 tests and local gates pass; practice build `1f25176e-dirty-ebf5a93c7d53` loaded, 13 messages / 3 attachments / 165 files preserved; no live Pro call or full-suite rerun.
 - September 18 upstream sync: 56/56 affected suites and 1,623 tests pass (0 failures/skips), plus 20 governance tests.
   Production build/typecheck, artifact syntax/mobile-load smoke, format/lint and full Obsidian review pass.
   One session-manager compatibility check preserves retired-model refusal; large-log regression stays enabled.
@@ -101,8 +104,7 @@
   the September experiment log.
 - Against frozen upstream `61619fe4`, 38 upstream-owned production TS/TSX files differ (excluding tests/stories).
   The personal-budget change adds no runtime-source edits: one build guard (+18/-2), tests, and docs.
-- Upstream drift is resolved at canonical `996a088c`; remote master remains untouched.
-- Current Windows deployment: clean `4.0.9+dev.b1328a7d.clean.fec5d39dc7b3`; new instance and Studio ready/paused verified.
+- September 18 old-test-Vault deployment: clean `4.0.9+dev.b1328a7d.clean.fec5d39dc7b3`; new instance and Studio ready/paused verified.
   Runtime 2040 / Queue 969; all 66 job identities/states preserved, no pending; local model readiness passes, no model calls.
   All 74 files retained; only diagnostic log changes. All 103 old settings unchanged; public catalog cache added. [Checkpoint](./designdocs/progress/acceptance/2026-09-18-upstream-sync.md#authorized-windows-deployment).
   Earlier Gallery plugin is removed; its shared-editor-style cleanup exception remains in the prior checkpoint.
@@ -110,7 +112,6 @@
   After the Rules update: 3 queued (paused), 4 outdated reviews, 38 failed, 11 completed, 4 cancelled; Recovery 0.
   Evidence: source-mode selection and reading-mode Ctrl+C both preserve all 3,769 characters; Live Preview highlighting differs.
   See the [Windows checkpoint](./designdocs/progress/acceptance/2026-09-14-windows.md) for evidence and limitations.
-- Issue #8: 17 tool + 107 related tests pass. `EXP-20260915-002` reaches an in-memory pending proposal with two requests; 14 real files and all Runtime/Review bytes unchanged. Earlier timeout remains inconclusive.
 
 ## Archive
 

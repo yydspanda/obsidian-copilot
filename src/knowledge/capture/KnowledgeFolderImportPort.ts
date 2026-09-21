@@ -1,6 +1,9 @@
-/** Browser-selected folder payload exposed without an external absolute path. */
+/** Byte capability shared by browser folder selections and explicit Vault snapshots. */
+export type KnowledgeFolderImportFile = Pick<File, "webkitRelativePath" | "size" | "arrayBuffer">;
+
+/** Selected folder payload exposed without an external absolute path. */
 export interface KnowledgeFolderImportRequest {
-  files: readonly File[];
+  files: readonly KnowledgeFolderImportFile[];
 }
 
 /** Aggregate, path-free receipt returned after one bounded folder import pass. */

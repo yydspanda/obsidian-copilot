@@ -14,6 +14,10 @@ import {
   ObsidianKnowledgeVaultSourcePresence,
 } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
 import { KnowledgeProductionFolderImportCoordinator } from "@/knowledge/capture/KnowledgeProductionFolderImportCoordinator";
+import {
+  KnowledgeStudioMaterialCoordinator,
+  type KnowledgeStudioMaterialGeneration,
+} from "@/knowledge/capture/KnowledgeStudioMaterialCoordinator";
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import type { KnowledgeDeepSeekFetchPort } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
 import { prepareKnowledgeConfiguredModelPreflight } from "@/knowledge/compiler/KnowledgeConfiguredModelBridge";
@@ -26,6 +30,7 @@ import {
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import type { KnowledgeChatModelReadiness } from "@/knowledge/setup/KnowledgeChatModelReadiness";
 import { KnowledgeSetupNavigation } from "@/knowledge/setup/KnowledgeSetupNavigation";
+import { KnowledgeSetupService } from "@/knowledge/setup/KnowledgeSetupService";
 import {
   createKnowledgeSetupUnloadedProjection,
   projectKnowledgeSetupReadiness,
@@ -146,6 +151,7 @@ export interface KnowledgePluginIntegrationDependencies {
   getCurrentProjectId(): string | undefined;
   subscribeCurrentProjectChange(listener: () => void): () => void;
   openChat(): void | Promise<void>;
+  openProjects(): void | Promise<void>;
 }
 
 /**
@@ -193,6 +199,9 @@ export class KnowledgePluginIntegration {
     })
   );
   private readonly knowledgeSetupNavigation: KnowledgeSetupNavigation;
+  private readonly knowledgeSetupService: KnowledgeSetupService;
+  private readonly knowledgeMaterialCoordinator: KnowledgeStudioMaterialCoordinator;
+  private knowledgeMaterialGeneration?: KnowledgeStudioMaterialGeneration;
   private readonly knowledgeStudioStartupAvailability =
     new KnowledgeStudioStartupAvailabilityAdapter(
       this.knowledgeStudioPort,
@@ -215,6 +224,17 @@ export class KnowledgePluginIntegration {
     this.plugin = dependencies.plugin;
     this.app = dependencies.plugin.app;
     this.modelManagement = dependencies.modelManagement;
+    this.knowledgeSetupService = new KnowledgeSetupService({
+      app: this.app,
+      getProjectRecords: () => getCachedProjectRecords(),
+      modelManagement: this.modelManagement,
+      profileOptions: createKnowledgeProductionPipelineResources().profileOptions,
+      isCurrent: () => this.loaded && !this.knowledgeLifecycleClosed,
+    });
+    this.knowledgeMaterialCoordinator = new KnowledgeStudioMaterialCoordinator({
+      vault: this.app.vault,
+      getCurrentGeneration: () => this.knowledgeMaterialGeneration,
+    });
     const pairing = createKnowledgeProductionWorkflowExecutionPairing();
     this.knowledgeProductionRuntimeExecutionClaim = pairing.runtimeClaim;
     this.knowledgeProductionPreflightLifecycle = new KnowledgePluginProductionPreflightLifecycle({
@@ -235,6 +255,9 @@ export class KnowledgePluginIntegration {
       openVaultFile: (path) => this.openKnowledgeSetupVaultFile(path),
       openChat: () => {
         if (!this.knowledgeLifecycleClosed) return dependencies.openChat();
+      },
+      openProjects: () => {
+        if (!this.knowledgeLifecycleClosed) return dependencies.openProjects();
       },
       refreshDisplayedStatus: () => this.refreshKnowledgeSetupReadiness(),
       notify: (message) => {
@@ -274,7 +297,9 @@ export class KnowledgePluginIntegration {
             this.knowledgeStudioSessionStore,
             this.knowledgeFolderImportPort,
             this.knowledgeSetupReadinessStore,
-            this.knowledgeSetupNavigation
+            this.knowledgeSetupNavigation,
+            this.knowledgeSetupService,
+            this.knowledgeMaterialCoordinator
           );
         });
         this.plugin.addRibbonIcon("library-big", "Open Knowledge Studio", () => {
@@ -1104,6 +1129,31 @@ export class KnowledgePluginIntegration {
               revokeDelegate: (delegate) => this.knowledgeFolderImportPort.revokeDelegate(delegate),
               assertCurrent,
             });
+            // Studio confirmation stays bound to these exact delegates. A later
+            // Bundle must never inherit a stale chooser's write authority.
+            // https://github.com/yydspanda/obsidian-copilot/issues/13
+            if (
+              admission.owners.length === 1 &&
+              admission.owners[0].config.sourceRoots.length === 1
+            ) {
+              const settings = getSettings();
+              this.knowledgeMaterialGeneration = Object.freeze({
+                bundleId: admission.owners[0].config.id,
+                sourceRoot: admission.owners[0].config.sourceRoots[0],
+                excludedRoots: Object.freeze([
+                  this.app.vault.configDir,
+                  settings.copilotFolder,
+                  ...settings.copilotRootHistory,
+                  ...admission.owners.map((owner) => owner.config.wikiRoot),
+                ]),
+                excludedPaths: Object.freeze(
+                  admission.owners.map((owner) => owner.config.schemaRef)
+                ),
+                capture: nextCaptureDelegate,
+                folderImport: nextFolderImportDelegate,
+                assertCurrent,
+              });
+            }
             sourcePathIndexLease = this.knowledgeSourcePathIndex.install(
               candidate.getRegisteredSourcePaths()
             );
@@ -1237,6 +1287,7 @@ export class KnowledgePluginIntegration {
 
   /** Synchronously closes the current observation session, if any. */
   private closeKnowledgeProductionObservation(): void {
+    this.knowledgeMaterialGeneration = undefined;
     this.knowledgeProductionObservation?.close();
     this.knowledgeProductionObservation = undefined;
     this.knowledgeProductionRelease?.close();
