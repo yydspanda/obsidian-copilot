@@ -8,13 +8,13 @@
 ## Current Stage
 
 - Stage ID: `OPS-MAINTENANCE`
-- Outcome: retain completed management-copy acceptance evidence and prepare the local repair handoff.
+- Outcome: retain completed management-copy acceptance evidence and return to reading practice.
 - Exit gate: bounded acceptance is complete; no further model calls or Vault changes are scheduled.
 
 ## In Progress
 
-- [ ] `OPS-PROGRESS-GOVERNANCE` — Maintain the completed acceptance record and local repair handoff.
-  Next: two repairs are local/deployed; commit/push and any upstream sync remain separate follow-up work.
+- [ ] `OPS-PROGRESS-GOVERNANCE` — Maintain the completed acceptance and delivery record.
+  Next: repairs pushed as `37a40be4`; continue reading in the management copy without new automated model calls. Upstream sync remains separate.
 
 ## Upstream Status
 
@@ -70,7 +70,7 @@
 ## Current Verification
 
 - October 3 management-copy acceptance complete: setup/Add/Review/edit/Apply/Query/Save/reload pass, 3 completed/0 failed, 5/8 model requests. Originals/credentials preserved; queue paused.
-  Two fork-owned repairs deployed; 209 affected tests and 12 gallery states pass. Baseline full sweep: 731 suites / 10,746 tests, 2 skips, predates final repairs; no new commit/push.
+  Two fork-owned repairs deployed and pushed as `37a40be4`; 209 affected tests and 12 gallery states pass. Baseline full sweep: 731 suites / 10,746 tests, 2 skips, predates final repairs.
 - September 21 Studio onboarding: 376 targeted tests, build, format/lint and review pass; 64 isolated gallery checks pass.
   Pushed source `5777c92d` rebuild matches deployed artifacts; 17 Windows checks pass, 185 files/92 settings/runtime unchanged; real submission awaits the user.
 - September 20 Pro repair: 715 tests and local gates pass; practice build `1f25176e-dirty-ebf5a93c7d53` loaded, 13 messages / 3 attachments / 165 files preserved; no live Pro call or full-suite rerun.

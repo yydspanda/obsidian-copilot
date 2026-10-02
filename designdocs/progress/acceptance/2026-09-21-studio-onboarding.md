@@ -406,3 +406,17 @@ requests and no model retries. This is not an exhaustive future scale/fault
 matrix or automatic semantic-quality guarantee. No new commit, push or upstream
 merge was performed; the two repairs remain local and deployed. Reproducible
 request/hash evidence is in October experiments 001–005.
+
+### Authorized source delivery
+
+The subsequent user request explicitly authorized commit/push. Commit `37a40be4`
+contains both repairs, tests, stories, documentation and completed acceptance
+evidence, and is pushed to `fork/knowledge-h3-personal-flow`. Normal commit hooks
+pass; the committed Root and Query production blobs are unchanged from the
+tested source (`ad4b186c56e1ae0c8e33a534acba4772f5e5d40c` and
+`14eb823b95d2b7289b2e081b5f4c64a5e55f2b78`). The deployed binary therefore remains
+the already-verified artifact; no extra reload or model retest is necessary for
+this Git-only handoff. A read-only Vault audit still matches the final Runtime
+hash `318dd134223cb7ca299dfdd3a754fec8c49b81b517117dca2d32444750cecd14`.
+Only the current fork branch is pushed. No upstream merge, remote-master change,
+new model request or additional Vault-content write is included.
