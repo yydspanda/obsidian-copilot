@@ -10,7 +10,7 @@ const success = {
   message: "The query answer was registered as a managed source.",
 } as const;
 
-/** Fixed, inert ports keep these snapshot-free states independent of plugin runtime. */
+/** Fixed, inert ports keep gallery states independent of plugin runtime. */
 function createProps(state: KnowledgeStudioState): Props {
   return {
     controller: {
@@ -99,4 +99,78 @@ export const RefreshingAfterSaveFailure: StoryObj<Props> = {
       message: "The answer could not be registered as a source.",
     },
   }),
+};
+
+const materialSelection = Object.freeze({
+  bundleId: "personal",
+  sourcePath: "Reading/Comparing observations.md",
+  destinationPath: "Sources/Vault/Reading/Comparing observations.md",
+  mode: "snapshot" as const,
+});
+const materialSession = Object.freeze({
+  bundleId: materialSelection.bundleId,
+  sourceRoot: "Sources",
+  choices: Object.freeze([{ path: materialSelection.sourcePath, size: 2826 }]),
+});
+
+// Read-model refresh must not close the chooser while its own snapshot is being added.
+// https://github.com/yydspanda/obsidian-copilot/issues/13
+export const AddMaterialDuringReadRefresh: StoryObj<Props> = {
+  args: {
+    ...createProps({
+      status: "ready",
+      activeTab: "activity",
+      refreshing: true,
+      bundleId: "personal",
+      snapshot: {
+        bundleId: "personal",
+        revisionToken: "revision-1",
+        availability: "ready",
+        commandCapabilities: {
+          pauseBundle: false,
+          resumeBundle: false,
+          cancelJob: false,
+          retryJob: false,
+          reviewReject: false,
+          reviewAccept: false,
+        },
+        activity: {
+          bundleId: "personal",
+          revision: 1,
+          controls: { state: "paused", canPause: false, canResume: false },
+          items: [],
+          counts: {
+            total: 0,
+            active: 0,
+            terminal: 0,
+            hiddenTerminal: 0,
+            byStatus: {
+              queued: 0,
+              parsing: 0,
+              analyzing: 0,
+              associating: 0,
+              generating: 0,
+              validating: 0,
+              awaiting_review: 0,
+              applying: 0,
+              finalizing: 0,
+              paused: 0,
+              recovery_required: 0,
+              failed: 0,
+              cancelled: 0,
+              completed: 0,
+            },
+          },
+        },
+        reviews: [],
+        recovery: { bundleId: "personal", runtimeRevision: 1, items: [] },
+      },
+    }),
+    materialPort: {
+      prepare: () => materialSession,
+      select: () => materialSelection,
+      // Keep Adding visible without timers, Vault writes, or model requests.
+      add: () => new Promise(noop),
+    },
+  },
 };

@@ -7,14 +7,14 @@
 
 ## Current Stage
 
-- Stage ID: `PK-H3`
-- Outcome: user experiences reading, comparing evidence and building personal notes with Copilot and Knowledge Studio.
-- Exit gate: user-operated material preview, confirmed import and Review demonstrate value; the assistant does not substitute scripted imports or model calls.
+- Stage ID: `OPS-MAINTENANCE`
+- Outcome: retain completed management-copy acceptance evidence and prepare the local repair handoff.
+- Exit gate: bounded acceptance is complete; no further model calls or Vault changes are scheduled.
 
 ## In Progress
 
-- [ ] `PK-H3-MANAGEMENT-REALUSE` — Resume hands-on reading practice in the prepared management copy.
-  Next: user opens Studio Add materials and previews their personal note; no assistant-run import, model call or Apply.
+- [ ] `OPS-PROGRESS-GOVERNANCE` — Maintain the completed acceptance record and local repair handoff.
+  Next: two repairs are local/deployed; commit/push and any upstream sync remain separate follow-up work.
 
 ## Upstream Status
 
@@ -27,6 +27,7 @@
 
 ## Recent Activity
 
+- 2026-10-03 — `PK-H3-MANAGEMENT-REALUSE` — Full bounded reading flow passes: 3 completed jobs, 0 failures, 5/8 requests; two fork-owned fixes deployed. [Completion](./designdocs/progress/archive/2026-10.md).
 - 2026-09-21 — `PK-STUDIO-ONBOARDING` — [Issue #13](https://github.com/yydspanda/obsidian-copilot/issues/13):
   repair pushed as `5777c92d`; 376 tests, 64 gallery and 17 Windows preview/status checks pass. [Evidence](./designdocs/progress/acceptance/2026-09-21-studio-onboarding.md).
 - 2026-09-20 — `PK-DEEPSEEK-PRO-RESTORE` — User paused reading practice to fix stale Pro rejection; exact Pro routing is restored locally.
@@ -55,10 +56,6 @@
 - 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — Local build comparison confirmed upstream at
   4,863,967 bytes and this fork at 6,383,885 bytes. Target and minifier probes remain over 5 MB;
   production policy and plugin code were left unchanged pending a delivery-architecture decision.
-- 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — Isolated DeepSeek compatibility and send-time guards
-  in fork-owned modules. Necessary upstream seams preserve ordinary-provider fallback and retain
-  live sessions when a supported model switch fails; same-tick invalid defaults stop before I/O.
-
 ## Working Agreements
 
 - Treat `origin/master` as the authoritative upstream baseline. Prefer new modules and narrow
@@ -72,6 +69,8 @@
 
 ## Current Verification
 
+- October 3 management-copy acceptance complete: setup/Add/Review/edit/Apply/Query/Save/reload pass, 3 completed/0 failed, 5/8 model requests. Originals/credentials preserved; queue paused.
+  Two fork-owned repairs deployed; 209 affected tests and 12 gallery states pass. Baseline full sweep: 731 suites / 10,746 tests, 2 skips, predates final repairs; no new commit/push.
 - September 21 Studio onboarding: 376 targeted tests, build, format/lint and review pass; 64 isolated gallery checks pass.
   Pushed source `5777c92d` rebuild matches deployed artifacts; 17 Windows checks pass, 185 files/92 settings/runtime unchanged; real submission awaits the user.
 - September 20 Pro repair: 715 tests and local gates pass; practice build `1f25176e-dirty-ebf5a93c7d53` loaded, 13 messages / 3 attachments / 165 files preserved; no live Pro call or full-suite rerun.
@@ -90,8 +89,6 @@
 - September 16 issue #9: 45 suites / 554 tests pass; production edits touch only two fork-owned modules.
   Personal production build passes at 6,428,121 bytes under the explicit 10,000,000-byte ceiling;
   typecheck, syntax and mobile-load smoke pass. Default 5 MB policy is unchanged; see the Windows checkpoint for hashes.
-- Size-guard regression: 41/41 tests pass after observing 21 intended failures before implementation.
-  Final artifact syntax and simulated mobile module-load smoke checks pass; these are not live UI tests.
 - September 15 merge checks: 48 Jest suites / 1,238 tests, 36 Node tests, production typecheck,
   artifact syntax/mobile-load smoke and Obsidian review pass. The earlier full sweep below predates this merge.
 - September 15 gates: production typecheck, formatting, lint (0 errors, 3 existing warnings),
@@ -117,4 +114,5 @@
 
 - [2026-08](./designdocs/progress/archive/2026-08.md)
 - [2026-09](./designdocs/progress/archive/2026-09.md)
+- [2026-10](./designdocs/progress/archive/2026-10.md)
 - [Frozen pre-governance snapshot](./designdocs/progress/legacy/TODO-2026-08-26.md)

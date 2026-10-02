@@ -866,6 +866,9 @@ function KnowledgeStudioContent({
             Setup &amp; status
           </Button>
           <KnowledgeFolderImportButton port={folderImportPort} />
+          {/* Copying a source triggers read-model refresh hints; those must not cancel the
+              copy or its registration. Generation replacement still unmounts this chooser.
+              https://github.com/yydspanda/obsidian-copilot/issues/13 */}
           <KnowledgeAddMaterialButton
             port={materialPort}
             bundleId={snapshot.bundleId}
@@ -878,7 +881,6 @@ function KnowledgeStudioContent({
             }
             disabled={
               state.status !== "ready" ||
-              state.refreshing ||
               state.pendingAction !== undefined ||
               snapshot.availability === "adapter_unavailable"
             }

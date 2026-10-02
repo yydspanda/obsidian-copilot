@@ -33,9 +33,10 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   verify without paid requests before returning to user-operated reading practice.
 - Task ID: `PK-DEEPSEEK-PRO-RESTORE` — restore continued official V4 Pro service with exact model
   identity across Chat and Knowledge, preserve Flash aliases and fail-closed boundaries, and verify locally.
-- Task ID: `PK-H3-MANAGEMENT-REALUSE` — coach the user through self-operated reading, viewpoint
-  comparison, source checking and personal note-taking in the prepared copy; explain one useful
-  step at a time and wait for feedback, without substituting assistant-run UI or model operations.
+- Task ID: `PK-H3-MANAGEMENT-REALUSE` — complete the remaining reading, source-checking and
+  Knowledge setup/ingest/Review/Query acceptance in the prepared management copy. The user's
+  October 3 request supersedes manual coaching with assistant-operated verification; preserve
+  originals and explicitly bound model requests and test-Wiki writes.
 - Task ID: `PK-H3-REVIEW11-FIX` — fix the cumulative review findings for Vault update containment,
   case-sensitive Chat attachment identity, bounded source reads, and obsolete model policy.
 - Task ID: `PK-H3-UPSTREAM-V4-WIN` — validate provider/project/settings migration, reload/unload,

@@ -567,11 +567,7 @@ function isSameVerifiedWikiSnapshot(
 /** Reports whether one citation can participate in the H.2 Markdown-only answer contract. */
 function isEligibleAnswerTarget(target: Readonly<StoredCitationTarget>): boolean {
   const locator = target.target.citation.locator;
-  return (
-    locator.kind !== "pdf_page" &&
-    locator.excerpt.length > 0 &&
-    locator.excerpt.length <= KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxSourceExcerptCharacters
-  );
+  return locator.kind !== "pdf_page" && locator.excerpt.length > 0;
 }
 
 interface KnowledgeAnswerModelMaterial {
@@ -742,42 +738,73 @@ export class KnowledgeScopedQueryCoordinator
       for (const candidate of candidates) {
         if (evidence.length >= KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxEvidenceItems) break;
         if (!isEligibleAnswerTarget(candidate)) continue;
-        const sourceExcerpt = candidate.target.citation.locator.excerpt;
-        const contextCost = contextId === undefined ? hit.snippet.length : 0;
-        if (
-          totalCharacters + contextCost + sourceExcerpt.length >
-          KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxTotalEvidenceCharacters
+        const completeExcerpt = candidate.target.citation.locator.excerpt;
+        let sourceVerified = false;
+        // Long valid citations must not erase all answer evidence. Send exact bounded
+        // pieces, but keep verification, navigation, and writeback bound to the complete
+        // citation. Blank pieces cannot support a claim and are omitted without trimming
+        // nonblank material or changing the existing request budgets.
+        // https://github.com/yydspanda/obsidian-copilot/issues/14
+        for (
+          let start = 0;
+          start < completeExcerpt.length &&
+          evidence.length < KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxEvidenceItems;
         ) {
-          continue;
-        }
-        const verified = await this.citationNavigation.verify(candidate.target, signal);
-        this.assertCurrent(generation, signal);
-        if (verified !== true) continue;
-        if (contextId === undefined) {
-          contextId = `context-${contexts.length + 1}`;
-          contexts.push(
+          let end = Math.min(
+            start + KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxSourceExcerptCharacters,
+            completeExcerpt.length
+          );
+          const lastCodeUnit = completeExcerpt.charCodeAt(end - 1);
+          const nextCodeUnit = completeExcerpt.charCodeAt(end);
+          if (
+            lastCodeUnit >= 0xd800 &&
+            lastCodeUnit <= 0xdbff &&
+            nextCodeUnit >= 0xdc00 &&
+            nextCodeUnit <= 0xdfff
+          ) {
+            end -= 1;
+          }
+          const sourceExcerpt = completeExcerpt.slice(start, end);
+          start = end;
+          if (sourceExcerpt.trim().length === 0) continue;
+          const contextCost = contextId === undefined ? hit.snippet.length : 0;
+          if (
+            totalCharacters + contextCost + sourceExcerpt.length >
+            KNOWLEDGE_GROUNDED_ANSWER_LIMITS.maxTotalEvidenceCharacters
+          ) {
+            break;
+          }
+          if (!sourceVerified) {
+            sourceVerified = await this.citationNavigation.verify(candidate.target, signal);
+            this.assertCurrent(generation, signal);
+            if (sourceVerified !== true) break;
+          }
+          if (contextId === undefined) {
+            contextId = `context-${contexts.length + 1}`;
+            contexts.push(
+              Object.freeze({
+                contextId,
+                pagePath: hit.pagePath,
+                pageContentHash: hit.pageContentHash,
+                heading: hit.heading,
+                headingPath: Object.freeze([...hit.headingPath]),
+                content: hit.snippet,
+              })
+            );
+            totalCharacters += hit.snippet.length;
+          }
+          const evidenceId = `evidence-${evidence.length + 1}`;
+          evidence.push(
             Object.freeze({
+              evidenceId,
               contextId,
-              pagePath: hit.pagePath,
-              pageContentHash: hit.pageContentHash,
-              heading: hit.heading,
-              headingPath: Object.freeze([...hit.headingPath]),
-              content: hit.snippet,
+              sourceExcerpt,
+              sourceRelation: candidate.target.citation.relation,
             })
           );
-          totalCharacters += hit.snippet.length;
+          targetsByEvidenceId.set(evidenceId, candidate);
+          totalCharacters += sourceExcerpt.length;
         }
-        const evidenceId = `evidence-${evidence.length + 1}`;
-        evidence.push(
-          Object.freeze({
-            evidenceId,
-            contextId,
-            sourceExcerpt,
-            sourceRelation: candidate.target.citation.relation,
-          })
-        );
-        targetsByEvidenceId.set(evidenceId, candidate);
-        totalCharacters += sourceExcerpt.length;
       }
     }
 

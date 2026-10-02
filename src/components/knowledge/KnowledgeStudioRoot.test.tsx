@@ -679,6 +679,68 @@ function renderStudio(
 }
 
 describe("KnowledgeStudioRoot", () => {
+  it.each([
+    ["preserves an in-flight snapshot during a source-triggered read refresh", false],
+    ["cancels an in-flight snapshot when the production generation refreshes", true],
+  ] as const)(
+    "%s — https://github.com/yydspanda/obsidian-copilot/issues/13",
+    async (_description, generationRefresh) => {
+      const state = createReadyState();
+      const controller = new TestKnowledgeStudioController(state);
+      const selection = {
+        bundleId: state.bundleId!,
+        sourcePath: "Notes/Idea.md",
+        destinationPath: "Sources/Vault/Notes/Idea.md",
+        mode: "snapshot" as const,
+      };
+      let addSignal: AbortSignal | undefined;
+      let finishAdd: () => void = () => {};
+      const materialPort: KnowledgeStudioMaterialPort = {
+        prepare: () => ({
+          bundleId: state.bundleId!,
+          sourceRoot: "Sources",
+          choices: [{ path: selection.sourcePath, size: 25 }],
+        }),
+        select: () => selection,
+        add: (_selection, signal) => {
+          addSignal = signal;
+          return new Promise((resolve, reject) => {
+            finishAdd = () => resolve({ ...selection, status: "added" });
+            signal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true });
+          });
+        },
+      };
+      renderStudio(controller, undefined, undefined, materialPort);
+      fireEvent.click(screen.getByRole("button", { name: "Add materials" }));
+      fireEvent.click(screen.getByRole("radio", { name: /Notes\/Idea.md/ }));
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /I understand this copies a snapshot/ })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(screen.getByRole("button", { name: "Adding…" })).toBeTruthy();
+
+      await act(async () => {
+        controller.publish({
+          ...state,
+          status: generationRefresh ? "refreshing" : "ready",
+          refreshing: true,
+        });
+      });
+
+      expect(addSignal?.aborted).toBe(generationRefresh);
+      if (generationRefresh) {
+        expect(screen.queryByRole("form", { name: "Choose material" })).toBeNull();
+        expect(screen.queryByText(/A snapshot was copied and registered/)).toBeNull();
+      } else {
+        expect(screen.getByRole("form", { name: "Choose material" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Adding…" })).toBeTruthy();
+        await act(async () => finishAdd());
+        expect(screen.getByText(/A snapshot was copied and registered/)).toBeTruthy();
+        expect(screen.queryByRole("form", { name: "Choose material" })).toBeNull();
+      }
+    }
+  );
+
   it("keeps the material receipt through its own generation refresh without changing tabs — https://github.com/yydspanda/obsidian-copilot/issues/13", async () => {
     const state = createReadyState();
     const controller = new TestKnowledgeStudioController(state);

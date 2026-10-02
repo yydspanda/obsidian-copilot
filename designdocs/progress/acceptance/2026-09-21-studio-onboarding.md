@@ -184,3 +184,225 @@ No model inference, real Add, setup creation, queue Resume or Wiki Apply was
 performed. First-use writes and successful ingest remain covered by local tests,
 not claimed as completed native Windows scenarios. The user-operated next step
 remains choosing their note in Add materials before confirming a real ingest.
+
+## User-authorized removal of the old manual setup
+
+The user correctly noted that retaining the manually prepared directories and
+Project binding did not exercise first-time setup, then explicitly requested
+removing the old setup. This supersedes the earlier next-step instruction to
+proceed directly to Add materials.
+
+Preflight checked the exact management practice Vault and empty runtime. The
+only contents were `Knowledge/reading-rules.md`, empty `Sources/Reading`, and
+empty `Wiki/Reading`; paths were real in-Vault paths without symbolic aliases.
+The existing `reading` Bundle and legacy Pro binding matched the expected
+Project before mutation.
+
+Through Obsidian's own APIs, only `copilot-project-knowledge-bundle` and
+`copilot-project-model-key` were removed from the existing `project.md`.
+Knowledge, Sources and Wiki were moved to the Vault trash, not permanently
+deleted. The original Project, its context inclusions and AGENTS/CLAUDE files,
+book chapters, personal notes, saved chats and provider configuration were kept.
+
+Verification proves:
+
+- All three original root paths are absent. The old rules file is preserved
+  under `.trash/Knowledge/reading-rules.md`.
+- Of 185 original material/note files, exactly the old rules path and Project
+  file change; all other 183 content hashes match.
+- The Project body hash and all retained frontmatter fields match. Only the
+  two authorized Knowledge fields were removed.
+- All 92 setting hashes and the complete runtime hash remain unchanged.
+- Studio now displays **Finish Knowledge setup**, with `读书心得` selected,
+  no Knowledge model selected, both existing DeepSeek choices available,
+  Workspace **Needs setup**, and Knowledge model **Waiting on another step**.
+
+No setup creation, source import, model request, Apply or plugin reload was
+performed. This establishes a clean Knowledge-on-an-existing-Project starting
+point, not an empty Copilot installation. The user will select the model and
+confirm the setup form; successful native file creation is still pending.
+
+## October 3 autonomous acceptance follow-up
+
+The new active goal asks the assistant to operate the remaining acceptance in
+the management test copy. It supersedes the earlier user-operated checkpoint,
+not the data-preservation boundary. Paid requests and test-Wiki Apply are still
+awaiting the separately requested bounded authorization. No model inference or
+Wiki Apply has been performed in this follow-up.
+
+Native first setup now passes through the actual Studio form. Selecting the
+existing Project and configured Pro UUID automatically creates `Sources/Knowledge`,
+`Wiki/Knowledge`, and `Knowledge/rules.md`, then persists the new Bundle and exact
+model binding. The old manual setup remains in Vault trash and was not reused.
+The success receipt stays visible after setup's refresh. All retained Project
+fields/body match their baseline; all 92 setting hashes are unchanged. Of 209
+preflight files, only the Project changes, with 208 unchanged; the new rules file
+is the only added file at this checkpoint. Runtime remains byte-identical at
+revision zero. Pausing via Activity then creates one paused, empty queue at
+runtime revision one.
+
+Actual snapshot Add uncovered an issue missed by the earlier preview-only
+checks. The first attempt leaves only the missing parent directory. The second
+publishes the exact snapshot but creates no Manifest or job and loses the chooser
+without feedback. The original remains unchanged and the queue remains paused.
+A live DOM/Vault event trace shows the snapshot create event followed by chooser
+closure, with no production-generation replacement. Ordinary read-model reload
+sets `refreshing=true`; Root passed this as disabled, causing the chooser effect
+to abort its own pending operation and suppress the cancellation error.
+
+The minimal repair removes that single read-refresh disabling condition from
+the Knowledge-owned Root. Non-ready status, pending commands, unavailable
+adapters, explicit Cancel and production-generation replacement retain their
+existing cancellation behavior. No upstream-owned production file changes.
+The new regression fails before the fix because the signal is unexpectedly
+aborted, then passes afterward; the paired generation-replacement case still
+aborts. Three affected suites / 91 tests pass. An adjacent gallery story covers
+the ordinary-refresh chooser/Adding state without any Vault or model operation.
+
+Personal build/typecheck, artifact syntax and mobile-load smoke pass. Formatting
+and lint pass with nine retained warnings. Full Obsidian review passes its gates;
+the dependency audit now reports three moderate advisories, not zero, and no
+automatic dependency changes were made. Negative-fixture errors are expected.
+The separately running baseline sweep completed successfully: 731 suites,
+10,746 passing tests and two pre-existing skips. Its Root suite contains the old
+42 cases, not the two new regressions; the final repaired source was separately
+retested with the 91 affected cases. Live integration tests were explicitly
+excluded with `--testPathIgnorePatterns='/node_modules/|/integration_tests/'` so
+repository integration fixtures could not load credentials and call a model.
+
+Windows delivery uses `test:vault`, with a temporary CLI wrapper pinning every
+command to the management test Vault. The script copies the files but its toggle
+does not reload this instance; a scoped idle unload/load with the cached manifest's
+runtime `dir` preserved loads a verified new instance:
+`4.0.9+dev.ff7a9b80.dirty.a5f18b11bd34`. Local/deployed `main.js` match at 6,463,595
+bytes, SHA-256 `19733c3973ba51815bc67791c426282ca79e9e6a4ecde4fb1cd09dfe9298bf9c`.
+Styles retain the September hash recorded above.
+
+Post-fix native checks pass:
+
+- Retrying the same snapshot reuses its identical bytes and registers exactly
+  one source and one pending job. An ordinary read refresh requested while Add
+  is in flight no longer cancels it. The success receipt survives the subsequent
+  production-generation refresh and the original note remains byte-identical.
+- A second snapshot Add reports already registered. Selecting the managed copy
+  directly shows Register existing file, needs no copy consent and also reports
+  already registered. Both leave the full Runtime byte-identical.
+- Runtime revision five / queue revision two contains one queued job at attempt
+  zero, control paused, one Manifest entry, no reviews, Apply commits or journal.
+- The preservation baseline still has 208 unchanged prior files and only the
+  authorized Project change. Exactly two files were added: generated rules and
+  the selected note's snapshot. All 92 setting hashes are unchanged; no Wiki
+  content was created and no provider credentials are recorded here.
+
+These checks establish native setup and paused intake, not paid compilation,
+Review/Apply, Query/Save or the final post-Apply reload. The bounded authorization
+for those remaining operations is still pending. The repair is local/deployed;
+no new commit, push or upstream synchronization was performed in this follow-up.
+
+The remaining non-paid checks also pass. After one idle plugin reload, Studio
+returns ready on Activity with the same source and job IDs, paused control,
+attempt zero and no rerun or duplicate job. Startup re-observation advances
+Runtime from five to eight, queue revision from two to three and input revision
+from one to two. This is observation ordering, not a model attempt; source hash
+and pipeline fingerprint are unchanged. The existing queue deduplication
+contract preserves that pending job. All 208 other prior files and 92 setting
+hashes still match, with no additional files or Wiki writes.
+
+Gallery rendering was initially blocked in a delegated agent's old filesystem
+sandbox; those attempts executed no assertions. The main agent subsequently
+ran an isolated Chromium page using the real gallery catalog and adjacent
+stories with minimal Obsidian/theme shims. Twelve rendered states pass across
+300/400/600 px: ready-during-read-refresh, chooser, pending Add, and the existing
+Adding form. Consent still gates Add; pending controls stay disabled. No renderer
+errors, alerts or horizontal overflow were observed. This is isolated component
+verification, not native Windows theme coverage. The dedicated browser was
+closed and temporary Vault diagnostics were removed. Paid end-to-end authority
+remains pending; the goal is not complete.
+
+### Subsequent bounded authorization and real Review/Apply
+
+The user subsequently approved up to eight actual model requests, including
+retries, and reviewed Apply in this test copy. A native-fetch pass-through guard
+counts actual official DeepSeek POSTs and blocks any ninth request. It records
+only safe metrics and hashes; source/prompt text and credentials are not logged.
+The first existing reflection ends legitimately with `analysis_no_targets` after
+one request. The selected chapter then produces one create proposal after two
+requests. Both originals and snapshots retain their exact hashes. The chapter's
+new snapshot parent directory also exercises the repaired Add path successfully.
+
+The proposal conflates original chapter material with the source author's later
+interpretations. The operator edits it through Review to distinguish them and
+preserve the original rich-research/selective-presentation distinction. Selection
+and Use edited file do not write Wiki; only Validate and apply selection creates
+the one target. An independent read-only audit verifies disk, acceptedChangeSet,
+Manifest intent and Manifest page hashes, acceptedDigest and the single Apply
+ledger. The untouched original proposal remains alongside the accepted edit.
+At Runtime revision 54, both jobs are completed, with no pending Review, rerun or
+active transaction. See experiments 001–003 in the
+[October log](../experiments/2026-10.md) for request and output hashes.
+
+The first real Query retrieves the applied page but returns deterministic
+insufficient evidence without a model call. All three current source quotes are
+5,105 characters; the Query coordinator excludes each at its 4,000-character
+per-item boundary. This is recorded as
+[issue 14](https://github.com/yydspanda/obsidian-copilot/issues/14), not counted as
+successful grounded answering. The queue is paused while the bounded-excerpt
+repair is tested; three of eight requests have been used.
+
+At this checkpoint, 208 prior files remain unchanged and only the authorized
+Project setup differs from the 209-file baseline. Four new files exist: rules,
+two source snapshots and one Wiki page. All credentials and model selections
+remain unchanged; the public `copilotPlusCatalog` startup cache is the only
+changed settings field, so the earlier all-92-settings-unchanged observation
+does not describe this later checkpoint.
+
+### Final real-use completion
+
+Issue 14 is repaired only in the Knowledge-owned Query coordinator. Exact source
+quotes are split into bounded, UTF-16-safe evidence pieces after full source
+verification; navigation, post-model checks and saved provenance remain bound to
+the original complete citation. Per-piece, total-character and item budgets and
+all model prompts remain unchanged. Red observes ten intended failures; green
+passes all 34 coordinator tests. One first-green assertion incorrectly expected
+a four-character suffix from a one-character final piece; that test assertion was
+corrected before the successful run. Independent diff review finds no blocker.
+
+The final affected run passes 15 suites / 209 tests, including all Query suites
+and the Root/Add/material-intake checks. An earlier invocation named one
+nonexistent test path and exited nonzero despite its six real suites passing;
+the corrected final command above is the passing result. Format, lint (nine
+retained warnings), full Obsidian review, typecheck/build, syntax and mobile-load
+smoke all pass. The three moderate dependency advisories remain visible. The
+earlier full-suite baseline is not a full rerun of these final repairs.
+
+The canonical test-vault build is deployed only to this test copy; its CLI toggle
+again requires the scoped idle unload/load fallback. The new verified instance is
+`4.0.9+dev.ff7a9b80.dirty.585c9e469cec`, with local/deployed main.js at 6,463,796
+bytes and SHA-256
+`e4bfab4cdedcc84ec6b97d8bb3a56ed85afdbcfeeaacbddc93a120ffeb464922`.
+Styles remain unchanged. Neither of the two changed production modules exists
+in the incorporated upstream tree; no upstream-owned production file was edited.
+
+The same reading question now produces five source-linked claims and survives
+navigation away and back. The full source is verified, while Live Preview's
+selection excludes its properties header; do not interpret this as raw-byte
+selection coverage. A single titled Save while paused creates one immutable
+capture and pending job, retains success feedback, and does not write Wiki.
+Resuming completes that job as legitimate `analysis_no_targets`, leaving the
+capture available without manufacturing a redundant Wiki page. Independent
+capture audit matches its digest, content hash, Manifest origin, job identity and
+complete original citation. Model inferences still require semantic review.
+
+Final idle reload and cleanup pass: three completed jobs, all attempt one, zero
+active/failed/pending/rerun work, one Apply ledger, no transaction, and all target
+hashes unchanged at Runtime 95 / queue 46. Native fetch is restored and temporary
+renderer instrumentation is deleted. The queue remains paused. All 208 other
+preflight files, credentials and model selections remain unchanged; only the
+authorized Project setup and public catalog cache differ. There are exactly five
+new files: rules, two snapshots, one applied Wiki and one immutable answer capture.
+
+The bounded first-use reading workflow is complete with five of eight authorized
+requests and no model retries. This is not an exhaustive future scale/fault
+matrix or automatic semantic-quality guarantee. No new commit, push or upstream
+merge was performed; the two repairs remain local and deployed. Reproducible
+request/hash evidence is in October experiments 001–005.
