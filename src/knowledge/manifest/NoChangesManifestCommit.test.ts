@@ -93,6 +93,110 @@ function createPlan(
 }
 
 describe("NoChangesManifestCommit", () => {
+  describe("createNoChangesManifestCommitPlan()", () => {
+    it("preserves absent diagnostics and the exact legacy identity — https://github.com/yydspanda/obsidian-copilot/issues/15", () => {
+      const plan = createPlan();
+
+      expect(plan).not.toHaveProperty("generationOutcomes");
+      expect(plan.noChangesId).toBe(
+        "knowledge-no-changes-d11289a51680c0920951aad8c0f6e9f4dc3740caaa2faf0bd4989d0fa9701eb0"
+      );
+      expect(createNoChangesManifestCommitPlanDigest(plan)).toBe(
+        "1218eeb5e4dca5934d78c0803320ce6de8f465165a0e299fc0d28d22fb636809"
+      );
+      const parsed = parseNoChangesManifestCommitPlan(JSON.parse(JSON.stringify(plan)));
+      expect(parsed).toEqual({ ok: true, value: plan });
+    });
+
+    it("retains detached frozen generation counts in the content-addressed plan — https://github.com/yydspanda/obsidian-copilot/issues/15", () => {
+      const generationOutcomes = { explicitUnchanged: 2, identicalWrites: 1 };
+      const plan = createPlan({ generationOutcomes });
+
+      expect(plan).toHaveProperty("generationOutcomes", generationOutcomes);
+      expect(Object.isFrozen(plan.generationOutcomes)).toBe(true);
+      generationOutcomes.explicitUnchanged = 9;
+      expect(plan).toHaveProperty("generationOutcomes", {
+        explicitUnchanged: 2,
+        identicalWrites: 1,
+      });
+      expect(plan.noChangesId).not.toBe(createPlan().noChangesId);
+      expect(createNoChangesManifestCommitPlanDigest(plan)).not.toBe(
+        createNoChangesManifestCommitPlanDigest(createPlan())
+      );
+      expect(
+        validateNoChangesManifestCommitPlan({
+          ...plan,
+          generationOutcomes: { explicitUnchanged: 1, identicalWrites: 2 },
+        }).valid
+      ).toBe(false);
+    });
+
+    it.each([
+      { explicitUnchanged: -1, identicalWrites: 1 },
+      { explicitUnchanged: 0.5, identicalWrites: 1 },
+      { explicitUnchanged: Number.MAX_SAFE_INTEGER + 1, identicalWrites: 0 },
+      { explicitUnchanged: Number.MAX_SAFE_INTEGER, identicalWrites: 1 },
+      { explicitUnchanged: 0, identicalWrites: 0 },
+      { explicitUnchanged: 1, identicalWrites: 0, content: "private model text" },
+    ])(
+      "rejects invalid or non-count generation diagnostics %j — https://github.com/yydspanda/obsidian-copilot/issues/15",
+      (generationOutcomes) => {
+        expect(() => createPlan({ generationOutcomes })).toThrow(
+          NoChangesManifestCommitValidationError
+        );
+      }
+    );
+
+    it.each<NoChangesManifestCommitReason>(["analysis_no_targets", "resolved_no_targets"])(
+      "rejects generation counts on the earlier %s outcome — https://github.com/yydspanda/obsidian-copilot/issues/15",
+      (reason) => {
+        expect(() =>
+          createPlan({
+            reason,
+            generationOutcomes: { explicitUnchanged: 1, identicalWrites: 0 },
+          })
+        ).toThrow(NoChangesManifestCommitValidationError);
+      }
+    );
+  });
+
+  describe("createKnowledgeNoChangesCommitMarker()", () => {
+    it("persists generation diagnostics through strict marker serialization and rejects altered counts — https://github.com/yydspanda/obsidian-copilot/issues/15", () => {
+      const plan = createPlan({
+        generationOutcomes: { explicitUnchanged: 1, identicalWrites: 1 },
+      });
+      const marker = createKnowledgeNoChangesCommitMarker({
+        plan,
+        jobClaim: {
+          jobId: "job-1",
+          sourceId: plan.sourceId,
+          sourceContentHash: plan.sourceContentHash,
+          pipelineFingerprint: plan.pipelineFingerprint,
+          inputRevision: plan.inputRevision,
+          attempt: 1,
+          startedAt: 100,
+        },
+        completedAt: 110,
+        manifestAfterRevision: 5,
+      });
+      const parsed = parseKnowledgeNoChangesCommitMarker(JSON.parse(JSON.stringify(marker)));
+      if (!parsed.ok) throw new Error("Expected generation diagnostics to survive marker reload");
+
+      expect(parsed.value).toHaveProperty("generationOutcomes", {
+        explicitUnchanged: 1,
+        identicalWrites: 1,
+      });
+      expect(Object.isFrozen(parsed.value.generationOutcomes)).toBe(true);
+      expect(validateNoChangesManifestCommitMarker(parsed.value).valid).toBe(true);
+      expect(
+        validateNoChangesManifestCommitMarker({
+          ...parsed.value,
+          generationOutcomes: { explicitUnchanged: 2, identicalWrites: 0 },
+        }).valid
+      ).toBe(false);
+    });
+  });
+
   it.each<NoChangesManifestCommitReason>([
     "analysis_no_targets",
     "resolved_no_targets",

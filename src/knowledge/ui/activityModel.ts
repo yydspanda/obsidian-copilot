@@ -3,6 +3,7 @@ import type {
   IngestQueueSnapshot,
 } from "@/knowledge/ingest/queue/QueueStorage";
 import type { KnowledgeFailure, KnowledgeIngestJob } from "@/knowledge/model/types";
+import type { KnowledgeRuntimeJobCompletion } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 
 /** Default number of terminal jobs retained in the derived Activity surface. */
 export const DEFAULT_ACTIVITY_TERMINAL_LIMIT = 50;
@@ -71,6 +72,7 @@ export interface KnowledgeActivityItem {
   changeSetId?: string;
   pausedReason?: string;
   failure?: KnowledgeActivityFailure;
+  completion?: KnowledgeRuntimeJobCompletion;
 }
 
 /** Aggregate counts include hidden terminal history as well as visible jobs. */
@@ -94,6 +96,7 @@ export interface KnowledgeActivityModel {
 /** Configuration for bounded terminal history projection. */
 export interface KnowledgeActivityModelOptions {
   maxTerminalItems?: number;
+  completionOutcomes?: Readonly<Record<string, KnowledgeRuntimeJobCompletion>>;
 }
 
 const TERMINAL_ACTIVITY_STATUSES = new Set<KnowledgeActivityStatus>([
@@ -325,11 +328,13 @@ function deriveJobActions(
  *
  * @param snapshot - Trusted durable queue snapshot
  * @param job - Durable job to copy
+ * @param completion - Optional outcome proved by the same Runtime snapshot
  * @returns Read-only UI projection without references to mutable job objects
  */
 function createActivityItem(
   snapshot: IngestQueueSnapshot,
-  job: KnowledgeIngestJob
+  job: KnowledgeIngestJob,
+  completion?: KnowledgeRuntimeJobCompletion
 ): Readonly<KnowledgeActivityItem> {
   const status = deriveActivityStatus(snapshot, job);
   const item: KnowledgeActivityItem = {
@@ -352,6 +357,18 @@ function createActivityItem(
       : {}),
     ...(job.status === "paused" && job.reason !== undefined ? { pausedReason: job.reason } : {}),
     ...(job.status === "failed" ? { failure: Object.freeze({ ...job.failure }) } : {}),
+    // Completed storage can still be finalizing; never show its outcome as acknowledged early.
+    // https://github.com/yydspanda/obsidian-copilot/issues/15
+    ...(status === "completed" && completion !== undefined
+      ? {
+          completion: Object.freeze({
+            ...completion,
+            ...(completion.kind === "no_changes" && completion.generationOutcomes !== undefined
+              ? { generationOutcomes: Object.freeze({ ...completion.generationOutcomes }) }
+              : {}),
+          }),
+        }
+      : {}),
   };
   return Object.freeze(item);
 }
@@ -480,7 +497,18 @@ export function deriveKnowledgeActivityModel(
   options: KnowledgeActivityModelOptions = {}
 ): Readonly<KnowledgeActivityModel> {
   const terminalLimit = readTerminalLimit(options.maxTerminalItems);
-  const projected = snapshot.jobs.map((job) => createActivityItem(snapshot, job));
+  const outcomes = options.completionOutcomes;
+  // Job identifiers are data, so inherited object keys cannot stand in for completion proof.
+  // https://github.com/yydspanda/obsidian-copilot/issues/15
+  const projected = snapshot.jobs.map((job) =>
+    createActivityItem(
+      snapshot,
+      job,
+      outcomes !== undefined && Object.prototype.hasOwnProperty.call(outcomes, job.id)
+        ? outcomes[job.id]
+        : undefined
+    )
+  );
   const active = projected.filter((item) => !item.terminal).sort(compareActivityItems);
   const terminal = projected.filter((item) => item.terminal);
   const visibleTerminal = terminal

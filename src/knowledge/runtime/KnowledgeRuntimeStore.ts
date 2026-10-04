@@ -557,7 +557,20 @@ export interface KnowledgeRuntimeStudioBundleSnapshot {
   runtimeRevision: number;
   queue: IngestQueueSnapshot;
   review: ChangeSetReviewSnapshot;
+  /** Content-free outcomes proven for exact jobs; absent on older read ports. */
+  completionOutcomes?: Readonly<Record<string, KnowledgeRuntimeJobCompletion>>;
 }
+
+/** Display-only completion evidence; never grants permission to write or reuse citations. */
+export type KnowledgeRuntimeJobCompletion =
+  | Readonly<{ kind: "applied" }>
+  | Readonly<{
+      kind: "no_changes";
+      reason: NoChangesManifestCommitMarker["reason"];
+      generationOutcomes?: Readonly<
+        NonNullable<NoChangesManifestCommitMarker["generationOutcomes"]>
+      >;
+    }>;
 
 /** Immutable accepted-source evidence attached to one applied Wiki page. */
 export interface KnowledgeRuntimeAppliedSourceProvenance {
@@ -4304,12 +4317,12 @@ function findCurrentSourceTerminalOutcome(
   return { kind: "invalid" };
 }
 
-/** Proves one exact reusable completion by no-change marker or Apply ledger. */
-function reusableCompletionHasProof(
+/** Distinguishes an exact completed write from no changes without interpreting model intent. */
+function readCompletionOutcome(
   snapshot: KnowledgeRuntimeSemanticSnapshot,
   manifest: SourceManifest | undefined,
   job: ReusableCompletedJob
-): boolean {
+): KnowledgeRuntimeJobCompletion | undefined {
   const source = manifest ? findKnowledgeSourceHistoryEntry(manifest, job.sourceId) : undefined;
   const marker = parseKnowledgeNoChangesCommitMarker(
     source?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
@@ -4325,9 +4338,19 @@ function reusableCompletionHasProof(
     marker.value.attempt === job.attempt &&
     marker.value.noChangesId === job.changeSetId &&
     marker.value.completedAt === job.completedAt;
-  if (exactNoChangesMarker) return true;
+  // A source's latest no-change marker must never describe another historical job.
+  // https://github.com/yydspanda/obsidian-copilot/issues/15
+  if (exactNoChangesMarker) {
+    return Object.freeze({
+      kind: "no_changes",
+      reason: marker.value.reason,
+      ...(marker.value.generationOutcomes === undefined
+        ? {}
+        : { generationOutcomes: Object.freeze({ ...marker.value.generationOutcomes }) }),
+    });
+  }
 
-  return snapshot.applyCommits.some(
+  const applied = snapshot.applyCommits.some(
     (record) =>
       record.bundleId === job.bundleId &&
       record.sourceId === job.sourceId &&
@@ -4336,6 +4359,16 @@ function reusableCompletionHasProof(
       record.inputRevision === job.inputRevision &&
       record.changeSetId === job.changeSetId
   );
+  return applied ? Object.freeze({ kind: "applied" }) : undefined;
+}
+
+/** Proves one exact reusable completion by no-change marker or Apply ledger. */
+function reusableCompletionHasProof(
+  snapshot: KnowledgeRuntimeSemanticSnapshot,
+  manifest: SourceManifest | undefined,
+  job: ReusableCompletedJob
+): boolean {
+  return readCompletionOutcome(snapshot, manifest, job) !== undefined;
 }
 
 /**
@@ -9356,17 +9389,32 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     const state = await this.readState();
     const queueRaw = findBundleSlot(state, "queues", bundleId);
     const reviewRaw = findBundleSlot(state, "reviews", bundleId);
+    const queue =
+      queueRaw === null
+        ? createEmptyRuntimeQueueSnapshot(bundleId)
+        : this.requireQueueSnapshot(bundleId, queueRaw);
+    const manifestRaw = findBundleSlot(state, "manifests", bundleId);
+    const manifest =
+      manifestRaw === null ? undefined : (thisOrNullManifest(manifestRaw) ?? undefined);
+    const completions: [string, KnowledgeRuntimeJobCompletion][] = [];
+    for (const job of queue.jobs) {
+      if (job.status !== "completed") continue;
+      const outcome = readCompletionOutcome(state, manifest, job);
+      if (outcome !== undefined) completions.push([job.id, outcome]);
+    }
     return {
       bundleId,
       runtimeRevision: state.revision,
-      queue:
-        queueRaw === null
-          ? createEmptyRuntimeQueueSnapshot(bundleId)
-          : this.requireQueueSnapshot(bundleId, queueRaw),
+      queue,
       review:
         reviewRaw === null
           ? createEmptyRuntimeReviewSnapshot(bundleId)
           : this.requireReviewSnapshot(bundleId, reviewRaw),
+      // Unproven legacy history stays unknown instead of implying a Wiki write.
+      // https://github.com/yydspanda/obsidian-copilot/issues/15
+      ...(completions.length === 0
+        ? {}
+        : { completionOutcomes: Object.freeze(Object.fromEntries(completions)) }),
     };
   }
 

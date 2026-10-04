@@ -919,7 +919,9 @@ export class KnowledgeStudioRuntimeReadAdapter
           ),
           availability: "ready" as const,
           commandCapabilities,
-          activity: deriveKnowledgeActivityModel(before.queue),
+          activity: deriveKnowledgeActivityModel(before.queue, {
+            completionOutcomes: before.completionOutcomes,
+          }),
           reviews: Object.freeze(reviews),
           outdatedReviewIds,
           forwardRevisionReviews: forwardRevision?.reviews ?? Object.freeze([]),

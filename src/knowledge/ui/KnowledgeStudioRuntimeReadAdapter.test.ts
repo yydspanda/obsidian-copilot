@@ -405,6 +405,36 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
     describe("load()", () => {
       const issue = "https://github.com/yydspanda/obsidian-copilot/issues/7";
 
+      it("forwards atomic no-changes completion diagnostics into Activity — https://github.com/yydspanda/obsidian-copilot/issues/15", async () => {
+        const queue = createQueue(createPendingRecord());
+        queue.jobs[0] = {
+          ...queue.jobs[0],
+          status: "completed",
+          stage: "completed",
+          changeSetId: "no-changes",
+          completedAt: 250,
+          updatedAt: 250,
+        };
+        queue.pendingReviews = [];
+        const completion = {
+          kind: "no_changes" as const,
+          reason: "all_targets_unchanged" as const,
+          generationOutcomes: { explicitUnchanged: 1, identicalWrites: 0 },
+        };
+        const projection = {
+          ...createProjection(7, queue),
+          completionOutcomes: { "job-1": completion },
+        };
+        const adapter = new KnowledgeStudioRuntimeReadAdapter({
+          runtime: new FakeRuntime([projection]),
+          bundles: [createBundle()],
+          targetResolver: createMissingResolver(),
+          assertCurrent: () => undefined,
+        });
+        const result = await adapter.load(BUNDLE_ID, new AbortController().signal);
+        expect(result.activity.items[0]).toMatchObject({ id: "job-1", completion });
+      });
+
       function createConfiguredAdapter(
         record: PendingChangeSetReviewRecord,
         reviewSources: NonNullable<KnowledgeStudioRuntimeReadAdapterInput["reviewSources"]>

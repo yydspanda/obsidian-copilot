@@ -24,6 +24,7 @@ import type {
   KnowledgeActivityStatus,
 } from "@/knowledge/ui/activityModel";
 import type { KnowledgeStudioCommandCapabilities } from "@/knowledge/ui/KnowledgeStudioController";
+import { cn } from "@/lib/utils";
 
 /** Callback-only boundary for the Activity panel. */
 export interface KnowledgeActivityPanelProps {
@@ -150,11 +151,45 @@ const STATUS_PRESENTATION: Readonly<Record<KnowledgeActivityStatus, StatusPresen
   },
   completed: {
     label: "Completed",
-    detail: "The queue finished this input and no durable commit acknowledgement remains pending.",
-    icon: CheckCircle2,
-    badgeClassName: "tw-bg-success",
-    iconClassName: "tw-text-success",
+    // Older records cannot prove whether processing wrote files.
+    // https://github.com/yydspanda/obsidian-copilot/issues/15
+    detail:
+      "Processing finished. The detailed outcome was not recorded, so this history cannot confirm whether Wiki files changed.",
+    icon: CircleDashed,
+    badgeClassName: cn("tw-bg-secondary-alt"),
+    iconClassName: cn("tw-text-muted"),
   },
+};
+
+const COMPLETION_PRESENTATION: Readonly<
+  Record<NonNullable<KnowledgeActivityItem["completion"]>["kind"], StatusPresentation>
+> = {
+  applied: {
+    label: "Wiki updated",
+    detail:
+      "Approved file changes were written to the Wiki. This does not verify that every source detail is represented.",
+    icon: CheckCircle2,
+    badgeClassName: cn("tw-bg-success"),
+    iconClassName: cn("tw-text-success"),
+  },
+  no_changes: {
+    label: "No Wiki changes",
+    detail: "Processing finished without writing any Wiki files.",
+    icon: CircleDashed,
+    badgeClassName: cn("tw-bg-secondary-alt"),
+    iconClassName: cn("tw-text-muted"),
+  },
+};
+
+const NO_CHANGES_REASON: Readonly<
+  Record<
+    Extract<NonNullable<KnowledgeActivityItem["completion"]>, { kind: "no_changes" }>["reason"],
+    string
+  >
+> = {
+  analysis_no_targets: "Analysis selected no Wiki targets.",
+  resolved_no_targets: "Target resolution left no Wiki targets to generate.",
+  all_targets_unchanged: "Generation produced no file changes.",
 };
 
 const BUNDLE_PRESENTATION: Readonly<Record<KnowledgeActivityBundleState, BundlePresentation>> = {
@@ -365,6 +400,31 @@ function FailureDetails({ item }: { item: Readonly<KnowledgeActivityItem> }) {
   );
 }
 
+function CompletionDetails({ completion }: Pick<KnowledgeActivityItem, "completion">) {
+  if (completion?.kind !== "no_changes") {
+    return null;
+  }
+
+  // A completed no-op does not prove that new material reached the Wiki or refreshed citations.
+  // https://github.com/yydspanda/obsidian-copilot/issues/15
+  return (
+    <div className="tw-space-y-1 tw-text-xs tw-text-muted">
+      <p className="tw-m-0">{NO_CHANGES_REASON[completion.reason]}</p>
+      {completion.reason === "all_targets_unchanged" && (
+        <p className="tw-m-0">
+          {completion.generationOutcomes
+            ? `Targets explicitly marked unchanged: ${completion.generationOutcomes.explicitUnchanged}. Proposed writes identical to existing files: ${completion.generationOutcomes.identicalWrites}.`
+            : "This history did not record how many targets were marked unchanged or proposed identical writes."}
+        </p>
+      )}
+      <p className="tw-m-0">
+        No Wiki changes does not mean new material is included. Existing citations may still need
+        updating.
+      </p>
+    </div>
+  );
+}
+
 /**
  * Renders one durable Activity item and capability-gated callbacks.
  *
@@ -384,7 +444,12 @@ function ActivityItem({
   onRetryJob: KnowledgeActivityPanelProps["onRetryJob"];
   onReviewJob: KnowledgeActivityPanelProps["onReviewJob"];
 }) {
-  const presentation = STATUS_PRESENTATION[item.status];
+  // Do not display a successful outcome until the durable commit is acknowledged.
+  // https://github.com/yydspanda/obsidian-copilot/issues/15
+  const completion = item.status === "completed" ? item.completion : undefined;
+  const presentation = completion
+    ? COMPLETION_PRESENTATION[completion.kind]
+    : STATUS_PRESENTATION[item.status];
   const StatusIcon = presentation.icon;
 
   return (
@@ -395,12 +460,12 @@ function ActivityItem({
             <div className="tw-flex tw-min-w-0 tw-items-start tw-gap-2">
               <StatusIcon
                 aria-hidden="true"
-                className={`tw-mt-0.5 tw-size-4 tw-shrink-0 ${presentation.iconClassName}`}
+                className={cn("tw-mt-0.5 tw-size-4 tw-shrink-0", presentation.iconClassName)}
               />
               <div className="tw-min-w-0">
                 <div className="tw-break-all tw-text-sm">{item.sourceId}</div>
                 <div className="tw-mt-1 tw-flex tw-flex-wrap tw-items-center tw-gap-2">
-                  <Badge className={`tw-shadow-none ${presentation.badgeClassName}`}>
+                  <Badge className={cn("tw-shadow-none", presentation.badgeClassName)}>
                     {presentation.label}
                   </Badge>
                   <span className="tw-text-xs tw-font-normal tw-text-muted">
@@ -453,6 +518,7 @@ function ActivityItem({
           <p className="tw-m-0 tw-text-xs tw-text-muted">
             {item.pausedReason ?? presentation.detail}
           </p>
+          <CompletionDetails completion={completion} />
           <FailureDetails item={item} />
           <div className="tw-flex tw-flex-wrap tw-gap-x-4 tw-gap-y-1 tw-text-xs tw-text-faint">
             <span>Attempt {item.attempt}</span>

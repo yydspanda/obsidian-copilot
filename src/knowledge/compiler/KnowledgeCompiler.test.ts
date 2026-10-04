@@ -644,7 +644,7 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     expect(next.manifestCommitPlanDigest).not.toBe(first.manifestCommitPlanDigest);
   });
 
-  it("returns no_changes without resolving or generating when analysis approves no targets", async () => {
+  it("returns no_changes without generation diagnostics when analysis approves no targets — https://github.com/yydspanda/obsidian-copilot/issues/15", async () => {
     const harness = createHarness({ analyze: async () => createAnalysisOutput([]) });
     const input = createCompileInput();
 
@@ -653,6 +653,7 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     );
 
     expect(result.analysis.targets).toEqual([]);
+    expect(result.manifestCommitPlan).not.toHaveProperty("generationOutcomes");
     expect(result.noChangesId).toBe(result.manifestCommitPlan.noChangesId);
     expect(result.noChangesId).toMatch(/[a-f0-9]{64}$/);
     expect(result.manifestCommitPlanDigest).toBe(
@@ -689,7 +690,7 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     expect(changedAnalysis.noChangesId).not.toBe(result.noChangesId);
   });
 
-  it("binds a resolved no-target conclusion to strict observations and retained pages", async () => {
+  it("binds a resolved no-target conclusion without generation diagnostics — https://github.com/yydspanda/obsidian-copilot/issues/15", async () => {
     const existing = "---\ntype: concept\n---\n\nObsolete\n";
     const authorization = createTargetAuthorization("Wiki/Obsolete.md", {
       allowedIntents: ["delete"],
@@ -736,6 +737,7 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
       ],
     });
     expect(result.manifestCommitPlan.evidenceDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.manifestCommitPlan).not.toHaveProperty("generationOutcomes");
     expect(result.manifestCommitPlan.evidenceDigest).toBe(
       sha256(
         `knowledge-no-changes-resolved-evidence-v1\n${canonicalizeJson({
@@ -761,7 +763,7 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     expect(harness.validator.inputs).toHaveLength(0);
   });
 
-  it("treats a byte-identical update as no change before candidate validation", async () => {
+  it("distinguishes byte-identical updates from explicit unchanged generation — https://github.com/yydspanda/obsidian-copilot/issues/15", async () => {
     const existing = "---\ntype: concept\n---\n\nUnchanged\n";
     const harness = createHarness({
       resolve: async (targets) => [
@@ -792,6 +794,7 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
     expect(diagnosticCodes(result)).toContain("compiler_update_content_unchanged");
     expect(result.manifestCommitPlan).toMatchObject({
       reason: "all_targets_unchanged",
+      generationOutcomes: { explicitUnchanged: 0, identicalWrites: 1 },
       compileContextDigest: result.compileContextDigest,
       analysisDigest: result.analysisDigest,
       baseGeneratedPages: [
@@ -832,11 +835,67 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
       )
     );
     expect(explicitUnchanged.compileContextDigest).toBe(result.compileContextDigest);
+    expect(explicitUnchanged.manifestCommitPlan).toHaveProperty("generationOutcomes", {
+      explicitUnchanged: 1,
+      identicalWrites: 0,
+    });
     expect(explicitUnchanged.analysisDigest).toBe(result.analysisDigest);
     expect(explicitUnchanged.manifestCommitPlan.evidenceDigest).not.toBe(
       result.manifestCommitPlan.evidenceDigest
     );
     expect(explicitUnchanged.noChangesId).not.toBe(result.noChangesId);
+  });
+
+  it("counts mixed explicit and byte-identical outcomes without retaining generated content — https://github.com/yydspanda/obsidian-copilot/issues/15", async () => {
+    const existing = "A source-grounded page with a manual correction.";
+    const paths = ["Wiki/Alpha.md", "Wiki/Beta.md"];
+    const harness = createHarness({
+      analyze: async () =>
+        createAnalysisOutput(
+          paths.map((path, index) => ({
+            ref: `target-${index}`,
+            path,
+            intent: "write",
+            reason: "Check the revised source against this page",
+            claimRefs: ["claim-main"],
+          }))
+        ),
+      resolve: async (targets) =>
+        targets.map((target) => ({
+          targetId: target.targetId,
+          kind: "file",
+          path: target.path,
+          content: existing,
+        })),
+      generate: async (request) => ({
+        version: 1,
+        targetSetDigest: request.targetSetDigest,
+        files: request.targets.map((target, index) =>
+          index === 0
+            ? { targetId: target.targetId, outcome: "unchanged" }
+            : { targetId: target.targetId, outcome: "write", afterContent: existing }
+        ),
+      }),
+    });
+    const result = requireNoChanges(
+      await harness.compiler.compile(
+        createCompileInput({
+          targetAuthorizations: paths.map((path) =>
+            createTargetAuthorization(path, {
+              expectedContentHash: createFileContentHash(existing),
+            })
+          ),
+        }),
+        new AbortController().signal
+      )
+    );
+
+    expect(result.manifestCommitPlan).toHaveProperty("generationOutcomes", {
+      explicitUnchanged: 1,
+      identicalWrites: 1,
+    });
+    expect(JSON.stringify(result.manifestCommitPlan)).not.toContain(existing);
+    expect(harness.validator.inputs).toHaveLength(0);
   });
 });
 

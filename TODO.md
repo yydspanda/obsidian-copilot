@@ -7,26 +7,28 @@
 
 ## Current Stage
 
-- Stage ID: `OPS-MAINTENANCE`
-- Outcome: retain completed management-copy acceptance evidence and return to reading practice.
-- Exit gate: bounded acceptance is complete; no further model calls or Vault changes are scheduled.
+- Stage ID: `PK-H3`
+- Outcome: deliver the verified no-changes feedback repair to the management test copy.
+- Exit gate: current branch pushed, exact deployed artifact loaded, and existing Vault data preserved.
 
 ## In Progress
 
-- [ ] `OPS-PROGRESS-GOVERNANCE` — Maintain the completed acceptance and delivery record.
-  Next: repairs pushed as `37a40be4`; continue reading in the management copy without new automated model calls. Upstream sync remains separate.
+- [ ] `PK-H3-NOCHANGES-DELIVERY` — commit/push, deploy and check native feedback with the queue paused.
+  Only the management test copy is in scope; fresh paid-test allowance requested separately, no upstream sync.
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
 - Last fetched: `2026-09-18` — canonical `996a088c`; merged into the current branch, 0 behind.
 - Incorporated baseline: `996a088c59a2ae123852d8e542f354b1eba72cee`; previous baseline was `61619fe4`.
+- Last remote comparison: `2026-10-03` — current development branch 106 ahead / 102 behind; no fetch or merge.
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
 
 ## Recent Activity
 
+- 2026-10-04 — `PK-H3-NOCHANGES-FEEDBACK` — No-changes diagnostics and accurate Activity outcomes repaired locally; 489 tests and 56 gallery checks pass. No paid/Vault operations or delivery. [Evidence and limits](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md).
 - 2026-10-03 — `PK-H3-MANAGEMENT-REALUSE` — Full bounded reading flow passes: 3 completed jobs, 0 failures, 5/8 requests; two fork-owned fixes deployed. [Completion](./designdocs/progress/archive/2026-10.md).
 - 2026-09-21 — `PK-STUDIO-ONBOARDING` — [Issue #13](https://github.com/yydspanda/obsidian-copilot/issues/13):
   repair pushed as `5777c92d`; 376 tests, 64 gallery and 17 Windows preview/status checks pass. [Evidence](./designdocs/progress/acceptance/2026-09-21-studio-onboarding.md).
@@ -53,9 +55,7 @@
   an explicit personal budget under [issue #4](https://github.com/yydspanda/obsidian-copilot/issues/4);
   the single-bundle production build passes at 6,393,390 bytes without deployment. Source fixes
   are committed as `7d978089`; the personal build guard and tests are committed as `38e54166`.
-- 2026-09-11 — `PK-H3-UPSTREAM-V4-WIN` — Local build comparison confirmed upstream at
-  4,863,967 bytes and this fork at 6,383,885 bytes. Target and minifier probes remain over 5 MB;
-  production policy and plugin code were left unchanged pending a delivery-architecture decision.
+
 ## Working Agreements
 
 - Treat `origin/master` as the authoritative upstream baseline. Prefer new modules and narrow
@@ -69,8 +69,12 @@
 
 ## Current Verification
 
+- October 4 no-changes repair: 11 suites / 489 tests, 20 governance tests, 56 isolated rendered states and build/lint/review pass.
+  Changes remain local; no full-suite rerun, paid request or native Windows acceptance. Incremental semantic inclusion is still unproven.
+- October 3 frozen-source regression: 731 suites / 10,760 tests pass, 2 existing skips; lint/format/governance pass.
+  Two-chapter comparison and full restart pass; new source processed as no-changes, so incremental Wiki/Query acceptance does not pass. 7/8 requests; evidence-retention limitation recorded above.
 - October 3 management-copy acceptance complete: setup/Add/Review/edit/Apply/Query/Save/reload pass, 3 completed/0 failed, 5/8 model requests. Originals/credentials preserved; queue paused.
-  Two fork-owned repairs deployed and pushed as `37a40be4`; 209 affected tests and 12 gallery states pass. Baseline full sweep: 731 suites / 10,746 tests, 2 skips, predates final repairs.
+  Two fork-owned repairs deployed and pushed as `37a40be4`; 209 affected tests and 12 gallery states pass. The newer full sweep above includes the final repairs.
 - September 21 Studio onboarding: 376 targeted tests, build, format/lint and review pass; 64 isolated gallery checks pass.
   Pushed source `5777c92d` rebuild matches deployed artifacts; 17 Windows checks pass, 185 files/92 settings/runtime unchanged; real submission awaits the user.
 - September 20 Pro repair: 715 tests and local gates pass; practice build `1f25176e-dirty-ebf5a93c7d53` loaded, 13 messages / 3 attachments / 165 files preserved; no live Pro call or full-suite rerun.
@@ -86,9 +90,7 @@
   Only 2 fork-owned runtime modules changed; 8 Windows story cases and the separately authorized live Save continuity check pass.
   Independent read-only verification passes all 18 receipt checks, including origin/hash/path/sourceId consistency.
   Repaired Save registers in 1,211 ms and returns ready on Query in 20,917 ms with feedback retained; full refresh latency remains.
-- September 16 issue #9: 45 suites / 554 tests pass; production edits touch only two fork-owned modules.
-  Personal production build passes at 6,428,121 bytes under the explicit 10,000,000-byte ceiling;
-  typecheck, syntax and mobile-load smoke pass. Default 5 MB policy is unchanged; see the Windows checkpoint for hashes.
+- September 16 issue #9: 45 suites / 554 tests and a 6,428,121-byte personal build pass; default 5 MB policy unchanged. Details remain in the September archive.
 - September 15 merge checks: 48 Jest suites / 1,238 tests, 36 Node tests, production typecheck,
   artifact syntax/mobile-load smoke and Obsidian review pass. The earlier full sweep below predates this merge.
 - September 15 gates: production typecheck, formatting, lint (0 errors, 3 existing warnings),

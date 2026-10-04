@@ -26,6 +26,12 @@ export type NoChangesManifestCommitReason =
   | "resolved_no_targets"
   | "all_targets_unchanged";
 
+/** Content-free explanation of why generation produced no Wiki mutations. */
+export interface NoChangesGenerationOutcomes {
+  explicitUnchanged: number;
+  identicalWrites: number;
+}
+
 /** Fields shared by ordinary and query-writeback no-changes plans. */
 interface NoChangesManifestCommitPlanBase {
   version: typeof NO_CHANGES_MANIFEST_COMMIT_VERSION;
@@ -39,6 +45,7 @@ interface NoChangesManifestCommitPlanBase {
   analysisDigest: string;
   evidenceDigest: string;
   reason: NoChangesManifestCommitReason;
+  generationOutcomes?: NoChangesGenerationOutcomes;
   expectedManifestRevision: number;
   expectedManifestDigest: string;
   baseGeneratedPages: ManifestCommitPage[];
@@ -78,6 +85,7 @@ export interface CreateNoChangesManifestCommitPlanInput {
   analysisDigest: string;
   evidenceDigest: string;
   reason: NoChangesManifestCommitReason;
+  generationOutcomes?: NoChangesGenerationOutcomes;
   expectedManifestRevision: number;
   expectedManifestDigest: string;
   baseGeneratedPages: readonly ManifestCommitPage[];
@@ -162,6 +170,21 @@ const noChangesReasonSchema = z.enum([
   "all_targets_unchanged",
 ]);
 
+// Counts explain a completed no-write result without retaining private model output.
+// https://github.com/yydspanda/obsidian-copilot/issues/15
+const generationOutcomesSchema = z
+  .object({
+    explicitUnchanged: nonNegativeIntegerSchema,
+    identicalWrites: nonNegativeIntegerSchema,
+  })
+  .strict()
+  .refine(
+    ({ explicitUnchanged, identicalWrites }) =>
+      Number.isSafeInteger(explicitUnchanged + identicalWrites) &&
+      explicitUnchanged + identicalWrites > 0,
+    { message: "Generation outcomes require a positive safe total target count" }
+  );
+
 const planBaseShape = {
   version: z.literal(NO_CHANGES_MANIFEST_COMMIT_VERSION),
   bundleId: nonEmptyStringSchema,
@@ -174,6 +197,7 @@ const planBaseShape = {
   analysisDigest: sha256Schema,
   evidenceDigest: sha256Schema,
   reason: noChangesReasonSchema,
+  generationOutcomes: generationOutcomesSchema.optional(),
   expectedManifestRevision: nonNegativeIntegerSchema,
   expectedManifestDigest: sha256Schema,
   baseGeneratedPages: z.array(manifestCommitPageSchema),
@@ -302,6 +326,16 @@ function omitNoChangesId(plan: NoChangesManifestCommitPlan): NoChangesManifestCo
 /** Validates canonical paths, ordering, and identity shared by parsed plans. */
 function validatePlanSemantics(plan: NoChangesManifestCommitPlan): KnowledgeDiagnostic[] {
   const diagnostics: KnowledgeDiagnostic[] = [];
+  // Earlier exits did not run generation, so counts would misrepresent their outcome.
+  // https://github.com/yydspanda/obsidian-copilot/issues/15
+  if (plan.generationOutcomes !== undefined && plan.reason !== "all_targets_unchanged") {
+    addError(
+      diagnostics,
+      "no_changes_generation_outcomes_reason_mismatch",
+      "generationOutcomes",
+      "Generation outcomes require an all-targets-unchanged conclusion"
+    );
+  }
   plan.baseGeneratedPages.forEach((page, index) => {
     diagnostics.push(
       ...validateVaultRelativePath(page.path, `baseGeneratedPages[${index}].path`).diagnostics
@@ -343,6 +377,9 @@ function validatePlanSemantics(plan: NoChangesManifestCommitPlan): KnowledgeDiag
 function freezePlan(plan: NoChangesManifestCommitPlan): NoChangesManifestCommitPlan {
   return Object.freeze({
     ...plan,
+    ...(plan.generationOutcomes === undefined
+      ? {}
+      : { generationOutcomes: Object.freeze({ ...plan.generationOutcomes }) }),
     baseGeneratedPages: Object.freeze(
       plan.baseGeneratedPages.map((page) => Object.freeze({ ...page }))
     ),
@@ -353,6 +390,9 @@ function freezePlan(plan: NoChangesManifestCommitPlan): NoChangesManifestCommitP
 function freezeMarker(marker: NoChangesManifestCommitMarker): NoChangesManifestCommitMarker {
   return Object.freeze({
     ...marker,
+    ...(marker.generationOutcomes === undefined
+      ? {}
+      : { generationOutcomes: Object.freeze({ ...marker.generationOutcomes }) }),
     baseGeneratedPages: Object.freeze(
       marker.baseGeneratedPages.map((page) => Object.freeze({ ...page }))
     ),
@@ -391,6 +431,11 @@ export function createNoChangesManifestCommitPlan(
     analysisDigest: input.analysisDigest,
     evidenceDigest: input.evidenceDigest,
     reason: input.reason,
+    // Missing diagnostics must remain absent to preserve persisted v1 identities and digests.
+    // https://github.com/yydspanda/obsidian-copilot/issues/15
+    ...(input.generationOutcomes === undefined
+      ? {}
+      : { generationOutcomes: { ...input.generationOutcomes } }),
     expectedManifestRevision: input.expectedManifestRevision,
     expectedManifestDigest: input.expectedManifestDigest,
     baseGeneratedPages: normalizePages(input.baseGeneratedPages),

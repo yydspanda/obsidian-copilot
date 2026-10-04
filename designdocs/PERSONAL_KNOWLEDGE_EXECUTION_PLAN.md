@@ -37,6 +37,17 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   Knowledge setup/ingest/Review/Query acceptance in the prepared management copy. The user's
   October 3 request supersedes manual coaching with assistant-operated verification; preserve
   originals and explicitly bound model requests and test-Wiki writes.
+- Task ID: `PK-H3-READING-REGRESSION` — verify the frozen delivered source with the full non-paid
+  suite, two-chapter evidence, managed-source revision and a safe full Windows restart; operate
+  only the management test copy with at most eight model requests and reviewed source-owned writes.
+- Task ID: `PK-H3-INCREMENTAL-DIAGNOSIS` — trace the retained changed-source no-changes result
+  and Query evidence gap without new model requests, Vault writes or production changes.
+- Task ID: `PK-H3-NOCHANGES-FEEDBACK` — retain content-free no-changes diagnostics, distinguish
+  Activity completion outcomes and verify the changed-source/Query boundary offline; preserve
+  prompts, source-hash validation, old runtime data and upstream-owned code.
+- Task ID: `PK-H3-NOCHANGES-DELIVERY` — commit/push the verified feedback repair, deploy only
+  to the management test copy and verify native loading and preservation; any paid incremental
+  replay requires a fresh bounded request allowance.
 - Task ID: `PK-H3-REVIEW11-FIX` — fix the cumulative review findings for Vault update containment,
   case-sensitive Chat attachment identity, bounded source reads, and obsolete model policy.
 - Task ID: `PK-H3-UPSTREAM-V4-WIN` — validate provider/project/settings migration, reload/unload,

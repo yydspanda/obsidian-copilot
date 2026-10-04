@@ -56,6 +56,7 @@ import {
 import {
   createNoChangesManifestCommitPlan,
   createNoChangesManifestCommitPlanDigest,
+  type NoChangesGenerationOutcomes,
   type NoChangesManifestCommitReason,
 } from "@/knowledge/manifest/NoChangesManifestCommit";
 import { canonicalizeJson, createFileContentHash } from "@/knowledge/model/fingerprint";
@@ -2329,6 +2330,7 @@ function createGeneratedNoChangesEvidenceDigest(
  * @param diagnostics - Complete diagnostics for this successful conclusion
  * @param reason - Stable stage-specific no-change reason
  * @param evidenceDigest - Exact evidence identity for that reason
+ * @param generationOutcomes - Content-free generation counts, absent for earlier exits
  * @returns Complete no-change result and Manifest commit plan
  */
 function createNoChangesResult(
@@ -2338,7 +2340,8 @@ function createNoChangesResult(
   analysis: CompilerAnalysis,
   diagnostics: KnowledgeDiagnostic[],
   reason: NoChangesManifestCommitReason,
-  evidenceDigest: string
+  evidenceDigest: string,
+  generationOutcomes?: NoChangesGenerationOutcomes
 ): KnowledgeCompileNoChanges {
   const source = input.manifest.entries.find((entry) => entry.sourceId === input.source.sourceId);
   if (!source) {
@@ -2354,6 +2357,7 @@ function createNoChangesResult(
     analysisDigest,
     evidenceDigest,
     reason,
+    ...(generationOutcomes === undefined ? {} : { generationOutcomes }),
     expectedManifestRevision: input.manifest.revision,
     expectedManifestDigest: createSourceManifestDigest(input.manifest),
     baseGeneratedPages: (source.lastSuccessful?.generatedPages ?? []).map((page) => {
@@ -2831,6 +2835,12 @@ export class KnowledgeCompiler {
     }
     const compileDiagnostics = [...targetDiagnostics, ...projection.diagnostics];
     if (projection.changes.length === 0) {
+      // Successful projection proves remaining write outcomes exactly equal the existing bytes.
+      // Retain this distinction from explicit unchanged without saving model content.
+      // https://github.com/yydspanda/obsidian-copilot/issues/15
+      const explicitUnchanged = generationOutput.files.filter(
+        (file) => file.outcome === "unchanged"
+      ).length;
       return createNoChangesResult(
         input,
         compileContextDigest,
@@ -2844,7 +2854,11 @@ export class KnowledgeCompiler {
           targetSetDigest,
           generationOutput,
           projection
-        )
+        ),
+        {
+          explicitUnchanged,
+          identicalWrites: generationOutput.files.length - explicitUnchanged,
+        }
       );
     }
 

@@ -157,6 +157,11 @@ import type {
 } from "@/knowledge/model/types";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
+import { KnowledgeAppliedWikiSnapshotReader } from "@/knowledge/query/KnowledgeAppliedWikiSnapshotReader";
+import { resolveKnowledgeCitationTarget } from "@/knowledge/query/KnowledgeCitationTargetResolver";
+import type { KnowledgeGroundedAnswerRequest } from "@/knowledge/query/KnowledgeGroundedAnswer";
+import { KnowledgeScopedLexicalRetriever } from "@/knowledge/query/KnowledgeScopedLexicalRetriever";
+import { KnowledgeScopedQueryCoordinator } from "@/knowledge/query/KnowledgeScopedQueryCoordinator";
 import { createNoJournalApplyRecoveryReference } from "@/knowledge/recovery/NoJournalApplyRecovery";
 import type { KnowledgeStartupReleaseRequest } from "@/knowledge/recovery/KnowledgeStartupRelease";
 import {
@@ -242,6 +247,7 @@ import {
 } from "@/knowledge/startup/KnowledgeProductionWorkflowExecutionLease";
 import { DelegatingKnowledgeKnownAppliedWikiOutputsPort } from "@/knowledge/wiki/DelegatingKnowledgeKnownAppliedWikiOutputsPort";
 import { KnowledgeProductionKnownAppliedWikiOutputsCoordinator } from "@/knowledge/wiki/KnowledgeProductionKnownAppliedWikiOutputsCoordinator";
+import { KnowledgeStudioRuntimeReadAdapter } from "@/knowledge/ui/KnowledgeStudioRuntimeReadAdapter";
 import type { App, DataAdapter, Vault } from "obsidian";
 import { FileSystemAdapter, TFile } from "obsidian";
 import { sha256 } from "@/utils/hash";
@@ -7807,7 +7813,7 @@ describe("KnowledgeRuntimeStore", () => {
     expect(await harness.file.read()).toBe(before);
   });
 
-  it("atomically commits first-source no-change success with Queue completion", async () => {
+  it("atomically completes a first-source no-change observation without inventing missing legacy generation diagnostics (https://github.com/yydspanda/obsidian-copilot/issues/15)", async () => {
     const harness = await createHarness();
     const manifest = createRegisteredManifest();
     await harness.manifest.write("personal", manifest, null);
@@ -7880,6 +7886,9 @@ describe("KnowledgeRuntimeStore", () => {
     expect(state.applyCommits).toEqual([]);
     expect(state.activeTransaction).toBeNull();
     expect(executions).toBe(1);
+    expect((await harness.runtime.readStudioBundle("personal")).completionOutcomes).toEqual({
+      "job-atomic-no-changes": { kind: "no_changes", reason: "analysis_no_targets" },
+    });
 
     const freshnessAuthority = await harness.runtime.readSourceFreshnessAuthority(
       "personal",
@@ -7963,12 +7972,19 @@ describe("KnowledgeRuntimeStore", () => {
     );
   });
 
-  it("atomically records a newer no-change observation without replacing applied success provenance", async () => {
+  it("retains no-change diagnostics after Apply and reload without treating outdated citations as current evidence (https://github.com/yydspanda/obsidian-copilot/issues/15)", async () => {
     const manifest = createRegisteredManifest();
-    const citation = createSourceCitation();
-    const proof = createCommittedApplyProof(manifest, "transaction-apply-then-no-changes", 1, [
-      citation,
-    ]);
+    let sourceText = "Grounded evidence for source-1";
+    const originalSourceHash = createSourceContentHash(sourceText);
+    const wikiText = `# Grounded evidence\n\n${sourceText}\n`;
+    const citation = createSourceCitation("source-1", createFileContentHash(sourceText));
+    const proof = createCommittedApplyProof(
+      manifest,
+      "transaction-apply-then-no-changes",
+      1,
+      [citation],
+      { sourceContentHash: originalSourceHash, afterContent: wikiText }
+    );
     const harness = await createApplyHarness(manifest, proof);
     await harness.port.recordCommitted(harness.journal, harness.receipt);
 
@@ -8002,6 +8018,66 @@ describe("KnowledgeRuntimeStore", () => {
     expect(provenanceBefore.pages).toHaveLength(1);
     expect(before.activeTransaction).toBeNull();
 
+    const bundle = createBundle();
+    const targetResolver = {
+      resolve: async (targets: readonly { targetId: string; path: string }[]) =>
+        targets.map(({ targetId, path }) => ({
+          targetId,
+          path,
+          kind: "file",
+          content: wikiText,
+        })),
+    };
+    const answerModel = {
+      generate: jest.fn(async (request: Readonly<KnowledgeGroundedAnswerRequest>) =>
+        JSON.stringify({
+          version: 1,
+          contextDigest: request.contextDigest,
+          status: "answered",
+          claims: [
+            {
+              claimId: "answer-1",
+              kind: "source_fact",
+              text: "Grounded evidence for source-1",
+              evidenceIds: [request.evidence[0].evidenceId],
+            },
+          ],
+          insufficientEvidence: [],
+        })
+      ),
+    };
+    let queryId = 0;
+    const query = new KnowledgeScopedQueryCoordinator({
+      bundleId: bundle.id,
+      idFactory: (kind) => `${kind}-${++queryId}`,
+      reader: new KnowledgeAppliedWikiSnapshotReader({
+        runtime: harness.runtime,
+        bundle,
+        targetResolver,
+        assertCurrent: () => undefined,
+      }),
+      retriever: new KnowledgeScopedLexicalRetriever(),
+      citationNavigation: {
+        verify: async (target) =>
+          resolveKnowledgeCitationTarget({ ...target, content: sourceText }).status === "resolved",
+        open: async () => {
+          throw new Error("This regression never opens Vault UI");
+        },
+      },
+      answerModel,
+    });
+    const signal = new AbortController().signal;
+    await expect(
+      query.query(bundle.id, { query: "Grounded evidence" }, signal)
+    ).resolves.toMatchObject({
+      answer: { status: "answered", claims: [{ text: sourceText }] },
+    });
+    expect(answerModel.generate).toHaveBeenCalledTimes(1);
+
+    sourceText += "\n\nRecord conditions, observations, possible explanations and counterexamples.";
+    const updatedSourceHash = createSourceContentHash(sourceText);
+    expect(updatedSourceHash).not.toBe(originalSourceHash);
+
     const revisions = new KnowledgeRuntimeInputRevisionAllocator(harness.runtime);
     const observations = new KnowledgeRuntimeInputObservationBinder(harness.runtime);
     const allocation = await revisions.allocate({
@@ -8012,18 +8088,32 @@ describe("KnowledgeRuntimeStore", () => {
     expect(allocation.inputRevision).toBe(2);
     const bound = await observations.bind({
       observationToken: allocation.observationToken,
-      sourceContentHash: HASH_C,
+      sourceContentHash: updatedSourceHash,
       pipelineFingerprint: HASH_B,
     });
     if (bound.kind !== "ready") {
       throw new Error("Expected a newer bound source observation after applied success");
     }
-    const plan = createRuntimeNoChangesPlan(
-      manifestBefore,
-      allocation.inputRevision,
-      HASH_C,
-      HASH_B
-    );
+    const planInput = {
+      bundleId: bundle.id,
+      sourceId: "source-1",
+      sourceContentHash: updatedSourceHash,
+      pipelineFingerprint: HASH_B,
+      inputRevision: allocation.inputRevision,
+      compileContextDigest: HASH_A,
+      analysisDigest: HASH_B,
+      evidenceDigest: HASH_C,
+      reason: "all_targets_unchanged" as const,
+      generationOutcomes: { explicitUnchanged: 1, identicalWrites: 0 },
+      expectedManifestRevision: manifestBefore.revision,
+      expectedManifestDigest: createSourceManifestDigest(manifestBefore),
+      baseGeneratedPages: sourceBefore.lastSuccessful.generatedPages.map((page) => ({
+        ...page,
+        contentHash: page.contentHash!,
+      })),
+      sourceAuthority: { operation: "ingest" as const },
+    };
+    const plan = createNoChangesManifestCommitPlan(planInput);
     const noChangesQueue = new IngestQueue(
       new KnowledgeRuntimeQueueStorage(harness.runtime),
       {
@@ -8061,8 +8151,10 @@ describe("KnowledgeRuntimeStore", () => {
       ok: true,
       value: {
         noChangesId: plan.noChangesId,
-        sourceContentHash: HASH_C,
+        sourceContentHash: updatedSourceHash,
         pipelineFingerprint: HASH_B,
+        reason: "all_targets_unchanged",
+        generationOutcomes: { explicitUnchanged: 1, identicalWrites: 0 },
         inputRevision: 2,
         jobId: "job-no-changes-after-apply",
         manifestAfterRevision: manifestAfter.revision,
@@ -8074,7 +8166,7 @@ describe("KnowledgeRuntimeStore", () => {
       harness.runtime.readSourceFreshnessAuthority("personal", "source-1")
     ).resolves.toMatchObject({
       kind: "no_changes",
-      sourceContentHash: HASH_C,
+      sourceContentHash: updatedSourceHash,
       pipelineFingerprint: HASH_B,
       inputRevision: 2,
       noChangesId: plan.noChangesId,
@@ -8094,6 +8186,65 @@ describe("KnowledgeRuntimeStore", () => {
       manifestRevision: manifestAfter.revision,
     });
     expect(provenanceAfter.pages).toEqual(provenanceBefore.pages);
+
+    // A completed source observation does not re-prove citations from older source bytes.
+    // https://github.com/yydspanda/obsidian-copilot/issues/15
+    expect(
+      resolveKnowledgeCitationTarget({
+        sourcePath: manifest.entries[0].sourcePath,
+        citation,
+        content: sourceText,
+      })
+    ).toEqual({ status: "stale" });
+    const updatedQuery = await query.query(bundle.id, { query: "Grounded evidence" }, signal);
+    expect(updatedQuery).toMatchObject({
+      answer: { status: "insufficient_evidence", claims: [] },
+    });
+    expect(updatedQuery.hits.map(({ snippet }) => snippet)).toEqual([
+      expect.stringContaining("Grounded evidence"),
+    ]);
+    expect(answerModel.generate).toHaveBeenCalledTimes(1);
+    query.close();
+
+    const reloadedRuntime = new KnowledgeRuntimeStore(harness.file);
+    await reloadedRuntime.initialize();
+    const completion = {
+      kind: "no_changes",
+      reason: "all_targets_unchanged",
+      generationOutcomes: { explicitUnchanged: 1, identicalWrites: 0 },
+    };
+    await expect(reloadedRuntime.readStudioBundle(bundle.id)).resolves.toMatchObject({
+      completionOutcomes: { "job-no-changes-after-apply": completion },
+    });
+    const adapter = new KnowledgeStudioRuntimeReadAdapter({
+      runtime: reloadedRuntime,
+      bundles: [bundle],
+      targetResolver,
+      assertCurrent: () => undefined,
+    });
+    const studio = await adapter.load(bundle.id, signal);
+    expect(
+      studio.activity.items.find(({ id }) => id === "job-no-changes-after-apply")
+    ).toMatchObject({
+      status: "completed",
+      completion,
+    });
+    expect(
+      studio.activity.items.find(({ id }) => id === "job-no-changes-after-apply")?.completion
+    ).toEqual(completion);
+    expect(
+      studio.activity.items.find(({ id }) => id === harness.journal.jobClaim.jobId)
+    ).toMatchObject({
+      status: "completed",
+      completion: { kind: "applied" },
+    });
+    const reloaded = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    expect(reloaded.applyCommits).toEqual(before.applyCommits);
+    expect(reloaded.reviews).toEqual(before.reviews);
+    expect(reloaded.activeTransaction).toBeNull();
+    expect((await reloadedRuntime.readAppliedProvenance(bundle.id)).pages).toEqual(
+      provenanceBefore.pages
+    );
   });
 
   it("atomically commits an older no-change attempt and promotes its exact newer rerun", async () => {
