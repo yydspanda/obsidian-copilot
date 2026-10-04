@@ -7,14 +7,14 @@
 
 ## Current Stage
 
-- Stage ID: `PK-H3`
-- Outcome: deliver the verified no-changes feedback repair to the management test copy.
-- Exit gate: current branch pushed, exact deployed artifact loaded, and existing Vault data preserved.
+- Stage ID: `OPS-MAINTENANCE`
+- Outcome: retain completed delivery evidence and the explicit incremental-replay blocker.
+- Exit gate: bounded tracker and registered task references pass governance checks.
 
 ## In Progress
 
-- [ ] `PK-H3-NOCHANGES-DELIVERY` — commit/push, deploy and check native feedback with the queue paused.
-  Only the management test copy is in scope; fresh paid-test allowance requested separately, no upstream sync.
+- [ ] `OPS-PROGRESS-GOVERNANCE` — preserve delivery evidence while awaiting a reprocess-feature decision.
+  Management copy deployed/paused; 0/3 newly approved model requests used. No same-input reprocess action exists.
 
 ## Upstream Status
 
@@ -28,7 +28,7 @@
 
 ## Recent Activity
 
-- 2026-10-04 — `PK-H3-NOCHANGES-FEEDBACK` — No-changes diagnostics and accurate Activity outcomes repaired locally; 489 tests and 56 gallery checks pass. No paid/Vault operations or delivery. [Evidence and limits](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md).
+- 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
 - 2026-10-03 — `PK-H3-MANAGEMENT-REALUSE` — Full bounded reading flow passes: 3 completed jobs, 0 failures, 5/8 requests; two fork-owned fixes deployed. [Completion](./designdocs/progress/archive/2026-10.md).
 - 2026-09-21 — `PK-STUDIO-ONBOARDING` — [Issue #13](https://github.com/yydspanda/obsidian-copilot/issues/13):
   repair pushed as `5777c92d`; 376 tests, 64 gallery and 17 Windows preview/status checks pass. [Evidence](./designdocs/progress/acceptance/2026-09-21-studio-onboarding.md).
@@ -70,7 +70,7 @@
 ## Current Verification
 
 - October 4 no-changes repair: 11 suites / 489 tests, 20 governance tests, 56 isolated rendered states and build/lint/review pass.
-  Changes remain local; no full-suite rerun, paid request or native Windows acceptance. Incremental semantic inclusion is still unproven.
+  Pushed/deployed; native Activity shows 2 applied/3 no-changes, data preserved. No paid replay/full-suite rerun; semantic inclusion unproven.
 - October 3 frozen-source regression: 731 suites / 10,760 tests pass, 2 existing skips; lint/format/governance pass.
   Two-chapter comparison and full restart pass; new source processed as no-changes, so incremental Wiki/Query acceptance does not pass. 7/8 requests; evidence-retention limitation recorded above.
 - October 3 management-copy acceptance complete: setup/Add/Review/edit/Apply/Query/Save/reload pass, 3 completed/0 failed, 5/8 model requests. Originals/credentials preserved; queue paused.

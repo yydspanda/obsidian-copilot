@@ -110,9 +110,10 @@ The Runtime full-suite result was observed in the test tool output.
 
 ## Handoff
 
-The repair is local and verified, not delivered. Commit/push, test-copy deployment
-and a bounded real incremental-content retest remain separate next steps. The
-previous request budget was not renewed or used during this deterministic repair.
+At the end of the local repair, commit/push, test-copy deployment and a bounded
+real incremental-content retest remained separate next steps. The previous request
+budget was not renewed or used during that deterministic repair. Delivery is
+recorded in the follow-up below.
 
 ## Authorized delivery follow-up
 
@@ -120,6 +121,68 @@ Task: `PK-H3-NOCHANGES-DELIVERY`. The user subsequently approved the next step:
 commit/push this development branch and deploy to
 `C:/Users/yydsp/Obsidian-Copilot-Management-Test`. Native loading, Activity outcome
 and preservation checks will keep the queue paused. No upstream merge or remote
-master change is included. The prior paid budget is closed; a new maximum of
-three requests for one source-specific compile/query replay was asked separately
-and is not treated as granted before the user's response.
+master change is included. The user separately approved a new maximum of three
+requests (analysis, generation, query), only for the supplemented chapter-13
+managed source, with reviewed Apply limited to its existing Wiki page. No retries,
+other-material or prompt changes are permitted; the queue must end paused.
+
+### Commit, push and native deployment
+
+Repair commit `6e04e4803727e7fb0a2b48241cffcaf53af31946` is pushed to
+`fork/knowledge-h3-personal-flow`. Normal Prettier/ESLint commit hooks pass. SSH
+authentication was unavailable, so the push used the existing HTTPS credential
+helper for this command only; no global Git setting or remote master changed.
+The remote branch SHA was independently read back after the successful push.
+
+Canonical deployment command:
+
+```bash
+COPILOT_TEST_VAULT_PATH=/mnt/c/Users/yydsp/Obsidian-Copilot-Management-Test \
+COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000 \
+OBSIDIAN_BIN='/mnt/c/Program Files/Obsidian/Obsidian.exe' npm run test:vault
+```
+
+The clean build is `6e04e480-clean-3a8429dc082e`; both artifact hashes exactly
+match the tested hashes above. Dependency installation left the tracked lockfile
+unchanged. Build/typecheck and repeated artifact syntax/mobile-load checks pass.
+The deploy script's CLI toggle reported a reload failure; copying alone was not
+treated as delivery success. An explicitly Vault-guarded idle plugin unload/load
+then succeeded, with a new plugin instance and the new production projection
+observed in the actual Windows Studio controller and rendered DOM.
+
+Native Activity is ready and paused: two `Wiki updated` rows and three `No Wiki
+changes` rows. Chapter 13's older Apply row remains applied; its newer no-changes
+row reports generation produced no changes and states that old target counts
+were not recorded. There are zero active/failed/pending-review jobs, zero reruns,
+no transaction, idle Query/Agent and empty Chat. All five existing jobs, Review
+records and Apply ledger entries are byte-equivalent to their deployment baseline.
+
+Preservation checks pass for all **226 file/link entries and 92 settings fields**,
+with no additions, deletions or content changes. Startup observation advances
+Runtime revision 277 to 289 and Queue revision 117 to 121; whole-Runtime byte
+identity is not claimed. The final Runtime SHA-256 is
+`0a33c691c33e78db798c0c4654feeaef317cae8c59797b34a6b2de6080b45365`.
+Temporary probe references are removed and native fetch is unchanged. Retained
+local evidence includes `deploy.log`, `loaded-probe.log`, `preservation.json` and
+the private before/after snapshots in the earlier reading-regression evidence folder.
+
+### Incremental replay cannot start through the current product
+
+The freshly approved request count remains **0/3 used**. No model request, source
+edit, new proposal, Apply or Query was performed in this delivery. Inspection
+found no supported way to reprocess the same completed no-changes input:
+
+- Material registration returns `already_registered` for an existing source;
+  Add materials does not create another processing job.
+- Reload/observation reuses the exact no-changes freshness proof for unchanged
+  source, pipeline and Wiki bytes, so the queue deduplicates it.
+- Retry accepts only retryable failed jobs. All five native Activity rows confirm
+  `canRetry: false`; enqueue does not accept an arbitrary force flag.
+
+The boundaries are `KnowledgeSourceRegistrationCore.ts`,
+`KnowledgeRuntimeStore.ts` (latest source freshness authority),
+`manifest/freshness.ts` and `IngestQueue.ts`. No marker deletion, forged job/hash,
+incidental note edit or configuration mutation was used to evade these rules.
+Delivery is complete, but semantic incremental acceptance remains unpassed.
+A controlled per-source reprocess action needs separate implementation approval
+before the already-approved bounded model replay can proceed.
