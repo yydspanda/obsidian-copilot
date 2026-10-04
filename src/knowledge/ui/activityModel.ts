@@ -50,6 +50,7 @@ export interface KnowledgeActivityJobActions {
   canCancel: boolean;
   canRetry: boolean;
   canReview: boolean;
+  canReanalyze?: boolean;
 }
 
 /** Detached, immutable failure text already sanitized by the queue boundary. */
@@ -97,6 +98,7 @@ export interface KnowledgeActivityModel {
 export interface KnowledgeActivityModelOptions {
   maxTerminalItems?: number;
   completionOutcomes?: Readonly<Record<string, KnowledgeRuntimeJobCompletion>>;
+  reanalyzableJobIds?: readonly string[];
 }
 
 const TERMINAL_ACTIVITY_STATUSES = new Set<KnowledgeActivityStatus>([
@@ -303,11 +305,13 @@ function hasDurablePendingReview(snapshot: IngestQueueSnapshot, job: KnowledgeIn
  *
  * @param snapshot - Trusted durable queue snapshot
  * @param job - Durable job to inspect
+ * @param canReanalyze - Exact job admission proved by the Runtime snapshot
  * @returns Immutable action availability for the Activity row
  */
 function deriveJobActions(
   snapshot: IngestQueueSnapshot,
-  job: KnowledgeIngestJob
+  job: KnowledgeIngestJob,
+  canReanalyze: boolean
 ): Readonly<KnowledgeActivityJobActions> {
   const canCancel =
     job.status === "pending" ||
@@ -320,6 +324,9 @@ function deriveJobActions(
       job.status === "awaiting_review" &&
       hasDurablePendingReview(snapshot, job) &&
       canBeginReview(snapshot),
+    // Reanalysis admission must come from source-aware Runtime proof, never terminal status alone.
+    // https://github.com/yydspanda/obsidian-copilot/issues/16
+    ...(canReanalyze ? { canReanalyze: true } : {}),
   });
 }
 
@@ -329,12 +336,14 @@ function deriveJobActions(
  * @param snapshot - Trusted durable queue snapshot
  * @param job - Durable job to copy
  * @param completion - Optional outcome proved by the same Runtime snapshot
+ * @param canReanalyze - Whether Runtime admits this exact job for explicit reanalysis
  * @returns Read-only UI projection without references to mutable job objects
  */
 function createActivityItem(
   snapshot: IngestQueueSnapshot,
   job: KnowledgeIngestJob,
-  completion?: KnowledgeRuntimeJobCompletion
+  completion: KnowledgeRuntimeJobCompletion | undefined,
+  canReanalyze: boolean
 ): Readonly<KnowledgeActivityItem> {
   const status = deriveActivityStatus(snapshot, job);
   const item: KnowledgeActivityItem = {
@@ -348,7 +357,7 @@ function createActivityItem(
     updatedAt: job.updatedAt,
     rerunRequested: job.rerunRequested,
     terminal: TERMINAL_ACTIVITY_STATUSES.has(status),
-    actions: deriveJobActions(snapshot, job),
+    actions: deriveJobActions(snapshot, job, status === "completed" && canReanalyze),
     ...(job.status === "pending" && job.nextAttemptAt !== undefined
       ? { nextAttemptAt: job.nextAttemptAt }
       : {}),
@@ -506,7 +515,8 @@ export function deriveKnowledgeActivityModel(
       job,
       outcomes !== undefined && Object.prototype.hasOwnProperty.call(outcomes, job.id)
         ? outcomes[job.id]
-        : undefined
+        : undefined,
+      options.reanalyzableJobIds?.includes(job.id) === true
     )
   );
   const active = projected.filter((item) => !item.terminal).sort(compareActivityItems);

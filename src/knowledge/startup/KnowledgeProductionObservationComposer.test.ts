@@ -974,6 +974,7 @@ describe("KnowledgeProductionObservationComposer", () => {
         resumeBundle: true,
         cancelJob: true,
         retryJob: true,
+        reanalyzeJob: true,
         reviewReject: true,
         reviewAccept: true,
         recoveryContinue: false,

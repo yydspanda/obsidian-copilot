@@ -1,5 +1,5 @@
 import * as React from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import {
   KnowledgeActivityPanel,
@@ -144,6 +144,187 @@ describe("KnowledgeActivityPanel", () => {
       jest.clearAllMocks();
     });
 
+    it("requires a cost confirmation before queueing one completed material and lets cancellation do nothing — https://github.com/yydspanda/obsidian-copilot/issues/16", async () => {
+      const onReanalyzeJob = jest.fn().mockResolvedValue(undefined);
+      const item = createItem({
+        status: "completed",
+        durableStage: "completed",
+        terminal: true,
+        actions: { canCancel: false, canRetry: false, canReview: false, canReanalyze: true },
+      });
+      render(
+        <KnowledgeActivityPanel
+          commandCapabilities={{ ...ENABLED_COMMAND_CAPABILITIES, reanalyzeJob: true }}
+          model={createModel({ items: [item] })}
+          {...DEFAULT_CALLBACKS}
+          onReanalyzeJob={onReanalyzeJob}
+        />
+      );
+      fireEvent.click(getButton("Reanalyze notes/source.md"));
+      expect(screen.getByRole("alertdialog", { name: "Reanalyze this material?" })).toBeTruthy();
+      expect(screen.getByText(/configured model and may incur charges/)).toBeTruthy();
+      expect(screen.getByText(/existing history and Wiki files are preserved/)).toBeTruthy();
+      expect(screen.getByText(/Resume bundle/)).toBeTruthy();
+      expect(onReanalyzeJob).not.toHaveBeenCalled();
+      fireEvent.click(getButton("Cancel reanalysis"));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(onReanalyzeJob).not.toHaveBeenCalled();
+      fireEvent.click(getButton("Reanalyze notes/source.md"));
+      await act(async () => fireEvent.click(getButton("Queue reanalysis")));
+      expect(onReanalyzeJob).toHaveBeenCalledTimes(1);
+      expect(onReanalyzeJob).toHaveBeenCalledWith("job-1");
+      expect(DEFAULT_CALLBACKS.onResumeBundle).not.toHaveBeenCalled();
+    });
+
+    it("keeps reanalysis and bundle mutation disabled until the queued request settles — https://github.com/yydspanda/obsidian-copilot/issues/16", async () => {
+      let settle!: () => void;
+      const onReanalyzeJob = jest.fn(() => new Promise<void>((resolve) => (settle = resolve)));
+      render(
+        <KnowledgeActivityPanel
+          commandCapabilities={{ ...ENABLED_COMMAND_CAPABILITIES, reanalyzeJob: true }}
+          model={createModel({
+            controls: { state: "paused", canPause: false, canResume: true },
+            items: [
+              createItem({
+                status: "completed",
+                durableStage: "completed",
+                terminal: true,
+                actions: {
+                  canCancel: false,
+                  canRetry: false,
+                  canReview: false,
+                  canReanalyze: true,
+                },
+              }),
+            ],
+          })}
+          {...DEFAULT_CALLBACKS}
+          onReanalyzeJob={onReanalyzeJob}
+        />
+      );
+      fireEvent.click(getButton("Reanalyze notes/source.md"));
+      const confirm = getButton("Queue reanalysis");
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+      expect(onReanalyzeJob).toHaveBeenCalledTimes(1);
+      expect(getButton("Reanalyze notes/source.md").disabled).toBe(true);
+      expect(getButton("Resume bundle").disabled).toBe(true);
+      expect(screen.getByRole("status").textContent).toContain("Queuing reanalysis");
+      await act(async () => settle());
+      expect(getButton("Resume bundle").disabled).toBe(false);
+    });
+
+    it("discards confirmation when the bundle, queue revision or admitted row changes — https://github.com/yydspanda/obsidian-copilot/issues/16", () => {
+      const onReanalyzeJob = jest.fn().mockResolvedValue(undefined);
+      const model = createModel({
+        items: [
+          createItem({
+            status: "completed",
+            durableStage: "completed",
+            terminal: true,
+            actions: { canCancel: false, canRetry: false, canReview: false, canReanalyze: true },
+          }),
+        ],
+      });
+      const props = {
+        ...DEFAULT_CALLBACKS,
+        commandCapabilities: { ...ENABLED_COMMAND_CAPABILITIES, reanalyzeJob: true },
+        model,
+        onReanalyzeJob,
+      };
+      const { rerender } = render(<KnowledgeActivityPanel {...props} />);
+      fireEvent.click(getButton("Reanalyze notes/source.md"));
+      rerender(
+        <KnowledgeActivityPanel {...props} model={{ ...model, revision: model.revision + 1 }} />
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      rerender(<KnowledgeActivityPanel {...props} />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      fireEvent.click(getButton("Reanalyze notes/source.md"));
+      rerender(
+        <KnowledgeActivityPanel
+          {...props}
+          model={{
+            ...model,
+            items: model.items.map((item) => ({
+              ...item,
+              actions: { ...item.actions, canReanalyze: false },
+            })),
+          }}
+        />
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Reanalyze notes/source.md" })).toBeNull();
+      rerender(<KnowledgeActivityPanel {...props} />);
+      fireEvent.click(getButton("Reanalyze notes/source.md"));
+      rerender(
+        <KnowledgeActivityPanel {...props} model={{ ...model, bundleId: "another-bundle" }} />
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(onReanalyzeJob).not.toHaveBeenCalled();
+    });
+
+    it("honors missing callbacks, disabled adapters and an externally busy controller — https://github.com/yydspanda/obsidian-copilot/issues/16", () => {
+      const model = createModel({
+        items: [
+          createItem({
+            status: "completed",
+            durableStage: "completed",
+            terminal: true,
+            actions: { canCancel: false, canRetry: false, canReview: false, canReanalyze: true },
+          }),
+        ],
+      });
+      const props = {
+        ...DEFAULT_CALLBACKS,
+        model,
+        commandCapabilities: ENABLED_COMMAND_CAPABILITIES,
+      };
+      const { rerender } = render(<KnowledgeActivityPanel {...props} />);
+      expect(getButton("Reanalyze notes/source.md").disabled).toBe(true);
+      rerender(
+        <KnowledgeActivityPanel
+          {...props}
+          busy
+          onReanalyzeJob={jest.fn()}
+          commandCapabilities={{ ...ENABLED_COMMAND_CAPABILITIES, reanalyzeJob: true }}
+        />
+      );
+      expect(getButton("Reanalyze notes/source.md").disabled).toBe(true);
+      expect(getButton("Pause bundle").disabled).toBe(true);
+    });
+
+    it("shows a safe queueing failure without exposing provider detail or starting a model — https://github.com/yydspanda/obsidian-copilot/issues/16", async () => {
+      const onReanalyzeJob = jest.fn().mockRejectedValue(new Error("private provider detail"));
+      render(
+        <KnowledgeActivityPanel
+          {...DEFAULT_CALLBACKS}
+          commandCapabilities={{ ...ENABLED_COMMAND_CAPABILITIES, reanalyzeJob: true }}
+          onReanalyzeJob={onReanalyzeJob}
+          model={createModel({
+            items: [
+              createItem({
+                status: "completed",
+                durableStage: "completed",
+                terminal: true,
+                actions: {
+                  canCancel: false,
+                  canRetry: false,
+                  canReview: false,
+                  canReanalyze: true,
+                },
+              }),
+            ],
+          })}
+        />
+      );
+      fireEvent.click(getButton("Reanalyze notes/source.md"));
+      await act(async () => fireEvent.click(getButton("Queue reanalysis")));
+      expect(screen.getByRole("alert").textContent).toContain("could not be queued");
+      expect(screen.queryByText(/private provider detail/)).toBeNull();
+      expect(DEFAULT_CALLBACKS.onResumeBundle).not.toHaveBeenCalled();
+    });
+
     it("renders aggregate counts, an empty state, and the permitted bundle action", () => {
       render(
         <KnowledgeActivityPanel
@@ -162,6 +343,49 @@ describe("KnowledgeActivityPanel", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Pause bundle" }));
       expect(DEFAULT_CALLBACKS.onPauseBundle).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers the gallery confirmation interactively and disables the busy gallery variant — https://github.com/yydspanda/obsidian-copilot/issues/16", () => {
+      const props = activityStories.Reanalyze.args as KnowledgeActivityPanelProps;
+      const { rerender } = render(<KnowledgeActivityPanel {...props} />);
+      fireEvent.click(screen.getByRole("button", { name: /^Reanalyze / }));
+      expect(screen.getByRole("alertdialog", { name: "Reanalyze this material?" })).toBeTruthy();
+      rerender(
+        <KnowledgeActivityPanel
+          {...(activityStories.ReanalyzeBusy.args as KnowledgeActivityPanelProps)}
+        />
+      );
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: /^Reanalyze / }).disabled).toBe(
+        true
+      );
+      expect(getButton("Queue reanalysis").disabled).toBe(true);
+      expect(getButton("Resume bundle").disabled).toBe(true);
+    });
+
+    it("does not offer reanalysis for older rows or unacknowledged completed work — https://github.com/yydspanda/obsidian-copilot/issues/16", () => {
+      const model = createModel({
+        items: [
+          createItem({
+            status: "completed",
+            terminal: true,
+            actions: { canCancel: false, canRetry: false, canReview: false },
+          }),
+          createItem({
+            id: "unacknowledged",
+            status: "finalizing",
+            actions: { canCancel: false, canRetry: false, canReview: false, canReanalyze: true },
+          }),
+        ],
+      });
+      render(
+        <KnowledgeActivityPanel
+          {...DEFAULT_CALLBACKS}
+          model={model}
+          commandCapabilities={{ ...ENABLED_COMMAND_CAPABILITIES, reanalyzeJob: true }}
+          onReanalyzeJob={jest.fn()}
+        />
+      );
+      expect(screen.queryByRole("button", { name: /^Reanalyze / })).toBeNull();
     });
 
     it("shows the exact processing stage and delegates only enabled job actions", () => {

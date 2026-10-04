@@ -921,6 +921,7 @@ export class KnowledgeStudioRuntimeReadAdapter
           commandCapabilities,
           activity: deriveKnowledgeActivityModel(before.queue, {
             completionOutcomes: before.completionOutcomes,
+            reanalyzableJobIds: before.reanalyzableJobIds,
           }),
           reviews: Object.freeze(reviews),
           outdatedReviewIds,
@@ -1071,6 +1072,25 @@ export class KnowledgeStudioRuntimeReadAdapter
   ): Promise<void> {
     if (!this.input.commands) throw new KnowledgeStudioAdapterUnavailableError();
     return this.input.commands.retryJob(bundleId, jobId, expectedQueueRevision, signal);
+  }
+
+  /**
+   * Delegates confirmed reanalysis without exposing Runtime mutation authority to the view.
+   * @param bundleId - Selected Bundle
+   * @param jobId - Completed Activity row selected by the user
+   * @param expectedQueueRevision - Revision displayed before confirmation
+   * @param signal - Cancellation owned by this Studio action
+   */
+  async reanalyzeJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    // Read-only generations must not turn a completed row into paid work.
+    // https://github.com/yydspanda/obsidian-copilot/issues/16
+    if (!this.input.commands) throw new KnowledgeStudioAdapterUnavailableError();
+    return this.input.commands.reanalyzeJob(bundleId, jobId, expectedQueueRevision, signal);
   }
 
   /** Delegates Review submission only when narrow command orchestration is installed. */

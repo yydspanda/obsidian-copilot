@@ -1012,6 +1012,7 @@ export class KnowledgeProductionObservationComposer {
     const commands = new KnowledgeStudioRuntimeCommandAdapter({
       queue: composition.queue,
       reviewReject: new KnowledgeRuntimeReviewRejectPort(composition.runtime),
+      reanalyzeCompletedSource: (command) => composition.runtime.reanalyzeCompletedSource(command),
       ...(reviewApply === undefined ? {} : { reviewApply }),
       bundleIds: composition.owners.map(({ config }) => config.id),
       assertCurrent,

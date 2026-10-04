@@ -4,7 +4,10 @@ import {
   KnowledgeReviewRejectConflictError,
   parseKnowledgeLiteralRejectCommand,
 } from "@/knowledge/review/ReviewRejectTransition";
-import { KnowledgeRuntimeReviewRejectPort } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import {
+  KnowledgeRuntimeReviewRejectPort,
+  type KnowledgeCompletedSourceReanalysisCommand,
+} from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { KnowledgeStudioReviewedApplyPort } from "@/knowledge/ui/KnowledgeStudioReviewedApplyPort";
 import type {
   KnowledgeStudioCommandCapabilities,
@@ -39,6 +42,7 @@ export interface KnowledgeStudioRuntimeCommandAdapterInput {
   assertCurrent: () => void;
   retainDrain?: (drain: Promise<void>) => void;
   notifyReviewWorkAvailable?: () => void;
+  reanalyzeCompletedSource?: (command: KnowledgeCompletedSourceReanalysisCommand) => Promise<void>;
 }
 
 /** Hidden mutation authority that cannot be recovered by reflecting over the adapter. */
@@ -50,6 +54,7 @@ interface KnowledgeStudioRuntimeCommandAdapterState {
   assertCurrent: () => void;
   retainDrain?: (drain: Promise<void>) => void;
   notifyReviewWorkAvailable?: () => void;
+  reanalyzeCompletedSource?: KnowledgeStudioRuntimeCommandAdapterInput["reanalyzeCompletedSource"];
   listeners: Map<string, Set<KnowledgeStudioCommandHintListener>>;
 }
 
@@ -176,7 +181,9 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
       typeof input.assertCurrent !== "function" ||
       (input.retainDrain !== undefined && typeof input.retainDrain !== "function") ||
       (input.notifyReviewWorkAvailable !== undefined &&
-        typeof input.notifyReviewWorkAvailable !== "function")
+        typeof input.notifyReviewWorkAvailable !== "function") ||
+      (input.reanalyzeCompletedSource !== undefined &&
+        typeof input.reanalyzeCompletedSource !== "function")
     ) {
       throw createAbortError();
     }
@@ -201,6 +208,9 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
       ...(input.notifyReviewWorkAvailable === undefined
         ? {}
         : { notifyReviewWorkAvailable: input.notifyReviewWorkAvailable }),
+      ...(input.reanalyzeCompletedSource === undefined
+        ? {}
+        : { reanalyzeCompletedSource: input.reanalyzeCompletedSource }),
       listeners: new Map(),
     });
     Object.freeze(this);
@@ -214,10 +224,11 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
   /** Returns the exact immutable capability set implemented by this command generation. */
   getCapabilities(): Readonly<KnowledgeStudioCommandCapabilities> {
     const state = requireCommandAdapterState(this);
-    return state.reviewApply
+    return state.reviewApply || state.reanalyzeCompletedSource
       ? Object.freeze({
           ...KNOWLEDGE_STUDIO_RUNTIME_COMMAND_CAPABILITIES,
-          reviewAccept: true,
+          ...(state.reviewApply ? { reviewAccept: true } : {}),
+          ...(state.reanalyzeCompletedSource ? { reanalyzeJob: true } : {}),
         })
       : KNOWLEDGE_STUDIO_RUNTIME_COMMAND_CAPABILITIES;
   }
@@ -280,6 +291,37 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
       { kind: "retry_job", bundleId, jobId, expectedQueueRevision },
       signal
     );
+  }
+
+  /**
+   * Queues one explicitly requested completed-input replay without resuming the Bundle.
+   * @param bundleId - Bundle selected by the user
+   * @param jobId - Exact completed Activity row selected for reanalysis
+   * @param expectedQueueRevision - Queue revision the user inspected before confirming
+   * @param signal - Cancellation owned by the current Studio action
+   */
+  async reanalyzeJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    const state = requireCommandAdapterState(this);
+    assertJobId(jobId);
+    assertQueueRevision(expectedQueueRevision);
+    const operation = (async () => {
+      assertInvocation(state, bundleId, signal);
+      // Legacy command generations cannot turn a completed row into fresh model work.
+      // https://github.com/yydspanda/obsidian-copilot/issues/16
+      if (!state.reanalyzeCompletedSource) throw createAbortError();
+      await state.reanalyzeCompletedSource(
+        Object.freeze({ bundleId, jobId, expectedQueueRevision })
+      );
+      // Once the atomic replay exists, late cancellation must not invite another paid attempt.
+      // https://github.com/yydspanda/obsidian-copilot/issues/16
+      publishCommandHint(state, bundleId);
+    })();
+    return retainCommandDrain(state, operation);
   }
 
   /** Rejects a whole proposal or delegates selected acceptance to the narrow apply owner. */

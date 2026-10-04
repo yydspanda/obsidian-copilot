@@ -61,6 +61,8 @@ export interface KnowledgeStudioCommandCapabilities {
   resumeBundle: boolean;
   cancelJob: boolean;
   retryJob: boolean;
+  /** Whether a confirmed completed-source reassessment can be queued without resuming work. */
+  reanalyzeJob?: boolean;
   reviewReject: boolean;
   reviewAccept: boolean;
   /** Whether the exact generation exposes dedicated forward Review decisions and Apply. */
@@ -151,6 +153,13 @@ export interface KnowledgeStudioCommandPort {
     expectedQueueRevision: number,
     signal: AbortSignal
   ): Promise<void>;
+  /** Queues a new assessment of one exact completed job, preserving its history. */
+  reanalyzeJob?(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void>;
   /** Submits content-free review decisions to the core review boundary. */
   submitReview(
     bundleId: string,
@@ -195,6 +204,7 @@ export interface KnowledgeStudioPendingAction {
     | "resume"
     | "cancel"
     | "retry"
+    | "reanalyze"
     | "submit_review"
     | "submit_forward_revision"
     | "retry_forward_revision_recovery"
@@ -465,6 +475,10 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
     typeof commandCapabilities.resumeBundle !== "boolean" ||
     typeof commandCapabilities.cancelJob !== "boolean" ||
     typeof commandCapabilities.retryJob !== "boolean" ||
+    // Older generations omit reanalysis; only an explicit boolean can expose paid work.
+    // https://github.com/yydspanda/obsidian-copilot/issues/16
+    (commandCapabilities.reanalyzeJob !== undefined &&
+      typeof commandCapabilities.reanalyzeJob !== "boolean") ||
     typeof commandCapabilities.reviewReject !== "boolean" ||
     typeof commandCapabilities.reviewAccept !== "boolean" ||
     (commandCapabilities.forwardRevisionReview !== undefined &&
@@ -1539,6 +1553,41 @@ export class KnowledgeStudioController {
       (bundleId, signal) =>
         this.commandPort.retryJob(bundleId, jobId, expectedQueueRevision, signal),
       () => ({ kind: "success", message: "Knowledge job queued for retry." })
+    );
+  }
+
+  /**
+   * Queues one confirmed reassessment without resuming work or changing old history.
+   *
+   * @param jobId - Completed job selected from the current paused Activity snapshot
+   */
+  async reanalyzeJob(jobId: string): Promise<void> {
+    if (this.state.pendingAction) return;
+    const snapshot = this.state.snapshot;
+    const item = snapshot?.activity.items.find((candidate) => candidate.id === jobId);
+    // A completion label is not admission authority, and old adapters cannot accept this action.
+    // https://github.com/yydspanda/obsidian-copilot/issues/16
+    if (
+      snapshot?.commandCapabilities.reanalyzeJob !== true ||
+      snapshot.activity.controls.state !== "paused" ||
+      item?.status !== "completed" ||
+      item.actions.canReanalyze !== true ||
+      typeof this.commandPort.reanalyzeJob !== "function"
+    ) {
+      await this.rejectUnavailableAction(
+        "This material cannot be reanalyzed from the current paused snapshot."
+      );
+      return;
+    }
+    const expectedQueueRevision = snapshot.activity.revision;
+    await this.executeAction(
+      { kind: "reanalyze", targetId: jobId },
+      (bundleId, signal) =>
+        this.commandPort.reanalyzeJob!(bundleId, jobId, expectedQueueRevision, signal),
+      () => ({
+        kind: "success",
+        message: "New analysis queued. The bundle remains paused; use Resume bundle when ready.",
+      })
     );
   }
 

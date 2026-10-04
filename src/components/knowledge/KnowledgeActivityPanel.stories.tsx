@@ -110,3 +110,26 @@ export const Finalizing: StoryObj<Props> = {
     },
   },
 };
+
+const reanalysisProps = createProps({
+  sourceId: "Sources/Reading/Observations across changing conditions and counterexamples.md",
+  completion: {
+    kind: "no_changes",
+    reason: "all_targets_unchanged",
+    generationOutcomes: { explicitUnchanged: 1, identicalWrites: 0 },
+  },
+  actions: { canCancel: false, canRetry: false, canReview: false, canReanalyze: true },
+});
+
+/** Click Reanalyze to inspect the inline cost confirmation; the callback stays inert. */
+export const Reanalyze: StoryObj<Props> = {
+  args: {
+    ...reanalysisProps,
+    commandCapabilities: { ...reanalysisProps.commandCapabilities, reanalyzeJob: true },
+    onReanalyzeJob: () => Promise.resolve(),
+  },
+};
+
+export const ReanalyzeBusy: StoryObj<Props> = {
+  args: { ...Reanalyze.args, busy: true },
+};

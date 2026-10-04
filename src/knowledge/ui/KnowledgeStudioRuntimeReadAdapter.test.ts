@@ -29,7 +29,10 @@ import {
   type ChangeSetReviewSnapshot,
   type PendingChangeSetReviewRecord,
 } from "@/knowledge/review/ReviewStorage";
-import type { KnowledgeRuntimeStudioBundleSnapshot } from "@/knowledge/runtime/KnowledgeRuntimeStore";
+import type {
+  KnowledgeCompletedSourceReanalysisCommand,
+  KnowledgeRuntimeStudioBundleSnapshot,
+} from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import {
   KnowledgeRuntimeQueueStorage,
   KnowledgeRuntimeReviewRejectPort,
@@ -316,7 +319,9 @@ function createQueryResult(): KnowledgeGroundedRetrievalResult {
 }
 
 /** Creates an authentic command adapter whose narrow reviewed-apply capability is enabled. */
-async function createAcceptEnabledCommands(): Promise<KnowledgeStudioRuntimeCommandAdapter> {
+async function createAcceptEnabledCommands(
+  reanalyzeCompletedSource?: (command: KnowledgeCompletedSourceReanalysisCommand) => Promise<void>
+): Promise<KnowledgeStudioRuntimeCommandAdapter> {
   const commandRuntime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
   await commandRuntime.initialize();
   const queue = new IngestQueue(new KnowledgeRuntimeQueueStorage(commandRuntime), {
@@ -330,6 +335,7 @@ async function createAcceptEnabledCommands(): Promise<KnowledgeStudioRuntimeComm
     reviewApply: new KnowledgeStudioReviewedApplyPort(async () => ({ kind: "applied" })),
     bundleIds: [BUNDLE_ID],
     assertCurrent: () => undefined,
+    reanalyzeCompletedSource,
   });
 }
 
@@ -404,6 +410,27 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
   describe("KnowledgeStudioRuntimeReadAdapter", () => {
     describe("load()", () => {
       const issue = "https://github.com/yydspanda/obsidian-copilot/issues/7";
+
+      it("projects only same-snapshot Runtime-approved completed jobs as reanalyzable — https://github.com/yydspanda/obsidian-copilot/issues/16", async () => {
+        const queue = createQueue(createPendingRecord());
+        queue.jobs[0] = {
+          ...queue.jobs[0],
+          status: "completed",
+          stage: "completed",
+          changeSetId: "done",
+          completedAt: 250,
+          updatedAt: 250,
+        };
+        queue.control = { status: "paused", reason: "user", pausedAt: 260 };
+        queue.pendingReviews = [];
+        const projection = { ...createProjection(7, queue), reanalyzableJobIds: ["job-1"] };
+        const adapter = createAdapter(new FakeRuntime([projection]));
+        const result = await adapter.load(BUNDLE_ID, new AbortController().signal);
+        expect(result.activity.items[0]).toMatchObject({
+          id: "job-1",
+          actions: { canReanalyze: true },
+        });
+      });
 
       it("forwards atomic no-changes completion diagnostics into Activity — https://github.com/yydspanda/obsidian-copilot/issues/15", async () => {
         const queue = createQueue(createPendingRecord());
@@ -657,6 +684,35 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
         expect(unsubscribeRuntime).toHaveBeenCalledTimes(1);
         if (active) retainedHint?.();
         expect(onHint).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("reanalyzeJob()", () => {
+      it("delegates exact intent to the private command adapter and exposes its capability — https://github.com/yydspanda/obsidian-copilot/issues/16", async () => {
+        const command = jest.fn(async () => undefined);
+        const adapter = createAdapter(
+          new FakeRuntime([createProjection(1)]),
+          createMissingResolver(),
+          undefined,
+          () => undefined,
+          await createAcceptEnabledCommands(command)
+        );
+        const snapshot = await adapter.load(BUNDLE_ID, new AbortController().signal);
+        expect(snapshot.commandCapabilities.reanalyzeJob).toBe(true);
+        await adapter.reanalyzeJob(BUNDLE_ID, "completed-job", 7, new AbortController().signal);
+        expect(command).toHaveBeenCalledTimes(1);
+        expect(command).toHaveBeenCalledWith({
+          bundleId: BUNDLE_ID,
+          jobId: "completed-job",
+          expectedQueueRevision: 7,
+        });
+      });
+
+      it("fails closed without an installed command adapter — https://github.com/yydspanda/obsidian-copilot/issues/16", async () => {
+        const adapter = createAdapter(new FakeRuntime([createProjection(1)]));
+        await expect(
+          adapter.reanalyzeJob(BUNDLE_ID, "completed-job", 7, new AbortController().signal)
+        ).rejects.toThrow("not configured");
       });
     });
 

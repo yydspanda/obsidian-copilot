@@ -126,6 +126,7 @@ const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"
   resume: "Resuming knowledge activity…",
   cancel: "Cancelling the selected job…",
   retry: "Queuing the selected job for retry…",
+  reanalyze: "Queuing a new analysis of the selected material…",
   submit_review: "Submitting the review decision…",
   submit_forward_revision: "Submitting the forward revision decision…",
   retry_forward_revision_recovery: "Rechecking the exact Forward Apply state…",
@@ -978,10 +979,12 @@ function KnowledgeStudioContent({
             <KnowledgeActivityPanel
               commandCapabilities={snapshot.commandCapabilities}
               model={snapshot.activity}
+              busy={state.pendingAction !== undefined}
               onCancelJob={(jobId) => void controller.cancelJob(jobId)}
               onPauseBundle={() => void controller.pauseBundle()}
               onResumeBundle={() => void controller.resumeBundle()}
               onRetryJob={(jobId) => void controller.retryJob(jobId)}
+              onReanalyzeJob={(jobId) => controller.reanalyzeJob(jobId)}
               onReviewJob={(jobId) => openJobReview(controller, jobId)}
             />
           )

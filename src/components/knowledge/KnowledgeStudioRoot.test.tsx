@@ -42,6 +42,8 @@ jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
     onResumeBundle: () => void;
     onCancelJob: (jobId: string) => void;
     onRetryJob: (jobId: string) => void;
+    onReanalyzeJob?: (jobId: string) => Promise<void>;
+    busy?: boolean;
     onReviewJob: (jobId: string) => void;
   }) => (
     <div data-testid="activity-panel">
@@ -76,6 +78,15 @@ jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
       </button>
       <button type="button" onClick={() => props.onReviewJob("job-review")}>
         Activity review
+      </button>
+      <button
+        type="button"
+        disabled={props.busy || !props.commandCapabilities.reanalyzeJob}
+        onClick={() => {
+          void props.onReanalyzeJob?.("completed-source-job");
+        }}
+      >
+        Activity reanalyze
       </button>
     </div>
   ),
@@ -517,6 +528,10 @@ class TestKnowledgeStudioController {
   /** Records an opaque job retry request without optimistic state. */
   async retryJob(jobId: string): Promise<void> {
     this.calls.push(`retry:${jobId}`);
+  }
+
+  async reanalyzeJob(jobId: string): Promise<void> {
+    this.calls.push(`reanalyze:${jobId}`);
   }
 
   /** Records an opaque review command without optimistic state. */
@@ -993,6 +1008,20 @@ describe("KnowledgeStudioRoot", () => {
       "review:changeset-1",
     ]);
     expect(screen.getByText("Review plan changeset-1")).toBeTruthy();
+  });
+
+  it("routes confirmed reanalysis to its exact job and disables it during another action — https://github.com/yydspanda/obsidian-copilot/issues/16", () => {
+    const state = createReadyState([], { ...ENABLED_COMMAND_CAPABILITIES, reanalyzeJob: true });
+    const controller = new TestKnowledgeStudioController(state);
+    renderStudio(controller);
+    fireEvent.click(screen.getByRole("button", { name: "Activity reanalyze" }));
+    expect(controller.calls).toEqual(["reanalyze:completed-source-job"]);
+    act(() => controller.publish({ ...state, pendingAction: { kind: "pause" } }));
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Activity reanalyze" }).disabled
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Activity reanalyze" }));
+    expect(controller.calls).toHaveLength(1);
   });
 
   it("keeps live Activity and Review navigation available while read-only commands stay disabled", () => {

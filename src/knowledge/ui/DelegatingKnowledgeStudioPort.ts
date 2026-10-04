@@ -280,6 +280,29 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
+  /**
+   * Routes confirmed reanalysis without losing a resolved atomic enqueue on generation change.
+   *
+   * @param bundleId - Bundle owning the selected completed job
+   * @param jobId - Exact completed job selected by the user
+   * @param expectedQueueRevision - Queue revision displayed at confirmation
+   * @param signal - Caller cancellation before the atomic operation commits
+   */
+  async reanalyzeJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    // Reanalysis is absent on older generations; never fall back to failed-job Retry.
+    // https://github.com/yydspanda/obsidian-copilot/issues/16
+    return this.runCommitWinsWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.reanalyzeJob === "function"
+        ? delegate.reanalyzeJob(bundleId, jobId, expectedQueueRevision, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
   /** Routes one Review mutation while preserving any resolved durable receipt. */
   async submitReview(
     bundleId: string,

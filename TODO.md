@@ -7,14 +7,14 @@
 
 ## Current Stage
 
-- Stage ID: `OPS-MAINTENANCE`
-- Outcome: retain completed delivery evidence and the explicit incremental-replay blocker.
-- Exit gate: bounded tracker and registered task references pass governance checks.
+- Stage ID: `PK-H3`
+- Outcome: safely reanalyze one completed material and attempt the bounded incremental reading replay.
+- Exit gate: local/native admission checks pass, delivered branch is pushed, and replay outcome is honestly recorded.
 
 ## In Progress
 
-- [ ] `OPS-PROGRESS-GOVERNANCE` — preserve delivery evidence while awaiting a reprocess-feature decision.
-  Management copy deployed/paused; 0/3 newly approved model requests used. No same-input reprocess action exists.
+- [ ] `PK-H3-SOURCE-REANALYSIS` — [Issue #16](https://github.com/yydspanda/obsidian-copilot/issues/16): confirmed single-source reanalysis, tests and delivery.
+  Then at most 3 model requests for chapter 13; no retries, prompt changes, other-material writes or upstream sync; end paused.
 
 ## Upstream Status
 

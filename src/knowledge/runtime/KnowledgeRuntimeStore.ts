@@ -559,6 +559,15 @@ export interface KnowledgeRuntimeStudioBundleSnapshot {
   review: ChangeSetReviewSnapshot;
   /** Content-free outcomes proven for exact jobs; absent on older read ports. */
   completionOutcomes?: Readonly<Record<string, KnowledgeRuntimeJobCompletion>>;
+  /** Eligible display hints only; the mutation reproves the exact current state. */
+  reanalyzableJobIds?: readonly string[];
+}
+
+/** Explicit replay intent tied to the completed Activity row the user inspected. */
+export interface KnowledgeCompletedSourceReanalysisCommand {
+  bundleId: string;
+  jobId: string;
+  expectedQueueRevision: number;
 }
 
 /** Display-only completion evidence; never grants permission to write or reuse citations. */
@@ -1323,6 +1332,15 @@ const sourceRetirementCommandSchema: z.ZodType<KnowledgeSourceRetirementCommand>
       .strict(),
   })
   .strict();
+
+const completedSourceReanalysisCommandSchema: z.ZodType<KnowledgeCompletedSourceReanalysisCommand> =
+  z
+    .object({
+      bundleId: nonEmptyStringSchema,
+      jobId: nonEmptyStringSchema,
+      expectedQueueRevision: nonNegativeSafeIntegerSchema,
+    })
+    .strict();
 
 /** Reports an unreadable, malformed, or semantically torn runtime envelope. */
 export class KnowledgeRuntimeStoreCorruptError extends Error {
@@ -4369,6 +4387,64 @@ function reusableCompletionHasProof(
   job: ReusableCompletedJob
 ): boolean {
   return readCompletionOutcome(snapshot, manifest, job) !== undefined;
+}
+
+/** Shares read-only eligibility with the atomic replay boundary without trusting a UI hint. */
+function readCompletedSourceReanalysis(
+  state: KnowledgeRuntimeStoreSnapshot,
+  manifest: SourceManifest | undefined,
+  queue: IngestQueueSnapshot,
+  jobId: string
+):
+  | {
+      job: ReusableCompletedJob;
+      source: KnowledgeRuntimeInputRevisionRecord;
+      highWatermark: IngestSourceHighWatermark;
+    }
+  | undefined {
+  // An explicit replay must not release a recovery gate or race an existing write owner.
+  // https://github.com/yydspanda/obsidian-copilot/issues/16
+  if (
+    !manifest ||
+    queue.control.status !== "paused" ||
+    queue.control.reason !== "user" ||
+    state.activeTransaction !== null ||
+    state.activeForwardRevisionApply !== null ||
+    queue.applyClaim !== undefined ||
+    queue.applyCommit !== undefined ||
+    queue.jobs.some((job) => job.status === "failed" && job.stage === "applying") ||
+    queue.revision === Number.MAX_SAFE_INTEGER ||
+    state.revision === Number.MAX_SAFE_INTEGER
+  )
+    return undefined;
+  const job = queue.jobs.find((candidate) => candidate.id === jobId);
+  if (
+    job?.status !== "completed" ||
+    !manifest.entries.some((entry) => entry.sourceId === job.sourceId) ||
+    findKnowledgeSourceRetirement(manifest, job.sourceId) ||
+    !reusableCompletionHasProof(state, manifest, job)
+  )
+    return undefined;
+  const highWatermark = queue.sourceHighWatermarks.find((item) => item.sourceId === job.sourceId);
+  if (!highWatermark) return undefined;
+  const outcome = findCurrentSourceTerminalOutcome(queue, highWatermark);
+  const source = state.inputRevisions
+    .find((bundle) => bundle.bundleId === queue.bundleId)
+    ?.sources.find((candidate) => candidate.sourceId === job.sourceId);
+  // A new watcher read owns its allocated revision even before its bytes reach Queue.
+  // https://github.com/yydspanda/obsidian-copilot/issues/16
+  if (
+    outcome.kind !== "completed" ||
+    outcome.job.id !== job.id ||
+    !source ||
+    source.inputRevision !== highWatermark.inputRevision ||
+    source.inputRevision === Number.MAX_SAFE_INTEGER ||
+    source.observations.some(
+      (observation) => observation.status === "allocated" || observation.status === "bound"
+    )
+  )
+    return undefined;
+  return { job, source, highWatermark };
 }
 
 /**
@@ -9240,6 +9316,121 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     return this.readBundleSlot("queues", bundleId);
   }
 
+  /**
+   * Schedules a separate completed-input attempt without changing history or resuming work.
+   * @param command - Exact completed job and observed Queue revision authorized by the user
+   */
+  async reanalyzeCompletedSource(
+    command: KnowledgeCompletedSourceReanalysisCommand
+  ): Promise<void> {
+    const request = completedSourceReanalysisCommandSchema.parse(command);
+    let expected: KnowledgeRuntimeStoreSnapshot | undefined;
+    try {
+      await this.updateState((state) => {
+        const queueRaw = findBundleSlot(state, "queues", request.bundleId);
+        const manifestRaw = findBundleSlot(state, "manifests", request.bundleId);
+        const queue =
+          queueRaw === null ? undefined : this.requireQueueSnapshot(request.bundleId, queueRaw);
+        const manifest =
+          manifestRaw === null ? undefined : this.requireManifest(request.bundleId, manifestRaw);
+        const admission =
+          queue?.revision === request.expectedQueueRevision
+            ? readCompletedSourceReanalysis(state, manifest, queue, request.jobId)
+            : undefined;
+        if (!admission || !queue) {
+          throw new TypeError(
+            "Completed-source reanalysis is unavailable; refresh Activity and pause the queue"
+          );
+        }
+        const { job, source, highWatermark } = admission;
+        const newJobId = `reanalysis-${this.nextOpaqueId("jobId")}`;
+        const observationToken = this.nextOpaqueId("observationToken");
+        const captureId = newJobId;
+        if (
+          state.queues.some((slot) =>
+            this.requireQueueSnapshot(slot.bundleId, slot.value).jobs.some(
+              (item) => item.id === newJobId
+            )
+          ) ||
+          state.inputRevisions.some((bundle) =>
+            bundle.sources.some((item) =>
+              item.observations.some(
+                (observation) =>
+                  observation.observationToken === observationToken ||
+                  observation.captureId === captureId
+              )
+            )
+          )
+        )
+          throw new SourceInputObservationTokenCollisionError();
+        const timestamp = Math.max(this.now(), job.updatedAt, highWatermark.observedAt);
+        const inputRevision = source.inputRevision + 1;
+        const nextQueue: IngestQueueSnapshot = {
+          ...queue,
+          revision: queue.revision + 1,
+          jobs: [
+            ...queue.jobs,
+            {
+              id: newJobId,
+              bundleId: queue.bundleId,
+              sourceId: job.sourceId,
+              sourceContentHash: job.sourceContentHash,
+              pipelineFingerprint: job.pipelineFingerprint,
+              inputRevision,
+              attempt: 0,
+              rerunRequested: false,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              status: "pending",
+              stage: "queued",
+            },
+          ],
+          sourceHighWatermarks: queue.sourceHighWatermarks.map((watermark) =>
+            watermark.sourceId === job.sourceId
+              ? { ...watermark, inputRevision, observedAt: timestamp }
+              : watermark
+          ),
+        };
+        // A replay advances ordering, never source bytes or completion evidence. The executor
+        // still checks the real source against this hash before making any model request.
+        // https://github.com/yydspanda/obsidian-copilot/issues/16
+        expected = {
+          ...state,
+          revision: nextStoreRevision(state),
+          queues: replaceBundleSlot(state.queues, queue.bundleId, nextQueue),
+          inputRevisions: replaceInputRevisionSource(state.inputRevisions, queue.bundleId, {
+            ...source,
+            inputRevision,
+            observations: [
+              ...source.observations,
+              {
+                observationToken,
+                captureId,
+                inputRevision,
+                status: "consumed",
+                sourceContentHash: job.sourceContentHash,
+                pipelineFingerprint: job.pipelineFingerprint,
+                allocatedAt: timestamp,
+                boundAt: timestamp,
+                settledAt: timestamp,
+                queueRevision: nextQueue.revision,
+              },
+            ],
+          }),
+        };
+        return { next: expected, value: undefined };
+      });
+    } catch (error) {
+      // Lost acknowledgements must not invite a second paid attempt from the same click.
+      // https://github.com/yydspanda/obsidian-copilot/issues/16
+      const actual =
+        expected === undefined ? undefined : await this.readState().catch(() => undefined);
+      if (expected === undefined || actual === undefined || !exactJsonValuesEqual(expected, actual))
+        throw error;
+      this.emitStudioHints([request.bundleId]);
+    }
+  }
+
   /** Atomically compares and replaces one complete queue snapshot. */
   async writeQueue(
     bundleId: string,
@@ -9397,10 +9588,13 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
     const manifest =
       manifestRaw === null ? undefined : (thisOrNullManifest(manifestRaw) ?? undefined);
     const completions: [string, KnowledgeRuntimeJobCompletion][] = [];
+    const reanalyzableJobIds: string[] = [];
     for (const job of queue.jobs) {
       if (job.status !== "completed") continue;
       const outcome = readCompletionOutcome(state, manifest, job);
       if (outcome !== undefined) completions.push([job.id, outcome]);
+      if (readCompletedSourceReanalysis(state, manifest, queue, job.id))
+        reanalyzableJobIds.push(job.id);
     }
     return {
       bundleId,
@@ -9415,6 +9609,9 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       ...(completions.length === 0
         ? {}
         : { completionOutcomes: Object.freeze(Object.fromEntries(completions)) }),
+      ...(reanalyzableJobIds.length === 0
+        ? {}
+        : { reanalyzableJobIds: Object.freeze(reanalyzableJobIds) }),
     };
   }
 
