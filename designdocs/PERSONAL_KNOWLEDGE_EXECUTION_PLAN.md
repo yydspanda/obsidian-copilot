@@ -48,6 +48,9 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
 - Task ID: `PK-H3-NOCHANGES-DELIVERY` — commit/push the verified feedback repair, deploy only
   to the management test copy and verify native loading and preservation; any paid incremental
   replay requires a fresh bounded request allowance.
+- Task ID: `PK-H3-INCREMENTAL-OMISSION` — diagnose why generation repeats an existing Wiki
+  instead of incorporating the approved source extension; begin with read-only evidence,
+  with no renewed model allowance or permission to modify prompts implied.
 - Task ID: `PK-H3-SOURCE-REANALYSIS` — add confirmed single-source reanalysis with preserved
   history, exact paused-queue admission and automatic dedup intact; verify and deliver before
   the approved three-request chapter-13 compile/Query replay in the management test copy.

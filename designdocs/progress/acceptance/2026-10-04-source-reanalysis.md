@@ -78,6 +78,61 @@ no retry. Only the already-supplemented chapter-13 source may be reprocessed and
 Apply is limited to its existing Wiki page after inspection. No prompts, other
 materials or original source files may change. End with the queue paused.
 
-At this implementation checkpoint, no paid requests have been made. Deployment
-and native replay results will be recorded below; implementing the entry does not
-prove that the model incorporates the new material or repairs stale citations.
+At the implementation checkpoint, no paid requests had been made. The subsequently
+authorized delivery and replay are recorded below.
+
+## Delivery and native result
+
+Source commit `644c5e0ae104ba5e6690d2558fdf7829f2ef1192` was pushed to the fork's
+`knowledge-h3-personal-flow`, with normal Prettier/ESLint commit hooks. The remote
+branch SHA was read back. The canonical `npm run test:vault` deployment used the
+management test-copy path and the personal 10 MB override, producing
+`4.0.9+dev.644c5e0a.clean.a88b2eb171d0`; artifact hashes match those above.
+
+The deploy script could not perform its CLI reload. A Vault-guarded idle unload/load
+then produced a new plugin instance, the reanalysis capability and actual Activity
+button. Merely copying artifacts was not counted as native delivery. A temporary
+request guard was installed before that reload so the production route captured
+it. It forwarded exact request bodies/headers/signals unchanged and persisted a
+credential-free dispatch receipt before each real request. It allowed analysis,
+generation and Query at most once each, rejected other compile sources, and limited
+generation to an update of the already-owned chapter-13 Wiki path. No retry was made.
+
+Native checks:
+
+1. Opening and cancelling confirmation changes no file or job and makes no request.
+2. Confirming adds exactly one pending job at fresh input revision 15. The five old
+   jobs are unchanged, Wiki is unchanged, and the queue remains user-paused. Success
+   feedback explicitly asks for Resume; zero requests have been dispatched.
+3. Explicit Resume makes one analysis and one generation request. Both return HTTP
+   200 with requested/observed `deepseek-v4-pro`, ending normally. The generation
+   proposes the **same bytes as the existing Wiki page**. The durable result is
+   `all_targets_unchanged`, `explicitUnchanged=0`, `identicalWrites=1`, attempt 1.
+4. No Review proposal is created, so no Apply is attempted. The queue is paused.
+5. One explicit Query asks for the five fields in the supplemented reader extension.
+   It retrieves two Wiki hits but the answer is `insufficient_evidence`, with zero
+   claims and four missing-evidence explanations. This is a real third request,
+   not a successful answer inferred from retrieval hits.
+6. The guard is closed and removed, native fetch restored, and an idle plugin reload
+   completes. Studio is ready/paused with six completed jobs, zero active/failed/
+   pending-review/rerun/recovery work, Query idle and agent sessions idle.
+
+**Reanalysis entry acceptance passes; incremental semantic acceptance does not.**
+The new material still has not reached Wiki/Query. This run narrows the symptom to
+an identical generated write; it does not establish why the model omitted the
+extension. Do not fix it by bypassing no-changes, hash/citation checks or Review,
+and do not spend another request under this exhausted allowance.
+
+All **226 file/link entries and 92 existing settings fields** remain unchanged,
+including the original chapter, managed source, Wiki and project/rules files.
+All five old jobs, old Review records, Apply ledger and other source entries are
+preserved. Runtime legitimately gains the one reanalysis and its completion marker;
+reload also advances observation bookkeeping. Whole-Runtime byte identity is not
+claimed. The previously reviewed historical wording is untouched.
+
+Model allowance: **3/3**, exactly analysis + generation + Query, no blocked attempts,
+transport failures or retries. No Apply, Save, other-material write, upstream sync
+or remote-master update occurred. See [experiments 20261004-001–003](../experiments/2026-10.md#experiment-exp-20261004-001)
+for upstream/model/config/data hashes, hardware, commands, tokens and timings.
+Local raw bodies/prompts were not retained; private receipts retain hashes and
+metrics, and the saved Query result is separate from the post-reload idle state.

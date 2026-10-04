@@ -8,13 +8,13 @@
 ## Current Stage
 
 - Stage ID: `PK-H3`
-- Outcome: safely reanalyze one completed material and attempt the bounded incremental reading replay.
-- Exit gate: local/native admission checks pass, delivered branch is pushed, and replay outcome is honestly recorded.
+- Outcome: understand the incremental-content omission without weakening source/Review safety.
+- Exit gate: a separately scoped repair and real evidence show the extension reaching Wiki and Query.
 
 ## In Progress
 
-- [ ] `PK-H3-SOURCE-REANALYSIS` — [Issue #16](https://github.com/yydspanda/obsidian-copilot/issues/16): confirmed single-source reanalysis, tests and delivery.
-  Then at most 3 model requests for chapter 13; no retries, prompt changes, other-material writes or upstream sync; end paused.
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Await next scope decision after identical generated Wiki content and insufficient Query evidence.
+  The 3-request allowance is exhausted; no retry, prompt edit or further model request is authorized. Queue stays paused.
 
 ## Upstream Status
 
@@ -28,6 +28,7 @@
 
 ## Recent Activity
 
+- 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
 - 2026-10-03 — `PK-H3-MANAGEMENT-REALUSE` — Full bounded reading flow passes: 3 completed jobs, 0 failures, 5/8 requests; two fork-owned fixes deployed. [Completion](./designdocs/progress/archive/2026-10.md).
 - 2026-09-21 — `PK-STUDIO-ONBOARDING` — [Issue #13](https://github.com/yydspanda/obsidian-copilot/issues/13):
@@ -49,12 +50,6 @@
   `EXP-20260917-002` passes live Save continuity: feedback survives full refresh, Query stays selected, and all 69 old files are unchanged.
 - 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests pass.
   Issue #7 blocks incompatible proposals; 36 Windows gallery cases and Query/citation/return checks pass.
-- 2026-09-13 — `PK-H3-UPSTREAM-V4-WIN` — Merged seven upstream commits through `9e2594b4`
-  (4.0.8) as `d1603e68` with zero conflicts. All 79 modified files and 12 new files were retained;
-  the restored working-tree content exactly matched the isolated merge preflight. The user approved
-  an explicit personal budget under [issue #4](https://github.com/yydspanda/obsidian-copilot/issues/4);
-  the single-bundle production build passes at 6,393,390 bytes without deployment. Source fixes
-  are committed as `7d978089`; the personal build guard and tests are committed as `38e54166`.
 
 ## Working Agreements
 
@@ -69,6 +64,7 @@
 
 ## Current Verification
 
+- October 4 reanalysis: 19 affected suites / 736 tests, 20 governance tests, 72 gallery checks and gates pass. Native queue/cancel/history checks pass; incremental Wiki/Query acceptance fails. 3/3 requests; all 226 files/92 settings preserved; queue paused.
 - October 4 no-changes repair: 11 suites / 489 tests, 20 governance tests, 56 isolated rendered states and build/lint/review pass.
   Pushed/deployed; native Activity shows 2 applied/3 no-changes, data preserved. No paid replay/full-suite rerun; semantic inclusion unproven.
 - October 3 frozen-source regression: 731 suites / 10,760 tests pass, 2 existing skips; lint/format/governance pass.
