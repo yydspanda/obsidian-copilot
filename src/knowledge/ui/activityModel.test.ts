@@ -407,7 +407,19 @@ describe("deriveKnowledgeActivityModel stage projection", () => {
     expect(model.items[0].actions.canReview).toBe(false);
   });
 
-  it.each(["user", "rate_limit", "startup_recovery"] as const)(
+  it("allows exact Review acceptance while unrelated materials remain user-paused — https://github.com/yydspanda/obsidian-copilot/issues/18", () => {
+    const model = deriveKnowledgeActivityModel(
+      createSnapshot([createReviewJob("review"), createPendingJob("other")], {
+        status: "paused",
+        reason: "user",
+        pausedAt: 20,
+      })
+    );
+    expect(model.controls.state).toBe("paused");
+    expect(model.items.find((item) => item.id === "review")?.actions.canReview).toBe(true);
+  });
+
+  it.each(["rate_limit", "startup_recovery"] as const)(
     "blocks review acceptance while the Bundle is paused for %s",
     (reason) => {
       const review = createReviewJob("review");
@@ -521,6 +533,25 @@ describe("deriveKnowledgeActivityModel stage projection", () => {
 });
 
 describe("deriveKnowledgeActivityModel commit and recovery gates", () => {
+  it("keeps an unacknowledged single-material Apply finalizing without offering Resume or another run — https://github.com/yydspanda/obsidian-copilot/issues/18", () => {
+    const owner = createCompletedJob("owner");
+    if (owner.status !== "completed") throw Error("Expected completed fixture");
+    const snapshot = createSnapshot(
+      [owner, createPendingJob("other"), createReviewJob("review")],
+      { status: "paused", reason: "user", pausedAt: 20 },
+      { applyCommit: createCommitMarker(owner) }
+    );
+    const model = deriveKnowledgeActivityModel(snapshot);
+    expect(model.controls).toMatchObject({
+      state: "finalizing",
+      canPause: false,
+      canResume: false,
+    });
+    expect(model.items.find((item) => item.id === "owner")?.status).toBe("finalizing");
+    expect(model.items.find((item) => item.id === "other")?.actions.canRunSelected).not.toBe(true);
+    expect(model.items.find((item) => item.id === "review")?.actions.canReview).toBe(false);
+  });
+
   it("keeps only the matching committed job finalizing until commit acknowledgement", () => {
     const owner = createCompletedJob("owner", { createdAt: 30, updatedAt: 50 });
     const history = createCompletedJob("history", { createdAt: 10, updatedAt: 20 });

@@ -796,7 +796,28 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
         });
       });
 
-      it.each(["user", "rate_limit"] as const)(
+      it("applies an explicitly reviewed proposal while user-paused and leaves all other pending work untouched (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+        const harness = await createReviewedApplyHarness("missing");
+        await harness.capabilities.queue.pause(BUNDLE_ID);
+        const before = await harness.capabilities.queue.load(BUNDLE_ID);
+        const command = await createAcceptCommand(harness);
+        await expect(
+          harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
+        ).resolves.toEqual({ kind: "applied" });
+        const after = await harness.capabilities.queue.load(BUNDLE_ID);
+        expect(after.control).toEqual(before.control);
+        expect(after.jobs.filter((job) => job.id !== harness.jobId)).toEqual(
+          before.jobs.filter((job) => job.id !== harness.jobId)
+        );
+        expect(harness.fileStore.files.get(TARGET_PATH)).toBe(PAGE_CONTENT);
+        expect(harness.refresh).toHaveBeenCalledTimes(1);
+        await expect(harness.capabilities.queue.runNext(BUNDLE_ID)).resolves.toMatchObject({
+          kind: "paused",
+          reason: "user",
+        });
+      });
+
+      it.each(["rate_limit"] as const)(
         "keeps the proposal pending and Runtime unchanged when paused for %s (https://github.com/yydspanda/obsidian-copilot/issues/6)",
         async (reason) => {
           const harness = await createReviewedApplyHarness("missing");
@@ -836,7 +857,7 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
         }
       );
 
-      it("keeps a proposal pending when Pause arrives after validation but before acceptance commits (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+      it("keeps background work paused without cancelling an explicitly authorized Apply before acceptance (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
         const harness = await createReviewedApplyHarness("missing");
         const command = await createAcceptCommand(harness);
         const writeReview = harness.capabilities.runtime.writeReview;
@@ -856,20 +877,18 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
 
         await expect(
           harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
-        ).resolves.toMatchObject({
-          kind: "blocked",
-          diagnostics: [expect.objectContaining({ code: "review_apply_queue_paused" })],
-        });
+        ).resolves.toEqual({ kind: "applied" });
 
         expect(writeSpy).toHaveBeenCalledTimes(1);
         expect(pausedState).toBeDefined();
-        expect(await harness.capabilities.file.read()).toBe(pausedState);
-        expect(harness.fileStore.files.size).toBe(0);
-        expect(harness.fileStore.compareAndSwapCalls).toBe(0);
-        expect(harness.refresh).not.toHaveBeenCalled();
+        expect(harness.fileStore.files.get(TARGET_PATH)).toBe(PAGE_CONTENT);
+        expect(harness.fileStore.compareAndSwapCalls).toBe(1);
+        expect(harness.refresh).toHaveBeenCalledTimes(1);
+        await expect(harness.capabilities.queue.load(BUNDLE_ID)).resolves.toMatchObject({
+          control: { status: "paused", reason: "user" },
+        });
         await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
-          outcome: "pending",
-          recordRevision: 0,
+          outcome: "accepted",
         });
       });
 
@@ -903,7 +922,7 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
         expect(harness.fileStore.compareAndSwapCalls).toBe(0);
       });
 
-      it("preserves accepted-not-started recovery when Pause arrives after acceptance committed (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
+      it("finishes explicit Apply without resuming the backlog when Pause arrives after acceptance (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
         const harness = await createReviewedApplyHarness("missing");
         const command = await createAcceptCommand(harness);
         const writeReview = harness.capabilities.runtime.writeReview;
@@ -921,7 +940,7 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
 
         await expect(
           harness.coordinator.submit(BUNDLE_ID, command, new AbortController().signal)
-        ).resolves.toEqual({ kind: "recovery_required" });
+        ).resolves.toEqual({ kind: "applied" });
 
         await expect(harness.reviews.get(BUNDLE_ID, harness.changeSetId)).resolves.toMatchObject({
           outcome: "accepted",
@@ -930,10 +949,13 @@ describe("KnowledgeProductionReviewedApplyCoordinator", () => {
           JSON.parse(await harness.capabilities.file.read()) as unknown
         );
         expect(runtime.activeTransaction).toBeNull();
-        expect(runtime.applyCommits).toEqual([]);
-        expect(harness.fileStore.files.size).toBe(0);
-        expect(harness.fileStore.compareAndSwapCalls).toBe(0);
+        expect(runtime.applyCommits).toHaveLength(1);
+        expect(harness.fileStore.files.get(TARGET_PATH)).toBe(PAGE_CONTENT);
+        expect(harness.fileStore.compareAndSwapCalls).toBe(1);
         expect(harness.refresh).toHaveBeenCalledTimes(1);
+        await expect(harness.capabilities.queue.load(BUNDLE_ID)).resolves.toMatchObject({
+          control: { status: "paused", reason: "user" },
+        });
       });
 
       it("blocks an old pipeline proposal before accepting it or writing Wiki files (https://github.com/yydspanda/obsidian-copilot/issues/7)", async () => {

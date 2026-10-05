@@ -7300,9 +7300,12 @@ function acceptedClaimProjectionMatches(
   candidate: IngestQueueSnapshot
 ): boolean {
   const claim = candidate.applyClaim;
+  // Review Apply is an explicit action; a user pause only blocks background work.
+  // https://github.com/yydspanda/obsidian-copilot/issues/18
   const controlAllowsBegin =
     current.control.status === "running" ||
-    (current.control.status === "paused" && current.control.reason === "startup_recovery");
+    (current.control.status === "paused" &&
+      (current.control.reason === "startup_recovery" || current.control.reason === "user"));
   if (
     !controlAllowsBegin ||
     current.applyClaim !== undefined ||
@@ -7686,9 +7689,11 @@ function applyCommitProjectionMatches(
   current: IngestQueueSnapshot,
   candidate: IngestQueueSnapshot
 ): boolean {
+  const preserveUserPause =
+    current.control.status === "paused" && current.control.reason === "user";
   if (
     candidate.control.status !== "paused" ||
-    candidate.control.reason !== "commit_pending_ack" ||
+    candidate.control.reason !== (preserveUserPause ? "user" : "commit_pending_ack") ||
     current.applyClaim === undefined ||
     candidate.applyCommit === undefined ||
     state.activeTransaction === null
@@ -7716,7 +7721,9 @@ function applyCommitProjectionMatches(
   ) {
     return false;
   }
-  const completedAt = candidate.control.pausedAt;
+  const completedJob = candidate.jobs.find((job) => job.id === applying.id);
+  if (completedJob?.status !== "completed") return false;
+  const completedAt = completedJob.completedAt;
   if (completedAt < Math.max(marker.committedAt, applying.updatedAt)) {
     return false;
   }
@@ -7746,12 +7753,17 @@ function applyCommitProjectionMatches(
   const expected: IngestQueueSnapshot = {
     ...expectedWithoutClaim,
     revision: current.revision + 1,
-    control: {
-      status: "paused",
-      reason: "commit_pending_ack",
-      pausedAt: completedAt,
-      detail: "Committed pages are waiting for durable journal acknowledgement",
-    },
+    // Retain the original pause across crash-safe acknowledgement; refreshing
+    // the workflow must not release unrelated backlog after a selected Apply.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    control: preserveUserPause
+      ? current.control
+      : {
+          status: "paused",
+          reason: "commit_pending_ack",
+          pausedAt: completedAt,
+          detail: "Committed pages are waiting for durable journal acknowledgement",
+        },
     applyCommit: marker,
   };
   return exactJsonValuesEqual(expected, candidate);
@@ -7770,13 +7782,15 @@ function applyCommitFinalizationProjectionMatches(
   current: IngestQueueSnapshot,
   candidate: IngestQueueSnapshot
 ): boolean {
+  const preserveUserPause =
+    current.control.status === "paused" && current.control.reason === "user";
   if (
     state.activeTransaction !== null ||
     current.applyCommit === undefined ||
     candidate.applyCommit !== undefined ||
     candidate.control.status !== "paused" ||
-    candidate.control.reason !== "startup_recovery" ||
-    candidate.control.pausedAt < current.applyCommit.committedAt
+    candidate.control.reason !== (preserveUserPause ? "user" : "startup_recovery") ||
+    (!preserveUserPause && candidate.control.pausedAt < current.applyCommit.committedAt)
   ) {
     return false;
   }
@@ -7785,12 +7799,16 @@ function applyCommitFinalizationProjectionMatches(
   const expected: IngestQueueSnapshot = {
     ...expectedWithoutMarker,
     revision: current.revision + 1,
-    control: {
-      status: "paused",
-      reason: "startup_recovery",
-      pausedAt: candidate.control.pausedAt,
-      detail: "Recovered apply committed; startup reconciliation must release the backlog",
-    },
+    // A selected Apply acknowledges only its marker, never the user's pause.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    control: preserveUserPause
+      ? current.control
+      : {
+          status: "paused",
+          reason: "startup_recovery",
+          pausedAt: candidate.control.pausedAt,
+          detail: "Recovered apply committed; startup reconciliation must release the backlog",
+        },
   };
   return exactJsonValuesEqual(expected, candidate);
 }
@@ -7851,6 +7869,25 @@ function protectedQueueControlTransitionIsAllowed(
   current: IngestQueueSnapshot | null,
   candidate: IngestQueueSnapshot
 ): boolean {
+  // The commit marker remains an independent hard gate when a selected Apply
+  // preserves the user's pause instead of replacing it with a recovery reason.
+  // https://github.com/yydspanda/obsidian-copilot/issues/18
+  if (
+    current?.control.status === "paused" &&
+    current.control.reason === "user" &&
+    (current.applyCommit !== undefined || candidate.applyCommit !== undefined)
+  ) {
+    if (current.applyCommit === undefined) {
+      return applyCommitProjectionMatches(state, current, candidate);
+    }
+    if (candidate.applyCommit === undefined) {
+      return applyCommitFinalizationProjectionMatches(state, current, candidate);
+    }
+    return (
+      exactJsonValuesEqual(current.control, candidate.control) &&
+      protectedQueueEvidenceIsPreserved(state, current, candidate)
+    );
+  }
   if (
     current?.control.status !== "paused" ||
     (current.control.reason !== "startup_recovery" &&
@@ -11025,13 +11062,25 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
       if (actualRevision !== expectedRevision) {
         throw new ReviewStorageRevisionConflictError(bundleId, expectedRevision, actualRevision);
       }
-      // Pause may arrive after asynchronous validation. Recheck it in the same
-      // commit as a new acceptance so a paused Queue cannot strand that decision.
-      // Startup recovery and already accepted history keep their existing contract.
-      // https://github.com/yydspanda/obsidian-copilot/issues/6
+      // Explicit Review Apply may proceed under a user pause without resuming
+      // background work; provider and recovery gates still forbid new acceptance.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
       const queueRaw = findBundleSlot(state, "queues", bundleId);
       const queue = queueRaw === null ? null : this.requireQueueSnapshot(bundleId, queueRaw);
-      if (queue?.control.status === "paused" && queue.control.reason !== "startup_recovery") {
+      // A second Studio view must not durably accept while selected work owns
+      // the paused queue, because its subsequent Apply claim would be blocked.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
+      const selectedWorkActive =
+        queue?.control.status === "paused" &&
+        queue.control.reason === "user" &&
+        queue.jobs.some((job) => job.status === "processing");
+      if (
+        queue?.applyCommit !== undefined ||
+        selectedWorkActive ||
+        (queue?.control.status === "paused" &&
+          queue.control.reason !== "startup_recovery" &&
+          queue.control.reason !== "user")
+      ) {
         const acceptedIds = new Set(
           candidate.records
             .filter((record) => record.outcome === "accepted")
@@ -12367,8 +12416,11 @@ export class KnowledgeRuntimeStore implements KnowledgeRuntimeSourceFreshnessAut
           candidate.pipelineFingerprint === request.pipelineFingerprint &&
           candidate.inputRevision === request.inputRevision
       );
+      // A selected claim does not release the user-paused background queue.
+      // The exact claim and consumed observation remain mandatory model authority.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
       if (
-        queue.control.status !== "running" ||
+        (queue.control.status !== "running" && queue.control.reason !== "user") ||
         !job ||
         tupleJobs.length !== 1 ||
         tupleJobs[0]?.id !== request.jobId ||

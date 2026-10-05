@@ -43,6 +43,7 @@ export interface KnowledgeStudioRuntimeCommandAdapterInput {
   retainDrain?: (drain: Promise<void>) => void;
   notifyReviewWorkAvailable?: () => void;
   reanalyzeCompletedSource?: (command: KnowledgeCompletedSourceReanalysisCommand) => Promise<void>;
+  onGenerationRefreshRequired?: () => void;
 }
 
 /** Hidden mutation authority that cannot be recovered by reflecting over the adapter. */
@@ -55,6 +56,7 @@ interface KnowledgeStudioRuntimeCommandAdapterState {
   retainDrain?: (drain: Promise<void>) => void;
   notifyReviewWorkAvailable?: () => void;
   reanalyzeCompletedSource?: KnowledgeStudioRuntimeCommandAdapterInput["reanalyzeCompletedSource"];
+  onGenerationRefreshRequired?: () => void;
   listeners: Map<string, Set<KnowledgeStudioCommandHintListener>>;
 }
 
@@ -183,7 +185,9 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
       (input.notifyReviewWorkAvailable !== undefined &&
         typeof input.notifyReviewWorkAvailable !== "function") ||
       (input.reanalyzeCompletedSource !== undefined &&
-        typeof input.reanalyzeCompletedSource !== "function")
+        typeof input.reanalyzeCompletedSource !== "function") ||
+      (input.onGenerationRefreshRequired !== undefined &&
+        typeof input.onGenerationRefreshRequired !== "function")
     ) {
       throw createAbortError();
     }
@@ -211,6 +215,9 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
       ...(input.reanalyzeCompletedSource === undefined
         ? {}
         : { reanalyzeCompletedSource: input.reanalyzeCompletedSource }),
+      ...(input.onGenerationRefreshRequired === undefined
+        ? {}
+        : { onGenerationRefreshRequired: input.onGenerationRefreshRequired }),
       listeners: new Map(),
     });
     Object.freeze(this);
@@ -224,11 +231,12 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
   /** Returns the exact immutable capability set implemented by this command generation. */
   getCapabilities(): Readonly<KnowledgeStudioCommandCapabilities> {
     const state = requireCommandAdapterState(this);
-    return state.reviewApply || state.reanalyzeCompletedSource
+    return state.reviewApply || state.reanalyzeCompletedSource || state.onGenerationRefreshRequired
       ? Object.freeze({
           ...KNOWLEDGE_STUDIO_RUNTIME_COMMAND_CAPABILITIES,
           ...(state.reviewApply ? { reviewAccept: true } : {}),
           ...(state.reanalyzeCompletedSource ? { reanalyzeJob: true } : {}),
+          ...(state.onGenerationRefreshRequired ? { runSelectedJob: true } : {}),
         })
       : KNOWLEDGE_STUDIO_RUNTIME_COMMAND_CAPABILITIES;
   }
@@ -320,6 +328,67 @@ export class KnowledgeStudioRuntimeCommandAdapter implements KnowledgeStudioComm
       // Once the atomic replay exists, late cancellation must not invite another paid attempt.
       // https://github.com/yydspanda/obsidian-copilot/issues/16
       publishCommandHint(state, bundleId);
+    })();
+    return retainCommandDrain(state, operation);
+  }
+
+  /**
+   * Executes one inspected pending job without granting permission to drain the Bundle.
+   * @param bundleId - Selected Bundle
+   * @param jobId - Exact queued Activity row confirmed by the user
+   * @param expectedQueueRevision - Queue revision inspected before confirmation
+   * @param signal - View cancellation checked before execution starts; the Queue owns entered work
+   */
+  async runSelectedJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    const state = requireCommandAdapterState(this);
+    assertJobId(jobId);
+    assertQueueRevision(expectedQueueRevision);
+    const operation = (async () => {
+      assertInvocation(state, bundleId, signal);
+      // A completed no-changes run changes Manifest authority even without writing Wiki.
+      // Only a generation owner can safely expose this paid action.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
+      if (!state.onGenerationRefreshRequired) throw createAbortError();
+      let result;
+      try {
+        result = await state.queue.runSelected(bundleId, jobId, expectedQueueRevision);
+      } catch (error) {
+        // A persistence failure may follow a durable commit; refresh authority, never retry.
+        // https://github.com/yydspanda/obsidian-copilot/issues/18
+        try {
+          state.onGenerationRefreshRequired();
+        } catch {
+          /* Notification cannot change durable truth. */
+        }
+        throw error;
+      } finally {
+        publishCommandHint(state, bundleId);
+      }
+      if (
+        result.kind === "executed" &&
+        result.status === "completed" &&
+        result.generationEffect === "manifest_no_changes_committed"
+      ) {
+        try {
+          state.onGenerationRefreshRequired();
+        } catch {
+          /* A committed result remains successful. */
+        }
+      }
+      // Backoff, failure and unavailable work are not a completed analysis and must not show success.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
+      if (
+        result.kind !== "executed" ||
+        result.jobId !== jobId ||
+        (result.status !== "completed" && result.status !== "awaiting_review")
+      ) {
+        throw new Error("The selected material did not finish; inspect its Activity status.");
+      }
     })();
     return retainCommandDrain(state, operation);
   }

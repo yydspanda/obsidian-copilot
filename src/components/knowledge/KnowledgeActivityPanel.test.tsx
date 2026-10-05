@@ -144,6 +144,116 @@ describe("KnowledgeActivityPanel", () => {
       jest.clearAllMocks();
     });
 
+    it("confirms paid execution of only the selected row and leaves other materials paused — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+      let settle!: () => void;
+      const onRunSelectedJob = jest.fn(() => new Promise<void>((resolve) => (settle = resolve)));
+      const props = {
+        ...DEFAULT_CALLBACKS,
+        onRunSelectedJob,
+        commandCapabilities: { ...ENABLED_COMMAND_CAPABILITIES, runSelectedJob: true },
+        model: createModel({
+          controls: { state: "paused", pauseReason: "user", canPause: false, canResume: true },
+          items: ["selected", "other"].map((id) =>
+            createItem({
+              id,
+              sourceId: `notes/${id}.md`,
+              actions: { canCancel: true, canRetry: false, canReview: false, canRunSelected: true },
+            })
+          ),
+        }),
+      };
+      render(<KnowledgeActivityPanel {...props} />);
+      fireEvent.click(getButton("Run only notes/selected.md"));
+      const dialog = screen.getByRole("alertdialog", { name: "Run only this material?" });
+      expect(dialog.textContent).toContain("analysis and generation");
+      expect(dialog.textContent).toContain("may incur charges");
+      expect(dialog.textContent).toContain("Other materials stay paused");
+      expect(dialog.textContent).toContain("Review and Apply");
+      expect(onRunSelectedJob).not.toHaveBeenCalled();
+      fireEvent.click(getButton("Not now"));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      fireEvent.click(getButton("Run only notes/selected.md"));
+      const confirm = getButton("Run this material");
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+      expect(onRunSelectedJob).toHaveBeenCalledTimes(1);
+      expect(onRunSelectedJob).toHaveBeenCalledWith("selected", 7);
+      expect(getButton("Resume bundle").disabled).toBe(true);
+      expect(getButton("Run only notes/other.md").disabled).toBe(true);
+      expect(getButton("Cancel notes/selected.md").disabled).toBe(false);
+      expect(getButton("Cancel notes/other.md").disabled).toBe(true);
+      fireEvent.click(getButton("Cancel notes/selected.md"));
+      expect(DEFAULT_CALLBACKS.onCancelJob).toHaveBeenCalledWith("selected");
+      expect(screen.getByRole("status").textContent).toContain("Running only this material");
+      expect(DEFAULT_CALLBACKS.onResumeBundle).not.toHaveBeenCalled();
+      await act(async () => settle());
+      expect(getButton("Resume bundle").disabled).toBe(false);
+    });
+
+    it("invalidates a selected-run confirmation when its visible queue revision changes — https://github.com/yydspanda/obsidian-copilot/issues/18", () => {
+      const props = {
+        ...DEFAULT_CALLBACKS,
+        onRunSelectedJob: jest.fn().mockResolvedValue(undefined),
+        commandCapabilities: { ...ENABLED_COMMAND_CAPABILITIES, runSelectedJob: true },
+        model: createModel({
+          controls: { state: "paused", pauseReason: "user", canPause: false, canResume: true },
+          items: [
+            createItem({
+              actions: { canCancel: true, canRetry: false, canReview: false, canRunSelected: true },
+            }),
+          ],
+        }),
+      };
+      const { rerender } = render(<KnowledgeActivityPanel {...props} />);
+      fireEvent.click(getButton("Run only notes/source.md"));
+      rerender(<KnowledgeActivityPanel {...props} model={{ ...props.model, revision: 8 }} />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      rerender(<KnowledgeActivityPanel {...props} />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(props.onRunSelectedJob).not.toHaveBeenCalled();
+    });
+
+    it("keeps selected execution unavailable without an exact command callback or while externally busy — https://github.com/yydspanda/obsidian-copilot/issues/18", () => {
+      const props = {
+        ...DEFAULT_CALLBACKS,
+        commandCapabilities: { ...ENABLED_COMMAND_CAPABILITIES, runSelectedJob: true },
+        model: createModel({
+          items: [
+            createItem({
+              actions: { canCancel: true, canRetry: false, canReview: false, canRunSelected: true },
+            }),
+          ],
+        }),
+      };
+      const { rerender } = render(<KnowledgeActivityPanel {...props} />);
+      expect(getButton("Run only notes/source.md").disabled).toBe(true);
+      rerender(<KnowledgeActivityPanel {...props} busy onRunSelectedJob={jest.fn()} />);
+      expect(getButton("Run only notes/source.md").disabled).toBe(true);
+    });
+
+    it("reports selected-run rejection without leaking provider details or retrying — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+      const onRunSelectedJob = jest.fn().mockRejectedValue(new Error("private provider detail"));
+      const props = {
+        ...DEFAULT_CALLBACKS,
+        onRunSelectedJob,
+        commandCapabilities: { ...ENABLED_COMMAND_CAPABILITIES, runSelectedJob: true },
+        model: createModel({
+          items: [
+            createItem({
+              actions: { canCancel: true, canRetry: false, canReview: false, canRunSelected: true },
+            }),
+          ],
+        }),
+      };
+      render(<KnowledgeActivityPanel {...props} />);
+      fireEvent.click(getButton("Run only notes/source.md"));
+      await act(async () => fireEvent.click(getButton("Run this material")));
+      expect(screen.getByRole("alert").textContent).toContain("Selected material could not be run");
+      expect(screen.queryByText(/private provider detail/)).toBeNull();
+      expect(onRunSelectedJob).toHaveBeenCalledTimes(1);
+      expect(DEFAULT_CALLBACKS.onResumeBundle).not.toHaveBeenCalled();
+    });
+
     it("requires a cost confirmation before queueing one completed material and lets cancellation do nothing — https://github.com/yydspanda/obsidian-copilot/issues/16", async () => {
       const onReanalyzeJob = jest.fn().mockResolvedValue(undefined);
       const item = createItem({
@@ -360,6 +470,58 @@ describe("KnowledgeActivityPanel", () => {
       );
       expect(getButton("Queue reanalysis").disabled).toBe(true);
       expect(getButton("Resume bundle").disabled).toBe(true);
+    });
+
+    it("renders selected-run gallery confirmation, pending and safe failure states without a provider — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+      const { rerender, unmount } = render(
+        <KnowledgeActivityPanel
+          {...(activityStories.SelectedRun.args as KnowledgeActivityPanelProps)}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Run only / }));
+      expect(screen.getByRole("alertdialog", { name: "Run only this material?" })).toBeTruthy();
+      await act(async () => fireEvent.click(getButton("Run this material")));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      rerender(
+        <KnowledgeActivityPanel
+          {...(activityStories.SelectedRunPending.args as KnowledgeActivityPanelProps)}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Run only / }));
+      fireEvent.click(getButton("Run this material"));
+      expect(screen.getByRole("status").textContent).toContain("Running only this material");
+      expect(getButton("Resume bundle").disabled).toBe(true);
+      unmount();
+      render(
+        <KnowledgeActivityPanel
+          {...(activityStories.SelectedRunFailure.args as KnowledgeActivityPanelProps)}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Run only / }));
+      await act(async () => fireEvent.click(getButton("Run this material")));
+      expect(screen.getByRole("alert").textContent).toContain("Selected material could not be run");
+    });
+
+    it("keeps Cancel available after remounting an active selected run and disables it while cancellation settles — https://github.com/yydspanda/obsidian-copilot/issues/18", () => {
+      const props = {
+        ...(activityStories.SelectedRun.args as KnowledgeActivityPanelProps),
+        busy: true,
+        runningSelectedJobId: "reading-job",
+      };
+      const { rerender } = render(<KnowledgeActivityPanel {...props} />);
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: /^Cancel / }).disabled).toBe(
+        false
+      );
+      expect(getButton("Resume bundle").disabled).toBe(true);
+      rerender(
+        <KnowledgeActivityPanel
+          {...(activityStories.SelectedRunCancelling.args as KnowledgeActivityPanelProps)}
+        />
+      );
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: /^Cancel / }).disabled).toBe(
+        true
+      );
+      expect(screen.getByRole("status").textContent).toContain("Cancelling this material");
     });
 
     it("does not offer reanalysis for older rows or unacknowledged completed work — https://github.com/yydspanda/obsidian-copilot/issues/16", () => {

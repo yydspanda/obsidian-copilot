@@ -65,7 +65,8 @@ describe("KnowledgeStudioController", () => {
         expect(command).toHaveBeenCalledWith("reading", "completed-1", 7, expect.any(AbortSignal));
         expect(controller.getState().feedback).toEqual({
           kind: "success",
-          message: "New analysis queued. The bundle remains paused; use Resume bundle when ready.",
+          message:
+            "New analysis queued. The bundle remains paused; use Run only this material on its queued row to process it alone.",
         });
         expect(controller.getState().snapshot?.activity.controls.state).toBe("paused");
         controller.destroy();

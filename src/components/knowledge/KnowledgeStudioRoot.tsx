@@ -127,6 +127,7 @@ const PENDING_ACTION_LABELS: Readonly<Record<KnowledgeStudioPendingAction["kind"
   cancel: "Cancelling the selected job…",
   retry: "Queuing the selected job for retry…",
   reanalyze: "Queuing a new analysis of the selected material…",
+  run_selected: "Running only the selected material… Other materials remain paused.",
   submit_review: "Submitting the review decision…",
   submit_forward_revision: "Submitting the forward revision decision…",
   retry_forward_revision_recovery: "Rechecking the exact Forward Apply state…",
@@ -634,9 +635,13 @@ function ReviewWorkspace({
             state.snapshot?.outdatedReviewIds?.includes(selectedReview.changeSetId) === true
           }
           applyPaused={
-            // Ordinary Review must not promise immediate Apply while activity is stopped.
-            // https://github.com/yydspanda/obsidian-copilot/issues/6
-            state.snapshot?.activity.controls.state !== "running"
+            // Approving this exact proposal must not resume unrelated materials.
+            // https://github.com/yydspanda/obsidian-copilot/issues/18
+            state.snapshot?.activity.controls.state !== "running" &&
+            !(
+              state.snapshot?.activity.controls.state === "paused" &&
+              state.snapshot.activity.controls.pauseReason === "user"
+            )
           }
           busy={state.pendingAction !== undefined}
           acceptCommandsEnabled={state.snapshot?.commandCapabilities.reviewAccept === true}
@@ -980,11 +985,18 @@ function KnowledgeStudioContent({
               commandCapabilities={snapshot.commandCapabilities}
               model={snapshot.activity}
               busy={state.pendingAction !== undefined}
+              runningSelectedJobId={
+                state.pendingAction?.kind === "run_selected"
+                  ? state.pendingAction.targetId
+                  : undefined
+              }
+              selectedRunCancelling={state.selectedRunCancelling}
               onCancelJob={(jobId) => void controller.cancelJob(jobId)}
               onPauseBundle={() => void controller.pauseBundle()}
               onResumeBundle={() => void controller.resumeBundle()}
               onRetryJob={(jobId) => void controller.retryJob(jobId)}
               onReanalyzeJob={(jobId) => controller.reanalyzeJob(jobId)}
+              onRunSelectedJob={(jobId, revision) => controller.runSelectedJob(jobId, revision)}
               onReviewJob={(jobId) => openJobReview(controller, jobId)}
             />
           )

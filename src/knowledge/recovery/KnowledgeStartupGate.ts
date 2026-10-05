@@ -556,8 +556,11 @@ function deriveStartupAttention(
     });
   }
   if (
-    snapshot.queueSnapshot.control.status === "paused" &&
-    snapshot.queueSnapshot.control.reason === "commit_pending_ack"
+    // Retaining a user pause does not acknowledge a committed transaction.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    snapshot.queueSnapshot.applyCommit !== undefined ||
+    (snapshot.queueSnapshot.control.status === "paused" &&
+      snapshot.queueSnapshot.control.reason === "commit_pending_ack")
   ) {
     addUniqueAttention(attention, seen, "queue_commit_pending_ack", {
       kind: "queue_commit_pending_ack",

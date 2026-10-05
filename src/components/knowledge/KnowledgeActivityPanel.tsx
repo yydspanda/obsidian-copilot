@@ -32,19 +32,23 @@ export interface KnowledgeActivityPanelProps {
   commandCapabilities: Readonly<
     Pick<
       KnowledgeStudioCommandCapabilities,
-      "pauseBundle" | "resumeBundle" | "cancelJob" | "retryJob" | "reanalyzeJob"
+      "pauseBundle" | "resumeBundle" | "cancelJob" | "retryJob" | "reanalyzeJob" | "runSelectedJob"
     >
   >;
   busy?: boolean;
+  selectedRunCancelling?: boolean;
+  runningSelectedJobId?: string;
   onPauseBundle: () => void;
   onResumeBundle: () => void;
   onCancelJob: (jobId: string) => void;
   onRetryJob: (jobId: string) => void;
   onReviewJob: (jobId: string) => void;
   onReanalyzeJob?: (jobId: string) => Promise<void>;
+  onRunSelectedJob?: (jobId: string, confirmedQueueRevision: number) => Promise<void>;
 }
 
-interface ReanalysisConfirmation {
+interface MaterialConfirmation {
+  kind: "reanalyze" | "run_selected";
   bundleId: string;
   revision: number;
   jobId: string;
@@ -448,11 +452,13 @@ function ActivityItem({
   onReviewJob,
   busy,
   reanalysisAvailable,
-  confirmationOpen,
-  reanalysisPending,
-  onBeginReanalysis,
-  onCancelReanalysis,
-  onConfirmReanalysis,
+  selectedRunAvailable,
+  confirmationKind,
+  pendingKind,
+  selectedRunCancelling,
+  onBeginConfirmation,
+  onCancelConfirmation,
+  onConfirm,
 }: {
   item: Readonly<KnowledgeActivityItem>;
   commandCapabilities: KnowledgeActivityPanelProps["commandCapabilities"];
@@ -461,11 +467,13 @@ function ActivityItem({
   onReviewJob: KnowledgeActivityPanelProps["onReviewJob"];
   busy: boolean;
   reanalysisAvailable: boolean;
-  confirmationOpen: boolean;
-  reanalysisPending: boolean;
-  onBeginReanalysis: (jobId: string) => void;
-  onCancelReanalysis: () => void;
-  onConfirmReanalysis: () => void;
+  selectedRunAvailable: boolean;
+  confirmationKind?: MaterialConfirmation["kind"];
+  pendingKind?: MaterialConfirmation["kind"];
+  selectedRunCancelling: boolean;
+  onBeginConfirmation: (jobId: string, kind: MaterialConfirmation["kind"]) => void;
+  onCancelConfirmation: () => void;
+  onConfirm: () => void;
 }) {
   const confirmationTitleId = React.useId();
   const confirmationDetailId = React.useId();
@@ -478,7 +486,7 @@ function ActivityItem({
   const StatusIcon = presentation.icon;
 
   return (
-    <li aria-busy={reanalysisPending || undefined} className="tw-list-none">
+    <li aria-busy={pendingKind !== undefined || undefined} className="tw-list-none">
       <Card className="tw-border-solid tw-bg-transparent tw-shadow-none">
         <CardHeader className="tw-p-4">
           <CardTitle className="tw-flex tw-flex-wrap tw-items-start tw-justify-between tw-gap-3">
@@ -500,6 +508,21 @@ function ActivityItem({
               </div>
             </div>
             <div className="tw-flex tw-flex-wrap tw-items-center tw-justify-end tw-gap-1">
+              {/* Scope paid execution to the confirmed row without waking the whole queue.
+                  https://github.com/yydspanda/obsidian-copilot/issues/18 */}
+              {item.status === "queued" && item.actions.canRunSelected && (
+                <Button
+                  aria-expanded={confirmationKind === "run_selected"}
+                  aria-label={`Run only ${item.sourceId}`}
+                  disabled={busy || !selectedRunAvailable}
+                  size="sm"
+                  variant="default"
+                  onClick={() => onBeginConfirmation(item.id, "run_selected")}
+                >
+                  <Play aria-hidden="true" className="tw-size-3" />
+                  Run only this material
+                </Button>
+              )}
               {item.actions.canReview && (
                 <Button
                   aria-label={`Review ${item.sourceId}`}
@@ -528,7 +551,11 @@ function ActivityItem({
                 <Button
                   aria-label={`Cancel ${item.sourceId}`}
                   className="tw-text-error hover:tw-text-on-accent"
-                  disabled={busy || !commandCapabilities.cancelJob}
+                  disabled={
+                    (busy && pendingKind !== "run_selected") ||
+                    selectedRunCancelling ||
+                    !commandCapabilities.cancelJob
+                  }
                   size="sm"
                   variant="ghost"
                   onClick={() => onCancelJob(item.id)}
@@ -541,12 +568,12 @@ function ActivityItem({
                   https://github.com/yydspanda/obsidian-copilot/issues/16 */}
               {item.status === "completed" && item.actions.canReanalyze && (
                 <Button
-                  aria-expanded={confirmationOpen}
+                  aria-expanded={confirmationKind === "reanalyze"}
                   aria-label={`Reanalyze ${item.sourceId}`}
                   disabled={busy || !reanalysisAvailable}
                   size="sm"
                   variant="ghost"
-                  onClick={() => onBeginReanalysis(item.id)}
+                  onClick={() => onBeginConfirmation(item.id, "reanalyze")}
                 >
                   <RefreshCw aria-hidden="true" className="tw-size-3" />
                   Reanalyze
@@ -561,12 +588,16 @@ function ActivityItem({
           </p>
           <CompletionDetails completion={completion} />
           <FailureDetails item={item} />
-          {reanalysisPending && (
+          {pendingKind && (
             <p aria-live="polite" className="tw-m-0 tw-text-xs tw-text-muted" role="status">
-              Queuing reanalysis…
+              {selectedRunCancelling
+                ? "Cancelling this material… Other materials remain paused."
+                : pendingKind === "run_selected"
+                  ? "Running only this material… Other materials remain paused."
+                  : "Queuing reanalysis…"}
             </p>
           )}
-          {confirmationOpen && (
+          {confirmationKind && (
             <div
               aria-describedby={confirmationDetailId}
               aria-labelledby={confirmationTitleId}
@@ -574,19 +605,21 @@ function ActivityItem({
               role="alertdialog"
             >
               <p className="tw-m-0 tw-text-sm tw-font-semibold" id={confirmationTitleId}>
-                Reanalyze this material?
+                {confirmationKind === "run_selected"
+                  ? "Run only this material?"
+                  : "Reanalyze this material?"}
               </p>
               <p className="tw-m-0 tw-mt-1 tw-text-xs tw-text-muted" id={confirmationDetailId}>
-                Reanalysis uses the configured model and may incur charges. Your existing history
-                and Wiki files are preserved. This only queues new work; choose Resume bundle to
-                start. Any proposed Wiki changes still need review.
+                {confirmationKind === "run_selected"
+                  ? "This runs analysis and generation with the configured model and may incur charges. Other materials stay paused. Wiki files are not changed automatically; any proposed changes still need Review and Apply."
+                  : "Reanalysis uses the configured model and may incur charges. Your existing history and Wiki files are preserved. This only queues new work; use Run only this material on its queued row to start it alone. Resume bundle starts all eligible materials. Any proposed Wiki changes still need review."}
               </p>
               <div className="tw-mt-3 tw-flex tw-flex-wrap tw-gap-2">
-                <Button disabled={busy} size="sm" onClick={onConfirmReanalysis}>
-                  Queue reanalysis
+                <Button disabled={busy} size="sm" onClick={onConfirm}>
+                  {confirmationKind === "run_selected" ? "Run this material" : "Queue reanalysis"}
                 </Button>
-                <Button disabled={busy} size="sm" variant="ghost" onClick={onCancelReanalysis}>
-                  Cancel reanalysis
+                <Button disabled={busy} size="sm" variant="ghost" onClick={onCancelConfirmation}>
+                  {confirmationKind === "run_selected" ? "Not now" : "Cancel reanalysis"}
                 </Button>
               </div>
             </div>
@@ -622,29 +655,35 @@ export function KnowledgeActivityPanel({
   onRetryJob,
   onReviewJob,
   onReanalyzeJob,
+  onRunSelectedJob,
+  runningSelectedJobId,
+  selectedRunCancelling = false,
   busy = false,
 }: KnowledgeActivityPanelProps) {
   const hasAnyJobs = model.counts.total > 0;
   const hasVisibleJobs = model.items.length > 0;
-  const [confirmation, setConfirmation] = React.useState<ReanalysisConfirmation>();
-  const [pendingJobId, setPendingJobId] = React.useState<string>();
-  const [reanalysisFailed, setReanalysisFailed] = React.useState(false);
+  const [confirmation, setConfirmation] = React.useState<MaterialConfirmation>();
+  const [pending, setPending] = React.useState<MaterialConfirmation>();
+  const [failedKind, setFailedKind] = React.useState<MaterialConfirmation["kind"]>();
   const pendingRef = React.useRef(false);
-  const invalidatedConfirmationRef = React.useRef<ReanalysisConfirmation>();
+  const invalidatedConfirmationRef = React.useRef<MaterialConfirmation>();
   // Resume and competing row mutations must wait for the exact queued request to settle.
   // https://github.com/yydspanda/obsidian-copilot/issues/16
-  const commandPending = busy || pendingJobId !== undefined;
+  const commandPending = busy || pending !== undefined;
   const reanalysisAvailable = commandCapabilities.reanalyzeJob === true && !!onReanalyzeJob;
-  // Confirmation is authority for one visible queue revision, never a refreshed or replaced row.
-  // https://github.com/yydspanda/obsidian-copilot/issues/16
+  const selectedRunAvailable = commandCapabilities.runSelectedJob === true && !!onRunSelectedJob;
+  // Paid-work confirmation belongs to one visible revision, never a refreshed or replaced row.
+  // https://github.com/yydspanda/obsidian-copilot/issues/18
   const confirmationMatches =
     confirmation !== undefined &&
     confirmation.bundleId === model.bundleId &&
     confirmation.revision === model.revision &&
-    reanalysisAvailable &&
     model.items.some(
       (item) =>
-        item.id === confirmation.jobId && item.status === "completed" && item.actions.canReanalyze
+        item.id === confirmation.jobId &&
+        (confirmation.kind === "run_selected"
+          ? selectedRunAvailable && item.status === "queued" && item.actions.canRunSelected
+          : reanalysisAvailable && item.status === "completed" && item.actions.canReanalyze)
     );
   if (confirmation && !confirmationMatches) invalidatedConfirmationRef.current = confirmation;
   const activeConfirmation =
@@ -652,23 +691,29 @@ export function KnowledgeActivityPanel({
       ? confirmation
       : undefined;
 
-  const confirmReanalysis = async (): Promise<void> => {
+  const confirmMaterial = async (): Promise<void> => {
     // Block repeated clicks before React renders the pending state; no implicit model retries.
     // https://github.com/yydspanda/obsidian-copilot/issues/16
-    if (pendingRef.current || busy || !activeConfirmation || !onReanalyzeJob) return;
+    if (pendingRef.current || busy || !activeConfirmation) return;
+    const action = activeConfirmation.kind === "run_selected" ? onRunSelectedJob : onReanalyzeJob;
+    if (!action) return;
     pendingRef.current = true;
-    setPendingJobId(activeConfirmation.jobId);
+    setPending(activeConfirmation);
     setConfirmation(undefined);
-    setReanalysisFailed(false);
+    setFailedKind(undefined);
     try {
-      await onReanalyzeJob(activeConfirmation.jobId);
+      if (activeConfirmation.kind === "run_selected") {
+        await onRunSelectedJob!(activeConfirmation.jobId, activeConfirmation.revision);
+      } else {
+        await onReanalyzeJob!(activeConfirmation.jobId);
+      }
     } catch {
       // Adapter failures may contain provider details; keep this local fallback content-free.
       // https://github.com/yydspanda/obsidian-copilot/issues/16
-      setReanalysisFailed(true);
+      setFailedKind(activeConfirmation.kind);
     } finally {
       pendingRef.current = false;
-      setPendingJobId(undefined);
+      setPending(undefined);
     }
   };
 
@@ -691,12 +736,14 @@ export function KnowledgeActivityPanel({
         onResumeBundle={onResumeBundle}
       />
       <ActivityCounts model={model} />
-      {reanalysisFailed && (
+      {failedKind && (
         <p
           className="tw-m-0 tw-rounded-md tw-bg-error tw-p-3 tw-text-xs tw-text-error"
           role="alert"
         >
-          Reanalysis could not be queued. Refresh Activity before trying again.
+          {failedKind === "run_selected"
+            ? "Selected material could not be run. Check its Activity outcome before trying again."
+            : "Reanalysis could not be queued. Refresh Activity before trying again."}
         </p>
       )}
 
@@ -724,15 +771,25 @@ export function KnowledgeActivityPanel({
               key={item.id}
               commandCapabilities={commandCapabilities}
               busy={commandPending}
-              confirmationOpen={activeConfirmation?.jobId === item.id}
+              confirmationKind={
+                activeConfirmation?.jobId === item.id ? activeConfirmation.kind : undefined
+              }
               item={item}
               reanalysisAvailable={reanalysisAvailable}
-              reanalysisPending={pendingJobId === item.id}
-              onBeginReanalysis={(jobId) =>
-                setConfirmation({ bundleId: model.bundleId, revision: model.revision, jobId })
+              selectedRunAvailable={selectedRunAvailable}
+              pendingKind={
+                runningSelectedJobId === item.id
+                  ? "run_selected"
+                  : pending?.jobId === item.id
+                    ? pending.kind
+                    : undefined
               }
-              onCancelReanalysis={() => setConfirmation(undefined)}
-              onConfirmReanalysis={() => void confirmReanalysis()}
+              selectedRunCancelling={selectedRunCancelling && runningSelectedJobId === item.id}
+              onBeginConfirmation={(jobId, kind) =>
+                setConfirmation({ bundleId: model.bundleId, revision: model.revision, jobId, kind })
+              }
+              onCancelConfirmation={() => setConfirmation(undefined)}
+              onConfirm={() => void confirmMaterial()}
               onCancelJob={onCancelJob}
               onRetryJob={onRetryJob}
               onReviewJob={onReviewJob}

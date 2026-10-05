@@ -1093,6 +1093,25 @@ export class KnowledgeStudioRuntimeReadAdapter
     return this.input.commands.reanalyzeJob(bundleId, jobId, expectedQueueRevision, signal);
   }
 
+  /**
+   * Runs only the confirmed pending material through the generation-owned command port.
+   * @param bundleId - Selected Bundle
+   * @param jobId - Exact queued Activity row
+   * @param expectedQueueRevision - Revision inspected before confirmation
+   * @param signal - Cancellation owned by this Studio action
+   */
+  async runSelectedJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    // Read-only startup/recovery generations must not start paid work.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    if (!this.input.commands) throw new KnowledgeStudioAdapterUnavailableError();
+    return this.input.commands.runSelectedJob(bundleId, jobId, expectedQueueRevision, signal);
+  }
+
   /** Delegates Review submission only when narrow command orchestration is installed. */
   async submitReview(
     bundleId: string,

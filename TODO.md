@@ -8,13 +8,13 @@
 ## Current Stage
 
 - Stage ID: `PK-H3`
-- Outcome: understand the incremental-content omission without weakening source/Review safety.
+- Outcome: reduce repeated source context and retain evidence-selection diagnostics without weakening source/Review safety.
 - Exit gate: a separately scoped repair and real evidence show the extension reaching Wiki and Query.
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Await next scope decision after identical generated Wiki content and insufficient Query evidence.
-  The 3-request allowance is exhausted; no retry, prompt edit or further model request is authorized. Queue stays paused.
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Selected-material execution is repaired and deployed; incremental semantic inclusion still fails. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
+  Analysis-only repair passes 347 tests/build/gates locally. User now authorizes commit/push, management-test deployment and one selected-source replay (fresh max 3 calls, no retry, reviewed existing-page Apply only). Delivery in progress; semantic acceptance remains unproven. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md).
 
 ## Upstream Status
 
@@ -28,6 +28,8 @@
 
 ## Recent Activity
 
+- 2026-10-06 — `PK-H3-INCREMENTAL-OMISSION` — Rules-only replay failed at 1/3 calls; authorized analysis-only repair passes 347 tests/build/gates. Generation prompt unchanged; no new calls/deployment/Vault writes. [Evidence](./designdocs/progress/acceptance/2026-10-06-retention-rules.md).
+- 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
 - 2026-10-03 — `PK-H3-MANAGEMENT-REALUSE` — Full bounded reading flow passes: 3 completed jobs, 0 failures, 5/8 requests; two fork-owned fixes deployed. [Completion](./designdocs/progress/archive/2026-10.md).
@@ -44,12 +46,6 @@
 - 2026-09-18 — `PK-H3-UPSTREAM-V4-WIN` — Bounded regression complete: five authorized Apply outcomes,
   722 suites / 10,472 tests pass; final Windows reload/popout/Query/citation and 18/18 preservation checks pass.
   Two minimal repairs are pushed/deployed; extra requests 9/20. [Evidence and exceptions](./designdocs/progress/acceptance/2026-09-18-unattended.md).
-- 2026-09-17 — `PK-H3-UPSTREAM-V4-WIN` — [Issue #9](https://github.com/yydspanda/obsidian-copilot/issues/9):
-  authorized 1 Query + 1 Save created exactly one capture, Manifest entry and pending job; no Wiki writes.
-  The earlier build lost feedback after 7 ms; repair 414b05ae is pushed/deployed, with no stale Query authority retained.
-  `EXP-20260917-002` passes live Save continuity: feedback survives full refresh, Query stays selected, and all 69 old files are unchanged.
-- 2026-09-15 — `PK-H3-UPSTREAM-V4-WIN` — Upstream `61619fe4` merged/pushed; 48 suites / 1,238 tests pass.
-  Issue #7 blocks incompatible proposals; 36 Windows gallery cases and Query/citation/return checks pass.
 
 ## Working Agreements
 
@@ -64,6 +60,7 @@
 
 ## Current Verification
 
+- October 6 analysis-only repair: 17 suites / 347 tests, personal build/typecheck, syntax/mobile smoke, full format/lint/review and governance pass; warnings retained. Not deployed or live-retested; earlier semantic failure remains open. [Evidence](./designdocs/progress/acceptance/2026-10-06-retention-rules.md).
 - October 4 reanalysis: 19 affected suites / 736 tests, 20 governance tests, 72 gallery checks and gates pass. Native queue/cancel/history checks pass; incremental Wiki/Query acceptance fails. 3/3 requests; all 226 files/92 settings preserved; queue paused.
 - October 4 no-changes repair: 11 suites / 489 tests, 20 governance tests, 56 isolated rendered states and build/lint/review pass.
   Pushed/deployed; native Activity shows 2 applied/3 no-changes, data preserved. No paid replay/full-suite rerun; semantic inclusion unproven.

@@ -133,3 +133,43 @@ export const Reanalyze: StoryObj<Props> = {
 export const ReanalyzeBusy: StoryObj<Props> = {
   args: { ...Reanalyze.args, busy: true },
 };
+
+const selectedProps = createProps({
+  sourceId: "Sources/Reading/Observations across changing conditions and counterexamples.md",
+  status: "queued",
+  durableStage: "queued",
+  terminal: false,
+  attempt: 0,
+  actions: { canCancel: true, canRetry: false, canReview: false, canRunSelected: true },
+});
+
+/** Open the inline confirmation; this local fixture never calls a model. */
+export const SelectedRun: StoryObj<Props> = {
+  args: {
+    ...selectedProps,
+    commandCapabilities: { ...selectedProps.commandCapabilities, runSelectedJob: true },
+    onRunSelectedJob: () => Promise.resolve(),
+  },
+};
+
+/** Confirm to inspect the in-progress row without allowing another action. */
+export const SelectedRunPending: StoryObj<Props> = {
+  args: { ...SelectedRun.args, onRunSelectedJob: () => new Promise<void>(() => {}) },
+};
+
+/** Confirm to inspect a safe rejection; the fixture never reaches a provider. */
+export const SelectedRunFailure: StoryObj<Props> = {
+  args: {
+    ...SelectedRun.args,
+    onRunSelectedJob: () => Promise.reject(new Error("fixture rejection")),
+  },
+};
+
+export const SelectedRunCancelling: StoryObj<Props> = {
+  args: {
+    ...SelectedRun.args,
+    busy: true,
+    runningSelectedJobId: "reading-job",
+    selectedRunCancelling: true,
+  },
+};

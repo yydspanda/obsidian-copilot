@@ -303,6 +303,28 @@ export class DelegatingKnowledgeStudioPort
     );
   }
 
+  /**
+   * Routes selected execution while retaining its durable result across generation refresh.
+   * @param bundleId - Bundle owning the selected pending job
+   * @param jobId - Exact pending job confirmed by the user
+   * @param expectedQueueRevision - Queue revision inspected before confirmation
+   * @param signal - Caller cancellation before execution begins
+   */
+  async runSelectedJob(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void> {
+    // Older delegates cannot authorize selected work; never fall back to Resume-all.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    return this.runCommitWinsWithCurrentDelegate(signal, (delegate, delegatedSignal) =>
+      typeof delegate.runSelectedJob === "function"
+        ? delegate.runSelectedJob(bundleId, jobId, expectedQueueRevision, delegatedSignal)
+        : Promise.reject(new KnowledgeStudioAdapterUnavailableError())
+    );
+  }
+
   /** Routes one Review mutation while preserving any resolved durable receipt. */
   async submitReview(
     bundleId: string,

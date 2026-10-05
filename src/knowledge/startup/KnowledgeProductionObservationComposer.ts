@@ -1013,6 +1013,9 @@ export class KnowledgeProductionObservationComposer {
       queue: composition.queue,
       reviewReject: new KnowledgeRuntimeReviewRejectPort(composition.runtime),
       reanalyzeCompletedSource: (command) => composition.runtime.reanalyzeCompletedSource(command),
+      ...(onApplyGenerationRefreshRequired === undefined
+        ? {}
+        : { onGenerationRefreshRequired: onApplyGenerationRefreshRequired }),
       ...(reviewApply === undefined ? {} : { reviewApply }),
       bundleIds: composition.owners.map(({ config }) => config.id),
       assertCurrent,

@@ -1083,12 +1083,19 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
 
     if (job.status === "processing") {
       processingCount += 1;
-      if (snapshot.control.status === "paused" && job.stage !== "applying") {
+      // An explicit selected claim may run while background work stays paused;
+      // automatic and recovery gates still forbid non-applying execution.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
+      if (
+        snapshot.control.status === "paused" &&
+        (snapshot.control.reason !== "user" || snapshot.applyCommit !== undefined) &&
+        job.stage !== "applying"
+      ) {
         addError(
           diagnostics,
           "queue_processing_under_paused_gate",
           `${field}.stage`,
-          "Only an applying job may finish under a paused execution gate"
+          "Only an applying job may finish under an automatic or recovery pause"
         );
       }
     }
@@ -1582,12 +1589,16 @@ export function validateIngestQueueSnapshot(value: unknown): KnowledgeValidation
 
   const hasCommitPendingAckGate =
     snapshot.control.status === "paused" && snapshot.control.reason === "commit_pending_ack";
-  if (snapshot.applyCommit && !hasCommitPendingAckGate) {
+  // A selected Apply retains the user's background pause through acknowledgement.
+  // Its exact commit marker still independently blocks all new processing.
+  // https://github.com/yydspanda/obsidian-copilot/issues/18
+  const hasUserPause = snapshot.control.status === "paused" && snapshot.control.reason === "user";
+  if (snapshot.applyCommit && !hasCommitPendingAckGate && !hasUserPause) {
     addError(
       diagnostics,
       "queue_apply_commit_gate_missing",
       "control",
-      "A durable apply-commit marker requires a commit-pending-ack pause gate"
+      "A durable apply-commit marker requires a commit-pending-ack or preserved user pause"
     );
   }
   if (hasCommitPendingAckGate && !snapshot.applyCommit) {

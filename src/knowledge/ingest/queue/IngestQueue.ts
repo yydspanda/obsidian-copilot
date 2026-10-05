@@ -2481,6 +2481,34 @@ export class IngestQueue {
     assertIdentifier(bundleId, "bundleId");
     await this.resumeRateLimitIfDue(bundleId);
     const claim = await this.claimNext(bundleId);
+    return this.executeClaim(bundleId, claim);
+  }
+
+  /**
+   * Executes one exact pending job without releasing the user-paused backlog.
+   *
+   * @param bundleId - Bundle containing the selected material
+   * @param jobId - Exact pending job chosen from Activity
+   * @param expectedQueueRevision - Queue revision the user selected from
+   * @returns Availability or outcome of this single attempt, never another job
+   */
+  async runSelected(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number
+  ): Promise<RunNextResult> {
+    this.assertExecutionOpen();
+    assertIdentifier(bundleId, "bundleId");
+    assertIdentifier(jobId, "jobId");
+    assertQueueRevision(expectedQueueRevision, "expectedQueueRevision");
+    const claim = await this.claimNext(bundleId, { jobId, expectedQueueRevision });
+    return this.executeClaim(bundleId, claim);
+  }
+
+  private async executeClaim(
+    bundleId: string,
+    claim: MutationResult<ClaimedJobResult>
+  ): Promise<RunNextResult> {
     if (claim.value.kind !== "claimed" || !claim.value.jobId) {
       if (claim.value.kind === "paused" && claim.value.reason) {
         return {
@@ -3348,6 +3376,11 @@ export class IngestQueue {
     const timestamp = this.now();
     const mutation = await this.getBundleMutex(bundleId).runExclusive(async () => {
       return this.mutate<boolean>(bundleId, (current) => {
+        // The commit marker blocks new Apply even when a user's pause is retained.
+        // https://github.com/yydspanda/obsidian-copilot/issues/18
+        if (current.applyCommit) {
+          throw new IngestQueueApplyCommitPendingError(bundleId);
+        }
         const job = requireJob(current, jobId);
         if (!jobMatchesReviewDecisionClaim(job, acceptedDecision.jobClaim)) {
           throw new IngestQueueTransitionError(
@@ -3397,7 +3430,13 @@ export class IngestQueue {
         ) {
           throw new IngestQueueApplyCommitPendingError(bundleId);
         }
-        if (current.control.status === "paused" && !isStartupRecoveryPaused) {
+        // An explicit review must not resume unrelated queued materials.
+        // https://github.com/yydspanda/obsidian-copilot/issues/18
+        if (
+          current.control.status === "paused" &&
+          !isStartupRecoveryPaused &&
+          current.control.reason !== "user"
+        ) {
           throw new IngestQueueTransitionError(
             job.id,
             jobState(job),
@@ -3633,12 +3672,17 @@ export class IngestQueue {
         return {
           next: {
             ...withoutApplyClaim,
-            control: {
-              status: "paused",
-              reason: "commit_pending_ack",
-              pausedAt: completedAt,
-              detail: "Committed pages are waiting for durable journal acknowledgement",
-            },
+            // Clearing this marker must never authorize a user-paused backlog.
+            // https://github.com/yydspanda/obsidian-copilot/issues/18
+            control:
+              current.control.status === "paused" && current.control.reason === "user"
+                ? current.control
+                : {
+                    status: "paused",
+                    reason: "commit_pending_ack",
+                    pausedAt: completedAt,
+                    detail: "Committed pages are waiting for durable journal acknowledgement",
+                  },
             applyCommit: marker,
           },
           value: true,
@@ -3675,8 +3719,8 @@ export class IngestQueue {
   /**
    * Releases a commit-pending queue only after the journal slot is durably clear.
    *
-   * This method deliberately leaves the backlog under `startup_recovery` pause,
-   * requiring a fresh Gate observation and conditional Runtime release.
+   * A user pause remains intact. Other commits leave the backlog under
+   * `startup_recovery`, requiring a fresh Gate observation and conditional release.
    *
    * @param bundleId - Stable Bundle identifier
    * @param transactionId - Exact acknowledged transaction identifier
@@ -3711,12 +3755,18 @@ export class IngestQueue {
         return {
           next: {
             ...withoutMarker,
-            control: {
-              status: "paused",
-              reason: "startup_recovery",
-              pausedAt: Math.max(timestamp, marker.committedAt),
-              detail: "Recovered apply committed; startup reconciliation must release the backlog",
-            },
+            // Explicit single-material Apply cannot release the rest of the queue.
+            // https://github.com/yydspanda/obsidian-copilot/issues/18
+            control:
+              current.control.status === "paused" && current.control.reason === "user"
+                ? current.control
+                : {
+                    status: "paused",
+                    reason: "startup_recovery",
+                    pausedAt: Math.max(timestamp, marker.committedAt),
+                    detail:
+                      "Recovered apply committed; startup reconciliation must release the backlog",
+                  },
           },
           value: true,
         };
@@ -3729,24 +3779,41 @@ export class IngestQueue {
   }
 
   /**
-   * Claims the oldest due pending job under the Bundle mutex and creates its controller.
+   * Claims one due pending job under the Bundle mutex and creates its controller.
    *
    * @param bundleId - Stable Bundle identifier
+   * @param selection - Exact user selection, otherwise the oldest due job
    * @returns Claimed snapshot or a durable availability result
    */
-  private async claimNext(bundleId: string): Promise<MutationResult<ClaimedJobResult>> {
+  private async claimNext(
+    bundleId: string,
+    selection?: { jobId: string; expectedQueueRevision: number }
+  ): Promise<MutationResult<ClaimedJobResult>> {
     const timestamp = this.now();
     return this.getBundleMutex(bundleId).runExclusive(async () => {
       this.assertExecutionOpen();
       const localExecution = this.activeControllers.get(bundleId);
-      if (localExecution) {
+      if (localExecution && !selection) {
         return {
           snapshot: await this.load(bundleId),
           value: { kind: "busy", jobId: localExecution.jobId },
         };
       }
-      const mutation = await this.mutate<ClaimedJobResult>(bundleId, (current) => {
-        if (current.control.status === "paused") {
+      const projectClaim = (current: IngestQueueSnapshot): QueueMutation<ClaimedJobResult> => {
+        // A selected run is one revision-bound exception to a user pause, never a
+        // recovery/backoff bypass or permission to choose another material.
+        // https://github.com/yydspanda/obsidian-copilot/issues/18
+        if (selection && current.control.status !== "paused") {
+          throw new IngestQueueTransitionError(
+            selection.jobId,
+            current.control.status,
+            "run selected work without a user-paused Bundle"
+          );
+        }
+        if (
+          current.control.status === "paused" &&
+          (!selection || current.control.reason !== "user")
+        ) {
           return {
             value: {
               kind: "paused" as const,
@@ -3757,12 +3824,29 @@ export class IngestQueue {
             },
           };
         }
+        if (selection && current.applyClaim) {
+          throw new IngestQueueRecoveryRequiredError(bundleId);
+        }
+        if (selection && current.applyCommit) {
+          throw new IngestQueueApplyCommitPendingError(bundleId);
+        }
+        if (localExecution) {
+          return { value: { kind: "busy", jobId: localExecution.jobId } };
+        }
         const processing = current.jobs.find((job) => job.status === "processing");
         if (processing) {
           return { value: { kind: "busy" as const, jobId: processing.id } };
         }
 
-        const pending = current.jobs
+        const selected = selection ? requireJob(current, selection.jobId) : undefined;
+        if (selected && selected.status !== "pending") {
+          throw new IngestQueueTransitionError(
+            selected.id,
+            jobState(selected),
+            "run selected work"
+          );
+        }
+        const pending = (selected ? [selected] : current.jobs)
           .filter((job): job is Extract<KnowledgeIngestJob, { status: "pending" }> => {
             return job.status === "pending";
           })
@@ -3808,7 +3892,10 @@ export class IngestQueue {
           next: replaceJob(current, processingJob),
           value: { kind: "claimed" as const, jobId: due.id },
         };
-      });
+      };
+      const mutation = selection
+        ? await this.mutateExactActivity(bundleId, selection.expectedQueueRevision, projectClaim)
+        : await this.mutate(bundleId, projectClaim);
 
       if (mutation.value.kind === "claimed" && mutation.value.jobId) {
         const claimed = requireJob(mutation.snapshot, mutation.value.jobId);
@@ -4214,7 +4301,12 @@ export class IngestQueue {
         const hasRerun = failedSnapshot.reruns.some((rerun) => rerun.sourceId === job.sourceId);
         if (hasRerun) {
           let next = promoteRerun(failedSnapshot, job.sourceId, Math.max(timestamp, job.updatedAt));
-          if (decision.kind === "pause") {
+          // Timed rate-limit release must not authorize the unselected backlog.
+          // https://github.com/yydspanda/obsidian-copilot/issues/18
+          if (
+            decision.kind === "pause" &&
+            !(current.control.status === "paused" && current.control.reason === "user")
+          ) {
             next = {
               ...next,
               control: {
@@ -4279,15 +4371,20 @@ export class IngestQueue {
           return {
             next: {
               ...replaceJob(current, nextJob),
-              control: {
-                status: "paused",
-                reason: "rate_limit",
-                pausedAt,
-                detail: normalized.failure.message,
-                ...(decision.retryAfterMs === undefined
-                  ? {}
-                  : { resumeAt: addSafeDelay(pausedAt, decision.retryAfterMs) }),
-              },
+              // A timed provider pause must not auto-release a user-paused backlog.
+              // https://github.com/yydspanda/obsidian-copilot/issues/18
+              control:
+                current.control.status === "paused" && current.control.reason === "user"
+                  ? current.control
+                  : {
+                      status: "paused",
+                      reason: "rate_limit",
+                      pausedAt,
+                      detail: normalized.failure.message,
+                      ...(decision.retryAfterMs === undefined
+                        ? {}
+                        : { resumeAt: addSafeDelay(pausedAt, decision.retryAfterMs) }),
+                    },
             },
             value: { changed: true, cause: "rate_limit" },
           };
@@ -4668,10 +4765,11 @@ export class IngestQueue {
     switch (command.kind) {
       case "pause_bundle": {
         if (
-          current.control.status === "paused" &&
-          ["startup_recovery", "recovery_required", "commit_pending_ack"].includes(
-            current.control.reason
-          )
+          current.applyCommit ||
+          (current.control.status === "paused" &&
+            ["startup_recovery", "recovery_required", "commit_pending_ack"].includes(
+              current.control.reason
+            ))
         ) {
           return { value: { changed: false } };
         }
@@ -4724,9 +4822,11 @@ export class IngestQueue {
             };
       }
       case "resume_bundle": {
+        // Commit acknowledgement is a hard gate independent of the retained pause.
+        // https://github.com/yydspanda/obsidian-copilot/issues/18
         if (
-          current.control.status === "paused" &&
-          current.control.reason === "commit_pending_ack"
+          current.applyCommit ||
+          (current.control.status === "paused" && current.control.reason === "commit_pending_ack")
         ) {
           throw new IngestQueueApplyCommitPendingError(command.bundleId);
         }
@@ -4861,11 +4961,11 @@ export class IngestQueue {
    * @param transform - Deterministic Activity transform
    * @returns Confirmed current or newly committed Queue and mutation metadata
    */
-  private async mutateExactActivity(
+  private async mutateExactActivity<T>(
     bundleId: string,
     expectedQueueRevision: number,
-    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<ActivityMutationValue>
-  ): Promise<MutationResult<ActivityMutationValue>> {
+    transform: (snapshot: IngestQueueSnapshot) => QueueMutation<T>
+  ): Promise<MutationResult<T>> {
     const loaded = await this.loadForMutation(bundleId);
     if (loaded.snapshot.revision !== expectedQueueRevision) {
       throw new IngestQueueActivityCommandStaleError(

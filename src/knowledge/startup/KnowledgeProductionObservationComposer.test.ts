@@ -414,6 +414,95 @@ describe("KnowledgeProductionObservationComposer", () => {
 
   describe("KnowledgeProductionObservationComposer", () => {
     describe("createKnowledgeStudioRuntimeReadAdapter()", () => {
+      it("runs only the selected material through the production pipeline and refreshes no-changes authority without draining a paused backlog — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+        const fetchPort = jest.fn<
+          ReturnType<KnowledgeDeepSeekFetchPort>,
+          Parameters<KnowledgeDeepSeekFetchPort>
+        >(async () => createNoChangesResponse());
+        const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
+        const runtime = await createRuntime(runtimeClaim);
+        const manifests = new SourceManifestRepository(
+          new KnowledgeRuntimeManifestStorage(runtime)
+        );
+        await manifests.registerSource("personal", {
+          sourceId: "selected-source",
+          sourcePath: "Sources/personal/Selected.md",
+          custody: "user_managed",
+        });
+        const vault = new ProductionVaultHarness();
+        vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
+        vault.addFile(SOURCE_PATH, encodeText("# Unselected source\n"));
+        vault.addFile("Sources/personal/Selected.md", encodeText("# Selected source\n"));
+        const composer = new KnowledgeProductionObservationComposer({
+          app: vault.createApp(),
+          runtime,
+          workflowLease: admission.workflowLease,
+          workflowCompositionClaim: admission.workflowCompositionClaim,
+        });
+        await composer.start(new AbortController().signal);
+        const refresh = jest.fn();
+        const worker = composer.createCompileReviewWorkerController(
+          admission.modelRouteLease,
+          () => true,
+          createWorkerScheduler(),
+          refresh
+        );
+        const adapter = composer.createKnowledgeStudioRuntimeReadAdapter(
+          admission.modelRouteLease,
+          undefined,
+          refresh
+        );
+        const stable = new DelegatingKnowledgeStudioPort();
+        stable.replaceDelegate(adapter);
+        try {
+          const initial = await stable.load("personal", new AbortController().signal);
+          await stable.pauseBundle(
+            "personal",
+            initial.activity.revision,
+            new AbortController().signal
+          );
+          const before = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+          if (!before.ok) throw new Error("Expected paused queue");
+          worker.start();
+          await flushStudioHints();
+          expect(fetchPort).not.toHaveBeenCalled();
+          const selected = before.value.jobs.find((job) => job.sourceId === "selected-source");
+          if (!selected) throw new Error("Expected selected pending job");
+          await stable.runSelectedJob(
+            "personal",
+            selected.id,
+            before.value.revision,
+            new AbortController().signal
+          );
+          worker.close();
+          await worker.whenSettled();
+          const after = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+          if (!after.ok) throw new Error("Expected completed selected queue");
+          expect(after.value.control).toEqual(before.value.control);
+          expect(after.value.jobs.find((job) => job.id === selected.id)).toMatchObject({
+            status: "completed",
+            attempt: 1,
+          });
+          expect(after.value.jobs.filter((job) => job.id !== selected.id)).toEqual(
+            before.value.jobs.filter((job) => job.id !== selected.id)
+          );
+          expect(fetchPort).toHaveBeenCalledTimes(1);
+          expect(refresh).toHaveBeenCalledTimes(1);
+          const manifest = await manifests.load("personal");
+          expect(
+            manifest.entries.find((entry) => entry.sourceId === "selected-source")?.extensions?.[
+              KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY
+            ]
+          ).toBeDefined();
+          expect([...vault.files.keys()].filter((path) => path.startsWith("Wiki/"))).toEqual([]);
+        } finally {
+          stable.dispose();
+          composer.close();
+          await worker.whenSettled();
+          lifecycle.close();
+        }
+      });
+
       it("projects only frozen generation-bound source fingerprints without writes or model calls and rejects an invalidated lease — https://github.com/yydspanda/obsidian-copilot/issues/7", async () => {
         const fetchPort = createFetchPort();
         const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);

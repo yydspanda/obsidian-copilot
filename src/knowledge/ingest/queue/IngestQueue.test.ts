@@ -1385,6 +1385,334 @@ describe("IngestQueue persistence and enqueue", () => {
 });
 
 describe("IngestQueue execution and reruns", () => {
+  describe("runSelected()", () => {
+    it("executes only the selected newer job without resuming the paused backlog (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness();
+      await harness.queue.enqueue(createRequest());
+      await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+      const before = await harness.queue.pause("personal");
+
+      await expect(
+        harness.queue.runSelected("personal", "job-2", before.revision)
+      ).resolves.toEqual({ kind: "executed", jobId: "job-2", status: "completed" });
+
+      const after = await harness.queue.load("personal");
+      expect(after.control).toEqual(before.control);
+      expect(after.jobs[0]).toEqual(before.jobs[0]);
+      expect(after.jobs[1]).toMatchObject({ id: "job-2", status: "completed", attempt: 1 });
+      expect(harness.executor.calls.map(({ job }) => job.id)).toEqual(["job-2"]);
+      await expect(harness.queue.runNext("personal")).resolves.toEqual({
+        kind: "paused",
+        reason: "user",
+      });
+    });
+
+    it.each(["rate_limit", "startup_recovery"] as const)(
+      "does not bypass the %s pause, including a due rate-limit timer (https://github.com/yydspanda/obsidian-copilot/issues/18)",
+      async (reason) => {
+        const harness = createHarness();
+        await harness.queue.enqueue(createRequest());
+        const before = createSnapshot("personal", {
+          ...harness.storage.getSnapshot("personal"),
+          control: {
+            status: "paused",
+            reason,
+            pausedAt: 50,
+            ...(reason === "rate_limit" ? { resumeAt: 99 } : {}),
+          },
+        });
+        harness.storage.seed("personal", before);
+
+        await expect(
+          harness.queue.runSelected("personal", "job-1", before.revision)
+        ).resolves.toEqual({
+          kind: "paused",
+          reason,
+          ...(reason === "rate_limit" ? { resumeAt: 99 } : {}),
+        });
+
+        expect(harness.storage.getSnapshot("personal")).toEqual(before);
+        expect(harness.executor.calls).toHaveLength(0);
+      }
+    );
+
+    it.each(["recovery_required", "commit_pending_ack"] as const)(
+      "does not bypass %s while another material owns unfinished Apply bookkeeping (https://github.com/yydspanda/obsidian-copilot/issues/18)",
+      async (reason) => {
+        const harness = createHarness(async () => createAwaitingReviewResult());
+        await harness.queue.enqueue(createRequest());
+        await harness.queue.runNext("personal");
+        await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+        await harness.queue.beginReviewApply("personal", createAcceptedReviewDecision());
+        if (reason === "recovery_required") {
+          await harness.queue.recoverOnStartup("personal");
+        } else {
+          await harness.queue.resolveApplyRecovery(
+            createCommitReceipt({
+              changeSetId: "changeset-review",
+              jobClaim: { startedAt: 120 },
+            })
+          );
+        }
+        const before = await harness.queue.load("personal");
+
+        await expect(
+          harness.queue.runSelected("personal", "job-2", before.revision)
+        ).resolves.toEqual({ kind: "paused", reason });
+        expect(harness.storage.getSnapshot("personal")).toEqual(before);
+        expect(harness.executor.calls).toHaveLength(1);
+      }
+    );
+
+    it("requires the Bundle to be user-paused instead of racing its worker (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness();
+      await harness.queue.enqueue(createRequest());
+      const before = await harness.queue.load("personal");
+
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision)
+      ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+      expect(harness.storage.getSnapshot("personal")).toEqual(before);
+      expect(harness.executor.calls).toHaveLength(0);
+    });
+
+    it("rejects missing and terminal selected jobs without falling back to another pending job (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness();
+      await harness.queue.enqueue(createRequest());
+      await harness.queue.runNext("personal");
+      await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+      const before = await harness.queue.pause("personal");
+
+      await expect(
+        harness.queue.runSelected("personal", "missing", before.revision)
+      ).rejects.toBeInstanceOf(IngestQueueJobNotFoundError);
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision)
+      ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+
+      expect(harness.storage.getSnapshot("personal")).toEqual(before);
+      expect(harness.executor.calls.map(({ job }) => job.id)).toEqual(["job-1"]);
+    });
+
+    it("waits for only the selected job's backoff then executes one explicit retry (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness();
+      const before = createSnapshot("personal", {
+        control: { status: "paused", reason: "user", pausedAt: 100 },
+        jobs: [
+          createPendingJob(),
+          createPendingJob({ id: "job-2", sourceId: "source-2", attempt: 1, nextAttemptAt: 200 }),
+        ],
+      });
+      harness.storage.seed("personal", before);
+
+      await expect(
+        harness.queue.runSelected("personal", "job-2", before.revision)
+      ).resolves.toEqual({ kind: "waiting", nextAttemptAt: 200 });
+      expect(harness.storage.getSnapshot("personal")).toEqual(before);
+      expect(harness.executor.calls).toHaveLength(0);
+      harness.setNow(200);
+      await expect(
+        harness.queue.runSelected("personal", "job-2", before.revision)
+      ).resolves.toMatchObject({ kind: "executed", jobId: "job-2", status: "completed" });
+      expect(harness.executor.calls[0].job.attempt).toBe(2);
+      expect(harness.storage.getSnapshot("personal").jobs[0]).toEqual(before.jobs[0]);
+    });
+
+    it("rejects stale selections and never rebases a competing CAS write (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness();
+      await harness.queue.enqueue(createRequest());
+      const before = await harness.queue.pause("personal");
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision - 1)
+      ).rejects.toBeInstanceOf(IngestQueueActivityCommandStaleError);
+      const concurrent = { ...before, revision: before.revision + 1 };
+      harness.storage.planWriteFailure(
+        new IngestQueueRevisionConflictError("personal", before.revision, concurrent.revision),
+        () => harness.storage.seed("personal", concurrent)
+      );
+
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision)
+      ).rejects.toBeInstanceOf(IngestQueueActivityCommandStaleError);
+      expect(harness.storage.getSnapshot("personal")).toEqual(concurrent);
+      expect(harness.executor.calls).toHaveLength(0);
+    });
+
+    it("executes a selected claim exactly once after a committed-write transport failure (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness();
+      await harness.queue.enqueue(createRequest());
+      const before = await harness.queue.pause("personal");
+      harness.storage.planCommittedWriteFailure(new Error("transport failed after commit"));
+
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision)
+      ).resolves.toMatchObject({ kind: "executed", status: "completed" });
+      expect(harness.executor.calls).toHaveLength(1);
+      expect(harness.storage.getSnapshot("personal").control).toEqual(before.control);
+    });
+
+    it("rejects a double click and keeps other selections busy until the current attempt settles (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const entered = createDeferred<void>();
+      const outcome = createDeferred<IngestExecutionResult>();
+      const harness = createHarness(async () => {
+        entered.resolve();
+        return outcome.promise;
+      });
+      await harness.queue.enqueue(createRequest());
+      await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+      const before = await harness.queue.pause("personal");
+      const running = harness.queue.runSelected("personal", "job-2", before.revision);
+      await entered.promise;
+
+      await expect(
+        harness.queue.runSelected("personal", "job-2", before.revision)
+      ).rejects.toBeInstanceOf(IngestQueueActivityCommandStaleError);
+      const during = await harness.queue.load("personal");
+      await expect(
+        harness.queue.runSelected("personal", "job-1", during.revision)
+      ).resolves.toEqual({ kind: "busy", jobId: "job-2" });
+      const otherQueue = new IngestQueue(harness.storage, harness.executor);
+      await expect(otherQueue.runSelected("personal", "job-1", during.revision)).resolves.toEqual({
+        kind: "busy",
+        jobId: "job-2",
+      });
+      expect(harness.storage.getSnapshot("personal").jobs[0]).toEqual(before.jobs[0]);
+      outcome.resolve({ kind: "no_changes", changeSetId: "selected-result" });
+      await running;
+      expect(harness.executor.calls.map(({ job }) => job.id)).toEqual(["job-2"]);
+    });
+
+    it("stops at the selected proposal and leaves the other material pending (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness(async () => createAwaitingReviewResult());
+      await harness.queue.enqueue(createRequest());
+      await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+      const before = await harness.queue.pause("personal");
+
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision)
+      ).resolves.toEqual({ kind: "executed", jobId: "job-1", status: "awaiting_review" });
+      const after = await harness.queue.load("personal");
+      expect(after.control).toEqual(before.control);
+      expect(after.jobs[1]).toEqual(before.jobs[1]);
+      expect(after.pendingReviews).toHaveLength(1);
+      expect(after.pendingReviews[0]).toMatchObject({
+        jobId: "job-1",
+        changeSetId: "changeset-review",
+      });
+      expect(harness.executor.calls).toHaveLength(1);
+    });
+
+    it("cancels the selected in-flight attempt without touching other pending work (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const entered = createDeferred<AbortSignal>();
+      const outcome = createDeferred<IngestExecutionResult>();
+      const harness = createHarness(async ({ signal }) => {
+        entered.resolve(signal);
+        return outcome.promise;
+      });
+      await harness.queue.enqueue(createRequest());
+      await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+      const before = await harness.queue.pause("personal");
+      const running = harness.queue.runSelected("personal", "job-1", before.revision);
+      const signal = await entered.promise;
+
+      await harness.queue.cancel("personal", "job-1");
+      expect(signal.aborted).toBe(true);
+      outcome.reject(new DOMException("Aborted", "AbortError"));
+      await expect(running).resolves.toEqual({
+        kind: "executed",
+        jobId: "job-1",
+        status: "cancelled",
+      });
+      const after = await harness.queue.load("personal");
+      expect(after.control).toEqual(before.control);
+      expect(after.jobs[1]).toEqual(before.jobs[1]);
+    });
+
+    it("recovers a selected attempt on close without releasing the backlog (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const entered = createDeferred<AbortSignal>();
+      const outcome = createDeferred<IngestExecutionResult>();
+      const harness = createHarness(async ({ signal }) => {
+        entered.resolve(signal);
+        return outcome.promise;
+      });
+      await harness.queue.enqueue(createRequest());
+      const before = await harness.queue.pause("personal");
+      const running = harness.queue.runSelected("personal", "job-1", before.revision);
+      const signal = await entered.promise;
+
+      harness.queue.close();
+      expect(signal.aborted).toBe(true);
+      outcome.reject(new DOMException("Aborted", "AbortError"));
+      await expect(running).resolves.toEqual({
+        kind: "executed",
+        jobId: "job-1",
+        status: "pending",
+      });
+      expect(harness.storage.getSnapshot("personal").control).toEqual(before.control);
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision)
+      ).rejects.toBeInstanceOf(IngestQueueClosedError);
+    });
+
+    it("leaves a retryable failure pending without performing an automatic second attempt (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+      const harness = createHarness(async ({ signal }) => {
+        throw new IngestExecutorError(
+          { code: "temporary", message: "Temporary error", retryable: true, rateLimited: false },
+          signal
+        );
+      });
+      await harness.queue.enqueue(createRequest());
+      const before = await harness.queue.pause("personal");
+
+      await expect(
+        harness.queue.runSelected("personal", "job-1", before.revision)
+      ).resolves.toMatchObject({ kind: "executed", status: "pending" });
+      harness.setNow(2_000);
+      await expect(harness.queue.runNext("personal")).resolves.toEqual({
+        kind: "paused",
+        reason: "user",
+      });
+      expect(harness.storage.getSnapshot("personal").control).toEqual(before.control);
+      expect(harness.executor.calls).toHaveLength(1);
+    });
+
+    it.each([false, true])(
+      "keeps the user pause after a rate limit with rerun=%s so a timer cannot start other materials (https://github.com/yydspanda/obsidian-copilot/issues/18)",
+      async (withRerun) => {
+        const harness = createHarness(async ({ signal }) => {
+          if (withRerun) {
+            await harness.queue.enqueue(
+              createRequest({ inputRevision: 2, sourceContentHash: HASH_C })
+            );
+          }
+          throw new IngestExecutorError(
+            {
+              code: "rate_limited",
+              message: "Rate limited",
+              retryable: true,
+              rateLimited: true,
+              retryAfterMs: 10,
+            },
+            signal
+          );
+        });
+        await harness.queue.enqueue(createRequest());
+        await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+        const before = await harness.queue.pause("personal");
+
+        await harness.queue.runSelected("personal", "job-1", before.revision);
+        harness.setNow(2_000);
+        await expect(harness.queue.runNext("personal")).resolves.toEqual({
+          kind: "paused",
+          reason: "user",
+        });
+        expect(harness.storage.getSnapshot("personal").control).toEqual(before.control);
+        expect(harness.storage.getSnapshot("personal").jobs[1]).toEqual(before.jobs[1]);
+        expect(harness.executor.calls).toHaveLength(1);
+      }
+    );
+  });
+
   it("synchronously aborts active lifecycle work and recovers it behind startup release", async () => {
     const entered = createDeferred<void>();
     const outcome = createDeferred<IngestExecutionResult>();
@@ -3208,21 +3536,58 @@ describe("IngestQueue pause, cancellation, review, and recovery", () => {
     await expect(running).resolves.toMatchObject({ kind: "commit_ready" });
   });
 
-  it("does not begin review apply while the Bundle is paused", async () => {
+  it("begins the exact accepted review while preserving a user-paused backlog (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
     const harness = createHarness(async () => createAwaitingReviewResult());
     await harness.queue.enqueue(createRequest());
     await harness.queue.runNext("personal");
-    await harness.queue.pause("personal", "Review later");
+    await harness.queue.enqueue(createRequest({ sourceId: "source-2" }));
+    const before = await harness.queue.pause("personal", "Review later");
 
     await expect(
       harness.queue.beginReviewApply("personal", createAcceptedReviewDecision())
-    ).rejects.toBeInstanceOf(IngestQueueTransitionError);
+    ).resolves.toMatchObject({ id: "job-1", status: "processing", stage: "applying" });
     const paused = harness.storage.getSnapshot("personal");
     expect(paused).toMatchObject({
       control: { status: "paused", reason: "user" },
-      jobs: [expect.objectContaining({ status: "awaiting_review" })],
+      jobs: [expect.objectContaining({ status: "processing", stage: "applying" }), before.jobs[1]],
     });
-    expect(paused.applyClaim).toBeUndefined();
+    expect(paused.control).toEqual(before.control);
+    expect(paused.applyClaim).toMatchObject({ jobId: "job-1" });
+
+    await harness.queue.resolveApplyRecovery(
+      createCommitReceipt({
+        changeSetId: "changeset-review",
+        jobClaim: { startedAt: 120 },
+      })
+    );
+    const committed = await harness.queue.load("personal");
+    expect(committed.control).toEqual(before.control);
+    expect(committed.applyCommit).toMatchObject({ jobId: "job-1" });
+    await expect(harness.queue.resume("personal")).rejects.toBeInstanceOf(
+      IngestQueueApplyCommitPendingError
+    );
+    await expect(
+      harness.queue.runSelected("personal", "job-2", committed.revision)
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitPendingError);
+    await expect(
+      harness.queue.beginReviewApply("personal", createAcceptedReviewDecision())
+    ).rejects.toBeInstanceOf(IngestQueueApplyCommitPendingError);
+    await expect(harness.queue.runNext("personal")).resolves.toEqual({
+      kind: "paused",
+      reason: "user",
+    });
+    expect(await harness.queue.pause("personal", "Do not replace the existing pause")).toEqual(
+      committed
+    );
+
+    const finalized = await harness.queue.finalizeApplyRecovery("personal", "transaction-1");
+    expect(finalized.control).toEqual(before.control);
+    expect(finalized.jobs[1]).toEqual(before.jobs[1]);
+    expect(finalized.applyCommit).toBeUndefined();
+    await expect(harness.queue.runNext("personal")).resolves.toEqual({
+      kind: "paused",
+      reason: "user",
+    });
   });
 
   it("starts one accepted review explicitly under startup recovery without releasing backlog", async () => {

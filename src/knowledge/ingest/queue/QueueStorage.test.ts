@@ -1242,12 +1242,12 @@ describe("validateIngestQueueSnapshot", () => {
     ).toBe(true);
   });
 
-  it("allows only applying work to finish beneath a paused execution gate", () => {
+  it("allows only applying work to finish beneath an automatic paused execution gate", () => {
     const parsing = createProcessingJob();
     expect(
       diagnosticCodes(
         createSnapshot({
-          control: { status: "paused", reason: "user", pausedAt: 120 },
+          control: { status: "paused", reason: "rate_limit", pausedAt: 120 },
           jobs: [parsing],
         })
       )
@@ -1263,6 +1263,42 @@ describe("validateIngestQueueSnapshot", () => {
       ).valid
     ).toBe(true);
   });
+
+  it("allows one selected processing job under a user pause without releasing pending siblings (https://github.com/yydspanda/obsidian-copilot/issues/18)", () => {
+    const snapshot = createSnapshot({
+      control: { status: "paused", reason: "user", pausedAt: 100 },
+      jobs: [createProcessingJob(), createPendingJob({ id: "job-2", sourceId: "source-2" })],
+    });
+
+    expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+    expect(snapshot.control).toEqual({ status: "paused", reason: "user", pausedAt: 100 });
+    expect(snapshot.jobs[1]).toMatchObject({ id: "job-2", status: "pending", attempt: 0 });
+  });
+
+  it("rejects concurrent processing even beneath a user pause (https://github.com/yydspanda/obsidian-copilot/issues/18)", () => {
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { status: "paused", reason: "user", pausedAt: 100 },
+          jobs: [createProcessingJob(), createProcessingJob({ id: "job-2", sourceId: "source-2" })],
+        })
+      )
+    ).toContain("queue_processing_count_invalid");
+  });
+
+  it.each(["rate_limit", "startup_recovery", "recovery_required", "commit_pending_ack"] as const)(
+    "rejects non-applying processing under a %s gate (https://github.com/yydspanda/obsidian-copilot/issues/18)",
+    (reason) => {
+      expect(
+        diagnosticCodes(
+          createSnapshot({
+            control: { status: "paused", reason, pausedAt: 100 },
+            jobs: [createProcessingJob()],
+          })
+        )
+      ).toContain("queue_processing_under_paused_gate");
+    }
+  );
 
   it("allows suggested resume time only for rate-limit pauses", () => {
     expect(
@@ -1303,6 +1339,28 @@ describe("validateIngestQueueSnapshot", () => {
     });
 
     expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("retains a user pause older than an exact Apply commit while acknowledgement is pending (https://github.com/yydspanda/obsidian-copilot/issues/18)", () => {
+    const snapshot = createSnapshot({
+      control: { status: "paused", reason: "user", pausedAt: 100 },
+      jobs: [createCompletedJob()],
+      applyCommit: createApplyCommitMarker(),
+    });
+
+    expect(validateIngestQueueSnapshot(snapshot)).toEqual({ valid: true, diagnostics: [] });
+  });
+
+  it("rejects a processing sibling while a user-paused Apply commit still needs acknowledgement (https://github.com/yydspanda/obsidian-copilot/issues/18)", () => {
+    expect(
+      diagnosticCodes(
+        createSnapshot({
+          control: { status: "paused", reason: "user", pausedAt: 100 },
+          jobs: [createCompletedJob(), createProcessingJob({ id: "job-2", sourceId: "source-2" })],
+          applyCommit: createApplyCommitMarker(),
+        })
+      )
+    ).toContain("queue_processing_under_paused_gate");
   });
 
   it("rejects a torn marker or commit-pending acknowledgement gate", () => {

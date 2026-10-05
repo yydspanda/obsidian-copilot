@@ -63,6 +63,8 @@ export interface KnowledgeStudioCommandCapabilities {
   retryJob: boolean;
   /** Whether a confirmed completed-source reassessment can be queued without resuming work. */
   reanalyzeJob?: boolean;
+  /** Whether one pending material can run without resuming the Bundle. */
+  runSelectedJob?: boolean;
   reviewReject: boolean;
   reviewAccept: boolean;
   /** Whether the exact generation exposes dedicated forward Review decisions and Apply. */
@@ -160,6 +162,13 @@ export interface KnowledgeStudioCommandPort {
     expectedQueueRevision: number,
     signal: AbortSignal
   ): Promise<void>;
+  /** Runs one confirmed pending material while all other queued work remains paused. */
+  runSelectedJob?(
+    bundleId: string,
+    jobId: string,
+    expectedQueueRevision: number,
+    signal: AbortSignal
+  ): Promise<void>;
   /** Submits content-free review decisions to the core review boundary. */
   submitReview(
     bundleId: string,
@@ -205,6 +214,7 @@ export interface KnowledgeStudioPendingAction {
     | "cancel"
     | "retry"
     | "reanalyze"
+    | "run_selected"
     | "submit_review"
     | "submit_forward_revision"
     | "retry_forward_revision_recovery"
@@ -242,6 +252,7 @@ export interface KnowledgeStudioState {
   selectedReviewChangeSetId?: string;
   selectedForwardRevisionRef?: string;
   pendingAction?: KnowledgeStudioPendingAction;
+  selectedRunCancelling?: boolean;
   feedback?: KnowledgeStudioFeedback;
   unavailableNotice?: string;
   error?: string;
@@ -479,6 +490,10 @@ function assertSnapshotIdentity(bundleId: string, snapshot: KnowledgeStudioSnaps
     // https://github.com/yydspanda/obsidian-copilot/issues/16
     (commandCapabilities.reanalyzeJob !== undefined &&
       typeof commandCapabilities.reanalyzeJob !== "boolean") ||
+    // Paid scoped execution is unavailable on older or malformed adapter generations.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    (commandCapabilities.runSelectedJob !== undefined &&
+      typeof commandCapabilities.runSelectedJob !== "boolean") ||
     typeof commandCapabilities.reviewReject !== "boolean" ||
     typeof commandCapabilities.reviewAccept !== "boolean" ||
     (commandCapabilities.forwardRevisionReview !== undefined &&
@@ -1518,7 +1533,66 @@ export class KnowledgeStudioController {
    * @param jobId - Opaque durable job identifier
    */
   async cancelJob(jobId: string): Promise<void> {
-    if (this.state.pendingAction) return;
+    const pending = this.state.pendingAction;
+    if (pending) {
+      // Long model requests must remain cancellable without unblocking any other queued work.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
+      const bundleId = this.state.bundleId;
+      const abort = this.actionAbort;
+      if (
+        pending.kind !== "run_selected" ||
+        pending.targetId !== jobId ||
+        this.state.selectedRunCancelling ||
+        !bundleId ||
+        !abort
+      )
+        return;
+      const generation = this.actionGeneration;
+      this.state = { ...this.state, selectedRunCancelling: true };
+      this.emit();
+      let requested = false;
+      try {
+        const fresh = await this.readPort.load(bundleId, abort.signal);
+        assertSnapshotIdentity(bundleId, fresh);
+        if (
+          generation !== this.actionGeneration ||
+          abort.signal.aborted ||
+          this.state.pendingAction !== pending
+        )
+          return;
+        const item = fresh.activity.items.find((candidate) => candidate.id === jobId);
+        if (
+          fresh.availability !== "ready" ||
+          !fresh.commandCapabilities.cancelJob ||
+          item?.actions.canCancel !== true
+        )
+          return;
+        await this.commandPort.cancelJob(bundleId, jobId, fresh.activity.revision, abort.signal);
+        requested = true;
+      } catch {
+        if (
+          generation === this.actionGeneration &&
+          !abort.signal.aborted &&
+          this.state.pendingAction === pending
+        ) {
+          this.state = {
+            ...this.state,
+            feedback: {
+              kind: "error",
+              message:
+                "Cancellation could not be confirmed. The selected run is still being checked; no other materials were resumed.",
+            },
+          };
+          this.emit();
+        }
+      } finally {
+        if (generation === this.actionGeneration && !requested) {
+          this.state = { ...this.state, selectedRunCancelling: undefined };
+          this.emit();
+        }
+      }
+      return;
+    }
     const snapshot = this.state.snapshot;
     const item = snapshot?.activity.items.find((candidate) => candidate.id === jobId);
     if (!snapshot?.commandCapabilities.cancelJob || item?.actions.canCancel !== true) {
@@ -1586,7 +1660,46 @@ export class KnowledgeStudioController {
         this.commandPort.reanalyzeJob!(bundleId, jobId, expectedQueueRevision, signal),
       () => ({
         kind: "success",
-        message: "New analysis queued. The bundle remains paused; use Resume bundle when ready.",
+        message:
+          "New analysis queued. The bundle remains paused; use Run only this material on its queued row to process it alone.",
+      })
+    );
+  }
+
+  /**
+   * Runs one explicitly confirmed pending material without resuming its Bundle.
+   *
+   * @param jobId - Pending job selected from the current user-paused Activity snapshot
+   * @param confirmedQueueRevision - Queue revision shown when the user confirmed paid execution
+   */
+  async runSelectedJob(jobId: string, confirmedQueueRevision: number): Promise<void> {
+    if (this.state.pendingAction) return;
+    const snapshot = this.state.snapshot;
+    const item = snapshot?.activity.items.find((candidate) => candidate.id === jobId);
+    // The confirmation authorizes one visible row, never a Bundle-wide fallback.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    if (
+      snapshot?.commandCapabilities.runSelectedJob !== true ||
+      snapshot.activity.revision !== confirmedQueueRevision ||
+      snapshot.activity.controls.state !== "paused" ||
+      snapshot.activity.controls.pauseReason !== "user" ||
+      item?.status !== "queued" ||
+      item.actions.canRunSelected !== true ||
+      typeof this.commandPort.runSelectedJob !== "function"
+    ) {
+      await this.rejectUnavailableAction(
+        "This material cannot run alone from the current paused snapshot."
+      );
+      return;
+    }
+    await this.executeAction(
+      { kind: "run_selected", targetId: jobId },
+      (bundleId, signal) =>
+        this.commandPort.runSelectedJob!(bundleId, jobId, confirmedQueueRevision, signal),
+      () => ({
+        kind: "success",
+        message:
+          "Selected-material run finished. Other materials remain paused. Check its Activity outcome; any proposed changes still need Review and Apply.",
       })
     );
   }
@@ -1779,10 +1892,14 @@ export class KnowledgeStudioController {
       return;
     }
 
-    // A paused queue cannot claim an ordinary Apply; keep the draft pending
-    // instead of allowing acceptance to create a recovery item without a write.
-    // https://github.com/yydspanda/obsidian-copilot/issues/6
-    if (!rejectsWholeProposal && snapshot?.activity.controls.state !== "running") {
+    // Exact Review approval must not require resuming other materials; safety pauses still block it.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    const controls = snapshot?.activity.controls;
+    if (
+      !rejectsWholeProposal &&
+      controls?.state !== "running" &&
+      !(controls?.state === "paused" && controls.pauseReason === "user")
+    ) {
       await this.rejectUnavailableAction(REVIEW_APPLY_PAUSED_MESSAGE);
       return;
     }
@@ -2268,6 +2385,7 @@ export class KnowledgeStudioController {
     this.state = {
       ...this.state,
       pendingAction,
+      selectedRunCancelling: undefined,
       query: { status: "idle" },
       openingReviewEvidenceRef: undefined,
       reviewEvidenceError: undefined,
@@ -2287,7 +2405,12 @@ export class KnowledgeStudioController {
         return;
       }
       successfulResult = result;
-      this.state = { ...this.state, pendingAction: undefined, feedback: toFeedback(result) };
+      this.state = {
+        ...this.state,
+        pendingAction: undefined,
+        selectedRunCancelling: undefined,
+        feedback: toFeedback(result),
+      };
       this.emit();
     } catch (error) {
       if (abort.signal.aborted || generation !== this.actionGeneration || isAbortError(error)) {
@@ -2296,6 +2419,7 @@ export class KnowledgeStudioController {
       this.state = {
         ...this.state,
         pendingAction: undefined,
+        selectedRunCancelling: undefined,
         feedback: {
           kind: "error",
           message:
@@ -2309,7 +2433,11 @@ export class KnowledgeStudioController {
         this.actionAbort = undefined;
         this.refreshQueued = false;
         if (this.state.pendingAction === pendingAction) {
-          this.state = { ...this.state, pendingAction: undefined };
+          this.state = {
+            ...this.state,
+            pendingAction: undefined,
+            selectedRunCancelling: undefined,
+          };
           this.emit();
         }
         if (successfulResult === undefined || shouldRefreshAfterSuccess(successfulResult)) {

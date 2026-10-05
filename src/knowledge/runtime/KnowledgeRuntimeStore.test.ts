@@ -3516,8 +3516,8 @@ describe("KnowledgeRuntimeStore", () => {
         };
       }
 
-      it.each(["running", "startup_recovery"] as const)(
-        "preserves acceptance while the Queue is %s (https://github.com/yydspanda/obsidian-copilot/issues/6)",
+      it.each(["running", "startup_recovery", "user"] as const)(
+        "preserves explicit acceptance without releasing the %s Queue (https://github.com/yydspanda/obsidian-copilot/issues/18)",
         async (control) => {
           const harness = await createReviewRejectHarness();
           const queue = harness.initialState.queues[0].value as IngestQueueSnapshot;
@@ -3535,7 +3535,7 @@ describe("KnowledgeRuntimeStore", () => {
         }
       );
 
-      it.each(["user", "rate_limit"] as const)(
+      it.each(["rate_limit"] as const)(
         "rejects new acceptance against a %s pause committed at the atomic boundary without changing Runtime (https://github.com/yydspanda/obsidian-copilot/issues/6)",
         async (reason) => {
           const harness = await createReviewRejectHarness();
@@ -3583,6 +3583,216 @@ describe("KnowledgeRuntimeStore", () => {
           revision: accepted.revision + 1,
         });
         await expect(harness.runtime.readQueue("personal")).resolves.toEqual(queue);
+      });
+
+      it("blocks new Review acceptance while a user-paused Apply marker awaits acknowledgement (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+        const harness = await createApplyHarness(createRegisteredManifest());
+        await harness.port.recordCommitted(harness.journal, harness.receipt);
+        const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+        const queue = createPendingApplyCommitQueue(harness.journal, harness.receipt);
+        queue.control = { status: "paused", reason: "user", pausedAt: 100 };
+        const pending = await createReviewRejectHarness();
+        const pendingQueue = pending.initialState.queues[0].value as IngestQueueSnapshot;
+        const pendingReview = pending.initialState.reviews[0].value as ChangeSetReviewSnapshot;
+        queue.jobs.push(...pendingQueue.jobs);
+        queue.pendingReviews.push(...pendingQueue.pendingReviews);
+        state.queues[0].value = queue;
+        const review = state.reviews[0].value as ChangeSetReviewSnapshot;
+        review.records.push(...pendingReview.records);
+        harness.file.replaceContent(JSON.stringify(state));
+        const before = await harness.file.read();
+        const accepted = acceptPendingReview(pending.initialState);
+
+        await expect(
+          harness.runtime.writeReview(
+            "personal",
+            {
+              ...review,
+              revision: review.revision + 1,
+              records: [...review.records.slice(0, -1), ...accepted.records],
+            },
+            review.revision
+          )
+        ).rejects.toMatchObject({ name: "ReviewStorageAcceptanceBlockedError" });
+
+        expect(await harness.file.read()).toBe(before);
+      });
+
+      it("leaves a proposal pending if another selected job starts before user-paused acceptance commits (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+        const harness = await createReviewRejectHarness();
+        const accepted = acceptPendingReview(harness.initialState);
+        const state = JSON.parse(
+          JSON.stringify(harness.initialState)
+        ) as KnowledgeRuntimeStoreSnapshot;
+        const queue = state.queues[0].value as IngestQueueSnapshot;
+        queue.control = { status: "paused", reason: "user", pausedAt: 100 };
+        queue.jobs.push({
+          id: "other-selected-job",
+          bundleId: "personal",
+          sourceId: "source-2",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: 1,
+          attempt: 1,
+          rerunRequested: false,
+          createdAt: 100,
+          updatedAt: 120,
+          status: "processing",
+          stage: "parsing",
+          startedAt: 120,
+        });
+        const watermark = { ...queue.sourceHighWatermarks[0], sourceId: "source-2" };
+        queue.sourceHighWatermarks.push(watermark);
+        state.inputRevisions[0].sources.push({
+          sourceId: "source-2",
+          inputRevision: 1,
+          managedAfterRevision: 1,
+          legacyCheckpoint: watermark,
+          observations: [],
+        });
+        state.revision += 1;
+        queue.revision += 1;
+        const before = JSON.stringify(state);
+        harness.file.runBeforeNextTransform(() => harness.file.replaceContent(before));
+
+        await expect(
+          harness.runtime.writeReview("personal", accepted, accepted.revision - 1)
+        ).rejects.toMatchObject({ name: "ReviewStorageAcceptanceBlockedError" });
+
+        expect(await harness.file.read()).toBe(before);
+      });
+    });
+    describe("proveIngestExecution()", () => {
+      it("proves only the exact selected attempt while the background Queue stays user-paused (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+        const harness = await createHarness();
+        await harness.manifest.write("personal", createRegisteredManifest(), null);
+        const allocation = await harness.revisions.allocate({
+          bundleId: "personal",
+          sourceId: "source-1",
+          captureId: "selected-execution-proof",
+        });
+        const bound = await harness.observations.bind({
+          observationToken: allocation.observationToken,
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+        });
+        if (bound.kind !== "ready") throw new Error("Expected a bound source observation");
+        const queue = new IngestQueue(
+          harness.queue,
+          {
+            execute: async () => ({ kind: "no_changes", changeSetId: "unused" }),
+          },
+          { clock: () => 100, jobIdFactory: () => "selected-job" }
+        );
+        await queue.enqueue(bound.observation);
+        const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+        const snapshot = state.queues[0].value as IngestQueueSnapshot;
+        snapshot.control = { status: "paused", reason: "user", pausedAt: 100 };
+        snapshot.jobs[0] = {
+          ...snapshot.jobs[0],
+          status: "processing",
+          stage: "parsing",
+          attempt: 1,
+          startedAt: 110,
+          updatedAt: 110,
+        };
+        harness.file.replaceContent(JSON.stringify(state));
+        const before = await harness.file.read();
+        const request: KnowledgeIngestExecutionProofRequest = {
+          bundleId: "personal",
+          jobId: "selected-job",
+          sourceId: "source-1",
+          sourceContentHash: HASH_A,
+          pipelineFingerprint: HASH_B,
+          inputRevision: bound.observation.inputRevision,
+          attempt: 1,
+          startedAt: 110,
+        };
+
+        await expect(
+          harness.runtime.proveIngestExecution(request, new AbortController().signal)
+        ).resolves.toMatchObject({
+          jobId: "selected-job",
+          attempt: 1,
+          startedAt: 110,
+          stage: "parsing",
+        });
+        await expect(
+          harness.runtime.proveIngestExecution(
+            { ...request, attempt: 2 },
+            new AbortController().signal
+          )
+        ).rejects.toBeInstanceOf(KnowledgeRuntimeIngestExecutionProofError);
+        await expect(
+          harness.runtime.proveIngestExecution(
+            { ...request, sourceContentHash: HASH_C },
+            new AbortController().signal
+          )
+        ).rejects.toBeInstanceOf(KnowledgeRuntimeIngestExecutionProofError);
+        expect(await harness.file.read()).toBe(before);
+      });
+    });
+
+    describe("writeQueue()", () => {
+      it("preserves a user pause through exact Apply completion and rejects acknowledgement before the journal clears (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+        const harness = await createApplyHarness(createRegisteredManifest());
+        const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+        const current = state.queues[0].value as IngestQueueSnapshot;
+        current.control = {
+          status: "paused",
+          reason: "user",
+          pausedAt: 100,
+          detail: "Run only selected material",
+        };
+        harness.file.replaceContent(JSON.stringify(state));
+        await harness.port.recordCommitted(harness.journal, harness.receipt);
+        const pending = createPendingApplyCommitQueue(harness.journal, harness.receipt);
+        pending.control = current.control;
+
+        await harness.runtime.writeQueue("personal", pending, current.revision);
+
+        const beforeAcknowledgement = await harness.file.read();
+        const finalized = { ...pending, revision: pending.revision + 1 };
+        delete finalized.applyCommit;
+        await expect(
+          harness.runtime.writeQueue("personal", finalized, pending.revision)
+        ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+        expect(await harness.file.read()).toBe(beforeAcknowledgement);
+        const acknowledged = JSON.parse(beforeAcknowledgement) as KnowledgeRuntimeStoreSnapshot;
+        acknowledged.activeTransaction = null;
+        harness.file.replaceContent(JSON.stringify(acknowledged));
+
+        await expect(
+          harness.runtime.writeQueue(
+            "personal",
+            { ...finalized, control: { status: "running" } },
+            pending.revision
+          )
+        ).rejects.toBeInstanceOf(KnowledgeRuntimeQueueRecoveryGateProtectedError);
+        await harness.runtime.writeQueue("personal", finalized, pending.revision);
+
+        await expect(harness.runtime.readQueue("personal")).resolves.toEqual(finalized);
+        expect(finalized.control).toEqual(current.control);
+      });
+
+      it("admits the exact accepted Apply claim without resuming a user-paused Queue (https://github.com/yydspanda/obsidian-copilot/issues/18)", async () => {
+        const harness = await createNoJournalRecoveryHarness();
+        const state = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+        const expected = JSON.parse(JSON.stringify(state.queues[0].value)) as IngestQueueSnapshot;
+        markAcceptedApplyNotStarted(state);
+        const queue = state.queues[0].value as IngestQueueSnapshot;
+        queue.control = { status: "paused", reason: "user", pausedAt: 100 };
+        expected.control = queue.control;
+        expected.revision = queue.revision + 1;
+        harness.file.replaceContent(JSON.stringify(state));
+
+        await harness.runtime.writeQueue("personal", expected, queue.revision);
+
+        await expect(harness.runtime.readQueue("personal")).resolves.toEqual(expected);
+        const after = JSON.parse(await harness.file.read()) as KnowledgeRuntimeStoreSnapshot;
+        expect(after.reviews).toEqual(state.reviews);
+        expect(after.manifests).toEqual(state.manifests);
+        expect(after.activeTransaction).toBeNull();
       });
     });
   });

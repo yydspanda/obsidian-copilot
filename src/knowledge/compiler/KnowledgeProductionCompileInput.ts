@@ -47,11 +47,12 @@ function createEvidenceId(index: number): string {
   return `evidence-${String(index + 1).padStart(4, "0")}`;
 }
 
-/** Creates the full-material locator for one text or Markdown artifact. */
+/** Keeps the artifact hash tied to original bytes even when the excerpt is a paragraph. */
 function createTextLocator(
-  artifact: Exclude<SourceArtifactObservation, { kind: "pdf" }>
+  artifact: Exclude<SourceArtifactObservation, { kind: "pdf" }>,
+  excerpt = requireEvidenceText(artifact.text),
+  startLine = 1
 ): SourceLocator {
-  const excerpt = requireEvidenceText(artifact.text);
   const common = {
     sourceId: artifact.sourceId,
     artifactId: artifact.artifactId,
@@ -63,20 +64,103 @@ function createTextLocator(
     return {
       ...common,
       kind: "markdown_lines",
-      startLine: 1,
-      endLine: normalizeCitationText(excerpt).split("\n").length,
+      startLine,
+      endLine: startLine + normalizeCitationText(excerpt).split("\n").length - 1,
     };
   }
   return { ...common, kind: "quote" };
 }
 
+function createTextLocators(
+  artifact: Exclude<SourceArtifactObservation, { kind: "pdf" }>,
+  maxItems: number
+): SourceLocator[] {
+  const text = normalizeCitationText(requireEvidenceText(artifact.text));
+  const excerpts: string[] = [];
+  let start = 0;
+  // Paragraph evidence makes a supplement independently selectable without changing
+  // parser or prompt contracts. Keep separators and leading whitespace with material.
+  // https://github.com/yydspanda/obsidian-copilot/issues/17
+  for (const separator of text.matchAll(/\n(?:[^\S\n]*\n)+/g)) {
+    const end = separator.index + separator[0].length;
+    const excerpt = text.slice(start, end);
+    if (excerpt.trim().length === 0) continue;
+    excerpts.push(excerpt);
+    start = end;
+    // Excess paragraphs must never discard source material or displace another
+    // artifact's evidence; retain the original full-material locator instead.
+    // https://github.com/yydspanda/obsidian-copilot/issues/17
+    if (excerpts.length > maxItems) return [createTextLocator(artifact)];
+  }
+  const tail = text.slice(start);
+  if (tail.trim().length === 0 && excerpts.length > 0) {
+    excerpts[excerpts.length - 1] += tail;
+  } else {
+    excerpts.push(tail);
+  }
+  if (excerpts.length > maxItems) return [createTextLocator(artifact)];
+
+  // A quote must identify one occurrence in the full normalized artifact. Merge
+  // adjacent paragraphs when repeated text is ambiguous, including an ambiguous
+  // final paragraph that can only acquire context by merging backwards.
+  // https://github.com/yydspanda/obsidian-copilot/issues/17
+  if (artifact.kind === "text") {
+    let index = 0;
+    let remainingWork = 4 * DEFAULT_KNOWLEDGE_COMPILER_LIMITS.maxModelContextCharacters;
+    while (index < excerpts.length) {
+      // Repetitive large sources otherwise spend quadratic work growing ambiguous
+      // quotes. Charge two full scans and at most one source-length concatenation;
+      // exceeding this bounded work budget preserves the complete original evidence.
+      // https://github.com/yydspanda/obsidian-copilot/issues/17
+      remainingWork -= 3 * text.length;
+      if (remainingWork < 0) return [createTextLocator(artifact)];
+      const excerpt = excerpts[index];
+      if (text.indexOf(excerpt, text.indexOf(excerpt) + 1) < 0) {
+        index += 1;
+      } else {
+        const mergeAt = index + 1 < excerpts.length ? index : index - 1;
+        excerpts.splice(mergeAt, 2, excerpts[mergeAt] + excerpts[mergeAt + 1]);
+        index = mergeAt;
+      }
+    }
+  }
+  if (excerpts.length === 1) return [createTextLocator(artifact)];
+  let startLine = 1;
+  return excerpts.map((excerpt) => {
+    // Line locators include their end line, so retaining a terminal LF would
+    // highlight the following paragraph's first line as part of this evidence.
+    // https://github.com/yydspanda/obsidian-copilot/issues/17
+    const lineExcerpt =
+      artifact.kind === "markdown" && excerpt.endsWith("\n") ? excerpt.slice(0, -1) : excerpt;
+    const locator = createTextLocator(artifact, lineExcerpt, startLine);
+    startLine += excerpt.split("\n").length - 1;
+    return locator;
+  });
+}
+
 /** Derives complete, parser-grounded evidence without language-specific chunking rules. */
 function createEvidence(artifacts: readonly SourceArtifactObservation[]): CompilerEvidence[] {
   const sortedArtifacts = [...artifacts].sort(compareArtifacts);
+  // Reserve existing artifact/page evidence before spending the remaining budget
+  // on paragraph granularity. PDF page behavior stays unchanged.
+  // https://github.com/yydspanda/obsidian-copilot/issues/17
+  let remainingSplits =
+    DEFAULT_KNOWLEDGE_COMPILER_LIMITS.maxEvidenceItems -
+    sortedArtifacts.reduce(
+      (count, artifact) =>
+        count +
+        (artifact.kind === "pdf"
+          ? artifact.pages.filter((page) => page.text.trim().length > 0).length
+          : 1),
+      0
+    );
+  if (remainingSplits < 0) throw new KnowledgeProductionCompileInputError();
   const locators: SourceLocator[] = [];
   for (const artifact of sortedArtifacts) {
     if (artifact.kind !== "pdf") {
-      locators.push(createTextLocator(artifact));
+      const textLocators = createTextLocators(artifact, remainingSplits + 1);
+      remainingSplits -= textLocators.length - 1;
+      locators.push(...textLocators);
       continue;
     }
     const pages = [...artifact.pages].sort((left, right) => left.page - right.page);

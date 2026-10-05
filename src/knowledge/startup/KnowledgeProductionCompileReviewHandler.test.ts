@@ -619,7 +619,7 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
     ]);
   });
 
-  it("derives a stable non-empty no-change identity without creating Review state", async () => {
+  it("persists evidence selection with a stable no-change identity without creating Review or Apply state — https://github.com/yydspanda/obsidian-copilot/issues/17", async () => {
     const first = await runAttempt({ invoke: async () => createAnalysisWireOutput(false) });
     const second = await runAttempt({ invoke: async () => createAnalysisWireOutput(false) });
     const firstJob = requireOnlyJob(first.queueSnapshot);
@@ -650,6 +650,13 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         sourceContentHash: firstJob.sourceContentHash,
         pipelineFingerprint: firstJob.pipelineFingerprint,
         inputRevision: firstJob.inputRevision,
+        evidenceCoverage: [
+          {
+            quoteHash: createFileContentHash(SOURCE_TEXT),
+            supportingClaimCount: 0,
+            targetClaimCount: 0,
+          },
+        ],
       },
     });
     expect(runtime.applyCommits).toEqual([]);

@@ -108,7 +108,7 @@ Activity 只展示有限数量的旧终态行；如果出现 “older terminal j
 | 状态                | 含义                             | 你的动作                                     |
 | ------------------- | -------------------------------- | -------------------------------------------- |
 | `Running`           | 队列可以启动合格工作             | 正常使用；需要临时停下时可点 `Pause bundle`  |
-| `Paused`            | 你主动暂停了 Bundle              | 准备好后点 `Resume bundle`                   |
+| `Paused`            | 你主动暂停了后台队列             | 可只运行一份材料；全部继续用 `Resume bundle` |
 | `Rate limited`      | 因请求速率限制而暂停             | 等待可恢复时间；按钮可用时再 `Resume bundle` |
 | `Startup recovery`  | 启动恢复尚未完成                 | 等待，不要用手工编辑绕过                     |
 | `Recovery required` | 存在需要明确处理的事务恢复       | 转到 `Recovery`，普通 `Resume` 不能绕过      |
@@ -147,9 +147,21 @@ Activity 只展示有限数量的旧终态行；如果出现 “older terminal j
 
 用于暂时停止整个 Bundle 启动后续合格工作。Pause 可以中止尚未进入 Apply 的处理中工作，并把它持久停在可恢复的安全状态；已经进入 `Applying` 的事务不会被半途截断。它不是撤销，也不会删除已保存的来源、Review 或历史。系统只会在允许暂停的状态显示按钮。
 
+主动暂停停止的是后台队列，不是取消你随后明确授权的单材料运行或 Review Apply。你仍可按下方入口只处理一份材料，其余材料保持暂停。
+
+### `Run only this material`
+
+队列由你主动暂停、没有其他任务正在处理时，合格的 `Queued` 行会显示这个按钮。点击后先阅读行内确认，再点 `Run this material`：仅运行这一条任务，分析和生成可能调用已配置模型并产生费用；不会使用 `Resume bundle`，也不会顺带运行其他材料。
+
+运行中会显示 `Running only this material…`，只保留当前材料的 `Cancel`，重复提交和其他操作暂时禁用。Cancel 会显示正在取消，等待任务确认停止；它不恢复其他材料，也不撤销以前的 Wiki。结束后查看该行的真实结果：可能等待 Review、没有 Wiki 修改、取消或失败；“运行结束”不等于内容已入库。有提案时仍须审核并显式 Apply。普通用户暂停不阻止这次明确的 Apply，也不会因此恢复其他材料。
+
+限流、启动恢复、事务恢复、提交确认或计划中的延迟重试不能用此按钮绕过。运行后出现这些状态时，先按对应提示处理，不要反复点击。
+
 ### `Resume bundle`
 
 只在当前暂停原因允许人工继续时显示。`Startup recovery`、`Recovery required` 和 `Finalizing commit` 属于硬阻断，不能靠普通 Resume 跳过。
+
+它继续的是整个 Bundle 的所有合格任务，不是当前选中的一份材料。只想处理一份时，保持暂停并使用该行的 `Run only this material`。
 
 ### `Cancel`
 
@@ -174,7 +186,7 @@ Activity 只展示有限数量的旧终态行；如果出现 “older terminal j
 
 ### `Reanalyze`
 
-想重新处理一份已经完成的材料时，先 `Pause bundle`，再在该材料最新的合格完成记录旁点击 `Reanalyze`。确认框会提醒模型费用；点击 `Queue reanalysis` 只建立一条新任务，保留旧历史，队列仍暂停。检查队列中没有不想处理的其他材料，再明确点击 `Resume bundle` 才允许后续处理和模型调用。
+想重新处理一份已经完成的材料时，先 `Pause bundle`，再在该材料最新的合格完成记录旁点击 `Reanalyze`。确认框会提醒模型费用；点击 `Queue reanalysis` 只建立一条新任务，保留旧历史，队列仍暂停。随后在这条新的 `Queued` 行点 `Run only this material` 并确认，就能单独处理它；只有确实要继续整个队列时才用 `Resume bundle`。
 
 同一材料已有待处理任务、来源有更新尚未观察完成、旧完成结果无法验证，或存在恢复/写入事务时，不会提供这个入口。它不是失败任务的 `Retry`，也不保证模型一定提出修改：仍可能得到 `No Wiki changes`。有修改时照常进入 Review，由你审核后 Apply；不会跳过来源哈希或引用校验。
 
@@ -194,11 +206,11 @@ Forward Review 接受后但 journal 尚未开始时，会显示 `Accepted revisi
 
 `no_changes` 是后台编译的正常成功结果，不会制造空提案。你通常会看到：
 
-- Activity 任务变成 `Completed`；
+- Activity 任务显示 `No Wiki changes`（较旧记录可能只显示 `Completed`）；
 - `Review` 数量没有增加；
 - Wiki 文件保持不变。
 
-这表示系统已经证明当前来源和现有 Wiki 不需要产生修改。不要因为 Review 为空就立即重复导入；重复处理可能带来不必要的模型费用。
+这只表示本次处理没有产生文件修改，不证明所有新材料都已收录，也不证明语义上一定无需更新。不要因为 Review 为空就立即重复导入；重复处理可能带来不必要的模型费用。
 
 如果该页当前有一个已验证的 Forward 页头，`no_changes` 会保留它。只有后续普通 Source Apply 确实成功提交了同一 Source 的该精确页面，才会取代这个 Forward 页头；其他页的 Apply 也不会移除它。
 

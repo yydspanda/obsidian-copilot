@@ -899,6 +899,58 @@ describe("KnowledgeStartupGate", () => {
     });
   });
 
+  describe("KnowledgeStartupGate", () => {
+    describe("run()", () => {
+      it("keeps an unacknowledged Apply blocked even when the queue retains its user pause — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+        const calls: string[] = [];
+        const recovery = createRecoveryRequiredQueue();
+        const old = recovery.jobs[0];
+        const queue: IngestQueueSnapshot = {
+          ...recovery,
+          control: { status: "paused", reason: "user", pausedAt: 1 },
+          jobs: [
+            {
+              id: old.id,
+              bundleId: old.bundleId,
+              sourceId: old.sourceId,
+              sourceContentHash: old.sourceContentHash,
+              pipelineFingerprint: old.pipelineFingerprint,
+              inputRevision: old.inputRevision,
+              attempt: old.attempt,
+              rerunRequested: false,
+              createdAt: 1,
+              updatedAt: 5,
+              status: "completed",
+              stage: "completed",
+              changeSetId: "changeset-1",
+              completedAt: 5,
+            },
+          ],
+          applyCommit: {
+            ...recovery.applyClaim!,
+            transactionId: "tx-pending",
+            changeSetId: "changeset-1",
+            changeSetDigest: HASH_A,
+            commitRevision: 0,
+            committedAt: 5,
+          },
+        };
+        delete queue.applyClaim;
+        const accepted = new ScriptedAcceptedPort(calls, [
+          createLoadedSnapshot([], { queue, runtimeRevision: 8 }),
+        ]);
+        const result = await createGate(calls, {
+          queue: new ScriptedQueuePort(calls, queue),
+          accepted,
+        }).run(createBundle());
+        expect(result).toMatchObject({
+          disposition: "blocked",
+          attention: [{ kind: "queue_commit_pending_ack" }],
+        });
+      });
+    });
+  });
+
   it("surfaces a Queue-only recovery gate when no accepted Review explains it", async () => {
     const calls: string[] = [];
     const queue = createRecoveryRequiredQueue();

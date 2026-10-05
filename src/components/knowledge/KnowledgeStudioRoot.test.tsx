@@ -43,6 +43,7 @@ jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
     onCancelJob: (jobId: string) => void;
     onRetryJob: (jobId: string) => void;
     onReanalyzeJob?: (jobId: string) => Promise<void>;
+    onRunSelectedJob?: (jobId: string, revision: number) => Promise<void>;
     busy?: boolean;
     onReviewJob: (jobId: string) => void;
   }) => (
@@ -87,6 +88,15 @@ jest.mock("@/components/knowledge/KnowledgeActivityPanel", () => ({
         }}
       >
         Activity reanalyze
+      </button>
+      <button
+        type="button"
+        disabled={props.busy || !props.commandCapabilities.runSelectedJob}
+        onClick={() => {
+          void props.onRunSelectedJob?.("selected-job", 7);
+        }}
+      >
+        Activity run selected
       </button>
     </div>
   ),
@@ -532,6 +542,10 @@ class TestKnowledgeStudioController {
 
   async reanalyzeJob(jobId: string): Promise<void> {
     this.calls.push(`reanalyze:${jobId}`);
+  }
+
+  async runSelectedJob(jobId: string, revision: number): Promise<void> {
+    this.calls.push(`run-selected:${jobId}:${revision}`);
   }
 
   /** Records an opaque review command without optimistic state. */
@@ -1022,6 +1036,48 @@ describe("KnowledgeStudioRoot", () => {
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Activity reanalyze" }));
     expect(controller.calls).toHaveLength(1);
+  });
+
+  it("routes a single-material run and shows its pending feedback while all commands are disabled — https://github.com/yydspanda/obsidian-copilot/issues/18", () => {
+    const state = createReadyState([], { ...ENABLED_COMMAND_CAPABILITIES, runSelectedJob: true });
+    const controller = new TestKnowledgeStudioController(state);
+    renderStudio(controller);
+    fireEvent.click(screen.getByRole("button", { name: "Activity run selected" }));
+    expect(controller.calls).toEqual(["run-selected:selected-job:7"]);
+    act(() =>
+      controller.publish({
+        ...state,
+        pendingAction: { kind: "run_selected", targetId: "selected-job" },
+      })
+    );
+    expect(
+      screen.getByText("Running only the selected material… Other materials remain paused.")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Activity run selected" }).disabled
+    ).toBe(true);
+  });
+
+  it("enables exact Review Apply while unrelated materials remain user-paused — https://github.com/yydspanda/obsidian-copilot/issues/18", () => {
+    const ready = createReadyState();
+    const controller = new TestKnowledgeStudioController({
+      ...ready,
+      activeTab: "review",
+      snapshot: {
+        ...ready.snapshot!,
+        activity: {
+          ...ready.snapshot!.activity,
+          controls: {
+            state: "paused",
+            pauseReason: "user",
+            canPause: false,
+            canResume: true,
+          },
+        },
+      },
+    });
+    renderStudio(controller);
+    expect(screen.getByText("Review apply paused false")).toBeTruthy();
   });
 
   it("keeps live Activity and Review navigation available while read-only commands stay disabled", () => {

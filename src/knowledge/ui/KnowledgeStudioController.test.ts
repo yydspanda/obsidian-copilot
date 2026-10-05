@@ -2767,6 +2767,26 @@ describe("KnowledgeStudioController", () => {
         }
       );
 
+      it("submits exact Review Apply while the queue remains user-paused — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+        const snapshot = createSnapshot();
+        snapshot.activity = {
+          ...snapshot.activity,
+          controls: { state: "paused", pauseReason: "user", canPause: false, canResume: true },
+        };
+        const port = new FakeKnowledgeStudioPort(
+          async () => snapshot,
+          undefined,
+          async () => ({ kind: "applied" })
+        );
+        const controller = new KnowledgeStudioController(port, port);
+        controller.start("personal");
+        await flushAsync();
+        await controller.submitReview(createReviewCommand());
+        expect(port.reviewCalls).toHaveLength(1);
+        expect(port.resumeCalls).toHaveLength(0);
+        expect(controller.getState().feedback?.kind).toBe("success");
+      });
+
       it("allows a whole-proposal rejection while paused without resuming the Bundle (https://github.com/yydspanda/obsidian-copilot/issues/6)", async () => {
         const snapshot = createSnapshot();
         snapshot.activity = {

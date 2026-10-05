@@ -16,6 +16,9 @@ import { sha256 } from "@/utils/hash";
 /** Current strict version of the durable no-changes Manifest plan and marker. */
 export const NO_CHANGES_MANIFEST_COMMIT_VERSION = 1 as const;
 
+/** Bound on content-free evidence diagnostics retained with one no-changes result. */
+export const MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS = 2048;
+
 /** Reserved source extension containing the latest atomic no-changes commit marker. */
 export const KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY =
   "obsidianCopilotKnowledgeNoChangesCommit" as const;
@@ -32,6 +35,15 @@ export interface NoChangesGenerationOutcomes {
   identicalWrites: number;
 }
 
+/** Analysis-stage evidence use, not a guarantee that generation expressed every claim. */
+export interface NoChangesEvidenceCoverageEntry {
+  quoteHash: string;
+  /** Distinct analysis claims supported by this evidence. */
+  supportingClaimCount: number;
+  /** Supporting claims assigned to at least one analysis write target. */
+  targetClaimCount: number;
+}
+
 /** Fields shared by ordinary and query-writeback no-changes plans. */
 interface NoChangesManifestCommitPlanBase {
   version: typeof NO_CHANGES_MANIFEST_COMMIT_VERSION;
@@ -46,6 +58,7 @@ interface NoChangesManifestCommitPlanBase {
   evidenceDigest: string;
   reason: NoChangesManifestCommitReason;
   generationOutcomes?: NoChangesGenerationOutcomes;
+  evidenceCoverage?: NoChangesEvidenceCoverageEntry[];
   expectedManifestRevision: number;
   expectedManifestDigest: string;
   baseGeneratedPages: ManifestCommitPage[];
@@ -86,6 +99,7 @@ export interface CreateNoChangesManifestCommitPlanInput {
   evidenceDigest: string;
   reason: NoChangesManifestCommitReason;
   generationOutcomes?: NoChangesGenerationOutcomes;
+  evidenceCoverage?: readonly NoChangesEvidenceCoverageEntry[];
   expectedManifestRevision: number;
   expectedManifestDigest: string;
   baseGeneratedPages: readonly ManifestCommitPage[];
@@ -185,6 +199,28 @@ const generationOutcomesSchema = z
     { message: "Generation outcomes require a positive safe total target count" }
   );
 
+// Per-evidence counts distinguish analysis selection from target assignment without private text.
+// Hashes may repeat across artifacts; order and evidenceDigest retain their exact binding.
+// https://github.com/yydspanda/obsidian-copilot/issues/17
+const evidenceCoverageSchema = z
+  .array(
+    z
+      .object({
+        quoteHash: sha256Schema,
+        supportingClaimCount: nonNegativeIntegerSchema,
+        targetClaimCount: nonNegativeIntegerSchema,
+      })
+      .strict()
+      .refine(
+        ({ supportingClaimCount, targetClaimCount }) => targetClaimCount <= supportingClaimCount,
+        {
+          message: "Target claim count cannot exceed supporting claim count",
+        }
+      )
+  )
+  .min(1)
+  .max(MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS);
+
 const planBaseShape = {
   version: z.literal(NO_CHANGES_MANIFEST_COMMIT_VERSION),
   bundleId: nonEmptyStringSchema,
@@ -198,6 +234,7 @@ const planBaseShape = {
   evidenceDigest: sha256Schema,
   reason: noChangesReasonSchema,
   generationOutcomes: generationOutcomesSchema.optional(),
+  evidenceCoverage: evidenceCoverageSchema.optional(),
   expectedManifestRevision: nonNegativeIntegerSchema,
   expectedManifestDigest: sha256Schema,
   baseGeneratedPages: z.array(manifestCommitPageSchema),
@@ -380,6 +417,13 @@ function freezePlan(plan: NoChangesManifestCommitPlan): NoChangesManifestCommitP
     ...(plan.generationOutcomes === undefined
       ? {}
       : { generationOutcomes: Object.freeze({ ...plan.generationOutcomes }) }),
+    ...(plan.evidenceCoverage === undefined
+      ? {}
+      : {
+          evidenceCoverage: Object.freeze(
+            plan.evidenceCoverage.map((entry) => Object.freeze({ ...entry }))
+          ),
+        }),
     baseGeneratedPages: Object.freeze(
       plan.baseGeneratedPages.map((page) => Object.freeze({ ...page }))
     ),
@@ -393,6 +437,13 @@ function freezeMarker(marker: NoChangesManifestCommitMarker): NoChangesManifestC
     ...(marker.generationOutcomes === undefined
       ? {}
       : { generationOutcomes: Object.freeze({ ...marker.generationOutcomes }) }),
+    ...(marker.evidenceCoverage === undefined
+      ? {}
+      : {
+          evidenceCoverage: Object.freeze(
+            marker.evidenceCoverage.map((entry) => Object.freeze({ ...entry }))
+          ),
+        }),
     baseGeneratedPages: Object.freeze(
       marker.baseGeneratedPages.map((page) => Object.freeze({ ...page }))
     ),
@@ -436,6 +487,11 @@ export function createNoChangesManifestCommitPlan(
     ...(input.generationOutcomes === undefined
       ? {}
       : { generationOutcomes: { ...input.generationOutcomes } }),
+    // Optional coverage must not change identities of persisted plans that predate diagnostics.
+    // https://github.com/yydspanda/obsidian-copilot/issues/17
+    ...(input.evidenceCoverage === undefined
+      ? {}
+      : { evidenceCoverage: input.evidenceCoverage.map((entry) => ({ ...entry })) }),
     expectedManifestRevision: input.expectedManifestRevision,
     expectedManifestDigest: input.expectedManifestDigest,
     baseGeneratedPages: normalizePages(input.baseGeneratedPages),

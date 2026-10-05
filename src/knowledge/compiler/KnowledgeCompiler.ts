@@ -56,6 +56,7 @@ import {
 import {
   createNoChangesManifestCommitPlan,
   createNoChangesManifestCommitPlanDigest,
+  MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS,
   type NoChangesGenerationOutcomes,
   type NoChangesManifestCommitReason,
 } from "@/knowledge/manifest/NoChangesManifestCommit";
@@ -2347,6 +2348,39 @@ function createNoChangesResult(
   if (!source) {
     throw new TypeError("Validated Compiler input must retain its primary Manifest source");
   }
+  // Selection receipts locate omissions without retaining source or model prose. They do not
+  // assert that a supported claim was expressed in generated text. Match full locators because
+  // identical quotes can belong to distinct artifacts or line ranges.
+  // https://github.com/yydspanda/obsidian-copilot/issues/17
+  const supportingClaims = new Map<string, Set<string>>();
+  for (const citation of analysis.citations) {
+    if (citation.relation !== "supports") continue;
+    const key = digestJson("knowledge-evidence-selection-v1", citation.locator);
+    const claims = supportingClaims.get(key) ?? new Set<string>();
+    claims.add(citation.claimId);
+    supportingClaims.set(key, claims);
+  }
+  const writeClaimIds = new Set(
+    analysis.targets
+      .filter((target) => target.intent === "write")
+      .flatMap((target) => target.claimIds)
+  );
+  // Custom compilers may admit more evidence than production; omit optional diagnostics instead
+  // of truncating them or turning a valid no-change result into a persistence failure.
+  // https://github.com/yydspanda/obsidian-copilot/issues/17
+  const evidenceCoverage =
+    input.evidence.length > MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS
+      ? undefined
+      : input.evidence.map(({ locator }) => {
+          const claims = supportingClaims.get(
+            digestJson("knowledge-evidence-selection-v1", locator)
+          );
+          return {
+            quoteHash: locator.quoteHash,
+            supportingClaimCount: claims?.size ?? 0,
+            targetClaimCount: claims ? [...claims].filter((id) => writeClaimIds.has(id)).length : 0,
+          };
+        });
   const plan = createNoChangesManifestCommitPlan({
     bundleId: input.bundle.id,
     sourceId: input.source.sourceId,
@@ -2357,6 +2391,7 @@ function createNoChangesResult(
     analysisDigest,
     evidenceDigest,
     reason,
+    ...(evidenceCoverage === undefined ? {} : { evidenceCoverage }),
     ...(generationOutcomes === undefined ? {} : { generationOutcomes }),
     expectedManifestRevision: input.manifest.revision,
     expectedManifestDigest: createSourceManifestDigest(input.manifest),

@@ -49,8 +49,34 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   to the management test copy and verify native loading and preservation; any paid incremental
   replay requires a fresh bounded request allowance.
 - Task ID: `PK-H3-INCREMENTAL-OMISSION` — diagnose why generation repeats an existing Wiki
-  instead of incorporating the approved source extension; begin with read-only evidence,
-  with no renewed model allowance or permission to modify prompts implied.
+  instead of incorporating the approved source extension; optimize exact paragraph evidence
+  and retain content-free no-changes selection diagnostics after the October 5 authorization.
+  Local verification and authorized management-copy deployment are complete. After the selected-run
+  repair, the October 5 replay used 2/3 requests and still produced identical Wiki bytes. The
+  extension appears in evidence but has zero supporting/target claim selections. On October 6,
+  the user authorized a management-test Rules retention clarification and one chapter-13 replay:
+  at most three fresh model calls, no retries, reviewed Apply to its existing Wiki only. Keep
+  other materials paused and plugin prompts unchanged; the old allowance stays closed at 2/3.
+  That Rules trial used only one analysis call and again returned no targets; no generation,
+  Apply, Query or retry followed. Rules remains saved; semantic acceptance is still failed.
+  The user then explicitly authorized a minimal Knowledge-owned analysis prompt repair with
+  offline tests only ([issue #19](https://github.com/yydspanda/obsidian-copilot/issues/19)).
+  Preserve attributed interpretations and uncertainty without guessing unseen Wiki coverage;
+  keep generation/Query/upstream prompts, authority and valid no-change outcomes unchanged.
+  This follow-up grants no model requests, deployment, Vault operations or commit/push.
+  The three-clause repair passes 347 targeted tests, personal build/typecheck, syntax/mobile
+  smoke, format/lint/review and governance locally; generation prompt bytes are unchanged.
+  This is policy-contract verification, not live semantic acceptance; the task remains open.
+  Subsequent user instruction authorizes current-branch commit/push, management-test deployment,
+  and a fresh bounded chapter-13 replay: at most three calls, no retries, reviewed existing-page
+  Apply only, other sources paused. Preserve the closed older allowances and record live results
+  in the [delivery checkpoint](./progress/acceptance/2026-10-06-policy-delivery.md).
+- Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
+  keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
+  Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;
+  deployed and natively verified the chapter-13-only replay, with other three jobs unstarted.
+  Original user pause survives; normal generation refresh changes observation metadata only.
+  Explicit paused Apply has local regression coverage; this no-changes replay did not exercise live Apply.
 - Task ID: `PK-H3-SOURCE-REANALYSIS` — add confirmed single-source reanalysis with preserved
   history, exact paused-queue admission and automatic dedup intact; verify and deliver before
   the approved three-request chapter-13 compile/Query replay in the management test copy.

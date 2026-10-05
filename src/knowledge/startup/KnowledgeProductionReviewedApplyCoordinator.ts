@@ -510,8 +510,9 @@ export class KnowledgeProductionReviewedApplyCoordinator {
           ],
         };
       }
-      // A paused atomic acceptance leaves the proposal pending; it must not
-      // trigger recovery or resume the Queue. https://github.com/yydspanda/obsidian-copilot/issues/6
+      // A blocked atomic acceptance leaves the proposal pending; it must not
+      // trigger recovery or resume background work.
+      // https://github.com/yydspanda/obsidian-copilot/issues/18
       if (error instanceof ReviewStorageAcceptanceBlockedError) {
         return {
           kind: "blocked",
@@ -521,7 +522,7 @@ export class KnowledgeProductionReviewedApplyCoordinator {
               severity: "error",
               field: "queue.control",
               message:
-                "The Bundle is paused; the proposal remains pending and Apply has not started.",
+                "The queue is not ready for Apply; the proposal remains pending and no write has started.",
             },
           ],
         };

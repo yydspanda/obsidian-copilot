@@ -51,6 +51,7 @@ export interface KnowledgeActivityJobActions {
   canRetry: boolean;
   canReview: boolean;
   canReanalyze?: boolean;
+  canRunSelected?: boolean;
 }
 
 /** Detached, immutable failure text already sanitized by the queue boundary. */
@@ -278,7 +279,12 @@ export function isIngestQueueJobRetryEligible(
  */
 function canBeginReview(snapshot: IngestQueueSnapshot): boolean {
   return (
-    snapshot.control.status === "running" &&
+    // Review is an exact user action; it must not require waking unrelated queued materials.
+    // https://github.com/yydspanda/obsidian-copilot/issues/18
+    (snapshot.control.status === "running" ||
+      (snapshot.control.status === "paused" && snapshot.control.reason === "user")) &&
+    !snapshot.applyClaim &&
+    !snapshot.applyCommit &&
     !snapshot.jobs.some((job) => job.status === "processing")
   );
 }
@@ -317,6 +323,16 @@ function deriveJobActions(
     job.status === "pending" ||
     job.status === "paused" ||
     (job.status === "processing" && job.stage !== "applying");
+  // The explicit single-material action never bypasses recovery or a scheduled retry.
+  // https://github.com/yydspanda/obsidian-copilot/issues/18
+  const canRunSelected =
+    snapshot.control.status === "paused" &&
+    snapshot.control.reason === "user" &&
+    job.status === "pending" &&
+    job.nextAttemptAt === undefined &&
+    !snapshot.applyClaim &&
+    !snapshot.applyCommit &&
+    !snapshot.jobs.some((candidate) => candidate.status === "processing");
   return Object.freeze({
     canCancel,
     canRetry: isIngestQueueJobRetryEligible(snapshot, job),
@@ -327,6 +343,7 @@ function deriveJobActions(
     // Reanalysis admission must come from source-aware Runtime proof, never terminal status alone.
     // https://github.com/yydspanda/obsidian-copilot/issues/16
     ...(canReanalyze ? { canReanalyze: true } : {}),
+    ...(canRunSelected ? { canRunSelected: true } : {}),
   });
 }
 
@@ -450,6 +467,18 @@ function createStatusCounts(): Record<KnowledgeActivityStatus, number> {
 function deriveBundleControls(
   snapshot: IngestQueueSnapshot
 ): Readonly<KnowledgeActivityBundleControls> {
+  // A single-material Apply retains user pause, but its commit still needs acknowledgement.
+  // https://github.com/yydspanda/obsidian-copilot/issues/18
+  if (snapshot.applyCommit) {
+    return Object.freeze({
+      state: "finalizing",
+      canPause: false,
+      canResume: false,
+      ...(snapshot.control.status === "paused"
+        ? { pauseReason: snapshot.control.reason, pausedAt: snapshot.control.pausedAt }
+        : {}),
+    });
+  }
   if (snapshot.control.status === "running") {
     return Object.freeze({ state: "running", canPause: true, canResume: false });
   }

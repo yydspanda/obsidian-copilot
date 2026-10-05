@@ -716,6 +716,46 @@ describe("KnowledgeStudioRuntimeReadAdapter", () => {
       });
     });
 
+    describe("runSelectedJob()", () => {
+      it("delegates the inspected pending job without exposing Queue authority — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+        const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+        await runtime.initialize();
+        const queue = new IngestQueue(new KnowledgeRuntimeQueueStorage(runtime), {
+          execute: async (): Promise<IngestExecutionResult> => {
+            throw new Error("Unexpected model call");
+          },
+        });
+        const run = jest
+          .spyOn(queue, "runSelected")
+          .mockResolvedValue({ kind: "executed", jobId: "selected", status: "awaiting_review" });
+        const commands = new KnowledgeStudioRuntimeCommandAdapter({
+          queue,
+          reviewReject: new KnowledgeRuntimeReviewRejectPort(runtime),
+          bundleIds: [BUNDLE_ID],
+          assertCurrent: () => undefined,
+          onGenerationRefreshRequired: () => undefined,
+        });
+        const adapter = createAdapter(
+          new FakeRuntime([createProjection(1)]),
+          createMissingResolver(),
+          undefined,
+          () => undefined,
+          commands
+        );
+        const snapshot = await adapter.load(BUNDLE_ID, new AbortController().signal);
+        expect(snapshot.commandCapabilities.runSelectedJob).toBe(true);
+        await adapter.runSelectedJob(BUNDLE_ID, "selected", 7, new AbortController().signal);
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(run).toHaveBeenCalledWith(BUNDLE_ID, "selected", 7);
+      });
+      it("refuses selected execution from a read-only generation — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+        const adapter = createAdapter(new FakeRuntime([createProjection(1)]));
+        await expect(
+          adapter.runSelectedJob(BUNDLE_ID, "selected", 7, new AbortController().signal)
+        ).rejects.toThrow("not configured");
+      });
+    });
+
     describe("saveQueryToWiki()", () => {
       const issue = "https://github.com/yydspanda/obsidian-copilot/issues/9";
 

@@ -13,6 +13,8 @@
 | Needs attention        | 持久环境或运行状态需要处理，不会自动修复         |
 | Query                  | 查询                                             |
 | Activity               | 活动/后台任务                                    |
+| Run only this material | 确认后只运行这一份材料，其他材料保持暂停         |
+| Resume bundle          | 继续整个 Bundle 的合格任务，不是只运行所选材料   |
 | Review                 | 审核                                             |
 | Recovery               | 恢复                                             |
 | Import folder          | 导入文件夹                                       |
@@ -75,14 +77,16 @@ Studio 的 **Add materials** 直接选择一份 Vault 文件。来源目录内�
 
 ## Bundle 状态
 
-| 状态              | 含义                     |
-| ----------------- | ------------------------ |
-| Running           | 可以开始合格工作         |
-| Paused            | 用户暂停了新工作         |
-| Rate limited      | 因提供商限制等待安全恢复 |
-| Startup recovery  | 启动恢复尚未完成         |
-| Recovery required | 新工作和自动写入被阻断   |
-| Finalizing commit | 等待已提交事务的持久确认 |
+| 状态              | 含义                                                |
+| ----------------- | --------------------------------------------------- |
+| Running           | 可以开始合格工作                                    |
+| Paused            | 用户暂停后台队列；仍可明确单材料运行或 Review Apply |
+| Rate limited      | 因提供商限制等待安全恢复                            |
+| Startup recovery  | 启动恢复尚未完成                                    |
+| Recovery required | 新工作和自动写入被阻断                              |
+| Finalizing commit | 等待已提交事务的持久确认                            |
+
+`Run only this material` 只对主动暂停中的合格排队任务开放，需要确认模型费用。它不会绕过限流、延迟重试或恢复门控，也不自动写 Wiki；没有修改或失败都可能是一次运行的结果。Review Apply 是对单个提案的显式授权，不需要恢复整个队列；Pause 不是取消已经开始的 Apply。
 
 ## Recovery 状态
 
@@ -210,6 +214,7 @@ Studio 的 **Add materials** 直接选择一份 Vault 文件。来源目录内�
 | 从 Setup 打开 Copilot 设置                       | 不调用 DeepSeek；设置页可能执行插件更新检查     |
 | 枚举/复制文件夹、本地 PDF 提取、SHA-256 校验     | 否                                              |
 | 新 Source 编译                                   | 通常是，分析与生成两个阶段                      |
+| Run only this material 确认运行                  | 可能，限所选材料的分析与生成；其他材料仍暂停    |
 | 已有持久证明且输入/输出精确未变化                | 否                                              |
 | 读取已验证的 Forward effective 页头              | 否；不调用模型修复或重新编译                    |
 | 有合格证据的 Grounded Query                      | 是，单独回答请求                                |
@@ -255,7 +260,7 @@ Studio 的 **Add materials** 直接选择一份 Vault 文件。来源目录内�
 
 ### no_changes
 
-编译器和校验证明当前输入不需要改变 Wiki。任务 Completed，但没有空 Review，也没有 Apply。
+本次编译没有产生 Wiki 文件修改，没有空 Review，也没有 Apply。它不证明所有新增材料都已收录，也不保证语义上一定无需更新。
 
 ### ChangeSet
 

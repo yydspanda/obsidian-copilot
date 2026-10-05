@@ -3,6 +3,7 @@ import {
   deriveKnowledgeSourceCompileAuthority,
 } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
+  MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS,
   NO_CHANGES_MANIFEST_COMMIT_VERSION,
   NoChangesManifestCommitValidationError,
   createKnowledgeNoChangesCommitMarker,
@@ -13,6 +14,7 @@ import {
   validateNoChangesManifestCommitMarker,
   validateNoChangesManifestCommitPlan,
   type CreateNoChangesManifestCommitPlanInput,
+  type NoChangesManifestCommitMarker,
   type NoChangesManifestCommitPlan,
   type NoChangesManifestCommitReason,
 } from "@/knowledge/manifest/NoChangesManifestCommit";
@@ -94,6 +96,148 @@ function createPlan(
 
 describe("NoChangesManifestCommit", () => {
   describe("createNoChangesManifestCommitPlan()", () => {
+    it("keeps evidence coverage absent on legacy plans without changing their exact identity — https://github.com/yydspanda/obsidian-copilot/issues/17", () => {
+      const plan = createPlan();
+      const parsed = parseNoChangesManifestCommitPlan(JSON.parse(JSON.stringify(plan)));
+
+      expect(plan).not.toHaveProperty("evidenceCoverage");
+      expect(plan.noChangesId).toBe(
+        "knowledge-no-changes-d11289a51680c0920951aad8c0f6e9f4dc3740caaa2faf0bd4989d0fa9701eb0"
+      );
+      expect(createNoChangesManifestCommitPlanDigest(plan)).toBe(
+        "1218eeb5e4dca5934d78c0803320ce6de8f465165a0e299fc0d28d22fb636809"
+      );
+      expect(parsed).toEqual({ ok: true, value: plan });
+      if (!parsed.ok) throw new Error("Expected the legacy plan to parse");
+      expect(parsed.value).not.toHaveProperty("evidenceCoverage");
+    });
+
+    it("retains detached frozen per-evidence counts in source order even when quote hashes repeat — https://github.com/yydspanda/obsidian-copilot/issues/17", () => {
+      const evidenceCoverage = [
+        { quoteHash: SOURCE_HASH, supportingClaimCount: 2, targetClaimCount: 1 },
+        { quoteHash: SOURCE_HASH, supportingClaimCount: 0, targetClaimCount: 0 },
+      ];
+      const input = { ...createPlanInput(), evidenceCoverage };
+      const plan = createPlan(input);
+      const coverage = plan.evidenceCoverage;
+
+      expect(coverage).toEqual(evidenceCoverage);
+      expect(coverage).not.toBe(evidenceCoverage);
+      expect(Object.isFrozen(coverage)).toBe(true);
+      expect(coverage?.every(Object.isFrozen)).toBe(true);
+      evidenceCoverage[0].targetClaimCount = 2;
+      evidenceCoverage.reverse();
+      expect(plan).toHaveProperty("evidenceCoverage", [
+        { quoteHash: SOURCE_HASH, supportingClaimCount: 2, targetClaimCount: 1 },
+        { quoteHash: SOURCE_HASH, supportingClaimCount: 0, targetClaimCount: 0 },
+      ]);
+      expect(plan.noChangesId).not.toBe(createPlan().noChangesId);
+      expect(createNoChangesManifestCommitPlanDigest(plan)).not.toBe(
+        createNoChangesManifestCommitPlanDigest(createPlan())
+      );
+    });
+
+    it("accepts the bounded maximum evidence count and safe claim counts — https://github.com/yydspanda/obsidian-copilot/issues/17", () => {
+      expect(MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS).toBe(2048);
+      const evidenceCoverage = Array.from(
+        { length: MAX_NO_CHANGES_EVIDENCE_COVERAGE_ITEMS },
+        () => ({
+          quoteHash: SOURCE_HASH,
+          supportingClaimCount: Number.MAX_SAFE_INTEGER,
+          targetClaimCount: Number.MAX_SAFE_INTEGER,
+        })
+      );
+      const input = { ...createPlanInput(), evidenceCoverage };
+
+      expect(createPlan(input)).toHaveProperty("evidenceCoverage", evidenceCoverage);
+    });
+
+    it.each([
+      { condition: "an empty array", evidenceCoverage: [] },
+      {
+        condition: "more than 2048 entries",
+        evidenceCoverage: Array.from({ length: 2049 }, () => ({
+          quoteHash: SOURCE_HASH,
+          supportingClaimCount: 1,
+          targetClaimCount: 0,
+        })),
+      },
+      {
+        condition: "a malformed quote hash",
+        evidenceCoverage: [
+          { quoteHash: "not-a-hash", supportingClaimCount: 1, targetClaimCount: 0 },
+        ],
+      },
+      {
+        condition: "a negative supporting count",
+        evidenceCoverage: [
+          { quoteHash: SOURCE_HASH, supportingClaimCount: -1, targetClaimCount: 0 },
+        ],
+      },
+      {
+        condition: "a fractional supporting count",
+        evidenceCoverage: [
+          { quoteHash: SOURCE_HASH, supportingClaimCount: 0.5, targetClaimCount: 0 },
+        ],
+      },
+      {
+        condition: "an unsafe supporting count",
+        evidenceCoverage: [
+          {
+            quoteHash: SOURCE_HASH,
+            supportingClaimCount: Number.MAX_SAFE_INTEGER + 1,
+            targetClaimCount: 0,
+          },
+        ],
+      },
+      {
+        condition: "a negative target count",
+        evidenceCoverage: [
+          { quoteHash: SOURCE_HASH, supportingClaimCount: 1, targetClaimCount: -1 },
+        ],
+      },
+      {
+        condition: "a fractional target count",
+        evidenceCoverage: [
+          { quoteHash: SOURCE_HASH, supportingClaimCount: 1, targetClaimCount: 0.5 },
+        ],
+      },
+      {
+        condition: "an unsafe target count",
+        evidenceCoverage: [
+          {
+            quoteHash: SOURCE_HASH,
+            supportingClaimCount: 1,
+            targetClaimCount: Number.MAX_SAFE_INTEGER + 1,
+          },
+        ],
+      },
+      {
+        condition: "a target count above the supporting count",
+        evidenceCoverage: [
+          { quoteHash: SOURCE_HASH, supportingClaimCount: 1, targetClaimCount: 2 },
+        ],
+      },
+      {
+        condition: "private text in an unsupported field",
+        evidenceCoverage: [
+          {
+            quoteHash: SOURCE_HASH,
+            supportingClaimCount: 1,
+            targetClaimCount: 0,
+            excerpt: "private source text",
+          },
+        ],
+      },
+    ])(
+      "rejects evidence coverage containing $condition — https://github.com/yydspanda/obsidian-copilot/issues/17",
+      ({ evidenceCoverage }) => {
+        const input = { ...createPlanInput(), evidenceCoverage };
+
+        expect(() => createPlan(input)).toThrow(NoChangesManifestCommitValidationError);
+      }
+    );
+
     it("preserves absent diagnostics and the exact legacy identity — https://github.com/yydspanda/obsidian-copilot/issues/15", () => {
       const plan = createPlan();
 
@@ -161,6 +305,57 @@ describe("NoChangesManifestCommit", () => {
   });
 
   describe("createKnowledgeNoChangesCommitMarker()", () => {
+    it("persists detached frozen evidence coverage through marker reload and rejects tampering — https://github.com/yydspanda/obsidian-copilot/issues/17", () => {
+      const input = {
+        ...createPlanInput(),
+        evidenceCoverage: [
+          { quoteHash: SOURCE_HASH, supportingClaimCount: 2, targetClaimCount: 1 },
+          { quoteHash: PIPELINE_HASH, supportingClaimCount: 0, targetClaimCount: 0 },
+        ],
+      };
+      const plan = createPlan(input);
+      const marker = createKnowledgeNoChangesCommitMarker({
+        plan,
+        jobClaim: {
+          jobId: "job-1",
+          sourceId: plan.sourceId,
+          sourceContentHash: plan.sourceContentHash,
+          pipelineFingerprint: plan.pipelineFingerprint,
+          inputRevision: plan.inputRevision,
+          attempt: 1,
+          startedAt: 100,
+        },
+        completedAt: 110,
+        manifestAfterRevision: 5,
+      });
+      const raw = JSON.parse(JSON.stringify(marker)) as NoChangesManifestCommitMarker;
+      const parsed = parseKnowledgeNoChangesCommitMarker(raw);
+      if (!parsed.ok) throw new Error("Expected evidence coverage to survive marker reload");
+      const coverage = parsed.value.evidenceCoverage;
+
+      expect(coverage).toEqual(input.evidenceCoverage);
+      expect(coverage).not.toBe(raw.evidenceCoverage);
+      expect(Object.isFrozen(coverage)).toBe(true);
+      expect(coverage?.every(Object.isFrozen)).toBe(true);
+      expect(marker.evidenceCoverage).not.toBe(plan.evidenceCoverage);
+      expect(Object.isFrozen(marker.evidenceCoverage)).toBe(true);
+      expect(marker.evidenceCoverage?.every(Object.isFrozen)).toBe(true);
+      expect(validateNoChangesManifestCommitMarker(parsed.value).valid).toBe(true);
+      for (const evidenceCoverage of [
+        [{ ...input.evidenceCoverage[0], supportingClaimCount: 3 }, input.evidenceCoverage[1]],
+        [{ ...input.evidenceCoverage[0], targetClaimCount: 2 }, input.evidenceCoverage[1]],
+        [{ ...input.evidenceCoverage[0], quoteHash: PAGE_HASH }, input.evidenceCoverage[1]],
+        [...input.evidenceCoverage].reverse(),
+      ]) {
+        expect(validateNoChangesManifestCommitPlan({ ...plan, evidenceCoverage }).valid).toBe(
+          false
+        );
+        expect(
+          validateNoChangesManifestCommitMarker({ ...parsed.value, evidenceCoverage }).valid
+        ).toBe(false);
+      }
+    });
+
     it("persists generation diagnostics through strict marker serialization and rejects altered counts — https://github.com/yydspanda/obsidian-copilot/issues/15", () => {
       const plan = createPlan({
         generationOutcomes: { explicitUnchanged: 1, identicalWrites: 1 },
