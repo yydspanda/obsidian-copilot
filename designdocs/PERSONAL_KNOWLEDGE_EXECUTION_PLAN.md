@@ -71,6 +71,9 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   and a fresh bounded chapter-13 replay: at most three calls, no retries, reviewed existing-page
   Apply only, other sources paused. Preserve the closed older allowances and record live results
   in the [delivery checkpoint](./progress/acceptance/2026-10-06-policy-delivery.md).
+  Delivered `79ba199b` after 942 changed-file tests. The live replay selected one extension-backed
+  claim for a target, but generation returned the identical old Wiki. Closed safely at 2/3 calls,
+  no Apply/Query/retry, notes/settings/history preserved; generation follow-up remains unimplemented.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;
