@@ -132,6 +132,14 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   authority and requests unchanged. Review the complete proposal before Apply; no retries,
   other sources paused, previous 1/3 allowance remains closed. Analysis-topic selection and
   lossless supporting evidence are generation prerequisites, not proof of final semantic coverage.
+  Delivered `d5a51bef` after 354 affected tests and all local gates. Analysis and generation
+  each run once; full linked supports are present, and the new proposal now preserves the
+  counterexample qualification but still omits research versus expression. No Apply/Query;
+  allowance closes 2/3 with the incomplete Review retained and all 226 files/92 settings exact.
+  The omission is now directly observed in generation, not blamed on absent source text.
+  Measurement shows 20 citation locators carrying 170,069 bytes for only 24,579 unique bytes.
+  Generation-only wire evidence-id compaction is proposed, not yet authorized or implemented;
+  do not change public/persisted schemas or reuse the closed allowance by inference.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;

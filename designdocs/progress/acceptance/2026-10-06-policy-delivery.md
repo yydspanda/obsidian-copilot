@@ -697,3 +697,64 @@ mistaking a lossy intermediate summary for the final output's coverage verdict.
 Logs use `.git/acceptance/detail-replay-20261008/qualification-repair-*`.
 The new ignored one-shot helpers reserve their own receipt under
 `.git/acceptance/qualification-replay-20261008/`; they cannot reuse old call budgets.
+
+### Delivery, full-support generation and remaining omission
+
+Normal commit hooks succeed; `d5a51befd72369b405bf6eda93c4dff2e73710d7` is pushed
+to the current fork branch after one bounded HTTPS push times out. The successful
+retry and zero ahead/behind fork reference prove delivery; a separate API timeout
+is not treated as remote proof. No upstream merge or remote master mutation.
+Canonical `test:vault` exits zero with clean tag `d5a51bef-clean-5465383dafce` and
+the pinned main/styles hashes. CLI reload fails; explicit guarded unload/load
+proves the new instance and ready Studio. Both actual outbound system hashes match.
+Cached in-memory manifest text is again not used as the loaded-code oracle.
+
+Deployment alone leaves all 226 files/links and 92 settings exact. It refreshes
+pending observation metadata only. The selected job is
+`5146e6b8-a2a8-4ec2-8b6a-830cd64a0457`, input revision 40, pipeline
+`6283fb94fd02673862bd617e7b5b0fe0302b353fa7d7758c9cbd658183d08e59`.
+Native selected-only confirmation makes one analysis request: 18 claims, all
+selected, 20 citations. Its extension claim includes the five fields,
+observation/explanation distinction and counterexample qualification, but still
+omits research versus expression. That actual shortcoming remains recorded.
+
+Before generation, both reviewers verify the complete extension supports locator
+is attached to the selected case-compilation topic, exact to the original evidence,
+with source attribution and unobserved status available. Release under the newly
+authorized source-detail policy; do not label analysis complete. Generation makes
+one request, HTTP 200 / normal stop, returning one valid existing-page update.
+Candidate after hash:
+`15a9dc681ec942ef574a67b1421f051e1a5f41f439adea73dbe505499110239e`.
+The whole original Wiki is preserved and new selected original/reader content is
+added. The five fields, observation/explanation and counterexample qualification
+survive. However, the complete candidate still has no equivalent of retaining
+research records before selecting typical examples for expression. It also omits
+the explicit unobserved-status caveat, although it does not falsely state that
+the observations were done and its reader-suggestion attribution remains visible.
+
+Full semantic acceptance **fails**. Root and independent reviewer do not edit
+the candidate to pass. No Apply, Query or retry; the incomplete Review remains
+pending with its history intact. Close the fresh allowance at **2/3**, restore
+native fetch, remove temporary prose traces and explicitly reload. Experiments:
+[`EXP-20261008-002`](../experiments/2026-10.md#experiment-exp-20261008-002) and
+[`EXP-20261008-003`](../experiments/2026-10.md#experiment-exp-20261008-003).
+
+Final Runtime 663, SHA-256
+`ea3af307cce8bff40c965cf2e072777257f03e5882cb57c495cfc569220d66c3`:
+nine completed / three pending / three cancelled / one awaiting Review; one
+pending Review and one unexecuted same-source startup observation rerun, user
+pause exact. No active transaction or forward Apply. All 226 file/link hashes,
+92 settings, 12 prior terminal jobs, old Reviews, Manifest and Apply/Forward
+ledgers remain exact. Other three materials retain attempt zero. The new Review
+is the only added durable proposal; source, Rules and Wiki are untouched.
+Independent preservation audit agrees; the receipt is closed, failed/blocked zero,
+cleanup complete. Unique snapshots are `qualification-before/deployed/final`.
+
+Diagnostic measurement of this actual generation input: 232,207 request bytes /
+53,177 prompt tokens. Twenty selected citation locators repeat 170,069 bytes;
+the ten unique locators total only 24,579 bytes. This establishes duplication,
+not that it caused the omission or that compaction will fix model compliance.
+The proposed next change would keep full evidence once and serialize citation
+references by existing evidence ID only in generation's prompt input. It needs
+its own explicit scope, encoding identity and fresh request allowance; do not
+silently broaden this policy-only repair or rearm its closed 2/3 receipt.
