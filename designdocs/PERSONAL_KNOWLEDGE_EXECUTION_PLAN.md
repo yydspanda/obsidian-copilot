@@ -156,6 +156,14 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   Query once each, no retries, Apply only after complete semantic review. Retain the previous
   incomplete proposal as rejected history; do not delete it or alter other materials. Prior
   receipts stay closed and the user queue pause remains in force.
+  Delivery `0945f5fd` is pushed and deployed with exact artifact hashes. The new analysis
+  system contract reaches official DeepSeek Pro, but its 22 selected claims again collapse
+  the reader extension into one incomplete point: the unverified-condition alternative,
+  counterexample qualification, research/expression distinction and explicit non-observation
+  caveat are absent, with observation/explanation separation ambiguous. Both reviewers
+  cancel before generation and close at 1/3 without Apply/Query. Exact supporting evidence
+  remains available; selected-ID coverage cannot detect unselected meaning. Generation v2
+  has only local coverage, not real-model validation. The semantic task remains open.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;

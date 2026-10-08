@@ -824,3 +824,60 @@ a complete independently reviewed proposal to the existing target. The Query
 also asks about the research/expression distinction omitted previously. Other
 materials remain paused; no old allowance is reopened and no source, Rules or
 model configuration is changed. Delivery and live outcomes will be recorded below.
+
+Implementation commit `0945f5fd435a9b6567bf5a8929133f2c5ab9641a` passes normal
+commit hooks and is pushed to the fork's current development branch; remote SHA
+is verified through the authenticated GitHub API. SSH lacks an available key and
+the inherited proxy stalls HTTPS, so the successful HTTPS push uses only
+command-scoped proxy removal and the existing authenticated credential helper.
+No remote URL, global Git configuration, dependency or remote master is changed.
+
+Before delivery, native Skip all changes / Reject proposal retains the old
+incomplete proposal as rejected history and promotes its queued same-source
+observation. All 226 file/link hashes and 92 settings remain exact. Canonical
+`test:vault` builds/deploys clean tag `0945f5fd-clean-086671d07994`; main/styles
+hashes match the locally verified artifacts. CLI reload fails, so explicit guarded
+unload/load proves a new plugin instance and ready Studio. Cached manifest text
+still shows an older label and is not used as the loaded-code oracle; the actual
+analysis system hash and refreshed pipeline confirm the new contract.
+
+Selected job `73d15050-0d65-416d-bddd-508c0cc7021f`, input revision 42, pipeline
+`859a71d6b387bbdcfa305d8f07f666abcdf03021ba9c1dad24f8ac66f5dd2a81`, runs once
+through native selected-only confirmation. Official Pro returns HTTP 200 / normal
+stop in 28,760 ms: 22 claims, all selected, 27 support citations. The actual
+analysis system SHA is
+`e928c6a1dd5d8eb1a26fcb25bf3d85c01ab6b4921c4316c739252dd4088f358f`.
+The full original extension remains an exact linked supports locator. Nevertheless,
+its selected claim retains only the five basic field categories and reader/non-original
+attribution: it drops the alternative of unverified conditions, the absence-of-counterexample
+qualification, the research/expression distinction, and explicit not-yet-observed status.
+Its wording does not clearly preserve observation versus explanation either. No
+other selected claim restores those meanings. Root and independent review agree.
+
+Cancel through the native controller at the unpaid generation checkpoint, before
+the timeout and before a second HTTP dispatch. Close the fresh allowance at **1/3**;
+no generation, proposal, Apply, Query or retry occurs. This is a real failure of
+analysis semantic completeness, not a transport error, token truncation or an
+observed generation-v2 defect. The new final-text handoff can check selected IDs
+but cannot catch source meaning that analysis never selected. Its real-model
+generation behavior and complete source-to-Wiki/Query acceptance remain unverified.
+Experiment: [`EXP-20261008-004`](../experiments/2026-10.md#experiment-exp-20261008-004).
+
+Cleanup removes temporary source/model traces, restores native fetch and reloads
+to a fresh idle plugin instance. Receipt is closed, cleanup complete, failed/blocked
+zero; the semantic-failure outcome is recorded separately. Final Runtime 693,
+SHA-256 `ee481b1e86a04b9c7b1cfe30c720a3189f4e07bead0b6cde04943a7ff65c1d7c`:
+nine completed / four pending / five cancelled, no pending Review or active Apply.
+The original user pause remains. The selected source's startup observation is
+queued, not executed. Snapshots: `handoff-before/rejected/deployed/final`.
+
+Independent final preservation audit matches the current disk: all 226 file/link
+hashes and all 92 settings are exact, with no additions or removals. The 13
+post-rejection terminal jobs and all four Review records remain byte-for-byte
+equivalent to the rejected baseline; the old incomplete proposal is not deleted.
+All 183 prior observation payloads remain, with eight deployment/cleanup observations
+appended. Other three materials retain their IDs, source hashes, pending status
+and attempt zero; only deployment pipeline and observation revision/time refresh.
+The selected job is cancelled; a new same-source observation waits at attempt zero.
+Manifest, Apply and forward ledgers and the original pause timestamp are unchanged;
+there is no active transaction. No further repair or paid retry is performed.
