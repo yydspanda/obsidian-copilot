@@ -102,13 +102,20 @@ async function compileNoChanges(
 ) {
   const input = options.input ?? createInput();
   const generate = jest.fn(async (request: CompilerGenerationRequest) => ({
-    version: 1,
+    version: 2,
     targetSetDigest: request.targetSetDigest,
-    files: request.targets.map((target: { targetId: string }) =>
-      options.explicitUnchanged
-        ? { targetId: target.targetId, outcome: "unchanged" }
-        : { targetId: target.targetId, outcome: "write", afterContent: EXISTING }
-    ),
+    files: request.targets.map((target) => {
+      // The scripted model misattributes old prose to the new claim. Exact anchors cannot
+      // establish semantic coverage, so selection receipts must not imply it.
+      // https://github.com/yydspanda/obsidian-copilot/issues/17
+      const claimCoverage = target.claimIds.map((claimId) => ({
+        claimId,
+        excerpt: "Research uses observations.",
+      }));
+      return options.explicitUnchanged
+        ? { targetId: target.targetId, outcome: "unchanged", claimCoverage }
+        : { targetId: target.targetId, outcome: "write", afterContent: EXISTING, claimCoverage };
+    }),
   }));
   const compiler = new KnowledgeCompiler({
     limits: { maxEvidenceItems: options.maxEvidenceItems ?? 2048 },

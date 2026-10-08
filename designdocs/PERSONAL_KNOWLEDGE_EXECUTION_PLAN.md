@@ -140,6 +140,22 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   Measurement shows 20 citation locators carrying 170,069 bytes for only 24,579 unique bytes.
   Generation-only wire evidence-id compaction is proposed, not yet authorized or implemented;
   do not change public/persisted schemas or reuse the closed allowance by inference.
+  Subsequent design discussion selects an explicit claim handoff instead of compaction or a
+  protected-original UI. The user authorizes local implementation and regression: analysis selects
+  standalone qualified points; generation v2 must anchor every selected claim in its own proposed
+  or existing page, with no exclusion shortcut. Reuse existing claims and source citations; consume
+  the anchors during compilation, without migrating persisted Review/Manifest history. Reject
+  missing, duplicate, foreign and nonexistent anchors before proposal or no-change completion.
+  Matching IDs and excerpts establishes a checked handoff, not semantic equivalence or complete
+  source extraction. Keep the paid replay closed; no new model allowance is implied.
+  Local implementation passes 18 related suites / 416 tests, 36 final test-only checks, 20 governance
+  tests and build/typecheck/smoke/format/lint/full review; existing warnings and dependency findings
+  remain visible. No deployment or live replay occurs; semantic acceptance stays open.
+  The subsequent explicit commit/push and real-validation request authorizes current-branch
+  delivery to Management-Test and a fresh bounded chapter-13 replay: analysis, generation and
+  Query once each, no retries, Apply only after complete semantic review. Retain the previous
+  incomplete proposal as rejected history; do not delete it or alter other materials. Prior
+  receipts stay closed and the user queue pause remains in force.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;

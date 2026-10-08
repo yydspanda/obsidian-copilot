@@ -13,8 +13,7 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Generation repair `d5a51bef` pushed/deployed; two live calls improve retention but still omit the research/expression distinction. Full supports reached generation, so this is a generation omission. No Apply/Query/retry; allowance closed 2/3, incomplete Review retained, Wiki and queue pause preserved.
-  Evidence compaction is the proposed next step, pending explicit scope. [Supporting-qualification result](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-supporting-qualification-follow-up).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Claim handoff locally verified; user now requests current-branch commit/push and real validation. Deploy to Management-Test, retain/reject the prior incomplete Review, then run only chapter 13: analysis, generation and Query once each, no retry; Apply only a complete reviewed proposal. Other materials stay paused; previous allowances remain closed. [Local verification and delivery scope](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-claim-handoff-offline).
 
 ## Upstream Status
 
@@ -28,7 +27,7 @@
 
 ## Recent Activity
 
-- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — `d5a51bef` pushed/deployed. Analysis+generation retain the counterexample qualification, but still lose research/expression; close 2/3 without Apply/Query. All 226 files/92 settings exact; incomplete Review retained. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-supporting-qualification-follow-up).
+- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — Claim handoff implemented locally; 416 related tests and build/lint/review gates pass. No commit/push, deployment or model calls. Earlier live replay remains incomplete and closed 2/3; Review/data preserved. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-claim-handoff-offline).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
@@ -60,6 +59,7 @@
 
 ## Current Verification
 
+- October 8 claim handoff: 18 suites / 416 related tests, final 36 cases after test-only lint fixes, 20 governance tests, build/typecheck/syntax/mobile smoke, format/lint/full review pass. Existing warnings and audit 0 critical / 1 high / 3 moderate remain visible. No full-suite rerun, deployment or real-model semantic pass.
 - October 8 supporting-qualification replay: 354 affected tests, final 17 encoder cases, build/typecheck/smoke, format/lint/full review pass; d5a51bef pushed/deployed. Two official Pro calls retain counterexample qualification but omit research/expression; no Apply/Query, closed 2/3, full semantic acceptance still fails. Earlier detail replay stays closed 1/3.
 - October 8 dependency follow-up: only 3 proxy-addr lock fields change; 8 security checks, 94 Claude tests, build/typecheck/smoke, format/lint and all review stages pass. Official live audit: 0 critical / 1 high / 3 moderate. The interrupted full command is not reported as an exit-0 run; audit and fixtures were completed separately.
 - October 6 analysis-detail repair: 17 suites / 352 tests, 20 governance tests, build/typecheck/smoke, format/lint pass. Review package/source/styles and separate fixtures pass; full gate fails on proxy-addr critical advisory. No dependency edits, deployment or real model retest.

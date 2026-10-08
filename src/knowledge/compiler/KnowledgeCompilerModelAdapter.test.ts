@@ -384,12 +384,19 @@ function createSuccessfulWireOutput(
   request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>
 ): string {
   if (stage === "analysis") return createAnalysisWireOutput();
+  const generationRequest = request as CompilerGenerationRequest;
+  const afterContent = "# New Page\n\nExact source text\n";
   return JSON.stringify({
-    version: 1,
-    targetSetDigest: (request as CompilerGenerationRequest).targetSetDigest,
-    files: (request as CompilerGenerationRequest).targets.map((target) => ({
+    version: 2,
+    targetSetDigest: generationRequest.targetSetDigest,
+    files: generationRequest.targets.map((target) => ({
       targetId: target.targetId,
-      outcome: "unchanged",
+      outcome: "write",
+      afterContent,
+      claimCoverage: target.claimIds.map((claimId) => ({
+        claimId,
+        excerpt: "Exact source text",
+      })),
     })),
   });
 }
@@ -637,7 +644,7 @@ describe("KnowledgeCompilerModelAdapter", () => {
         context.signal
       );
 
-      expect(result.kind).toBe("no_changes");
+      expect(result.kind).toBe("proposed");
       expect(routeCalls).toHaveLength(2);
       expect(routeCalls.map(({ stage }) => stage)).toEqual(["analysis", "generation"]);
       expect(routeCalls.every(({ signal }) => signal === context.signal)).toBe(true);

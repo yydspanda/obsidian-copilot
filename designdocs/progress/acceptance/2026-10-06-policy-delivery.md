@@ -758,3 +758,69 @@ The proposed next change would keep full evidence once and serialize citation
 references by existing evidence ID only in generation's prompt input. It needs
 its own explicit scope, encoding identity and fresh request allowance; do not
 silently broaden this policy-only repair or rearm its closed 2/3 receipt.
+
+## Authorized claim handoff (offline)
+
+Task event: `PK-H3-INCREMENTAL-OMISSION` — October 8 design agreement authorizes
+the existing two stages to hand off selected points explicitly. This replaces
+the proposed compaction-first follow-up; no protected-original UI is introduced.
+
+Analysis is instructed to select standalone substantive points with their attribution
+and qualifications. Generation output v2 adds `claimCoverage` to both write and
+unchanged outcomes. For each target, every selected claim ID must occur exactly
+once and reference a nonblank exact excerpt of its final content: `afterContent`
+for write, the bound existing content for unchanged. Shared excerpts are allowed
+for merged expression; foreign IDs, duplicate IDs, absent IDs and nonexistent
+text are rejected before either proposal or no-change completion. Structural
+targets follow their actual claim selection; delete-only work still skips generation.
+Coverage count and text, including unchanged excerpts, use the existing resource
+limits. Generation failures retain only the five new allowlisted check codes.
+
+Input, analysis and prompt-envelope versions stay at 1. The generation schema ID,
+example and parser move together to v2, changing the existing prompt identity.
+The private decoded-object transport contract remains at 1. No compatibility
+fallback invents coverage for old model output. Coverage is consumed during
+compilation and is absent from stored proposals, manifests and note content;
+existing historical records require no migration or retroactive checking.
+
+Observed RED: 11 handoff cases fail before the core checks, with 5 normal cases
+passing; 3 prompt-contract cases fail before the encoder changes; schema tests
+show 3 failures before v2 support. Disabling the new count/text budgets makes
+both dedicated resource cases fail; both checks are restored afterward. Handler
+diagnostic RED shows 6 intended failures before its bounded allowlist extension.
+The integrated run passes 18 suites / 416 tests. This is deterministic verification
+using synthetic responses, not a real-model semantic acceptance result.
+
+Final verification: the two suites changed only to resolve test lint errors pass
+36/36 again. Production build/typecheck with the existing personal 10,000,000-byte
+budget, `node --check main.js`, mobile-load smoke, format, lint, progress validation
+and 20 governance tests pass. The artifact is 6,489,700 bytes, SHA-256
+`af49887eca7d9cd0425e6027d26909edd770f5bc677813abdada51cefa5b1018`.
+The default size limit is unchanged. This is related regression coverage, not a
+new full-repository test sweep.
+
+Full `review:obsidian` exits zero, including audit and negative fixtures. The first
+attempt could not audit because the configured npm mirror lacks that API; the
+successful rerun uses only a command-scoped official registry override, without
+changing configuration, dependencies or lockfiles. Lint retains 9 existing warnings;
+source/style review warnings remain visible. Audit reports 0 critical, 1 high and
+3 moderate vulnerabilities, not a clean dependency bill of health. No review
+rule or threshold is suppressed or relaxed.
+
+Production changes stay within Knowledge-owned modules. No model requests,
+Vault operations, deployment, commit or push occur in this follow-up. The prior
+live allowance stays closed, and full source-to-Wiki/Query semantic acceptance
+remains open: an actual excerpt can still express a claim incorrectly, and an
+unselected source point has no claim ID for this check to cover.
+
+## Authorized claim-handoff delivery and real replay
+
+Task event: `PK-H3-INCREMENTAL-OMISSION` — the user next requests commit/push and
+real validation. Scope is the current development branch and Management-Test only:
+deploy/reload the verified artifact, preserve the prior incomplete proposal as
+rejected history, and run chapter 13 through the native selected-only action.
+Analysis, generation and Query may run once each, with no retry; Apply requires
+a complete independently reviewed proposal to the existing target. The Query
+also asks about the research/expression distinction omitted previously. Other
+materials remain paused; no old allowance is reopened and no source, Rules or
+model configuration is changed. Delivery and live outcomes will be recorded below.

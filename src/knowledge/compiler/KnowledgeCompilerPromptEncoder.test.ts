@@ -401,7 +401,41 @@ describe("KnowledgeCompilerPromptEncoder", () => {
         createBehavior()
       );
 
-      expect(envelope.schemaId).toBe("knowledge.compiler.generation-output.v1");
+      expect(envelope.schemaId).toBe("knowledge.compiler.generation-output.v2");
+      expect(envelope.version).toBe(1);
+      const schema: unknown = JSON.parse(
+        envelope.messages[0].content.split("OUTPUT_JSON_SCHEMA:")[1].split("\n")[0]
+      );
+      const coverage = {
+        type: "array",
+        items: {
+          additionalProperties: false,
+          required: ["claimId", "excerpt"],
+          properties: {
+            claimId: { type: "string", pattern: "\\S" },
+            excerpt: { type: "string", pattern: "\\S" },
+          },
+        },
+      };
+      expect(schema).toMatchObject({
+        properties: {
+          version: { const: 2 },
+          files: {
+            items: {
+              oneOf: [
+                {
+                  required: ["targetId", "outcome", "afterContent", "claimCoverage"],
+                  properties: { claimCoverage: coverage },
+                },
+                {
+                  required: ["targetId", "outcome", "claimCoverage"],
+                  properties: { claimCoverage: coverage },
+                },
+              ],
+            },
+          },
+        },
+      });
       expect(envelope.messages[0].content).toContain("Return each input targetId exactly once");
       expect(envelope.messages[0].content).toContain(
         "Never return a path, operation, hash, sourceRefs, validation, status"
@@ -427,9 +461,7 @@ describe("KnowledgeCompilerPromptEncoder", () => {
       const envelope = encodeKnowledgeCompilerPrompt("generation", request, createBehavior());
       const policy = envelope.messages[0].content;
 
-      expect(policy).toContain(
-        "identify the supported analysis claims referenced by its claimIds that are relevant under schema.content"
-      );
+      expect(policy).toContain("organize every selected claim in that target's claimIds");
       expect(policy).toContain(
         "compare those claims together with their relevant source-backed details and qualifications with that target's currentContent and integrate missing information"
       );
@@ -444,6 +476,38 @@ describe("KnowledgeCompilerPromptEncoder", () => {
         "Do not present suggestions as original-author doctrine or verified observations"
       );
       expect(parsePromptInput(envelope.messages[1].content)).toMatchObject({ request });
+    });
+
+    it("assigns content selection to analysis and requires final-text anchors for every selected claim — https://github.com/yydspanda/obsidian-copilot/issues/20", () => {
+      const analysis = encodeKnowledgeCompilerPrompt(
+        "analysis",
+        createAnalysisRequest(),
+        createBehavior()
+      );
+      const generation = encodeKnowledgeCompilerPrompt(
+        "generation",
+        createGenerationRequest(),
+        createBehavior()
+      );
+
+      expect(analysis.messages[0].content).toContain(
+        "Each selected claim is a content obligation for generation"
+      );
+      expect(analysis.messages[0].content).toContain(
+        "a standalone substantive point with its own attribution and qualifications"
+      );
+      expect(generation.messages[0].content).toContain(
+        "exactly one claimCoverage entry per selected claimId"
+      );
+      expect(generation.messages[0].content).toContain(
+        "For unchanged, copy from that target's currentContent"
+      );
+      expect(generation.messages[0].content).toContain(
+        "Several claims may share an excerpt when their expression is merged"
+      );
+      expect(generation.messages[0].content).toContain(
+        "Do not omit a selected claim or replace its text anchor with a coverage assertion"
+      );
     });
 
     it("instructs generation to recover a selected topic's omitted qualifications from its complete supporting excerpt — https://github.com/yydspanda/obsidian-copilot/issues/20", () => {

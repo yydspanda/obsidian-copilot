@@ -285,12 +285,13 @@ async function resolveAllMissing(targets: readonly CompilerTargetRequest[]): Pro
 /** Creates valid generation output for every writable target. */
 function createGenerationOutput(request: CompilerGenerationRequest): CompilerGenerationModelOutput {
   return {
-    version: 1,
+    version: 2,
     targetSetDigest: request.targetSetDigest,
     files: request.targets.map((target) => ({
       targetId: target.targetId,
       outcome: "write" as const,
       afterContent: `---\ntype: concept\n---\n\n# ${target.path}\n`,
+      claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: target.path })),
     })),
   };
 }
@@ -623,12 +624,13 @@ describe("KnowledgeCompiler security resource bounds", () => {
     const harness = createHarness({
       analyze: async () => createAnalysisOutput({ targets }),
       generate: async (request) => ({
-        version: 1,
+        version: 2,
         targetSetDigest: request.targetSetDigest,
         files: request.targets.map((target) => ({
           targetId: target.targetId,
           outcome: "write" as const,
           afterContent: "123456",
+          claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: "123456" })),
         })),
       }),
       limits: { maxTotalGeneratedCharacters: 10 },

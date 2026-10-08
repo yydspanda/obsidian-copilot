@@ -400,7 +400,9 @@ export interface KnowledgeCompilerLimits {
   maxTargetAuthorizations: number;
   maxModelContextCharacters: number;
   maxAnalysisCharacters: number;
+  /** Per-target response text, including claim coverage identifiers and excerpts. */
   maxGeneratedFileCharacters: number;
+  /** Total response text, including coverage on unchanged targets. */
   maxTotalGeneratedCharacters: number;
   maxValidationDiagnostics: number;
 }

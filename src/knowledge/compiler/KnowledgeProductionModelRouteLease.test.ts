@@ -324,12 +324,13 @@ function createAnalysisWireOutput(includeTarget: boolean): string {
 /** Creates one valid second-stage write result for every approved target. */
 function createGenerationWireOutput(request: CompilerGenerationRequest): string {
   return JSON.stringify({
-    version: 1,
+    version: 2,
     targetSetDigest: request.targetSetDigest,
     files: request.targets.map((target) => ({
       targetId: target.targetId,
       outcome: "write",
       afterContent: "---\ntype: concept\n---\n\n# New Page\n",
+      claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: "New Page" })),
     })),
   });
 }
