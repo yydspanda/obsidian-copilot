@@ -8,13 +8,13 @@
 ## Current Stage
 
 - Stage ID: `PK-H3`
-- Outcome: reduce repeated source context and retain evidence-selection diagnostics without weakening source/Review safety.
+- Outcome: retain selected interpretations and their meaningful qualifications without weakening source/Review safety.
 - Exit gate: a separately scoped repair and real evidence show the extension reaching Wiki and Query.
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Selected-material execution is repaired and deployed; incremental semantic inclusion still fails. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
-  `79ba199b` pushed/deployed; 942 affected tests pass. Live analysis selects extension evidence (1 support / 1 target), but generation repeats old Wiki. Closed at 2/3 calls, no Apply/Query/retry, notes/history preserved, other jobs paused. Retention still fails. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Deliver the verified analysis-detail and minimal proxy-addr repairs, then run the newly authorized chapter-13-only replay. Prior allowances remain closed; at most analysis/generation/Query once each, no retries, inspected Apply to its existing test Wiki only, other sources paused.
+  Local checks pass; semantic retention still awaits actual claims, proposal and Query evidence. [October 8 delivery scope](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
 
 ## Upstream Status
 
@@ -28,7 +28,7 @@
 
 ## Recent Activity
 
-- 2026-10-06 — `PK-H3-INCREMENTAL-OMISSION` — `79ba199b` pushed/deployed; 942 affected tests pass. Selected replay cites extension but generation repeats old Wiki; 2/3 calls, no writes, guard closed, queue paused. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md).
+- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — Local repair/dependency checks pass; user now authorizes current-branch commit/push, management-copy deployment and a fresh bounded three-call replay. Prior failed replay remains closed. [Scope](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
@@ -60,6 +60,10 @@
 
 ## Current Verification
 
+- October 8 dependency follow-up: only 3 proxy-addr lock fields change; 8 security checks, 94 Claude tests, build/typecheck/smoke, format/lint and all review stages pass. Official live audit: 0 critical / 1 high / 3 moderate. The interrupted full command is not reported as an exit-0 run; audit and fixtures were completed separately.
+- October 6 analysis-detail repair: 17 suites / 352 tests, 20 governance tests, build/typecheck/smoke, format/lint pass. Review package/source/styles and separate fixtures pass; full gate fails on proxy-addr critical advisory. No dependency edits, deployment or real model retest.
+- October 6 generation policy: 17 suites / 350 tests, personal build/typecheck, syntax/mobile smoke, format/lint/review and governance pass. Analysis/input/schema unchanged; no live request, deployment or commit/push. Semantic retention remains unproven. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#subsequently-authorized-generation-policy-repair-offline-only).
+- October 6 subsequent replay: exact tested artifact deployed/reloaded; 2 model calls yield a valid but incomplete proposal. 226 notes/links unchanged; only one auto-removed Codex model/reference changes settings. Review retained, no Apply/Query, queue paused with one unexecuted observation rerun. No complete semantic pass or commit/push.
 - October 6 delivery: 22 changed suites / 942 tests and format/lint pass; prior prompt/build/review gates pass with warnings retained. `79ba199b` deployed after explicit reload and artifact verification. Two live calls improve selection, not Wiki retention; all 226 files / 92 settings preserved. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md).
 - October 4 reanalysis: 19 affected suites / 736 tests, 20 governance tests, 72 gallery checks and gates pass. Native queue/cancel/history checks pass; incremental Wiki/Query acceptance fails. 3/3 requests; all 226 files/92 settings preserved; queue paused.
 - October 4 no-changes repair: 11 suites / 489 tests, 20 governance tests, 56 isolated rendered states and build/lint/review pass.

@@ -73,7 +73,49 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   in the [delivery checkpoint](./progress/acceptance/2026-10-06-policy-delivery.md).
   Delivered `79ba199b` after 942 changed-file tests. The live replay selected one extension-backed
   claim for a target, but generation returned the identical old Wiki. Closed safely at 2/3 calls,
-  no Apply/Query/retry, notes/settings/history preserved; generation follow-up remains unimplemented.
+  no Apply/Query/retry, notes/settings/history preserved. The user then authorized a minimal
+  generation-policy repair and offline regression only ([issue #20](https://github.com/yydspanda/obsidian-copilot/issues/20)):
+  compare relevant supported target claims with existing content, retain attribution/conditions/
+  uncertainty, and preserve equivalent no-change outcomes. No input restructuring, analysis/Query/
+  upstream prompt changes, model calls, deployment, Vault operations or commit/push are included.
+  The generation-only three-clause repair passes 350 targeted tests, personal build/typecheck,
+  syntax/mobile smoke, format/lint/review and governance locally. It is uncommitted and undeployed;
+  these checks establish policy delivery, not live semantic retention. The task remains open.
+  Subsequent instruction authorizes management-test deployment and one fresh selected-source
+  replay: at most analysis/generation/Query once each, no retries, inspected Apply to its existing
+  Wiki only, other sources paused. The prior 2/3 allowance remains closed; no commit/push requested.
+  Delivered `c1cd05cd-dirty-fed1eb9e1a68`; two calls now produce one valid update proposal with
+  the five recording fields, but important qualifications remain omitted. No Apply/Query/retry;
+  allowance closed at 2/3, original Wiki/notes unchanged, undecided Review and one unexecuted
+  startup-observation rerun retained under user pause. The documented automatic Codex catalog
+  removal does not alter DeepSeek settings. Full retention still fails; no commit/push performed.
+  A separately authorized boundary diagnostic rejects that incomplete proposal with history
+  retained and allows at most two chapter-13 requests, no prompt/Wiki changes. Actual analysis
+  claim text is already missing the concrete method and qualifications, although selected by
+  the target. Cancel before generation; close at 1/2, no retry/Apply/Query. Temporary tracing
+  removed, 226 files/92 settings preserved, four queued jobs remain paused after observation.
+  This isolates the current run's extraction defect. The user then authorizes its minimal
+  analysis-only repair: state relevant concrete methods/qualifications in claim text rather than
+  topic labels or citations alone, retain concise paraphrases, and do not invent missing details.
+  Keep generation/Query/shared policy, schemas and inputs unchanged; offline tests only, with no
+  new model requests, deployment, Vault operations or commit/push.
+  Two analysis-only rules pass 352 targeted tests and build/typecheck/smoke; independent contract
+  audit confirms other stage bytes remain unchanged. Full review gate is blocked by the existing
+  transitive proxy-addr 2.0.7 critical advisory. Dependency files remain untouched; remediation
+  needs its own scope before delivery. No full semantic pass is claimed.
+  October 8 continuation authorizes the minimal dependency patch: update only the existing
+  proxy-addr lockfile entry to 2.0.8, verify with a reproducible installation and rerun gates.
+  No new direct dependency, override, upstream-source edit, Vault operation, model call or
+  commit/push is included. Eight security checks, 94 related Claude tests and build/smoke pass;
+  lint and all review stages pass after separately completing the interrupted audit/fixtures.
+  Official live audit reports zero critical, one high and three moderate advisories; the original
+  full command's completion is not inferred from partial logs. The semantic retention task stays open.
+  The October 8 explicit request now authorizes current-branch commit/push, management-test-only
+  deployment and a fresh chapter-13 replay: analysis, generation and Query at most once each,
+  no retries, and inspected Apply to that source's existing Wiki only. Preserve old closed
+  allowances, other materials, history, settings and the user queue pause. Inspect actual claim
+  details before generation, and stop paid execution if meaning is already missing; local
+  string tests and citation counts do not establish semantic acceptance.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;
