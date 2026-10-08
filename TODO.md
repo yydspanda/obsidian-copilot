@@ -13,8 +13,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Deliver the verified analysis-detail and minimal proxy-addr repairs, then run the newly authorized chapter-13-only replay. Prior allowances remain closed; at most analysis/generation/Query once each, no retries, inspected Apply to its existing test Wiki only, other sources paused.
-  Local checks pass; semantic retention still awaits actual claims, proposal and Query evidence. [October 8 delivery scope](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Repair `5a9dc50d` pushed/deployed. Fresh live analysis retains the five recording fields and observation/explanation distinction, but still omits two qualifications. Stop before generation; allowance closed at 1/3, no Apply/Query/retry, Wiki and old history preserved, queue paused.
+  Extraction-detail retention remains incomplete; the deployed repair is not full semantic acceptance. [October 8 result](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
 
 ## Upstream Status
 
@@ -28,7 +28,7 @@
 
 ## Recent Activity
 
-- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — Local repair/dependency checks pass; user now authorizes current-branch commit/push, management-copy deployment and a fresh bounded three-call replay. Prior failed replay remains closed. [Scope](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
+- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — `5a9dc50d` pushed/deployed; live extraction improves but still misses two qualifications. Cancel before generation and close 1/3. Wiki/history preserved; only automatic Codex catalog changes, other jobs unstarted and pause retained. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
@@ -60,6 +60,7 @@
 
 ## Current Verification
 
+- October 8 live replay: official Pro analysis HTTP 200 / normal stop, 15 claims all selected; five fields and observation/explanation survive, but counterexample and research/expression qualifications do not. Native cancel, no generation/Apply/Query, closed 1/3; artifact/new instance verified and cleanup complete. No full semantic pass.
 - October 8 dependency follow-up: only 3 proxy-addr lock fields change; 8 security checks, 94 Claude tests, build/typecheck/smoke, format/lint and all review stages pass. Official live audit: 0 critical / 1 high / 3 moderate. The interrupted full command is not reported as an exit-0 run; audit and fixtures were completed separately.
 - October 6 analysis-detail repair: 17 suites / 352 tests, 20 governance tests, build/typecheck/smoke, format/lint pass. Review package/source/styles and separate fixtures pass; full gate fails on proxy-addr critical advisory. No dependency edits, deployment or real model retest.
 - October 6 generation policy: 17 suites / 350 tests, personal build/typecheck, syntax/mobile smoke, format/lint/review and governance pass. Analysis/input/schema unchanged; no live request, deployment or commit/push. Semantic retention remains unproven. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#subsequently-authorized-generation-policy-repair-offline-only).

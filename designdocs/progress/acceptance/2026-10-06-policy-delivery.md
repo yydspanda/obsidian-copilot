@@ -567,3 +567,68 @@ Read-only native preflight confirms the exact management test Vault, Studio read
 user pause, nine completed / four pending / two cancelled jobs, and no pending
 Review or transaction. The fresh baseline preserves 226 notes/links. No deployment
 or paid semantic result is inferred from local verification.
+
+### Delivery and actual analysis result
+
+Normal commit hooks succeed; repair commit `5a9dc50daaa08d96f525dbd931dbeef81c2e97fe`
+is pushed to the current fork branch, without force or remote `master` changes.
+HTTP/1.1 resolves the stalled HTTPS push; repository remote URLs remain unchanged.
+Canonical deployment command:
+`COPILOT_TEST_VAULT_PATH='/mnt/c/Users/yydsp/Obsidian-Copilot-Management-Test' OBSIDIAN_BIN='/mnt/c/Program Files/Obsidian/Obsidian.exe' COPILOT_PERSONAL_MAX_BUNDLE_BYTES=10000000 npm run test:vault`.
+
+The deployment exits zero and copies the exact previously verified main/styles
+hashes above. Its esbuild child prints a shutdown `all goroutines are asleep`
+message after artifact copying; this warning is retained, not represented as a
+clean log. Syntax check and byte identity pass. CLI reload reports failure; an
+explicit native unload/load under the unarmed one-shot guard proves a new plugin
+instance and ready Studio. Disk manifest identifies `5a9dc50d-clean-8c9bdedef416`;
+the in-memory manifest label remains cached from the older build. The actual
+outbound analysis system hash equals the repaired `ad200aeb…ad4ec6`, proving the
+new policy is executing rather than relying on that stale label.
+
+Arm only the unique pending chapter-13 job after deployment, at input revision 38,
+pipeline `856893fd9910c1e411988051778face8d05944391dc4c881b75e104703552b7f`.
+Native **Run only this material** and confirmation start one official
+`deepseek-v4-pro` analysis. HTTP 200, normal `stop`, 28,694 ms, 13,888 total tokens;
+15 claims all selected by the target. One selected claim supports the full
+extension paragraph. Its actual text now retains the five recording fields and
+the observation/explanation distinction, attributed as the reader's future method.
+Raw and normalized claim text match, so normalization is not discarding meaning.
+
+Independent and root review still find two omissions: not finding a counterexample
+does not mean none exists; retaining research records differs from choosing typical
+material when expressing a conclusion. No other selected claim supplies those
+meanings. This is a partial extraction improvement, **not** complete retention.
+At the unpaid generation checkpoint, native cancellation aborts the exact selected
+run before dispatch. No generation, Review proposal, Apply, Query or retry follows.
+Close the fresh allowance at **1/3**. Raw intermediate prose is removed from memory;
+the receipt retains only hashes, metrics and reviewed coverage flags. Experiment:
+[`EXP-20261008-001`](../experiments/2026-10.md#experiment-exp-20261008-001).
+
+### Preservation and final state
+
+Cleanup restores native fetch and explicitly reloads to discard captured test
+transport capabilities. Final Studio is ready on Activity, Query idle, original
+user pause exact. Runtime revision 632, SHA-256
+`54f6530e8b1480cf22bf6326b55de7987e90668573e2498d8ad5a1207ed21237`:
+nine completed / four pending / three cancelled, zero pending Review, rerun,
+transaction or forward Apply. Selected job is cancelled at attempt one; the one
+new startup chapter-13 observation remains pending at attempt zero. Other three
+pending jobs never run. Their deployment observation fingerprint/revision/time
+refresh is recorded separately; all 11 prior terminal jobs remain exact.
+
+Independent final audit retains all 226 files/links, with no additions/deletions.
+All notes, source, Rules and original Wiki bytes are exact; the only changed file
+is the automatically refreshed `.copilot/model-catalog-cache.json`. Reviews,
+Manifests and Apply ledger remain byte-equivalent by parsed identity.
+Of 92 old settings, only `configuredModels` changes. Exact predeployment registry
+hash proves this is automatic Codex catalog refresh: three description updates,
+two retired entries removed and two newly available entries added, total seven
+rows before and after. All non-agent model rows and the other 91 settings,
+including providers, credentials and Chat selection, remain exact. No manual
+configuration edit or restoration of retired entries is performed.
+
+The receipt is closed, `failed=false`, `blocked=0`, `cleanup-complete`.
+Ignored evidence: `.git/acceptance/detail-replay-20261008/`, and the unique
+`detail-before`, `detail-deployed` and `detail-final` snapshots alongside the
+reading-regression driver. No paid retry or further prompt change is included.

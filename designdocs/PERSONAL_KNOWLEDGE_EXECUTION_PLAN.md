@@ -116,6 +116,13 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   allowances, other materials, history, settings and the user queue pause. Inspect actual claim
   details before generation, and stop paid execution if meaning is already missing; local
   string tests and citation counts do not establish semantic acceptance.
+  Repair `5a9dc50d` is pushed and deployed. The new live analysis retains the five recording
+  fields and observation/explanation separation, but omits the absence-of-counterexample
+  qualification and research-record/expression distinction. Both reviewers agree to cancel
+  before generation; close at 1/3 with no Apply/Query/retry. Wiki, notes and old history remain
+  exact; only automatic Codex catalog/cache refresh changes non-Knowledge settings metadata.
+  Cleanup restores native fetch and reloads; the new chapter-13 observation remains unexecuted
+  under the original user pause. Full semantic retention remains open, not declared fixed.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;
