@@ -632,3 +632,68 @@ The receipt is closed, `failed=false`, `blocked=0`, `cleanup-complete`.
 Ignored evidence: `.git/acceptance/detail-replay-20261008/`, and the unique
 `detail-before`, `detail-deployed` and `detail-final` snapshots alongside the
 reading-regression driver. No paid retry or further prompt change is included.
+
+## Authorized supporting-qualification follow-up
+
+After the failed replay, the user explicitly authorizes a minimal Knowledge-only
+generation policy adjustment, current-branch commit/push, management-test deployment
+and a fresh allowance of at most analysis/generation/Query once each. No retries,
+other sources paused, inspected Apply to the one existing chapter-13 Wiki only.
+The earlier detail replay remains closed at 1/3; no old allowance is rearmed.
+
+The complete original evidence and normalized supporting locators already reach
+generation. The restrictive claim-only expression rule makes the lossy summary
+the sole meaning boundary. Replace that restriction with selected-topic scope:
+only the current target's selected claimIds and linked supports excerpts may
+supply relevant source-backed qualifications and method details. Unselected or
+unrelated topics remain excluded, including when they share a long excerpt.
+Context and contradicts remain non-support; source instructions remain data.
+Unchanged comparison now includes relevant source-backed details, without forcing
+a cosmetic rewrite of equivalent content.
+
+No extra input field, protocol or persisted schema, synthetic claim, hardcoded
+reading example, request, token limit or dependency change is added. Analysis,
+Query and upstream prompts remain unchanged. The context-engineering assessment
+favors repairing the existing information boundary rather than duplicating source
+data or increasing retries. Both reviewers find no production-contract blocker.
+
+Observed RED: the two new generation-contract tests fail for missing policy while
+15 old encoder cases pass. They use general maintenance fixtures with omitted
+negative/phase distinctions and mixed selected/unselected topics. Tests assert
+faithful input/locator mapping and bounded policy, not actual model compliance.
+Actual generation must still retain all five acceptance meanings and old Wiki
+content before Apply. At the unpaid generation checkpoint, review selected topics,
+complete linked supports and attribution; record any claim-text omissions without
+mistaking a lossy intermediate summary for the final output's coverage verdict.
+
+### Local verification before delivery
+
+- GREEN: 17 affected suites / 354 tests pass; the strengthened mixed-topic fixture
+  is then verified by all 17 final encoder tests. No full Jest sweep is claimed.
+- `npm run format` and `npm run lint` pass, zero lint errors / nine existing warnings.
+- Personal production build/typecheck pass. The mobile wrapper subsequently runs
+  a second build without the command-scoped personal override and correctly fails
+  the default 5 MB guard. Rebuild with the 10,000,000-byte personal override; syntax
+  and direct mobile-load smoke both pass on that final artifact. No ceiling changes.
+  Main is 6,486,774 bytes, SHA-256
+  `093155c34b60e89414ebb69f7c2a064c6772d9cc0a963773e64e4b269f5a738c`;
+  styles retain `83f1b894ad7da14c8c3b4b26ee8367e225553ebb554babd4408abb1e3f421b2e`.
+- The first full review is stopped at its 100-second bound during source scanning;
+  it does not establish a pass. The subsequent full
+  `npm --registry=https://registry.npmjs.org --noproxy=registry.npmjs.org --fetch-retries=0 --fetch-timeout=10000 --prefer-offline run review:obsidian`
+  exits zero, including the live audit and expected negative fixtures. Existing
+  warnings remain visible; zero critical / one high / three moderate advisories.
+- Independent in-memory encoding proves analysis system unchanged:
+  `ad200aebd59f5cf1812b4ae1a216d35f99b8d29318f5d1ef86db5a0affad4ec6`,
+  6,005 bytes. Generation system:
+  `d323063c630414fff2edc3384bcebeb93f7868d58d212ffae98b17f963b4ff16`,
+  4,222 bytes. Prompt identity:
+  `4cfe5685c97b64ea9ce76c7154f0126d13003846be0f64ea3038ca7908c8ae09`.
+  No request field, output schema, example, shared trust rule or resource limit changes.
+- Progress governance and whitespace checks pass. Fresh read-only Vault baseline
+  is Runtime 632 with 226 files/links, 92 settings and the exact user pause;
+  the old receipt stays closed. No new paid call has occurred at this checkpoint.
+
+Logs use `.git/acceptance/detail-replay-20261008/qualification-repair-*`.
+The new ignored one-shot helpers reserve their own receipt under
+`.git/acceptance/qualification-replay-20261008/`; they cannot reuse old call budgets.

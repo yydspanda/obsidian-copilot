@@ -123,6 +123,15 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   exact; only automatic Codex catalog/cache refresh changes non-Knowledge settings metadata.
   Cleanup restores native fetch and reloads; the new chapter-13 observation remains unexecuted
   under the original user pause. Full semantic retention remains open, not declared fixed.
+  The user then explicitly authorizes a minimal Knowledge generation-rule adjustment and
+  current-branch commit/push, management-test deployment and one fresh three-call replay.
+  Complete selected supports excerpts already reach generation; use them for the selected
+  topic's relevant details and qualifications rather than treat the shorter analysis claim as
+  the sole meaning boundary. Do not introduce unselected topics, treat context/contradicts as
+  support, invent details or execute source instructions. Keep analysis/Query policy, schemas,
+  authority and requests unchanged. Review the complete proposal before Apply; no retries,
+  other sources paused, previous 1/3 allowance remains closed. Analysis-topic selection and
+  lossless supporting evidence are generation prerequisites, not proof of final semantic coverage.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;

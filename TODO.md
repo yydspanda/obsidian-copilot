@@ -13,8 +13,8 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Repair `5a9dc50d` pushed/deployed. Fresh live analysis retains the five recording fields and observation/explanation distinction, but still omits two qualifications. Stop before generation; allowance closed at 1/3, no Apply/Query/retry, Wiki and old history preserved, queue paused.
-  Extraction-detail retention remains incomplete; the deployed repair is not full semantic acceptance. [October 8 result](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Authorized generation-boundary repair: use existing selected supports excerpts for relevant qualifications omitted by analysis, without admitting unselected topics. Preserve schemas, analysis policy, authority and old closed allowance; local checks precede delivery and one fresh three-call chapter-13 replay.
+  Full Wiki/Query retention remains unproven. [Supporting-qualification follow-up](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-supporting-qualification-follow-up).
 
 ## Upstream Status
 
@@ -28,7 +28,7 @@
 
 ## Recent Activity
 
-- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — `5a9dc50d` pushed/deployed; live extraction improves but still misses two qualifications. Cancel before generation and close 1/3. Wiki/history preserved; only automatic Codex catalog changes, other jobs unstarted and pause retained. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#october-8-authorized-delivery-and-detail-replay).
+- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — Previous 1/3 replay stays closed. New explicit scope authorizes minimal Knowledge generation repair, commit/push/deploy and at most three fresh requests; full proposal meaning still gates Apply. [Scope](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-supporting-qualification-follow-up).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
