@@ -164,6 +164,16 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   cancel before generation and close at 1/3 without Apply/Query. Exact supporting evidence
   remains available; selected-ID coverage cannot detect unselected meaning. Generation v2
   has only local coverage, not real-model validation. The semantic task remains open.
+  The user next requests one final attempt, preferring a simpler explanation of events,
+  principles, methods and core ideas over exhaustive detail retention. Retire the new
+  claimCoverage contract/checks and restore the simple generation output; keep existing
+  two-stage processing, exact source/target permissions, Review and safe Apply. Generation
+  prompt input references existing evidence IDs instead of repeating complete locators;
+  retain all original evidence bytes and relations. No new model, verifier, retry or UI.
+  Deliver and run chapter 13 once (at most analysis/generation/Query once each), Apply only
+  a useful, grounded, reviewed existing-page update; stop after that attempt. Evaluate final
+  meaning and attribution rather than a fixed five-clause reproduction checklist. Prior
+  failures and closed receipts remain unchanged; see the core-clarity acceptance checkpoint.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;

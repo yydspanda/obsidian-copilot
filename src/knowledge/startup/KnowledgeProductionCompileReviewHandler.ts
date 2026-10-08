@@ -152,17 +152,6 @@ const SAFE_ANALYSIS_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
   "path_windows_trailing_character",
 ]);
 
-// A rejected claim-to-content hand-off needs an actionable check without exposing
-// model-generated claim ids, excerpts, or diagnostic payloads in Queue history.
-// https://github.com/yydspanda/obsidian-copilot/issues/20
-const SAFE_GENERATION_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
-  "compiler_generation_claim_limit_exceeded",
-  "compiler_generation_claim_unknown",
-  "compiler_generation_claim_duplicate",
-  "compiler_generation_claim_excerpt_missing",
-  "compiler_generation_claim_missing",
-]);
-
 const REVIEW_STATE_CONFLICT: Readonly<SafeExecutorFailure> = Object.freeze({
   code: "knowledge_review_state_conflict",
   message: "The compiled proposal cannot enter the current review state",
@@ -370,23 +359,19 @@ function matchesReviewJobClaim(
 /** Projects a Compiler rejection without retaining model-controlled diagnostic text. */
 function projectControlledFailure(result: KnowledgeCompileFailure, signal: AbortSignal): never {
   const failure = CONTROLLED_COMPILER_FAILURES[result.stage];
-  // A bounded list preserves actionable stage-specific failures without changing retry
+  // A bounded list preserves actionable analysis failures without changing retry
   // policy or trusting arbitrary diagnostic codes from another compiler stage.
   // https://github.com/yydspanda/obsidian-copilot/issues/8
-  // https://github.com/yydspanda/obsidian-copilot/issues/20
-  const safeCodes =
+  const codes =
     result.stage === "analysis"
-      ? SAFE_ANALYSIS_DIAGNOSTIC_CODES
-      : result.stage === "generation"
-        ? SAFE_GENERATION_DIAGNOSTIC_CODES
-        : undefined;
-  const codes = safeCodes
-    ? [
-        ...new Set(
-          result.diagnostics.map(({ code }) => code).filter((code) => safeCodes.has(code))
-        ),
-      ].slice(0, 5)
-    : [];
+      ? [
+          ...new Set(
+            result.diagnostics
+              .map(({ code }) => code)
+              .filter((code) => SAFE_ANALYSIS_DIAGNOSTIC_CODES.has(code))
+          ),
+        ].slice(0, 5)
+      : [];
   throw createExecutorError(
     {
       ...failure,

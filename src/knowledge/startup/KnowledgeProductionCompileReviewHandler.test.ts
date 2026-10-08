@@ -7,7 +7,6 @@ import type {
   KnowledgeCompilerStage,
 } from "@/knowledge/compiler/CompilerModelPort";
 import type { CompilerAnalysisModelOutput } from "@/knowledge/compiler/analysisSchema";
-import type { CompilerGenerationModelOutput } from "@/knowledge/compiler/generationSchema";
 import { KnowledgeCompiler } from "@/knowledge/compiler/KnowledgeCompiler";
 import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
@@ -295,13 +294,12 @@ function createAnalysisWireOutput(includeTarget: boolean): string {
 /** Creates a valid generation wire result for all authorized write targets. */
 function createGenerationWireOutput(request: CompilerGenerationRequest): string {
   return JSON.stringify({
-    version: 2,
+    version: 1,
     targetSetDigest: request.targetSetDigest,
     files: request.targets.map((target) => ({
       targetId: target.targetId,
       outcome: "write",
       afterContent: `---\ntype: concept\n---\n\n# Atlas\n\n${SOURCE_TEXT}\n`,
-      claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: SOURCE_TEXT })),
     })),
   });
 }
@@ -669,8 +667,6 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
     describe("execute()", () => {
       const issue = "https://github.com/yydspanda/obsidian-copilot/issues/8";
       const analysisMessage = "The knowledge compiler rejected the analysis result";
-      const generationIssue = "https://github.com/yydspanda/obsidian-copilot/issues/20";
-      const generationMessage = "The knowledge compiler rejected the generated proposal";
 
       async function runControlledFailure(
         stage: KnowledgeCompilerStage,
@@ -823,162 +819,6 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
           });
           expect(attempt.runtimeContent).not.toContain("private-diagnostic");
           expect(attempt.queueSnapshot.control).toEqual({ status: "running" });
-          expect(attempt.reviewSnapshot.records).toEqual([]);
-        }
-      );
-
-      it.each([
-        "compiler_generation_claim_limit_exceeded",
-        "compiler_generation_claim_unknown",
-        "compiler_generation_claim_duplicate",
-        "compiler_generation_claim_excerpt_missing",
-        "compiler_generation_claim_missing",
-      ])(
-        `preserves the generation claim check %s without leaking diagnostic text or creating Review (${generationIssue})`,
-        async (code) => {
-          const attempt = await runControlledFailure("generation", [
-            {
-              code,
-              severity: "error",
-              field: "private-generation-field-canary",
-              message: "private-generation-message-canary",
-            },
-          ]);
-
-          expect(attempt.queueResult).toMatchObject({ kind: "executed", status: "failed" });
-          expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
-            status: "failed",
-            failure: {
-              code: "knowledge_compiler_generation_rejected",
-              message: `${generationMessage}. Checks: ${code}.`,
-              retryable: false,
-            },
-          });
-          expect(attempt.runtimeContent).not.toContain("private-generation");
-          expect(attempt.queueSnapshot.control).toEqual({ status: "running" });
-          expect(attempt.queueSnapshot.pendingReviews).toEqual([]);
-          expect(attempt.reviewSnapshot.records).toEqual([]);
-          expect(JSON.parse(attempt.runtimeContent)).toMatchObject({
-            applyCommits: [],
-            activeTransaction: null,
-          });
-        }
-      );
-
-      it(`reports an actual generation claim omission without retaining the rejected body (${generationIssue})`, async () => {
-        const invoke = jest.fn<
-          ReturnType<KnowledgePrivateModelInvoke>,
-          Parameters<KnowledgePrivateModelInvoke>
-        >(async (stage, request) => {
-          if (stage === "analysis") return createAnalysisWireOutput(true);
-          const output = JSON.parse(
-            createGenerationWireOutput(request as CompilerGenerationRequest)
-          ) as CompilerGenerationModelOutput;
-          const file = output.files[0];
-          if (!file || file.outcome !== "write") throw new Error("Expected one generated write");
-          file.claimCoverage = [];
-          file.afterContent += "private-generation-body-canary";
-          return JSON.stringify(output);
-        });
-        const attempt = await runAttempt({ invoke });
-
-        expect(invoke).toHaveBeenCalledTimes(2);
-        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
-          status: "failed",
-          failure: {
-            code: "knowledge_compiler_generation_rejected",
-            message: `${generationMessage}. Checks: compiler_generation_claim_missing.`,
-            retryable: false,
-          },
-        });
-        expect(attempt.runtimeContent).not.toContain("private-generation-body-canary");
-        expect(attempt.queueSnapshot.pendingReviews).toEqual([]);
-        expect(attempt.reviewSnapshot.records).toEqual([]);
-      });
-
-      it(`deduplicates generation claim checks and excludes forged or analysis-only codes (${generationIssue})`, async () => {
-        const codes = [
-          "compiler_generation_claim_missing-private-code-canary",
-          "compiler_generation_claim_missing",
-          "compiler_generation_claim_missing",
-          "compiler_claim_ungrounded",
-          "compiler_generation_claim_unknown",
-          "compiler_generation_claim_duplicate",
-          "compiler_generation_claim_excerpt_missing",
-          "compiler_generation_claim_limit_exceeded",
-          "schema_custom",
-        ];
-        const attempt = await runControlledFailure(
-          "generation",
-          codes.map((code) => ({
-            code,
-            severity: "error",
-            field: "private-generation-field-canary",
-            message: "private-generation-message-canary",
-          }))
-        );
-        const job = requireOnlyJob(attempt.queueSnapshot);
-        if (job.status !== "failed") throw new Error("Expected one failed Queue job");
-
-        expect(job.failure).toMatchObject({
-          message: `${generationMessage}. Checks: compiler_generation_claim_missing, compiler_generation_claim_unknown, compiler_generation_claim_duplicate, compiler_generation_claim_excerpt_missing, compiler_generation_claim_limit_exceeded.`,
-          retryable: false,
-        });
-        expect(job.failure.message.length).toBeLessThanOrEqual(1_000);
-        expect(attempt.runtimeContent).not.toContain("private-code-canary");
-        expect(attempt.runtimeContent).not.toContain("private-generation");
-        expect(attempt.runtimeContent).not.toContain("compiler_claim_ungrounded");
-        expect(attempt.runtimeContent).not.toContain("schema_custom");
-        expect(attempt.reviewSnapshot.records).toEqual([]);
-      });
-
-      it(`keeps generation claim failures generic when every supplied code is outside the allowlist (${generationIssue})`, async () => {
-        const attempt = await runControlledFailure("generation", [
-          {
-            code: "compiler_generation_claim_missing-private-code-canary",
-            severity: "error",
-            field: "private-generation-field-canary",
-            message: "private-generation-message-canary",
-          },
-        ]);
-
-        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
-          failure: {
-            code: "knowledge_compiler_generation_rejected",
-            message: generationMessage,
-            retryable: false,
-          },
-        });
-        expect(attempt.runtimeContent).not.toContain("private-code-canary");
-        expect(attempt.runtimeContent).not.toContain("private-generation");
-        expect(attempt.reviewSnapshot.records).toEqual([]);
-      });
-
-      it.each([
-        ["input", "The knowledge compiler rejected its derived input"],
-        ["analysis", analysisMessage],
-        ["target_resolution", "The knowledge compiler rejected the resolved target state"],
-        [
-          "candidate_validation",
-          "The knowledge compiler rejected deterministic candidate validation",
-        ],
-      ] as const)(
-        `does not retain generation claim checks in the %s stage (${generationIssue})`,
-        async (stage, message) => {
-          const attempt = await runControlledFailure(stage, [
-            {
-              code: "compiler_generation_claim_missing",
-              severity: "error",
-              field: "private-generation-field-canary",
-              message: "private-generation-message-canary",
-            },
-          ]);
-
-          expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
-            failure: { message, retryable: false },
-          });
-          expect(attempt.runtimeContent).not.toContain("compiler_generation_claim_missing");
-          expect(attempt.runtimeContent).not.toContain("private-generation");
           expect(attempt.reviewSnapshot.records).toEqual([]);
         }
       );

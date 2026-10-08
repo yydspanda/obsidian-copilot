@@ -306,13 +306,12 @@ async function resolveAllMissing(targets: readonly CompilerTargetRequest[]): Pro
 /** Generates deterministic content for every writable target in one request. */
 async function generateAllWritable(request: CompilerGenerationRequest): Promise<unknown> {
   return {
-    version: 2,
+    version: 1,
     targetSetDigest: request.targetSetDigest,
     files: request.targets.map((target) => ({
       targetId: target.targetId,
       outcome: "write" as const,
       afterContent: `---\ntype: concept\n---\n\n# ${target.path}\n`,
-      claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: target.path })),
     })),
   } satisfies CompilerGenerationModelOutput;
 }
@@ -464,16 +463,12 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
           };
         }),
       generate: async (request) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: request.targetSetDigest,
         files: request.targets.map((target) => ({
           targetId: target.targetId,
           outcome: "write" as const,
           afterContent: target.path === "Wiki/Create.md" ? newCreate : newUpdate,
-          claimCoverage: target.claimIds.map((claimId) => ({
-            claimId,
-            excerpt: target.path === "Wiki/Create.md" ? "Created" : "Updated",
-          })),
         })),
       }),
     });
@@ -775,18 +770,10 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
         { targetId: targets[0].targetId, kind: "file", path: targets[0].path, content: existing },
       ],
       generate: async (request) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: request.targetSetDigest,
         files: [
-          {
-            targetId: request.targets[0].targetId,
-            outcome: "write",
-            afterContent: existing,
-            claimCoverage: request.targets[0].claimIds.map((claimId) => ({
-              claimId,
-              excerpt: "Unchanged",
-            })),
-          },
+          { targetId: request.targets[0].targetId, outcome: "write", afterContent: existing },
         ],
       }),
     });
@@ -829,12 +816,11 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
           { targetId: targets[0].targetId, kind: "file", path: targets[0].path, content: existing },
         ],
         generate: async (request) => ({
-          version: 2,
+          version: 1,
           targetSetDigest: request.targetSetDigest,
           files: request.targets.map((target) => ({
             targetId: target.targetId,
             outcome: "unchanged" as const,
-            claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: "Unchanged" })),
           })),
         }),
       }).compiler.compile(
@@ -882,21 +868,12 @@ describe("KnowledgeCompiler deterministic ChangeSet projection", () => {
           content: existing,
         })),
       generate: async (request) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: request.targetSetDigest,
         files: request.targets.map((target, index) =>
           index === 0
-            ? {
-                targetId: target.targetId,
-                outcome: "unchanged",
-                claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: existing })),
-              }
-            : {
-                targetId: target.targetId,
-                outcome: "write",
-                afterContent: existing,
-                claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: existing })),
-              }
+            ? { targetId: target.targetId, outcome: "unchanged" }
+            : { targetId: target.targetId, outcome: "write", afterContent: existing }
         ),
       }),
     });
@@ -1122,66 +1099,39 @@ describe("KnowledgeCompiler fail-closed analysis and generation", () => {
       name: "unknown target",
       code: "compiler_generation_target_unknown",
       build: (request) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: request.targetSetDigest,
-        files: [
-          {
-            targetId: "target-not-approved",
-            outcome: "write",
-            afterContent: "unknown",
-            claimCoverage: [],
-          },
-        ],
+        files: [{ targetId: "target-not-approved", outcome: "write", afterContent: "unknown" }],
       }),
     },
     {
       name: "duplicate target",
       code: "compiler_generation_target_duplicate",
       build: (request) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: request.targetSetDigest,
         files: [
-          {
-            targetId: request.targets[0].targetId,
-            outcome: "write",
-            afterContent: "one",
-            claimCoverage: request.targets[0].claimIds.map((claimId) => ({
-              claimId,
-              excerpt: "one",
-            })),
-          },
-          {
-            targetId: request.targets[0].targetId,
-            outcome: "write",
-            afterContent: "two",
-            claimCoverage: request.targets[0].claimIds.map((claimId) => ({
-              claimId,
-              excerpt: "two",
-            })),
-          },
+          { targetId: request.targets[0].targetId, outcome: "write", afterContent: "one" },
+          { targetId: request.targets[0].targetId, outcome: "write", afterContent: "two" },
         ],
       }),
     },
     {
       name: "missing target",
       code: "compiler_generation_target_missing",
-      build: (request) => ({ version: 2, targetSetDigest: request.targetSetDigest, files: [] }),
+      build: (request) => ({ version: 1, targetSetDigest: request.targetSetDigest, files: [] }),
     },
     {
       name: "wrong target-set digest",
       code: "compiler_generation_target_set_mismatch",
       build: (request) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: "0".repeat(64),
         files: [
           {
             targetId: request.targets[0].targetId,
             outcome: "write",
             afterContent: "wrong target set",
-            claimCoverage: request.targets[0].claimIds.map((claimId) => ({
-              claimId,
-              excerpt: "wrong target set",
-            })),
           },
         ],
       }),
@@ -1392,17 +1342,13 @@ describe("KnowledgeCompiler target resolver boundary", () => {
         },
       ],
       generate: async (request) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: request.targetSetDigest,
         files: [
           {
             targetId: request.targets[0].targetId,
             outcome: "write",
             afterContent: replacement,
-            claimCoverage: request.targets[0].claimIds.map((claimId) => ({
-              claimId,
-              excerpt: "New alias",
-            })),
           },
         ],
       }),

@@ -36,7 +36,6 @@ import {
   type CompilerAnalysisModelOutput,
 } from "@/knowledge/compiler/analysisSchema";
 import {
-  KNOWLEDGE_COMPILER_GENERATION_OUTPUT_VERSION,
   parseCompilerGenerationModelOutput,
   type CompilerGeneratedFile,
   type CompilerGenerationModelOutput,
@@ -2543,32 +2542,16 @@ function projectGeneration(
       );
     }
     generatedById.set(file.targetId, file);
-    // Coverage must remain bounded even when unchanged carries no generated page.
-    // https://github.com/yydspanda/obsidian-copilot/issues/20
-    if (file.claimCoverage.length > limits.maxClaims) {
-      addDiagnostic(
-        diagnostics,
-        "error",
-        "compiler_generation_claim_limit_exceeded",
-        `files[${index}].claimCoverage`,
-        "Generation coverage exceeds the configured claim count limit"
-      );
-      return;
+    if (file.outcome === "write") {
+      totalGeneratedCharacters += file.afterContent.length;
     }
-    const generatedCharacters =
-      (file.outcome === "write" ? file.afterContent.length : 0) +
-      file.claimCoverage.reduce(
-        (total, entry) => total + entry.claimId.length + entry.excerpt.length,
-        0
-      );
-    totalGeneratedCharacters += generatedCharacters;
-    if (generatedCharacters > limits.maxGeneratedFileCharacters) {
+    if (file.outcome === "write" && file.afterContent.length > limits.maxGeneratedFileCharacters) {
       addDiagnostic(
         diagnostics,
         "error",
         "compiler_generated_content_limit_exceeded",
-        `files[${index}]`,
-        "Generated content and claim coverage exceed the configured per-file character limit"
+        `files[${index}].afterContent`,
+        "Generated content exceeds the configured per-file character limit"
       );
     }
   });
@@ -2596,65 +2579,6 @@ function projectGeneration(
 
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
     return { ok: false, diagnostics };
-  }
-
-  // A selected point must have a real location before write or no-change acceptance.
-  // This checks the handoff, not whether the excerpt semantically expresses the claim.
-  // https://github.com/yydspanda/obsidian-copilot/issues/20
-  for (const [index, target] of writableTargets.entries()) {
-    const generated = generatedById.get(target.targetId)!;
-    const content =
-      generated.outcome === "write"
-        ? generated.afterContent
-        : target.operation === "update"
-          ? target.beforeContent
-          : undefined;
-    const selectedIds = new Set(target.claimIds);
-    const seenIds = new Set<string>();
-    const field = `targets[${index}].claimCoverage`;
-    for (const entry of generated.claimCoverage) {
-      if (!selectedIds.has(entry.claimId)) {
-        addDiagnostic(
-          diagnostics,
-          "error",
-          "compiler_generation_claim_unknown",
-          field,
-          "Generation coverage references a claim not selected for this target"
-        );
-        return { ok: false, diagnostics };
-      }
-      if (seenIds.has(entry.claimId)) {
-        addDiagnostic(
-          diagnostics,
-          "error",
-          "compiler_generation_claim_duplicate",
-          field,
-          "Generation must locate each selected claim exactly once per target"
-        );
-        return { ok: false, diagnostics };
-      }
-      seenIds.add(entry.claimId);
-      if (content === undefined || !content.includes(entry.excerpt)) {
-        addDiagnostic(
-          diagnostics,
-          "error",
-          "compiler_generation_claim_excerpt_missing",
-          field,
-          "Generation coverage must quote exact text from this target's final content"
-        );
-        return { ok: false, diagnostics };
-      }
-    }
-    if (target.claimIds.some((claimId) => !seenIds.has(claimId))) {
-      addDiagnostic(
-        diagnostics,
-        "error",
-        "compiler_generation_claim_missing",
-        field,
-        "Generation must locate every selected claim in this target's final content"
-      );
-      return { ok: false, diagnostics };
-    }
   }
 
   const changes: KnowledgeFileChange[] = targets
@@ -2895,7 +2819,7 @@ export class KnowledgeCompiler {
       (target): target is CompilerWritableTarget => target.operation !== "delete"
     );
     let generationOutput: CompilerGenerationModelOutput = {
-      version: KNOWLEDGE_COMPILER_GENERATION_OUTPUT_VERSION,
+      version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
       targetSetDigest,
       files: [],
     };

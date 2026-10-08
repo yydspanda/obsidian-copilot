@@ -208,13 +208,12 @@ class DeterministicCompilerModel implements CompilerModelPort {
   /** Generates deterministic content for every compiler-approved writable target. */
   async generate(request: CompilerGenerationRequest, _signal: AbortSignal): Promise<unknown> {
     return {
-      version: 2,
+      version: 1,
       targetSetDigest: request.targetSetDigest,
       files: request.targets.map((target) => ({
         targetId: target.targetId,
         outcome: "write",
         afterContent: `---\ntype: concept\n---\n\n# ${target.path}\n`,
-        claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: target.path })),
       })),
     };
   }

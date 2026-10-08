@@ -15,7 +15,6 @@ import {
   type KnowledgeModelStageReporter,
 } from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 import type {
-  CompilerGenerationRequest,
   CompilerTargetRequest,
   KnowledgeCompileInput,
 } from "@/knowledge/compiler/CompilerModelPort";
@@ -370,20 +369,11 @@ function createModelContent(
       ],
     });
   }
-  const targets = request.targets as CompilerGenerationRequest["targets"];
-  const afterContent = "# New Page\n\nExact source text\n";
+  const targets = request.targets as { targetId: string }[];
   return JSON.stringify({
-    version: 2,
+    version: 1,
     targetSetDigest: request.targetSetDigest,
-    files: targets.map((target) => ({
-      targetId: target.targetId,
-      outcome: "write",
-      afterContent,
-      claimCoverage: target.claimIds.map((claimId) => ({
-        claimId,
-        excerpt: "Exact source text",
-      })),
-    })),
+    files: targets.map((target) => ({ targetId: target.targetId, outcome: "unchanged" })),
   });
 }
 
@@ -492,7 +482,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
         createCompileInput(preparation),
         context.signal
       );
-      expect(result.kind).toBe("proposed");
+      expect(result.kind).toBe("no_changes");
     });
 
     expect(calls).toHaveLength(2);
@@ -565,7 +555,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
         const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
         await expect(
           createCompiler(adapter).compile(createCompileInput(preparation), context.signal)
-        ).resolves.toMatchObject({ kind: "proposed" });
+        ).resolves.toMatchObject({ kind: "no_changes" });
       }
     );
 
@@ -632,7 +622,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
       const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
       await expect(
         createCompiler(adapter).compile(createCompileInput(preparation), context.signal)
-      ).resolves.toMatchObject({ kind: "proposed" });
+      ).resolves.toMatchObject({ kind: "no_changes" });
     });
 
     expect(fetchPort).toHaveBeenCalledTimes(2);
@@ -706,7 +696,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
       const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
       await expect(
         createCompiler(adapter).compile(createCompileInput(preparation), context.signal)
-      ).resolves.toMatchObject({ kind: "proposed" });
+      ).resolves.toMatchObject({ kind: "no_changes" });
     });
 
     expect(fetchPort).toHaveBeenCalledTimes(2);

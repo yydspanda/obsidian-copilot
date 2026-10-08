@@ -26,7 +26,6 @@ export {
   type CompilerAnalysisModelOutput,
 } from "@/knowledge/compiler/analysisSchema";
 export {
-  KNOWLEDGE_COMPILER_GENERATION_OUTPUT_VERSION,
   parseCompilerGenerationModelOutput,
   type CompilerGenerationModelOutput,
 } from "@/knowledge/compiler/generationSchema";

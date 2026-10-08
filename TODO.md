@@ -8,12 +8,12 @@
 ## Current Stage
 
 - Stage ID: `PK-H3`
-- Outcome: retain selected interpretations and their meaningful qualifications without weakening source/Review safety.
-- Exit gate: a separately scoped repair and real evidence show the extension reaching Wiki and Query.
+- Outcome: clearly explain core facts, principles and usable methods with correct attribution and source/Review safety.
+- Exit gate: one final bounded replay demonstrates useful source-grounded Wiki and Query content; exhaustive detail retention is no longer the product goal.
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Claim handoff `0945f5fd` pushed/deployed. Real analysis still collapses the reader-method qualifications; two reviewers cancel before generation. Close this replay 1/3, no Apply/Query; generation v2 remains untested with a real model. Investigate the analysis-selection gap before any further repair/replay; other materials stay paused. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-claim-handoff-delivery-and-real-replay).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — User requests one final attempt and a simpler product standard. Remove mandatory claim anchors, restore simple generation output, deduplicate generation evidence references without losing source text, and verify clear core content instead of every detail. One chapter-13 replay, at most analysis/generation/Query once each; no retry, new verifier or other materials. [Scope and fixed criteria](./designdocs/progress/acceptance/2026-10-08-core-clarity.md).
 
 ## Upstream Status
 

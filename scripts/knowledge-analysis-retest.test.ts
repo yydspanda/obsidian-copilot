@@ -30,7 +30,6 @@ import type {
 } from "@/knowledge/model/types";
 import { toWindowsPathKey } from "@/knowledge/paths/vaultPath";
 import { ChangeSetReviewRepository } from "@/knowledge/review/ChangeSetReviewRepository";
-import type { ChangeSetReviewSnapshot } from "@/knowledge/review/ReviewStorage";
 import {
   KnowledgeRuntimeInputObservationBinder,
   KnowledgeRuntimeInputRevisionAllocator,
@@ -483,7 +482,7 @@ describe("knowledge-analysis-retest", () => {
   });
 
   describe("run()", () => {
-    it(`${ISSUE} proposes one page after two requests only in the copied Runtime and cannot run twice`, async () => {
+    it(`${ISSUE} performs one analysis and one generation on the copied Runtime and cannot run twice`, async () => {
       const original = await fixture({
         pendingSources: PENDING_SOURCE_IDS,
         reviewSourceId: OTHER_REVIEW_SOURCE_ID,
@@ -517,13 +516,11 @@ describe("knowledge-analysis-retest", () => {
             ],
           }).value;
         return response({
-          version: 2,
+          version: 1,
           targetSetDigest: request.targetSetDigest,
-          files: request.targets.map((target) => ({
+          files: request.targets.map((target: { targetId: string }) => ({
             targetId: target.targetId,
-            outcome: "write",
-            afterContent: `---\ntype: knowledge\n---\n\n${SOURCE_TEXT}\n`,
-            claimCoverage: target.claimIds.map((claimId) => ({ claimId, excerpt: SOURCE_TEXT })),
+            outcome: "unchanged",
           })),
         }).value;
       });
@@ -534,8 +531,8 @@ describe("knowledge-analysis-retest", () => {
         phase: "queue_settled",
         failureCode: undefined,
         staticCodes: [],
-        status: "awaiting_review",
-        queueResult: { kind: "executed", status: "awaiting_review" },
+        status: "completed",
+        queueResult: { kind: "executed", status: "completed" },
         priorReviewsUnchanged: true,
       });
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -544,37 +541,19 @@ describe("knowledge-analysis-retest", () => {
       const after = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await clone.read()));
       const beforeQueue = before.queues[0].value as IngestQueueSnapshot;
       const afterQueue = after.queues[0].value as IngestQueueSnapshot;
-      const beforeReviews = before.reviews[0].value as ChangeSetReviewSnapshot;
-      const afterReviews = after.reviews[0].value as ChangeSetReviewSnapshot;
-      expect(afterReviews.records).toEqual(expect.arrayContaining(beforeReviews.records));
-      expect(afterReviews.records).toHaveLength(beforeReviews.records.length + 1);
-      expect(
-        afterReviews.records.find((record) => record.jobClaim.sourceId === SOURCE_ID)
-      ).toMatchObject({
-        outcome: "pending",
-        proposal: {
-          changes: [
-            expect.objectContaining({
-              path: "Wiki/Review.md",
-              operation: "create",
-              afterContent: `---\ntype: knowledge\n---\n\n${SOURCE_TEXT}\n`,
-            }),
-          ],
-        },
-      });
+      expect(after.reviews).toEqual(before.reviews);
       expect(after.applyCommits).toEqual(before.applyCommits);
-      expect(after.manifests).toEqual(before.manifests);
       expect(afterQueue.reruns).toEqual(beforeQueue.reruns);
-      expect(afterQueue.pendingReviews).toEqual(expect.arrayContaining(beforeQueue.pendingReviews));
-      expect(afterQueue.pendingReviews).toHaveLength(beforeQueue.pendingReviews.length + 1);
+      expect(afterQueue.pendingReviews).toEqual(beforeQueue.pendingReviews);
       expect(afterQueue.jobs).toHaveLength(beforeQueue.jobs.length);
       expect(afterQueue.jobs.filter((job) => job.status === "pending")).toHaveLength(0);
-      expect(afterQueue.jobs.find((job) => job.sourceId === SOURCE_ID)).toMatchObject({
-        id: beforeQueue.jobs.find((job) => job.sourceId === SOURCE_ID)?.id,
-        sourceId: SOURCE_ID,
-        attempt: 1,
-        status: "awaiting_review",
-      });
+      expect(afterQueue.jobs.filter((job) => job.status === "completed")).toEqual([
+        expect.objectContaining({
+          id: beforeQueue.jobs.find((job) => job.sourceId === SOURCE_ID)?.id,
+          sourceId: SOURCE_ID,
+          attempt: 1,
+        }),
+      ]);
       expect(afterQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)).toEqual(
         beforeQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)
       );

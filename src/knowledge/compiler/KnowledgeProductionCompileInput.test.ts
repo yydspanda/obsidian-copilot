@@ -374,16 +374,12 @@ describe("KnowledgeProductionCompileInput", () => {
         ],
       }));
       const generate = jest.fn(async (request: CompilerGenerationRequest) => ({
-        version: 2,
+        version: 1,
         targetSetDigest: request.targetSetDigest,
-        files: request.targets.map(({ targetId, claimIds }) => ({
+        files: request.targets.map(({ targetId }) => ({
           targetId,
           outcome: "write",
           afterContent: "# Reading\nA limiting counterexample.\n",
-          claimCoverage: claimIds.map((claimId) => ({
-            claimId,
-            excerpt: "A limiting counterexample.",
-          })),
         })),
       }));
       const compiler = new KnowledgeCompiler({
