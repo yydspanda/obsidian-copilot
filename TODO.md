@@ -9,11 +9,11 @@
 
 - Stage ID: `PK-H3`
 - Outcome: clearly explain core facts, principles and usable methods with correct attribution and source/Review safety.
-- Exit gate: one final bounded replay demonstrates useful source-grounded Wiki and Query content; exhaustive detail retention is no longer the product goal.
+- Exit gate: useful source-grounded Wiki/Query content remains unverified. The user's final automated attempt is closed; no further retry is authorized. Exhaustive detail retention is no longer the product goal.
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — User requests one final attempt and a simpler product standard. Remove mandatory claim anchors, restore simple generation output, deduplicate generation evidence references without losing source text, and verify clear core content instead of every detail. One chapter-13 replay, at most analysis/generation/Query once each; no retry, new verifier or other materials. [Scope and fixed criteria](./designdocs/progress/acceptance/2026-10-08-core-clarity.md).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Simplification `3d2666dc` is pushed/deployed. Final attempt closes at 1/3: normal analysis, but the agent's temporary review checkpoint expires before generation. No Apply/Query; final content is unverified, not declared fixed. Stop automated experiments and await user direction; do not add complexity or reuse the allowance. [Evidence and fixed criteria](./designdocs/progress/acceptance/2026-10-08-core-clarity.md).
 
 ## Upstream Status
 
@@ -27,7 +27,7 @@
 
 ## Recent Activity
 
-- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — `0945f5fd` pushed/deployed after 416 related tests and gates. One Pro analysis still omits qualifications; cancel before generation, close 1/3 without Apply/Query. Old incomplete proposal retained as rejected history. [Evidence](./designdocs/progress/acceptance/2026-10-06-policy-delivery.md#authorized-claim-handoff-delivery-and-real-replay).
+- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — Simpler `3d2666dc` pushed/deployed after 383 related tests and gates. Final live attempt ends at the temporary acceptance checkpoint's timeout, 1/3 calls, no generation/Apply/Query; no retry. [Latest outcome](./designdocs/progress/acceptance/2026-10-08-core-clarity.md). Earlier `0945f5fd` semantic failure remains recorded.
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
@@ -59,6 +59,7 @@
 
 ## Current Verification
 
+- October 8 final simplification: 17 suites / 383 related tests, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; existing warnings/advisories remain. One normal Pro analysis passes scope/provenance inspection, but review handoff misses the temporary 120-second deadline. Native cancellation, no generation/Apply/Query; not a full-suite or final-content pass. No further automatic experiment.
 - October 8 claim handoff: 18 suites / 416 related tests, final 36 cases, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; warnings and audit 0 critical / 1 high / 3 moderate retained. `0945f5fd` deployed; one real analysis fails semantic completeness, closed 1/3 before generation/Apply/Query. Not a full-suite or end-to-end semantic pass.
 - October 8 supporting-qualification replay: 354 affected tests, final 17 encoder cases, build/typecheck/smoke, format/lint/full review pass; d5a51bef pushed/deployed. Two official Pro calls retain counterexample qualification but omit research/expression; no Apply/Query, closed 2/3, full semantic acceptance still fails. Earlier detail replay stays closed 1/3.
 - October 8 dependency follow-up: only 3 proxy-addr lock fields change; 8 security checks, 94 Claude tests, build/typecheck/smoke, format/lint and all review stages pass. Official live audit: 0 critical / 1 high / 3 moderate. The interrupted full command is not reported as an exit-0 run; audit and fixtures were completed separately.

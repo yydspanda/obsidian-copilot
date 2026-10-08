@@ -174,6 +174,13 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   a useful, grounded, reviewed existing-page update; stop after that attempt. Evaluate final
   meaning and attribution rather than a fixed five-clause reproduction checklist. Prior
   failures and closed receipts remain unchanged; see the core-clarity acceptance checkpoint.
+  Simplification `3d2666dc` is pushed/deployed after 383 related tests and all local gates.
+  The final analysis returns normally and its scope/provenance passes both inspections,
+  but the agent's temporary 120-second acceptance checkpoint expires before release.
+  This is an acceptance-orchestration failure, not a model-generation rejection: zero
+  generation, Apply or Query calls occur. Close 1/3, remove the guard and stop experiments
+  as requested; no retry or new mechanism. Final content usefulness remains unverified.
+  The simpler product scope remains delivered, without claiming full semantic retention.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;

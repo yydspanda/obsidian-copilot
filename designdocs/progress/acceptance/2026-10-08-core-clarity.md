@@ -83,3 +83,59 @@ Fresh pre-deployment baseline: 226 files/links, runtime revision 693, 9 complete
 4 pending / 5 cancelled jobs, no pending Review or active transaction. The original
 user pause and all earlier closed receipts remain intact. No live outcome is
 claimed at this checkpoint.
+
+## Delivered final attempt and its limitation
+
+Code `3d2666dc1577c80dfdda7669d352323ef6972b03` is committed and pushed to
+`knowledge-h3-personal-flow`; remote branch SHA is independently confirmed.
+Canonical `npm run test:vault` with the Management-Test path and personal bundle
+budget rebuilds the exact pinned artifact. The script's CLI reload fails; explicit
+idle unload/load succeeds and a fresh plugin instance loads the matching main
+hash. The old in-memory manifest label is not used as the build oracle.
+
+The native selected-only action runs job `107ae1da-bd38-4d77-b7d4-a63c247ebe3c`,
+input revision 45, once. Official DeepSeek Pro analysis returns HTTP 200 / normal
+stop in 14,650 ms: 5 selected topic claims, 8 supporting citations. Full source
+and personal-extension evidence remain available in the compacted generation
+request. Root and independent inspection pass topic scope, evidence and attribution
+availability; they do not claim the final prose is complete.
+
+**The final live acceptance is incomplete.** The temporary, ignored acceptance
+guard waits at most 120 seconds for review before dispatching generation. The
+agent's review handoff misses that deadline. Native cancellation occurs before
+the release helper is invoked; the helper correctly refuses to resume the expired
+request. This is an orchestration error in this acceptance session, not a model
+timeout, generation failure, failed content review or production-plugin timer.
+No attempt is made to extend the deadline, bypass cancellation or spend a retry.
+
+Close this last allowance at 1/3. There is no generation response, new proposal,
+Apply, Wiki write or Query. The new generation policy and eventual answer quality
+therefore have **no live semantic pass**. Compacted wire citation metadata is
+observed at the unpaid boundary, but no paid generation speed or token reduction
+is claimed. The old failures remain failures under their original criteria.
+
+Temporary model interception and raw in-memory traces are removed, native fetch
+is restored and another explicit idle reload completes. The original user pause
+(`1791128571149`) survives. Final runtime revision 746 contains 9 completed,
+4 pending and 6 cancelled jobs, no pending Review, rerun or active transaction.
+One new chapter-13 observation is pending at attempt zero after reload; it is not
+an authorized retry and is left unexecuted. No other source is run.
+
+Root and independent preservation comparison confirms all 226 files/links are
+byte-identical, including source, Rules and the existing Wiki. All 14 older terminal
+jobs, 4 old Reviews, Manifest and Apply/forward-state history remain exact. The
+other three pending jobs have attempt zero; only observation metadata changes.
+Of 92 settings fields, 91 are exact; `configuredModels` has a different hash. No
+settings write was performed by this acceptance helper. The baseline retains hashes,
+not model-setting values, so this is explicitly an unresolved settings exception,
+not a claim that every setting was preserved. The actual DeepSeek wire configuration
+matches the pinned prior hash; that alone does not prove the entire changed setting
+field is equivalent. No restoration or unrelated configuration edit is attempted.
+
+Final runtime SHA-256:
+`909537c6c8d8f1b2adce205e424a497a9858d28e050533d7717f0e3f3eea0ada`.
+The content-free receipt records `acceptance-checkpoint-timed-out-before-generation`
+and `cleanup-complete`; late scope-review metadata explicitly records that release
+did not succeed and final content was not reviewed. The last attempt is finished,
+not silently converted into another debugging/replay loop. Further product/content
+evaluation is left for user direction; no new complexity is proposed.
