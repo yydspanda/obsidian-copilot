@@ -13,7 +13,7 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Deliver the authorized Query attribution/scope rules ([issue #23](https://github.com/yydspanda/obsidian-copilot/issues/23)) and minimal production dependency repair, then run the separately approved single Query. 110 tests/build/full review pass; allowance unused, queue paused, no Save/retry. [Evidence](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#query-wording-delivery-preflight).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — User accepts remaining Query wording limitations for now; do not retry or adjust prompts. Zero-model Windows tab navigation and Studio close/reopen pass on `801bdc73`; return to practical acceptance with the queue paused and notes/settings/history preserved. Both Query allowances are closed 1/1. [Handoff](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#zero-model-studio-continuity).
 
 ## Upstream Status
 
@@ -58,7 +58,7 @@
 
 ## Current Verification
 
-- October 9 Query delivery preflight: 110 tests, two dependency regression checks, full lint, personal build/typecheck, syntax/mobile smoke and complete Obsidian review pass. Official production audit: 0 critical / 1 high / 3 moderate; existing warnings retained. No fresh full-Jest or semantic pass; one Query authorized but unused. [Checkpoint](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#query-wording-delivery-preflight).
+- October 9 Query delivery: `801bdc73` pushed/loaded; method/citation and zero-model tab/reopen checks pass. User accepts cross-chapter wording limitations without declaring semantic success. 230 files, 92 settings and Runtime unchanged; six sources retained, five queued jobs paused. Offline 110 tests, two dependency checks, lint/build/review pass; audit 0 critical / 1 high / 3 moderate. [Checkpoint](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#zero-model-studio-continuity).
 - October 9 delivery: `a0aac67f` pushed with tested code blobs unchanged. Local full Jest 744 suites / 10,981 passed / 4 skipped and gates pass with warnings retained. Native receipt closed 2/8; initial Jest request count unknown. Zero-model menu/consent checks preserve notes/settings/runtime; no fresh Review/Apply. Hosted governance passes, drift fails at 131 behind; default hosted Node CI did not run. Semantic limitation remains.
 - October 8 final simplification: 17 suites / 383 related tests, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; existing warnings/advisories remain. One normal Pro analysis passes scope/provenance inspection, but review handoff misses the temporary 120-second deadline. Native cancellation, no generation/Apply/Query; not a full-suite or final-content pass. No further automatic experiment.
 - October 8 claim handoff: 18 suites / 416 related tests, final 36 cases, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; warnings and audit 0 critical / 1 high / 3 moderate retained. `0945f5fd` deployed; one real analysis fails semantic completeness, closed 1/3 before generation/Apply/Query. Not a full-suite or end-to-end semantic pass.

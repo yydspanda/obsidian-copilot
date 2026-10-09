@@ -461,3 +461,89 @@ not that failed sample, is the successful evidence. No rule is suppressed.
 
 Independent read-only review finds no blocker in either the prompt diff or the
 dependency resolution. No fresh full-Jest or semantic-model pass is claimed.
+
+### Query wording live result
+
+Code `801bdc731de283656db86bb4e9529e4b6d706db5` is committed and pushed to the
+fork development branch; the remote SHA is checked independently. Normal commit
+hooks preserve all three tested source/test/lock blobs. The canonical deployment
+script copies the clean artifact but its automatic CLI reload fails. A scoped
+native manifest refresh and unload/load subsequently prove a new instance running
+`4.0.9+dev.801bdc73.clean.637cc42ab958`. Main SHA-256 is
+`655fffedb6795de37b15ced8572591fe63b022987e34081b704e9f91782d15fb`.
+Reload advances observation bookkeeping from Runtime 951 to 969; it preserves the
+original pause, notes, settings and five unstarted jobs.
+
+Exactly one native Search submits the same question as experiment 005. Its answer
+is later read back without reissuing the request: five claims give the practical
+recording fields, observation/explanation separation, unfound-counterexample
+qualification and research-record/expression distinction. It explicitly labels
+the method as the reader's extension rather than chapter thirteen's original text.
+The earlier categorical judgment based on example count does not recur. Although
+retrieval includes chapters ten and thirteen, the answer cites only chapter
+thirteen, so cross-chapter attribution is not exercised and no general semantic
+guarantee is claimed.
+
+Clicking the first claim's source citation selects the exact 159-character method
+paragraph, SHA-256 `4c133f7f2cb223fe697e4a4da8a71e207493151249465f4d775efc3ee2859bd9`,
+then Studio is restored with the answer retained. Against the settled post-reload
+baseline, all 230 file/link fingerprints, 92 settings, Runtime bytes and plugin
+bytes remain unchanged; no transaction is active. The five queued jobs remain at
+attempt zero. Close the allowance at 1/1; no retry, Save, Apply or extra model call.
+The long gap before result collection is not measured model latency.
+See `EXP-20261009-006` for provenance and measurement limits.
+
+### Bounded cross-chapter check
+
+The user separately approves one Query explicitly comparing chapters ten and
+thirteen, with no retry, Save or other processing. On the same loaded artifact,
+one Search returns seven claims and cites both chapter sources; the first ready
+observation is 14,789 ms after submission (not exact transport latency).
+
+This check **does not fully pass**. Source citations point to the respective
+chapters, but the prose still omits explicit chapter attribution and uses the
+ambiguous phrase “the original text” when combining sources. The inference now
+says a conclusion based on a few examples “may” be unreliable rather than treating
+it as necessarily wrong, but describes typical material as only an expression
+device. That exclusive restriction is not supported by the cited research versus
+presentation distinction. The new prompt does not guarantee semantic compliance.
+
+All 230 file/link fingerprints, 92 settings, Runtime and plugin bytes remain
+unchanged. The original user pause and five unstarted jobs are retained. No
+additional navigation test, Save, Apply, retry, prompt edit or model request is
+performed. The allowance is closed 1/1, and the returned answer remains visible.
+See `EXP-20261009-007` for the exact bounded result and measurement limits.
+
+### Zero-model Studio continuity
+
+The user accepts the remaining answer-wording limitations for now and requests
+continued acceptance. Preserve the failed semantic evidence above; acceptance of
+that limitation is not a new semantic pass. No prompt repair or further model
+request is performed.
+
+On the same loaded `801bdc73` artifact, native Activity → Sources → Query
+navigation retains the exact cross-chapter query ID and ready answer. All six
+registered sources remain available; Activity shows zero failed jobs and the
+five queued jobs remain paused. Closing only the Studio leaf removes it; opening
+the normal Copilot Studio command creates a new ready view. Its temporary answer
+is cleared as designed, and its Query input is enabled and empty. The six source
+identities and all Activity counts match their pre-close values.
+
+The native CLI returns no receipt for each of the two workspace-changing actions
+(close and open), causing the initial harness and its first continuation to exit
+nonzero. Independent read-only checks confirm each action took effect; neither
+action is repeated. The final continuation exits zero after verifying the new
+view and Query input. Do not describe the initial automation commands themselves
+as successful receipt-bearing runs.
+
+All 230 file/link fingerprints, 92 settings, Runtime bytes (including queue,
+Review history and Apply ledger) and plugin bytes remain unchanged, including
+against the prior cross-chapter baseline. The final screen is the empty Query
+tab. Zero Search, Save, Apply or queue-resume actions occur. No production edit,
+rebuild, deployment or broader crash/dual-instance acceptance is implied.
+
+Local receipts: `/tmp/knowledge-studio-lifecycle-20261009-before.json`,
+`/tmp/knowledge-studio-lifecycle-20261009-after.json` and
+`/tmp/knowledge-studio-lifecycle-20261009-result.json`. The resumable scoped harness
+is `/tmp/knowledge-studio-lifecycle-20261009.mjs`; its continuations only read
+already-completed workspace changes rather than retrying them.
