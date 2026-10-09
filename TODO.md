@@ -20,14 +20,14 @@
 - Canonical: `logancyang/obsidian-copilot@master`
 - Last fetched: `2026-09-18` — canonical `996a088c`; merged into the current branch, 0 behind.
 - Incorporated baseline: `996a088c59a2ae123852d8e542f354b1eba72cee`; previous baseline was `61619fe4`.
-- Last remote comparison: `2026-10-09` — current development branch 120 ahead / 125 behind remote canonical `25635116`; no fetch or merge. Drift policy fails; a merge is not included in this regression.
+- Last remote comparison: `2026-10-09 08:21 +08:00` — development commit `a0aac67f` is 121 ahead / 131 behind canonical `5fbd933f`; no fetch or merge. Hosted drift check fails; remote master remains out of scope.
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
 
 ## Recent Activity
 
-- 2026-10-09 — `PK-H3-OVERNIGHT-REGRESSION` — 744 suites / 10,981 tests pass, 4 explicit skips; native Query/citation/Save and preservation pass. New fixture yields no targets, so fresh Review/Apply remains unverified. Native receipt closed 2/8; initial interrupted Jest lacks request counts. Two fixes/doc clarification local, no commit/push. [Report](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
+- 2026-10-09 — `PK-H3-OVERNIGHT-REGRESSION` — 744 suites / 10,981 tests pass, 4 explicit skips; native Query/citation/Save pass, fresh Review/Apply unverified. Native receipt closed 2/8; initial Jest request count unknown. Fixes/report pushed as `a0aac67f`; zero-model menu/consent follow-up preserves data. [Report](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
 - 2026-10-09 — `PK-H3-INCREMENTAL-OMISSION` — User delegates one normal chapter-13 run; native processing completes in 23,289 ms, identical write count 1, no new Review. New personal-method evidence has 0 supporting/selected claims. No retry/Apply/Query; prior October 8 timeout remains separately recorded. [Evidence](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#october-9-user-delegated-native-use).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
@@ -58,7 +58,7 @@
 
 ## Current Verification
 
-- October 9 overnight: default full Jest 744 suites / 10,981 passed / 4 skipped; format/lint/build/typecheck/smoke/review and 20 governance tests pass with warnings retained. Native source analysis, Query/citation/Save/reload checked, native receipt closed 2/8; initial interrupted Jest has no request count. No fresh Review/Apply. Old notes/settings/history retained, queue paused; test-cost/build fixes local. Semantic limitation and upstream 125-behind remain.
+- October 9 delivery: `a0aac67f` pushed with tested code blobs unchanged. Local full Jest 744 suites / 10,981 passed / 4 skipped and gates pass with warnings retained. Native receipt closed 2/8; initial Jest request count unknown. Zero-model menu/consent checks preserve notes/settings/runtime; no fresh Review/Apply. Hosted governance passes, drift fails at 131 behind; default hosted Node CI did not run. Semantic limitation remains.
 - October 8 final simplification: 17 suites / 383 related tests, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; existing warnings/advisories remain. One normal Pro analysis passes scope/provenance inspection, but review handoff misses the temporary 120-second deadline. Native cancellation, no generation/Apply/Query; not a full-suite or final-content pass. No further automatic experiment.
 - October 8 claim handoff: 18 suites / 416 related tests, final 36 cases, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; warnings and audit 0 critical / 1 high / 3 moderate retained. `0945f5fd` deployed; one real analysis fails semantic completeness, closed 1/3 before generation/Apply/Query. Not a full-suite or end-to-end semantic pass.
 - October 8 supporting-qualification replay: 354 affected tests, final 17 encoder cases, build/typecheck/smoke, format/lint/full review pass; d5a51bef pushed/deployed. Two official Pro calls retain counterexample qualification but omit research/expression; no Apply/Query, closed 2/3, full semantic acceptance still fails. Earlier detail replay stays closed 1/3.

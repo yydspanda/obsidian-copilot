@@ -183,3 +183,35 @@ Studio Activity，队列暂停；新增 Save 材料仍待处理，不会无人�
 来自预期失败的门禁自测 fixture，最终 fixture suite 通过；它们不是生产 manifest 失败。
 
 最终全量 JSON SHA-256：`a12ae8f1359bbd84df0c6aa99c18132a99fef2de0bd81441d338aa5156700fde`。
+
+## 08:25 提交后补充验证
+
+用户随后要求 commit/push 并继续验证。修复、测试及本报告已提交为
+`a0aac67f85808eaea11b635321057064aefbd9fc`，并核对远端
+`yydspanda/obsidian-copilot:knowledge-h3-personal-flow` 指向相同 SHA。
+正常提交钩子的 Prettier、ESLint 通过；三个代码文件的 Git blob 与之前全量测试时一致。
+远端 master 仍为 `5fa68724f4bb893eedbb0d7cd6becd875734d688`，没有修改。
+
+补查没有新增模型请求、材料、Wiki 写入或部署：
+
+- 普通 Chat 模型菜单显示 Flash、Pro 和带许可提示的 Copilot 模型；只查看并关闭，没有切换模型。
+- 普通 Chat History 显示当前为空；没有加载、保存或删除对话。此结果不代表 Agent 历史也为空。
+- Add materials 选中现有验收原件后，未确认复制时 Add 禁用，确认后启用；点击该表单内的 Cancel 后关闭。
+- 重新打开时搜索为空、没有已选文件、Add 禁用；重新选择同一文件后，复制确认仍为未勾选，必须重新确认。最后取消退出。
+- 230 个文件/链接未新增或删除，只有原有 debug.log 更新；92 个设置、main.js、整个 Knowledge Runtime 均与补查前逐字相同，队列继续保持原 user pause。
+
+这些操作使用当前 Windows Obsidian 中的 DOM click/pointer 事件；本次 CDP 命令返回
+255，未宣称系统级鼠标或键盘测试通过。关闭的菜单可能仍留有退出动画 DOM，已通过
+`data-state=closed` 和 trigger `aria-expanded=false` 核实关闭状态，未把残留节点误报为
+关闭失败。前后快照是本地 `postpush-before-menus.json` / `postpush-after-menus.json`。
+
+GitHub 上[项目治理检查](https://github.com/yydspanda/obsidian-copilot/actions/runs/37864100893)
+通过，但[上游漂移检查](https://github.com/yydspanda/obsidian-copilot/actions/runs/37864100972)
+失败。08:21 的独立只读对比显示：上述开发提交领先 121、落后 131；canonical 为
+`5fbd933fbff2d0cacb241d13f79f5a8e3b7ca682`，合入基线仍为 `996a088c`。
+该 SHA 来自后续对比，不冒充漂移工作流未打印的观测 SHA。没有调高阈值或擅自合并。
+默认 Node.js 工作流只监听 master/main 的 push，本次未触发，所以不能声称远端全量
+CI 通过。上述 744 suites 仍是本地完整测试的证据。
+
+本次补查补齐了之前未完成的复制确认重置场景，不改变“新材料未生成提案、完整
+Knowledge 整理链路未通过”的结论；没有复用关闭的模型额度。
