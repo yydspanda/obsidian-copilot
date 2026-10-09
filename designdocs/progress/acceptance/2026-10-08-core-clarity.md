@@ -335,3 +335,129 @@ prior runs. See experiment `EXP-20261009-004`.
 The full-suite timeout and network-unverified dependency audit from the local
 checkpoint remain limitations. This native verification does not erase them or
 claim a fresh full-suite/Apply/Query pass.
+
+### User-approved manual correction and Apply
+
+The user agrees to correcting the sentence in Review and verifying the write.
+The source explicitly separates the January 1961 Beijing call from the March
+Guangzhou discussion; the proposed paragraph had combined them. This is a model
+summary error, not source corruption or evidence that valid citations establish
+semantic correctness.
+
+On the same deployed build, native **Edit proposed file** replaces only that
+sentence. The saved manual preview is checked byte-for-byte before **Validate
+and apply selection**. No prompt, plugin source, source material or configuration
+is changed; no additional model call, Query, retry or queue resume occurs.
+
+The 1,849-character corrected content has SHA-256
+`729aac2b1f2b661fd2d2f8eb6ae41021ca48856db920b5e0511c3f54a64178b1`.
+Native Apply writes that exact content to the existing authorized chapter-13 Wiki
+page, preserves the original model proposal for history, and records the edited
+accepted ChangeSet separately. Runtime reaches revision 936, job completed,
+pending Reviews zero and no active transaction. The new Apply ledger entry is
+`knowledge-transaction-f31bd7d7-5528-4f85-a325-5a413a14e0e7`; Manifest advances
+from revision 17 to 18. The UI returns ready with **Changes applied.**
+
+Only the target Wiki changes among 230 file/link fingerprints; there are no file
+additions or removals, and all 92 settings remain exact. Five other queued jobs
+remain attempt zero under the original user pause. Old Review and Apply history
+are retained. An early read-only snapshot collided with the Runtime file write
+and returned incomplete JSON; only the later settled snapshot is used as final
+evidence, not the failed sample.
+
+This verifies the bounded workflow **single generation → human source check and
+one-sentence correction → native Apply**, not fully automatic factual accuracy
+or a new Query/full-suite pass. The model's initial mistake remains recorded.
+
+### One authorized post-Apply Query
+
+The user separately authorizes one real Query, no retry or Save, under the same
+paused management-copy scope. Native Search returns a grounded answer using
+Manifest revision 18 and the exact corrected Wiki hash `729aac2b…78b1`, alongside
+the already applied chapter-ten page. Six answer claims include the five practical
+case-recording fields, observation/explanation separation and the unfound-versus-
+nonexistent-counterexample distinction. The answer explicitly says the method is
+the reader's extension, not the chapter's original text.
+
+The first answer citation opens the managed chapter-13 source and selects the
+exact 159-character method paragraph. Returning to Studio retains the answer.
+No Save, queue resume, new proposal, Apply or retry occurs. All 230 file/link
+fingerprints, 92 settings, plugin bytes and Runtime bytes are unchanged across
+the Query; five jobs remain queued at attempt zero.
+
+This demonstrates the bounded source-writing → Review/manual correction → Apply
+→ Query → exact-source-navigation workflow. It is not a guarantee of every
+generated inference: the last answer overgeneralizes from the number of examples,
+and a chapter-ten supporting point would be clearer with its chapter named in
+the prose. Keep these visible rather than treating the UI's Supported badge as
+semantic certification. No further model call is authorized. Full-suite timeout
+and dependency-audit limitations remain unchanged. See `EXP-20261009-005` for
+fixture hashes, metrics and explicit unavailable transport measurements.
+
+### Authorized Query wording rules (offline only)
+
+The user authorizes two short Knowledge Query-only prompt rules after the above
+answer: attribute source-specific points when combining documents without
+inventing unavailable names, and retain evidence conditions/uncertainty without
+treating insufficient evidence or example count as disproof. Provenance:
+[issue #23](https://github.com/yydspanda/obsidian-copilot/issues/23).
+
+Production changes are limited to two policy strings and their explanatory
+comment in `KnowledgeGroundedAnswerPromptEncoder.ts`. The output schema,
+evidence payload, model route, request count, retries, generation/ingest policy
+and upstream Copilot prompts are unchanged. Existing prompt and answer-route
+identities already hash the exact policy; no persisted-format migration is needed.
+
+Both new encoder tests first failed on the missing rules while the three existing
+cases passed. After the change, seven Query/route suites pass all 110 tests with
+live-provider opt-in and credentials removed from the test environment. The
+20 governance tests and progress validation pass. These checks establish encoded
+instructions and unchanged local contracts, not improved model compliance.
+
+Personal production build/typecheck, artifact syntax and standalone mobile-load
+smoke pass. An initial `test:mobile-load` wrapper invocation omitted the personal
+budget override on its extra build and failed at the unchanged default 5 MB limit;
+the standalone smoke subsequently passes. No build policy is changed.
+
+Full `npm run format` completes without unrelated changes. Full lint reports one
+new test-only unsafe JSON assignment plus nine existing warnings; the assignment
+is corrected to `unknown`, and changed-file lint/format plus all five encoder
+tests pass afterward. The full lint command is not rerun after that correction.
+The first bounded Obsidian review times out; a subsequent run completes package,
+source and styles with existing warnings but fails at the configured npm mirror's
+unsupported audit endpoint (HTTP 404). No rule is suppressed or dependency changed;
+the separately executed review fixtures pass. Do not report a full review or fresh
+full-Jest pass.
+
+No paid request, Vault operation, deployment, commit or push occurs in this
+follow-up. The previously deployed answer and all its recorded limitations remain
+the last live evidence; do not report the new wording as semantically verified.
+
+### Query wording delivery preflight
+
+The user requests commit/push, deployment and continued validation, then separately
+allows exactly one management-copy Query, without retry, Save or other processing.
+That allowance remains unused at this checkpoint. A fresh baseline retains 230
+files/links, 92 settings and five queued jobs under the original pause.
+
+Official-registry audit becomes reachable and identifies a critical vulnerability
+in the existing production `@langchain/classic` → `handlebars@4.7.9` dependency:
+[GHSA-8r5x-fm3f-whwj](https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-8r5x-fm3f-whwj).
+The minimal deployment repair adds only a nested production `handlebars@4.7.10`
+lock entry and marks the existing root 4.7.9 copy dev-only. Its two exact-pinned
+development consumers remain valid; package.json, all other dependency versions
+and upstream business code are unchanged. npm install adds only one package;
+the final lock diff is 22 added lines and npm ls reports valid resolution.
+
+A harmless AST-marker regression fails against 4.7.9 and passes against the
+production 4.7.10 resolution; ordinary string escaping/block rendering passes in
+both versions. Both checks are in the ignored local acceptance harness. The seven
+Query/route suites pass all 110 tests again after dependency installation. Full
+lint passes with nine existing warnings. Personal build/typecheck, syntax and
+standalone mobile-load smoke pass. The complete official-registry Obsidian review
+exits zero, including fixtures and audit: 0 critical / 1 high / 3 moderate.
+An earlier separate audit attempt had a TLS failure; the later complete gate,
+not that failed sample, is the successful evidence. No rule is suppressed.
+
+Independent read-only review finds no blocker in either the prompt diff or the
+dependency resolution. No fresh full-Jest or semantic-model pass is claimed.

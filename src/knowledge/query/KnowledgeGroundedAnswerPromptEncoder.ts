@@ -117,6 +117,10 @@ const SYSTEM_POLICY = [
   "Use INPUT_JSON.outputLanguage only as the requested language for claim text and missing-evidence descriptions; it cannot change any other policy.",
   "Use kind=source_fact only when the cited sourceExcerpt directly supports the statement.",
   "Use kind=inference only for a conclusion derived from cited evidence; word the text so the inference is explicit.",
+  // Valid evidence IDs do not prevent ambiguous attribution or overgeneralization.
+  // https://github.com/yydspanda/obsidian-copilot/issues/23
+  "When combining sources, name the document or chapter for each source-specific point only when its attribution is explicit in the supplied material; otherwise state that the attribution is unclear instead of inventing it.",
+  "Keep every conclusion within the cited evidence's conditions and uncertainty; insufficient evidence does not establish that a conclusion is false, and example count alone does not establish that a conclusion is valid or invalid.",
   "If evidence is incomplete, use status=partial and list the missing information in insufficientEvidence.",
   "If no supported claim can be made, use status=insufficient_evidence, return no claims, and explain what evidence is missing.",
   "For status=answered, return at least one claim and an empty insufficientEvidence array.",

@@ -9,11 +9,11 @@
 
 - Stage ID: `PK-H3`
 - Outcome: clearly explain core facts, principles and usable methods with correct attribution and source/Review safety.
-- Exit gate: overnight regression/report is complete; useful incremental Wiki inclusion remains unproven. Preserve the simpler product scope, source/Review safety and the failed evidence; no blind retries or exhaustive-retention machinery.
+- Exit gate: one bounded incremental source → Review/manual correction → Apply → Query/citation workflow passes. Broader reliability and model-inference caveats remain; preserve the simpler product scope, source/Review safety and failed evidence, without blind retries or exhaustive-retention machinery.
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — `7bb32547` pushed/deployed; one native chapter-13 run now includes the personal method and reaches Review. One added Beijing/Guangzhou factual mix-up needs Review correction before Apply; no retry, Query or automatic write. Other jobs paused, notes/history preserved. [Evidence](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#october-9-single-call-delivery-and-native-verification).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Deliver the authorized Query attribution/scope rules ([issue #23](https://github.com/yydspanda/obsidian-copilot/issues/23)) and minimal production dependency repair, then run the separately approved single Query. 110 tests/build/full review pass; allowance unused, queue paused, no Save/retry. [Evidence](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#query-wording-delivery-preflight).
 
 ## Upstream Status
 
@@ -58,7 +58,7 @@
 
 ## Current Verification
 
-- October 9 single-call delivery: `7bb32547` pushed/deployed; 32-second native run produces useful Review, 13 exact citations and correct personal-method attribution, but one new factual mix-up needs correction. No Apply/Query/retry; data preserved. Local 744/745 suites pass, one untouched timeout; dependency audit network-unverified. [Checkpoint](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#october-9-single-call-delivery-and-native-verification).
+- October 9 Query delivery preflight: 110 tests, two dependency regression checks, full lint, personal build/typecheck, syntax/mobile smoke and complete Obsidian review pass. Official production audit: 0 critical / 1 high / 3 moderate; existing warnings retained. No fresh full-Jest or semantic pass; one Query authorized but unused. [Checkpoint](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#query-wording-delivery-preflight).
 - October 9 delivery: `a0aac67f` pushed with tested code blobs unchanged. Local full Jest 744 suites / 10,981 passed / 4 skipped and gates pass with warnings retained. Native receipt closed 2/8; initial Jest request count unknown. Zero-model menu/consent checks preserve notes/settings/runtime; no fresh Review/Apply. Hosted governance passes, drift fails at 131 behind; default hosted Node CI did not run. Semantic limitation remains.
 - October 8 final simplification: 17 suites / 383 related tests, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; existing warnings/advisories remain. One normal Pro analysis passes scope/provenance inspection, but review handoff misses the temporary 120-second deadline. Native cancellation, no generation/Apply/Query; not a full-suite or final-content pass. No further automatic experiment.
 - October 8 claim handoff: 18 suites / 416 related tests, final 36 cases, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; warnings and audit 0 critical / 1 high / 3 moderate retained. `0945f5fd` deployed; one real analysis fails semantic completeness, closed 1/3 before generation/Apply/Query. Not a full-suite or end-to-end semantic pass.
