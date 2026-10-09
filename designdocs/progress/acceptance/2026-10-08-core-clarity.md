@@ -273,3 +273,65 @@ Delivery state: local edits only on `knowledge-h3-personal-flow`, based on
 `542f3a71`. No commit/push, deployment, native application action or model request.
 The implementation removes the diagnosed analysis-selection gate, but a real
 source-writing semantic acceptance remains pending.
+
+## October 9 single-call delivery and native verification
+
+The user requests commit/push followed by real verification. Commit `7bb32547`
+is pushed non-forced to the fork's `knowledge-h3-personal-flow` branch; no other
+branch or upstream code is changed. Normal formatting/lint commit hooks pass,
+and an independent byte comparison confirms the tested source is unchanged.
+SSH authentication fails; the existing HTTPS credential helper succeeds without
+changing global Git configuration. The remote development ref is verified.
+
+`npm run test:vault` deploys a clean personal build to Management-Test only,
+using the explicit Vault path and existing 10 MB personal bundle limit. Build,
+TypeScript, bundle syntax and mobile-load smoke pass. Main SHA-256 is
+`52997a59db26ef0a24acf21574a862b4f8713fed814a81af5157060af928a6c4`;
+styles SHA-256 is
+`83f1b894ad7da14c8c3b4b26ee8367e225553ebb554babd4408abb1e3f421b2e`.
+The deployment script's CLI reload fails. An explicit native unload/load replaces
+the plugin but initially retains Obsidian's cached manifest label; refreshing the
+manifest with Obsidian's loader and reloading confirms a new instance with version
+`4.0.9+dev.7bb32547.clean.b902a3987f70`. The original user pause remains intact.
+No model call is made during deployment or startup observation.
+
+One normal native **Run only this material** action runs the existing chapter-13
+source under its unchanged DeepSeek Pro configuration. No interceptor, temporary
+deadline, intermediate release, retry, Query or Apply is introduced. Job
+`4f85ec99-c8f0-4f82-8765-60566324ac3c`, input revision 57, reaches pending Review
+at attempt one after 32,021 ms. The draft proposes one update to its existing
+authorized Wiki page: 1,824 characters, nine distinct cited claims and 13 exact
+source citations. All 13 excerpts and hashes match the source. The new personal
+method paragraph is cited and included in the body, with explicit non-original
+attribution, observation versus explanation, unverified conditions and the
+qualification that not finding a counterexample does not establish its absence.
+This demonstrates useful incremental inclusion, unlike the prior identical write.
+
+Native Review renders the proposal. Its second evidence button opens the correct
+managed source in source mode and selects the exact 159-character personal-method
+paragraph; selection SHA-256 is
+`4c133f7f2cb223fe697e4a4da8a71e207493151249465f4d775efc3ee2859bd9`.
+The proposal is retained in Review without accepted decisions or Wiki writes.
+
+**Not a complete factual-quality pass:** a newly added sentence incorrectly places
+the call to make 1961 a year of seeking truth from facts at the Guangzhou meeting.
+The provided source places that call at the January Beijing meeting, then separately
+describes the March Guangzhou discussion. Valid quote hashes do not prove every
+generated factual relation. The existing Review editor is the appropriate place
+to correct this sentence before Apply; no additional model run or automated
+semantic-repair machinery is added. The previous paragraph-level retention
+checklist is not reinstated.
+
+All 230 pre-existing file/link hashes and all settings fields are unchanged through
+generation. Old Review/Apply history is preserved; only the selected job is started.
+Startup observation updates queued input identities and adds two unstarted jobs
+for the new pipeline fingerprint, rather than running those materials. Final state:
+five other jobs remain queued at attempt zero, one new Review is pending, no active
+transaction, and the original user pause is retained. Runtime Review persistence
+is expected; neither source nor Wiki files are changed. HTTP payload/response model
+identity, tokens and wire latency are not instrumented and are not inferred from
+prior runs. See experiment `EXP-20261009-004`.
+
+The full-suite timeout and network-unverified dependency audit from the local
+checkpoint remain limitations. This native verification does not erase them or
+claim a fresh full-suite/Apply/Query pass.
