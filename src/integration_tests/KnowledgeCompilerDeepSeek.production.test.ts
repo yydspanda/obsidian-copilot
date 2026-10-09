@@ -43,6 +43,7 @@ import { KnowledgeProductionCompileReviewHandler } from "@/knowledge/startup/Kno
 import { createKnowledgeProductionPipelineResources } from "@/knowledge/startup/KnowledgeProductionPipelineResources";
 import { KnowledgeProductionPreparationExecutor } from "@/knowledge/startup/KnowledgeProductionPreparationExecutor";
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
+import { sha256 } from "@/utils/hash";
 
 interface NativeNodeProcess {
   env: NodeJS.ProcessEnv;
@@ -110,13 +111,16 @@ const SOURCE_ID = "source-atlas-live";
 const SOURCE_PATH = "Sources/Atlas.md";
 const SCHEMA_PATH = "Schema/knowledge.md";
 const ATLAS_PATH = "Wiki/Atlas.md";
+// New-source destinations belong to the program; the independent Query fixture
+// deliberately retains its existing page path.
+// https://github.com/yydspanda/obsidian-copilot/issues/20
+const COMPILED_ATLAS_PATH = `Wiki/Atlas-${sha256(SOURCE_ID).slice(0, 12)}.md`;
 const MODEL_NAME = "deepseek-flash";
 const JOB_ID = "job-live-deepseek-atlas";
 const SOURCE_CONTENT = "# Project Atlas source\n\nProject Atlas launch date is 2026-08-01.\n";
 const SCHEMA_CONTENT = `# Atlas Wiki schema
 
-All supported Project Atlas facts belong only in \`${ATLAS_PATH}\`.
-Create that page and do not create or update any other page.
+Organize all supported source facts into the supplied destination.
 Every regular page must start with YAML frontmatter containing the canonical non-empty field \`type: topic\`.
 Keep the complete page concise, state the exact supported launch date, and do not add links, references, autolinks, or footnotes.
 Write the complete Markdown page instead of returning unchanged.
@@ -482,7 +486,7 @@ describe("Knowledge Compiler DeepSeek production chain", () => {
     }
   }, 120_000);
 
-  it("https://github.com/yydspanda/obsidian-copilot/issues/3 persists an exact pending Review through canonical Flash without mutating Manifest or Wiki bytes", async () => {
+  it("persists an exact pending Review with one canonical-Flash writing request without mutating Manifest or Wiki bytes — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
     const apiKey = DEEPSEEK_API_KEY;
     if (!apiKey) throw new Error("DEEPSEEK_API_KEY is required for this live integration test");
 
@@ -603,9 +607,8 @@ describe("Knowledge Compiler DeepSeek production chain", () => {
         status: "awaiting_review",
       });
 
-      expect(requestMetadata).toHaveLength(2);
+      expect(requestMetadata).toHaveLength(1);
       expect(requestMetadata.map(({ url, method }) => ({ url, method }))).toEqual([
-        { url: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT, method: "POST" },
         { url: KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT, method: "POST" },
       ]);
       expect(requestMetadata.every(({ requestBytes }) => requestBytes > 0)).toBe(true);
@@ -634,7 +637,7 @@ describe("Knowledge Compiler DeepSeek production chain", () => {
       expect(record.proposal.changes).toHaveLength(1);
       const change = record.proposal.changes[0];
       expect(change).toMatchObject({
-        path: ATLAS_PATH,
+        path: COMPILED_ATLAS_PATH,
         operation: "create",
         expectedAbsent: true,
       });
@@ -651,7 +654,7 @@ describe("Knowledge Compiler DeepSeek production chain", () => {
         baseGeneratedPages: [],
         mutations: [
           {
-            path: ATLAS_PATH,
+            path: COMPILED_ATLAS_PATH,
             operation: "create",
             access: "create_only",
             ownership: "generated",
@@ -683,7 +686,7 @@ describe("Knowledge Compiler DeepSeek production chain", () => {
       ]);
 
       expect(await manifestStorage.read(BUNDLE_ID)).toEqual(manifest);
-      expect(readOnlyWiki.contents.has(ATLAS_PATH)).toBe(false);
+      expect(readOnlyWiki.contents.has(COMPILED_ATLAS_PATH)).toBe(false);
       expect(readOnlyWiki.read).not.toHaveBeenCalled();
       expect(readOnlyWiki.stat).toHaveBeenCalledTimes(1);
       expect("write" in readOnlyWiki.adapter).toBe(false);

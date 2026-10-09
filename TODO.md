@@ -13,7 +13,7 @@
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Content-selection limitation remains open after the completed overnight regression. No unapproved prompt changes or further automatic model retries; review the product scope before another repair. [Report](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Single-call simplification is locally verified with limitations recorded below. User now requests commit/push and real verification: deploy only to Management-Test, run chapter 13 once, inspect the Review draft; no retry, batch, Query or automatic Apply. Preserve historical pages and write authority. [Prior evidence](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
 
 ## Upstream Status
 
@@ -58,6 +58,7 @@
 
 ## Current Verification
 
+- October 9 single-call simplification: all changed suites pass; full run 744/745 suites, 11,002 tests pass / 4 skipped / 1 untouched publisher timeout; isolated bounded rerun remains unverified. Build/typecheck/smoke/format/lint/governance pass; dependency audit network-unverified. No model, Vault, commit/push or deployment action. [Checkpoint](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#october-9-approved-single-call-simplification-local-only).
 - October 9 delivery: `a0aac67f` pushed with tested code blobs unchanged. Local full Jest 744 suites / 10,981 passed / 4 skipped and gates pass with warnings retained. Native receipt closed 2/8; initial Jest request count unknown. Zero-model menu/consent checks preserve notes/settings/runtime; no fresh Review/Apply. Hosted governance passes, drift fails at 131 behind; default hosted Node CI did not run. Semantic limitation remains.
 - October 8 final simplification: 17 suites / 383 related tests, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; existing warnings/advisories remain. One normal Pro analysis passes scope/provenance inspection, but review handoff misses the temporary 120-second deadline. Native cancellation, no generation/Apply/Query; not a full-suite or final-content pass. No further automatic experiment.
 - October 8 claim handoff: 18 suites / 416 related tests, final 36 cases, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; warnings and audit 0 critical / 1 high / 3 moderate retained. `0945f5fd` deployed; one real analysis fails semantic completeness, closed 1/3 before generation/Apply/Query. Not a full-suite or end-to-end semantic pass.

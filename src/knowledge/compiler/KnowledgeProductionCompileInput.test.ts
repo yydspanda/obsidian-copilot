@@ -4,7 +4,6 @@ import {
 } from "@/knowledge/compiler/KnowledgeProductionCompileInput";
 import {
   DEFAULT_KNOWLEDGE_COMPILER_LIMITS,
-  type CompilerAnalysisRequest,
   type CompilerGenerationRequest,
   type CompilerTargetRequest,
 } from "@/knowledge/compiler/CompilerModelPort";
@@ -346,33 +345,6 @@ describe("KnowledgeProductionCompileInput", () => {
         request,
         1024
       );
-      const analyze = jest.fn(async (request: CompilerAnalysisRequest) => ({
-        version: 1,
-        summary: "Record the supplement.",
-        concepts: [],
-        entities: [],
-        claims: [
-          { ref: "claim-limit", text: "The supplement limits the original claim." },
-          { ref: "claim-counterexample", text: "The supplement contains a counterexample." },
-        ],
-        relations: [],
-        citations: ["claim-limit", "claim-counterexample"].map((claimRef) => ({
-          claimRef,
-          evidenceId: request.evidence.find(({ locator }) =>
-            locator.excerpt.includes("Supplement")
-          )!.evidenceId,
-          relation: "supports",
-        })),
-        targets: [
-          {
-            ref: "target-reading",
-            path: "Wiki/Reading.md",
-            intent: "write",
-            reason: "Record the supported counterexample.",
-            claimRefs: ["claim-limit", "claim-counterexample"],
-          },
-        ],
-      }));
       const generate = jest.fn(async (request: CompilerGenerationRequest) => ({
         version: 1,
         targetSetDigest: request.targetSetDigest,
@@ -380,16 +352,26 @@ describe("KnowledgeProductionCompileInput", () => {
           targetId,
           outcome: "write",
           afterContent: "# Reading\nA limiting counterexample.\n",
+          claims: [
+            "The supplement limits the original claim.",
+            "The supplement contains a counterexample.",
+          ].map((text) => ({
+            text,
+            evidenceIds: [
+              request.evidence.find(({ locator }) => locator.excerpt.includes("Supplement"))!
+                .evidenceId,
+            ],
+          })),
         })),
       }));
       const compiler = new KnowledgeCompiler({
-        model: { analyze, generate },
+        model: { generate },
         targetResolver: {
           resolve: async (targets: readonly CompilerTargetRequest[]) =>
-            targets.map(({ targetId }) => ({
+            targets.map(({ targetId, path }) => ({
               targetId,
               kind: "missing",
-              windowsPathKey: "wiki/reading.md",
+              windowsPathKey: path.toLowerCase(),
             })),
         },
         candidateValidator: {
@@ -404,20 +386,18 @@ describe("KnowledgeProductionCompileInput", () => {
 
       expect(parsed.artifact.kind).toBe("text");
       expect(result.kind).toBe("proposed");
-      expect(analyze).toHaveBeenCalledTimes(1);
-      expect(analyze.mock.calls[0][0].evidence.map(({ locator }) => locator.excerpt)).toEqual([
+      expect(generate.mock.calls[0][0].evidence.map(({ locator }) => locator.excerpt)).toEqual([
         "# Reading\nOriginal claim.\n\n",
         "## Supplement\nA limiting counterexample.\n",
       ]);
       expect(generate).toHaveBeenCalledTimes(1);
-      const generation = generate.mock.calls[0][0];
-      expect(generation.evidence).toEqual(analyze.mock.calls[0][0].evidence);
-      expect(generation.analysis.citations.map(({ locator }) => locator.excerpt)).toEqual([
+      if (result.kind !== "proposed") throw new Error("Expected a source writing proposal");
+      expect(result.analysis.citations.map(({ locator }) => locator.excerpt)).toEqual([
         "## Supplement\nA limiting counterexample.\n",
         "## Supplement\nA limiting counterexample.\n",
       ]);
       expect(
-        generation.analysis.citations.every(
+        result.analysis.citations.every(
           ({ locator }) => locator.artifactContentHash === request.sourceContentHash
         )
       ).toBe(true);
@@ -425,7 +405,7 @@ describe("KnowledgeProductionCompileInput", () => {
         resolveKnowledgeCitationTarget({
           sourcePath: request.sourcePath,
           content: text,
-          citation: generation.analysis.citations[0],
+          citation: result.analysis.citations[0],
         })
       ).toMatchObject({
         status: "resolved",
@@ -435,7 +415,7 @@ describe("KnowledgeProductionCompileInput", () => {
         resolveKnowledgeCitationTarget({
           sourcePath: request.sourcePath,
           content: `${text}Changed source.`,
-          citation: generation.analysis.citations[0],
+          citation: result.analysis.citations[0],
         })
       ).toEqual({ status: "stale" });
     });
@@ -550,7 +530,7 @@ describe("KnowledgeProductionCompileInput", () => {
       ]);
     });
 
-    it("rejects a Schema-directed write to another source's managed page before target reads or generation — https://github.com/yydspanda/obsidian-copilot/issues/8", async () => {
+    it("keeps Schema-directed foreign pages outside the target set and rejects an unauthorized output — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
       const targetPath = "Wiki/Existing.md";
       const schemaContent = `# Knowledge schema\nEvery ingest must write only ${targetPath}.\n`;
       const preparation = createPreparation([createTextArtifact()]);
@@ -586,41 +566,32 @@ describe("KnowledgeProductionCompileInput", () => {
         },
         43
       );
-      const analyze = jest.fn(async (request: CompilerAnalysisRequest) => ({
+      const generate = jest.fn(async (request: CompilerGenerationRequest) => ({
         version: 1,
-        summary: "Follow the schema's required target",
-        concepts: [],
-        entities: [],
-        claims: [{ ref: "claim-primary", text: "Exact primary source text" }],
-        relations: [],
-        citations: [
+        targetSetDigest: request.targetSetDigest,
+        files: [
           {
-            claimRef: "claim-primary",
-            evidenceId: request.evidence[0].evidenceId,
-            relation: "supports",
-          },
-        ],
-        targets: [
-          {
-            ref: "target-existing",
-            path: targetPath,
-            intent: "write",
-            reason: "The schema requires this target",
-            claimRefs: ["claim-primary"],
+            targetId: "foreign-page",
+            outcome: "write",
+            afterContent: "Foreign write",
+            claims: [
+              { text: "Exact primary source text", evidenceIds: [request.evidence[0].evidenceId] },
+            ],
           },
         ],
       }));
-      const generate = jest.fn(async () => {
-        throw new Error("Generation must not run without target authority");
-      });
-      const resolve = jest.fn(async () => {
-        throw new Error("Target reads must not run without target authority");
-      });
+      const resolve = jest.fn(async (targets: readonly CompilerTargetRequest[]) =>
+        targets.map((target) => ({
+          targetId: target.targetId,
+          kind: "missing",
+          windowsPathKey: target.path.toLowerCase(),
+        }))
+      );
       const validate = jest.fn(async () => {
         throw new Error("Candidate validation must not run without target authority");
       });
       const compiler = new KnowledgeCompiler({
-        model: { analyze, generate },
+        model: { generate },
         targetResolver: { resolve },
         candidateValidator: { validate },
       });
@@ -630,24 +601,17 @@ describe("KnowledgeProductionCompileInput", () => {
       expect(input.targetAuthorizations).toEqual([]);
       const result = await compiler.compile(input, new AbortController().signal);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         kind: "failed",
-        stage: "analysis",
+        stage: "generation",
         retryable: false,
-        diagnostics: [
-          {
-            code: "compiler_target_manifest_authorization_missing",
-            severity: "error",
-            field: "targets[0].path",
-            message:
-              "A Manifest-tracked target requires explicit caller-owned authorization even when its file is missing",
-          },
-        ],
       });
-      expect(analyze).toHaveBeenCalledTimes(1);
-      expect(analyze.mock.calls[0][0].schema.content).toBe(schemaContent);
-      expect(generate).not.toHaveBeenCalled();
-      expect(resolve).not.toHaveBeenCalled();
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(generate.mock.calls[0][0].schema.content).toBe(schemaContent);
+      expect(generate.mock.calls[0][0].targets.every((target) => target.path !== targetPath)).toBe(
+        true
+      );
+      expect(resolve.mock.calls[0][0].every((target) => target.path !== targetPath)).toBe(true);
       expect(validate).not.toHaveBeenCalled();
       expect(JSON.stringify(manifest)).toBe(beforeManifest);
     });

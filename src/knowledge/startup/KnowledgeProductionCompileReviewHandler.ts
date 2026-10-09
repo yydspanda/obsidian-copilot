@@ -109,9 +109,9 @@ const CONTROLLED_COMPILER_FAILURES: Readonly<
 });
 
 // Diagnostic messages and fields may contain model-proposed paths or unknown keys.
-// Only these fixed analysis rule identifiers may enter durable failure text.
+// Only these fixed compiler rule identifiers may enter durable failure text.
 // https://github.com/yydspanda/obsidian-copilot/issues/8
-const SAFE_ANALYSIS_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
+const SAFE_COMPILER_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
   "schema_invalid_type",
   "schema_invalid_value",
   "schema_unrecognized_keys",
@@ -128,6 +128,7 @@ const SAFE_ANALYSIS_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
   "compiler_citation_evidence_unknown",
   "compiler_citation_duplicate",
   "compiler_claim_ungrounded",
+  "compiler_generation_new_target_unchanged",
   "compiler_target_outside_wiki",
   "compiler_target_equals_wiki_root",
   "compiler_target_not_markdown",
@@ -359,16 +360,18 @@ function matchesReviewJobClaim(
 /** Projects a Compiler rejection without retaining model-controlled diagnostic text. */
 function projectControlledFailure(result: KnowledgeCompileFailure, signal: AbortSignal): never {
   const failure = CONTROLLED_COMPILER_FAILURES[result.stage];
-  // A bounded list preserves actionable analysis failures without changing retry
-  // policy or trusting arbitrary diagnostic codes from another compiler stage.
-  // https://github.com/yydspanda/obsidian-copilot/issues/8
+  // Source-writing and destination checks need the same bounded identifiers as
+  // historical analysis failures, without persisting model text or changing retries.
+  // https://github.com/yydspanda/obsidian-copilot/issues/20
   const codes =
-    result.stage === "analysis"
+    result.stage === "analysis" ||
+    result.stage === "generation" ||
+    result.stage === "target_resolution"
       ? [
           ...new Set(
             result.diagnostics
               .map(({ code }) => code)
-              .filter((code) => SAFE_ANALYSIS_DIAGNOSTIC_CODES.has(code))
+              .filter((code) => SAFE_COMPILER_DIAGNOSTIC_CODES.has(code))
           ),
         ].slice(0, 5)
       : [];

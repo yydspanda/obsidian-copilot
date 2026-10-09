@@ -5,14 +5,12 @@ import {
   DEFAULT_KNOWLEDGE_COMPILER_LIMITS,
   KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
   type CompilerAnalysis,
-  type CompilerAnalysisRequest,
   type CompilerApprovedTarget,
   type CompilerBoundTarget,
   type CompilerCandidateValidationInput,
   type CompilerCandidateValidationResult,
   type CompilerChangeSetDraft,
   type CompilerEvidence,
-  type CompilerGenerationAnalysis,
   type CompilerGenerationRequest,
   type CompilerGenerationTarget,
   type KnowledgeCompilerInfrastructureFailureCode,
@@ -31,10 +29,8 @@ import {
 } from "@/knowledge/compiler/CompilerModelPort";
 
 export { DEFAULT_KNOWLEDGE_COMPILER_LIMITS } from "@/knowledge/compiler/CompilerModelPort";
-import {
-  parseCompilerAnalysisModelOutput,
-  type CompilerAnalysisModelOutput,
-} from "@/knowledge/compiler/analysisSchema";
+import type { CompilerWritingPlan } from "@/knowledge/compiler/CompilerWritingPlan";
+import { createKnowledgeSourceTargetPlan } from "@/knowledge/compiler/KnowledgeSourceTargetPlan";
 import {
   parseCompilerGenerationModelOutput,
   type CompilerGeneratedFile,
@@ -272,16 +268,13 @@ const compilerCandidateValidationResultSchema: z.ZodType<CompilerCandidateValida
   .strict();
 
 /** Model stages that may receive compiler-issued process-local authorization. */
-export type KnowledgeCompilerModelCallStage = "analysis" | "generation";
+export type KnowledgeCompilerModelCallStage = "generation";
 
 const modelSessionIdentities = new WeakSet<object>();
 
 /**
- * Fresh opaque identity shared only by model calls from one compile invocation.
- *
- * A session has no public state. Adapters compare its exact object identity to
- * prevent analysis from one compile invocation authorizing another invocation's
- * generation call.
+ * Fresh opaque identity for the writing call of one compile invocation.
+ * A session has no public state and cannot authorize a different invocation.
  */
 export class KnowledgeCompilerModelSession {
   /** Rejects direct construction without the module-private compiler token. */
@@ -310,29 +303,17 @@ function createModelSession(): KnowledgeCompilerModelSession {
   return session;
 }
 
-/** Exact private compiler state released to an authorized analysis adapter. */
-export interface KnowledgeCompilerAnalysisModelCall {
-  stage: "analysis";
-  session: KnowledgeCompilerModelSession;
-  request: CompilerAnalysisRequest;
-  signal: AbortSignal;
-}
-
 /** Exact private compiler state released to an authorized generation adapter. */
 export interface KnowledgeCompilerGenerationModelCall {
   stage: "generation";
   session: KnowledgeCompilerModelSession;
   request: CompilerGenerationRequest;
   signal: AbortSignal;
-  rawAnalysis: unknown;
-  analysis: CompilerAnalysis;
   targets: readonly CompilerBoundTarget[];
 }
 
 /** One-shot compiler call state inspected only by the receiving model adapter. */
-export type KnowledgeCompilerModelCall =
-  | KnowledgeCompilerAnalysisModelCall
-  | KnowledgeCompilerGenerationModelCall;
+export type KnowledgeCompilerModelCall = KnowledgeCompilerGenerationModelCall;
 
 interface KnowledgeCompilerModelCallAuthorizationState {
   call: KnowledgeCompilerModelCall;
@@ -413,10 +394,10 @@ type AnalysisNormalizationResult =
 
 /** Internal result used while binding approved paths to exact file states. */
 type TargetBindingResult =
-  | { ok: true; targets: CompilerBoundTarget[]; diagnostics: KnowledgeDiagnostic[] }
+  | { ok: true; targets: CompilerWritableTarget[]; diagnostics: KnowledgeDiagnostic[] }
   | { ok: false; diagnostics: KnowledgeDiagnostic[] };
 
-/** Internal result used while projecting second-stage output into file changes. */
+/** Internal result used while projecting written output into file changes. */
 type GenerationProjectionResult =
   | { ok: true; changes: KnowledgeFileChange[]; diagnostics: KnowledgeDiagnostic[] }
   | { ok: false; diagnostics: KnowledgeDiagnostic[] };
@@ -1418,7 +1399,7 @@ function validateCompileInput(
 }
 
 /**
- * Creates an identity for the exact context exposed to both model stages.
+ * Creates an identity for the exact source context and destination authority.
  *
  * @param input - Validated normalized compiler input
  * @returns Stable compile context digest
@@ -1485,7 +1466,7 @@ function validateCollectionLimit(
 function validateModelRequestCharacterLimit(
   value: unknown,
   limit: number,
-  field: "analysisRequest" | "generationRequest"
+  field: "generationRequest"
 ): KnowledgeDiagnostic[] {
   if (JSON.stringify(value).length <= limit) {
     return [];
@@ -1528,23 +1509,20 @@ function validateUniqueRefs(
 }
 
 /**
- * Normalizes model-local refs into stable domain ids and validates all links.
+ * Normalizes the local writing plan and generated claims into stable domain ids.
  *
- * @param output - Strictly parsed first-stage output
+ * @param output - Compiler-owned targets and claims from strictly parsed generation output
  * @param input - Validated normalized compiler input
  * @param limits - Explicit resource limits
  * @returns Stable analysis or deterministic semantic diagnostics
  */
 function normalizeAnalysis(
-  output: CompilerAnalysisModelOutput,
+  output: CompilerWritingPlan,
   input: KnowledgeCompileInput,
   limits: KnowledgeCompilerLimits
 ): AnalysisNormalizationResult {
   const diagnostics: KnowledgeDiagnostic[] = [];
-  validateCollectionLimit(diagnostics, "concepts", output.concepts.length, limits.maxConcepts);
-  validateCollectionLimit(diagnostics, "entities", output.entities.length, limits.maxEntities);
   validateCollectionLimit(diagnostics, "claims", output.claims.length, limits.maxClaims);
-  validateCollectionLimit(diagnostics, "relations", output.relations.length, limits.maxRelations);
   validateCollectionLimit(diagnostics, "citations", output.citations.length, limits.maxCitations);
   validateCollectionLimit(diagnostics, "targets", output.targets.length, limits.maxTargets);
   if (JSON.stringify(output).length > limits.maxAnalysisCharacters) {
@@ -1553,7 +1531,7 @@ function normalizeAnalysis(
       "error",
       "compiler_analysis_character_limit_exceeded",
       "analysis",
-      "Analysis output exceeds the configured total character limit"
+      "Writing plan exceeds the configured total character limit"
     );
   }
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
@@ -1562,23 +1540,8 @@ function normalizeAnalysis(
 
   validateUniqueRefs(
     diagnostics,
-    "concepts",
-    output.concepts.map((item) => item.ref)
-  );
-  validateUniqueRefs(
-    diagnostics,
-    "entities",
-    output.entities.map((item) => item.ref)
-  );
-  validateUniqueRefs(
-    diagnostics,
     "claims",
     output.claims.map((item) => item.ref)
-  );
-  validateUniqueRefs(
-    diagnostics,
-    "relations",
-    output.relations.map((item) => item.ref)
   );
   validateUniqueRefs(
     diagnostics,
@@ -1586,112 +1549,23 @@ function normalizeAnalysis(
     output.targets.map((item) => item.ref)
   );
 
-  const nodeRefs = new Set<string>();
-  for (const [namespace, values] of [
-    ["concepts", output.concepts],
-    ["entities", output.entities],
-    ["claims", output.claims],
-  ] as const) {
-    values.forEach((value, index) => {
-      if (nodeRefs.has(value.ref)) {
-        addDiagnostic(
-          diagnostics,
-          "error",
-          "compiler_analysis_node_ref_ambiguous",
-          `${namespace}[${index}].ref`,
-          "Concept, entity, and claim refs must be globally unambiguous"
-        );
-      }
-      nodeRefs.add(value.ref);
-    });
-  }
-
-  const concepts = output.concepts.map((concept) => ({
-    id: createStableId("concept", {
-      name: concept.name,
-      ...(concept.description === undefined ? {} : { description: concept.description }),
-    }),
-    name: concept.name,
-    ...(concept.description === undefined ? {} : { description: concept.description }),
-  }));
-  const entities = output.entities.map((entity) => ({
-    id: createStableId("entity", {
-      name: entity.name,
-      type: entity.type,
-      ...(entity.description === undefined ? {} : { description: entity.description }),
-    }),
-    name: entity.name,
-    type: entity.type,
-    ...(entity.description === undefined ? {} : { description: entity.description }),
-  }));
   const claims = output.claims.map((claim) => ({
     id: createStableId("claim", { text: claim.text }),
     text: claim.text,
   }));
 
-  const nodeIdByRef = new Map<string, string>();
-  output.concepts.forEach((item, index) => nodeIdByRef.set(item.ref, concepts[index].id));
-  output.entities.forEach((item, index) => nodeIdByRef.set(item.ref, entities[index].id));
-  output.claims.forEach((item, index) => nodeIdByRef.set(item.ref, claims[index].id));
-
-  const stableNodeIds = new Set<string>();
-  [...concepts, ...entities, ...claims].forEach((item) => {
-    if (stableNodeIds.has(item.id)) {
+  const stableClaimIds = new Set<string>();
+  claims.forEach((claim) => {
+    if (stableClaimIds.has(claim.id)) {
       addDiagnostic(
         diagnostics,
         "error",
         "compiler_analysis_semantic_duplicate",
         "analysis",
-        "Semantically duplicate analysis nodes are not accepted"
+        "Semantically duplicate claims are not accepted"
       );
     }
-    stableNodeIds.add(item.id);
-  });
-
-  const relations = output.relations.flatMap((relation, index) => {
-    const fromId = nodeIdByRef.get(relation.fromRef);
-    const toId = nodeIdByRef.get(relation.toRef);
-    if (!fromId || !toId) {
-      addDiagnostic(
-        diagnostics,
-        "error",
-        "compiler_relation_endpoint_unknown",
-        `relations[${index}]`,
-        "Relation endpoints must reference a concept, entity, or claim"
-      );
-      return [];
-    }
-    if (fromId === toId) {
-      addDiagnostic(
-        diagnostics,
-        "error",
-        "compiler_relation_self_reference",
-        `relations[${index}]`,
-        "A relation must connect two distinct analysis nodes"
-      );
-    }
-    return [
-      {
-        id: createStableId("relation", { fromId, toId, type: relation.type }),
-        fromId,
-        toId,
-        type: relation.type,
-      },
-    ];
-  });
-
-  const relationIds = new Set<string>();
-  relations.forEach((relation, index) => {
-    if (relationIds.has(relation.id)) {
-      addDiagnostic(
-        diagnostics,
-        "error",
-        "compiler_relation_semantic_duplicate",
-        `relations[${index}]`,
-        "Semantically duplicate relations are not accepted"
-      );
-    }
-    relationIds.add(relation.id);
+    stableClaimIds.add(claim.id);
   });
 
   const evidenceById = new Map(input.evidence.map((evidence) => [evidence.evidenceId, evidence]));
@@ -1743,9 +1617,7 @@ function normalizeAnalysis(
       return;
     }
     citationKeys.add(citationKey);
-    if (citation.relation === "supports") {
-      supportedClaimIds.add(claimId);
-    }
+    supportedClaimIds.add(claimId);
     citations.push({
       citationId: createStableId("citation", {
         claimId,
@@ -1883,20 +1755,7 @@ function normalizeAnalysis(
     const access = authorization ? "authorized" : "create_only";
     const contentPolicy = authorization?.contentPolicy ?? "grounded";
     const ownership = authorization?.ownership ?? "new";
-    if (target.intent === "delete" && !authorization?.allowedIntents.includes("delete")) {
-      addDiagnostic(
-        diagnostics,
-        "error",
-        "compiler_target_delete_unauthorized",
-        `targets[${index}].intent`,
-        "Delete targets require an explicit caller-owned delete authorization"
-      );
-    }
-    if (
-      target.intent === "write" &&
-      authorization !== undefined &&
-      !authorization.allowedIntents.includes("write")
-    ) {
+    if (authorization !== undefined && !authorization.allowedIntents.includes("write")) {
       addDiagnostic(
         diagnostics,
         "error",
@@ -1905,16 +1764,6 @@ function normalizeAnalysis(
         "Known targets require an explicit caller-owned write authorization"
       );
     }
-    if (target.intent === "write" && contentPolicy === "grounded" && claimIds.length === 0) {
-      addDiagnostic(
-        diagnostics,
-        "error",
-        "compiler_target_claim_required",
-        `targets[${index}].claimRefs`,
-        "Grounded write targets must reference at least one supported analysis claim"
-      );
-    }
-
     const sourceRefs = new Set<string>([input.source.sourceId]);
     authorization?.sourceRefs.forEach((sourceRef) => sourceRefs.add(sourceRef));
     claimIds.forEach((claimId) => {
@@ -1961,7 +1810,7 @@ function normalizeAnalysis(
       "error",
       "compiler_target_windows_collision",
       "targets",
-      `Analysis proposed multiple targets for Windows path '${collision.key}'`
+      `Writing plan contains multiple targets for Windows path '${collision.key}'`
     );
   });
   for (let leftIndex = 0; leftIndex < targets.length; leftIndex += 1) {
@@ -1977,7 +1826,7 @@ function normalizeAnalysis(
           "error",
           "compiler_target_path_overlap",
           `targets[${rightIndex}].path`,
-          "Analysis cannot target both an ancestor path and its descendant"
+          "Writing plan cannot target both an ancestor path and its descendant"
         );
       }
     }
@@ -1987,10 +1836,7 @@ function normalizeAnalysis(
     return { ok: false, diagnostics };
   }
 
-  concepts.sort((left, right) => compareText(left.id, right.id));
-  entities.sort((left, right) => compareText(left.id, right.id));
   claims.sort((left, right) => compareText(left.id, right.id));
-  relations.sort((left, right) => compareText(left.id, right.id));
   citations.sort((left, right) => compareText(left.citationId, right.citationId));
   targets.sort((left, right) => {
     const pathComparison = compareVaultPaths(left.path, right.path);
@@ -2000,10 +1846,10 @@ function normalizeAnalysis(
   const analysis: CompilerAnalysis = deepFreeze({
     version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
     summary: output.summary,
-    concepts,
-    entities,
+    concepts: [],
+    entities: [],
     claims,
-    relations,
+    relations: [],
     citations,
     targets,
   });
@@ -2050,11 +1896,11 @@ function validateObservedTargetPath(
 }
 
 /**
- * Binds first-stage intents to runtime-owned create/update/delete semantics.
+ * Binds planned intents to runtime-owned file observations.
  *
  * @param analysis - Stable normalized analysis
  * @param observations - Strictly parsed resolver payload
- * @returns Bound targets, no-op warnings, or fail-closed diagnostics
+ * @returns Bound writable targets or fail-closed diagnostics
  */
 function bindTargetObservations(
   analysis: CompilerAnalysis,
@@ -2102,7 +1948,7 @@ function bindTargetObservations(
     return { ok: false, diagnostics };
   }
 
-  const boundTargets: CompilerBoundTarget[] = [];
+  const boundTargets: CompilerWritableTarget[] = [];
   analysis.targets.forEach((target, index) => {
     const observation = observationsById.get(target.targetId);
     if (!observation) {
@@ -2116,16 +1962,6 @@ function bindTargetObservations(
           "compiler_missing_windows_key_mismatch",
           `observations[${index}].windowsPathKey`,
           "Missing observation must prove the approved Windows comparison key was checked"
-        );
-        return;
-      }
-      if (target.intent === "delete") {
-        addDiagnostic(
-          diagnostics,
-          "warning",
-          "compiler_delete_target_missing",
-          `targets[${index}].path`,
-          "Delete target is already missing and was treated as no change"
         );
         return;
       }
@@ -2168,43 +2004,23 @@ function bindTargetObservations(
     }
 
     const beforeHash = createFileContentHash(observation.content);
-    if (target.intent === "delete") {
-      if (target.expectedContentHash !== beforeHash) {
-        addDiagnostic(
-          diagnostics,
-          "error",
-          "compiler_delete_content_changed",
-          `observations[${index}].content`,
-          "Delete target no longer matches the manifest's last generated content hash"
-        );
-        return;
-      }
-      boundTargets.push({
-        ...target,
-        path: observation.path,
-        operation: "delete",
-        beforeContent: observation.content,
-        beforeHash,
-      });
-    } else {
-      if (target.expectedContentHash !== beforeHash) {
-        addDiagnostic(
-          diagnostics,
-          "error",
-          "compiler_write_content_changed",
-          `observations[${index}].content`,
-          "Write target no longer matches the Manifest's last committed content hash"
-        );
-        return;
-      }
-      boundTargets.push({
-        ...target,
-        path: observation.path,
-        operation: "update",
-        beforeContent: observation.content,
-        beforeHash,
-      });
+    if (target.expectedContentHash !== beforeHash) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_write_content_changed",
+        `observations[${index}].content`,
+        "Write target no longer matches the Manifest's last committed content hash"
+      );
+      return;
     }
+    boundTargets.push({
+      ...target,
+      path: observation.path,
+      operation: "update",
+      beforeContent: observation.content,
+      beforeHash,
+    });
   });
 
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
@@ -2218,25 +2034,21 @@ function bindTargetObservations(
  * Creates an immutable identity for exact runtime-bound target states.
  *
  * @param compileContextDigest - Digest of all model-visible compile context
- * @param analysisDigest - Digest of normalized first-stage analysis
  * @param targets - Exact sorted runtime-bound targets
  * @returns Target-set digest echoed by the generation response
  */
 function createTargetSetDigest(
   compileContextDigest: string,
-  analysisDigest: string,
   targets: readonly CompilerBoundTarget[]
 ): string {
-  return digestJson("knowledge-target-set-v1", {
+  return digestJson("knowledge-target-set-v2", {
     compileContextDigest,
-    analysisDigest,
     targets: targets.map((target) => ({
       targetId: target.targetId,
       path: target.path,
       intent: target.intent,
       operation: target.operation,
       reason: target.reason,
-      claimIds: target.claimIds,
       sourceRefs: target.sourceRefs,
       access: target.access,
       contentPolicy: target.contentPolicy,
@@ -2250,55 +2062,12 @@ function createTargetSetDigest(
 }
 
 /**
- * Creates the exact evidence identity for an analysis that approved no targets.
- *
- * @param compileContextDigest - Exact normalized Compiler input identity
- * @param analysisDigest - Exact normalized first-stage result identity
- * @returns Canonical no-change evidence digest
- */
-function createAnalysisNoChangesEvidenceDigest(
-  compileContextDigest: string,
-  analysisDigest: string
-): string {
-  return digestJson("knowledge-no-changes-analysis-evidence-v1", {
-    compileContextDigest,
-    analysisDigest,
-  });
-}
-
-/**
- * Creates an order-stable identity for strict target requests and observations.
- *
- * @param compileContextDigest - Exact normalized Compiler input identity
- * @param analysisDigest - Exact normalized first-stage result identity
- * @param requests - Canonical approved target requests
- * @param observations - Strictly parsed runtime target observations
- * @returns Canonical no-change evidence digest
- */
-function createResolvedNoChangesEvidenceDigest(
-  compileContextDigest: string,
-  analysisDigest: string,
-  requests: readonly CompilerTargetRequest[],
-  observations: readonly CompilerTargetObservation[]
-): string {
-  const observationsById = new Map(
-    observations.map((observation) => [observation.targetId, observation])
-  );
-  return digestJson("knowledge-no-changes-resolved-evidence-v1", {
-    compileContextDigest,
-    analysisDigest,
-    targetRequests: requests,
-    targetObservations: requests.map((request) => observationsById.get(request.targetId)),
-  });
-}
-
-/**
  * Creates the exact evidence identity for a valid generation with no file changes.
  *
  * @param compileContextDigest - Exact normalized Compiler input identity
- * @param analysisDigest - Exact normalized first-stage result identity
+ * @param analysisDigest - Exact normalized written-claim and target identity
  * @param targetSetDigest - Exact bound target-set identity
- * @param generationOutput - Strictly parsed second-stage result
+ * @param generationOutput - Strictly parsed writing result
  * @param projection - Runtime-owned generation projection
  * @returns Canonical no-change evidence digest
  */
@@ -2326,8 +2095,8 @@ function createGeneratedNoChangesEvidenceDigest(
  *
  * @param input - Validated normalized compile input
  * @param compileContextDigest - Exact normalized Compiler input identity
- * @param analysisDigest - Exact normalized first-stage result identity
- * @param analysis - Normalized first-stage result
+ * @param analysisDigest - Exact normalized written-claim and target identity
+ * @param analysis - Normalized written claims and target authority
  * @param diagnostics - Complete diagnostics for this successful conclusion
  * @param reason - Stable stage-specific no-change reason
  * @param evidenceDigest - Exact evidence identity for that reason
@@ -2457,30 +2226,7 @@ function createWritableChange(
 }
 
 /**
- * Builds one runtime-owned delete change without model-controlled fields.
- *
- * @param target - Exact existing delete target
- * @returns Fully bound delete file change
- */
-function createDeleteChange(
-  target: Extract<CompilerBoundTarget, { operation: "delete" }>
-): KnowledgeFileChange {
-  return {
-    id: createStableId("change", {
-      targetId: target.targetId,
-      operation: target.operation,
-      beforeHash: target.beforeHash,
-    }),
-    operation: "delete",
-    path: target.path,
-    sourceRefs: [...target.sourceRefs],
-    reason: target.reason,
-    beforeHash: target.beforeHash,
-  };
-}
-
-/**
- * Validates exact second-stage coverage and creates runtime-owned changes.
+ * Validates exact writing coverage and creates runtime-owned changes.
  *
  * @param output - Strictly parsed generation output
  * @param targetSetDigest - Digest generation must echo exactly
@@ -2491,7 +2237,7 @@ function createDeleteChange(
 function projectGeneration(
   output: CompilerGenerationModelOutput,
   targetSetDigest: string,
-  targets: readonly CompilerBoundTarget[],
+  targets: readonly CompilerWritableTarget[],
   limits: KnowledgeCompilerLimits
 ): GenerationProjectionResult {
   const diagnostics: KnowledgeDiagnostic[] = [];
@@ -2515,11 +2261,7 @@ function projectGeneration(
     );
   }
 
-  const writableTargets = targets.filter(
-    (target): target is Extract<CompilerBoundTarget, { operation: "create" | "update" }> =>
-      target.operation !== "delete"
-  );
-  const writableById = new Map(writableTargets.map((target) => [target.targetId, target]));
+  const writableById = new Map(targets.map((target) => [target.targetId, target]));
   const generatedById = new Map<string, CompilerGeneratedFile>();
   let totalGeneratedCharacters = 0;
   output.files.forEach((file, index) => {
@@ -2565,7 +2307,7 @@ function projectGeneration(
     );
   }
 
-  writableTargets.forEach((target, index) => {
+  targets.forEach((target, index) => {
     if (!generatedById.has(target.targetId)) {
       addDiagnostic(
         diagnostics,
@@ -2575,19 +2317,28 @@ function projectGeneration(
         "Generation must explicitly write or preserve every writable target"
       );
     }
+    // A source without a page must not look completed while producing nothing.
+    // https://github.com/yydspanda/obsidian-copilot/issues/20
+    if (
+      target.operation === "create" &&
+      generatedById.get(target.targetId)?.outcome === "unchanged"
+    ) {
+      addDiagnostic(
+        diagnostics,
+        "error",
+        "compiler_generation_new_target_unchanged",
+        `targets[${index}].targetId`,
+        "Generation must write a draft for a target that does not exist"
+      );
+    }
   });
 
   if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
     return { ok: false, diagnostics };
   }
 
-  const changes: KnowledgeFileChange[] = targets
-    .filter(
-      (target): target is Extract<CompilerBoundTarget, { operation: "delete" }> =>
-        target.operation === "delete"
-    )
-    .map(createDeleteChange);
-  writableTargets.forEach((target) => {
+  const changes: KnowledgeFileChange[] = [];
+  targets.forEach((target) => {
     const generated = generatedById.get(target.targetId);
     if (!generated || generated.outcome === "unchanged") {
       return;
@@ -2669,6 +2420,48 @@ function createFailure(
   return { kind: "failed", stage, retryable: false, diagnostics };
 }
 
+/** Binds model-written statements to trusted evidence without creating a second content gate. */
+function createWrittenAnalysis(
+  plan: CompilerWritingPlan,
+  targets: readonly CompilerBoundTarget[],
+  output: CompilerGenerationModelOutput
+): CompilerWritingPlan {
+  const claims = new Map<string, CompilerWritingPlan["claims"][number]>();
+  const citations = new Map<string, CompilerWritingPlan["citations"][number]>();
+  const files = new Map(output.files.map((file) => [file.targetId, file]));
+  const writtenTargets = targets.map((target) => {
+    const file = files.get(target.targetId);
+    const claimRefs = new Set<string>();
+    if (file?.outcome === "write") {
+      for (const claim of file.claims) {
+        const ref = createStableId("written-claim", { text: claim.text });
+        claims.set(ref, { ref, text: claim.text });
+        claimRefs.add(ref);
+        for (const evidenceId of claim.evidenceIds) {
+          citations.set(JSON.stringify([ref, evidenceId]), {
+            claimRef: ref,
+            evidenceId,
+            relation: "supports",
+          });
+        }
+      }
+    }
+    return {
+      ref: target.targetId,
+      path: target.path,
+      intent: "write" as const,
+      reason: target.reason,
+      claimRefs: [...claimRefs].sort(compareText),
+    };
+  });
+  return {
+    ...plan,
+    claims: [...claims.values()].sort((left, right) => compareText(left.ref, right.ref)),
+    citations: [...citations.values()],
+    targets: writtenTargets,
+  };
+}
+
 /**
  * Verifies configured limits before the compiler accepts dependencies.
  *
@@ -2682,7 +2475,7 @@ function assertValidLimits(limits: KnowledgeCompilerLimits): void {
   }
 }
 
-/** Provider-neutral deterministic two-stage Knowledge Compiler. */
+/** Plans safe source destinations, then validates one model-written review draft. */
 export class KnowledgeCompiler {
   private readonly limits: KnowledgeCompilerLimits;
 
@@ -2727,45 +2520,20 @@ export class KnowledgeCompiler {
     }
 
     const compileContextDigest = createCompileContextDigest(input);
-    const analysisRequest = this.createAnalysisRequest(input, compileContextDigest);
-    const analysisRequestDiagnostics = validateModelRequestCharacterLimit(
-      analysisRequest,
-      this.limits.maxModelContextCharacters,
-      "analysisRequest"
-    );
-    if (analysisRequestDiagnostics.length > 0) {
-      return createFailure("input", analysisRequestDiagnostics);
-    }
-    const rawAnalysis = await this.invokeDependency("analysis", signal, () => {
-      this.authorizeModelCall({
-        stage: "analysis",
-        session: modelSession,
-        request: analysisRequest,
-        signal,
-      });
-      return this.dependencies.model.analyze(analysisRequest, signal);
-    });
-    const parsedAnalysis = parseCompilerAnalysisModelOutput(rawAnalysis);
-    if (!parsedAnalysis.ok) {
-      return createFailure("analysis", parsedAnalysis.issues);
-    }
-
-    const normalized = normalizeAnalysis(parsedAnalysis.value, input, this.limits);
+    // Selecting a source authorizes drafting, not a model decision to skip it.
+    // https://github.com/yydspanda/obsidian-copilot/issues/20
+    const plan: CompilerWritingPlan = {
+      version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
+      summary: "Source-grounded writing",
+      claims: [],
+      citations: [],
+      targets: createKnowledgeSourceTargetPlan(input),
+    };
+    const normalized = normalizeAnalysis(plan, input, this.limits);
     if (!normalized.ok) {
-      return createFailure("analysis", normalized.diagnostics);
+      return createFailure("target_resolution", normalized.diagnostics);
     }
-    const { analysis, analysisDigest } = normalized;
-    if (analysis.targets.length === 0) {
-      return createNoChangesResult(
-        input,
-        compileContextDigest,
-        analysisDigest,
-        analysis,
-        inputDiagnostics,
-        "analysis_no_targets",
-        createAnalysisNoChangesEvidenceDigest(compileContextDigest, analysisDigest)
-      );
-    }
+    let { analysis, analysisDigest } = normalized;
 
     const targetRequests = deepFreeze(
       analysis.targets.map<CompilerTargetRequest>((target) => ({
@@ -2793,71 +2561,92 @@ export class KnowledgeCompiler {
       return createFailure("target_resolution", binding.diagnostics);
     }
     const targetDiagnostics = [...inputDiagnostics, ...binding.diagnostics];
-    if (binding.targets.length === 0) {
-      return createNoChangesResult(
-        input,
-        compileContextDigest,
-        analysisDigest,
-        analysis,
-        targetDiagnostics,
-        "resolved_no_targets",
-        createResolvedNoChangesEvidenceDigest(
-          compileContextDigest,
-          analysisDigest,
-          targetRequests,
-          parsedObservations.data
-        )
-      );
-    }
-
-    const targetSetDigest = createTargetSetDigest(
+    const targetSetDigest = createTargetSetDigest(compileContextDigest, binding.targets);
+    const generationRequest = this.createGenerationRequest(
+      input,
       compileContextDigest,
-      analysisDigest,
+      targetSetDigest,
       binding.targets
     );
-    const writableTargets = binding.targets.filter(
-      (target): target is CompilerWritableTarget => target.operation !== "delete"
+    const generationRequestDiagnostics = validateModelRequestCharacterLimit(
+      generationRequest,
+      this.limits.maxModelContextCharacters,
+      "generationRequest"
     );
-    let generationOutput: CompilerGenerationModelOutput = {
-      version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
-      targetSetDigest,
-      files: [],
-    };
-    if (writableTargets.length > 0) {
-      const generationRequest = this.createGenerationRequest(
-        input,
-        compileContextDigest,
-        analysisDigest,
-        targetSetDigest,
-        analysis,
-        writableTargets
-      );
-      const generationRequestDiagnostics = validateModelRequestCharacterLimit(
-        generationRequest,
-        this.limits.maxModelContextCharacters,
-        "generationRequest"
-      );
-      if (generationRequestDiagnostics.length > 0) {
-        return createFailure("generation", generationRequestDiagnostics);
-      }
-      const rawGeneration = await this.invokeDependency("generation", signal, () => {
-        this.authorizeModelCall({
-          stage: "generation",
-          session: modelSession,
-          request: generationRequest,
-          signal,
-          rawAnalysis,
-          analysis,
-          targets: binding.targets,
-        });
-        return this.dependencies.model.generate(generationRequest, signal);
-      });
-      const parsedGeneration = parseCompilerGenerationModelOutput(rawGeneration);
-      if (!parsedGeneration.ok) {
-        return createFailure("generation", parsedGeneration.issues);
-      }
-      generationOutput = parsedGeneration.value;
+    if (generationRequestDiagnostics.length > 0) {
+      return createFailure("generation", generationRequestDiagnostics);
     }
+    const rawGeneration = await this.invokeDependency("generation", signal, () => {
+      this.authorizeModelCall({
+        stage: "generation",
+        session: modelSession,
+        request: generationRequest,
+        signal,
+        targets: binding.targets,
+      });
+      return this.dependencies.model.generate(generationRequest, signal);
+    });
+    const parsedGeneration = parseCompilerGenerationModelOutput(rawGeneration);
+    if (!parsedGeneration.ok) {
+      return createFailure("generation", parsedGeneration.issues);
+    }
+    const generationOutput = parsedGeneration.value;
+
+    // Repeated claims must not evade the configured writing budget by collapsing
+    // into one Map entry after their text has already been hashed.
+    // https://github.com/yydspanda/obsidian-copilot/issues/20
+    const writingBudgetDiagnostics: KnowledgeDiagnostic[] = [];
+    let rawClaimCount = 0;
+    let rawCitationCount = 0;
+    let rawClaimCharacters = 0;
+    for (const file of generationOutput.files) {
+      if (file.outcome !== "write") continue;
+      rawClaimCount += file.claims.length;
+      rawClaimCharacters += JSON.stringify(file.claims).length;
+      for (const claim of file.claims) rawCitationCount += claim.evidenceIds.length;
+    }
+    validateCollectionLimit(
+      writingBudgetDiagnostics,
+      "claims",
+      rawClaimCount,
+      this.limits.maxClaims
+    );
+    validateCollectionLimit(
+      writingBudgetDiagnostics,
+      "citations",
+      rawCitationCount,
+      this.limits.maxCitations
+    );
+    if (rawClaimCharacters > this.limits.maxAnalysisCharacters) {
+      addDiagnostic(
+        writingBudgetDiagnostics,
+        "error",
+        "compiler_analysis_character_limit_exceeded",
+        "analysis",
+        "Written claim metadata exceeds the configured total character limit"
+      );
+    }
+    if (writingBudgetDiagnostics.length > 0) {
+      return createFailure("generation", writingBudgetDiagnostics);
+    }
+
+    // Citations describe the written draft; nothing is preselected or labelled supported
+    // merely because it was supplied as source context.
+    // https://github.com/yydspanda/obsidian-copilot/issues/20
+    const written = normalizeAnalysis(
+      createWrittenAnalysis(plan, binding.targets, generationOutput),
+      input,
+      this.limits
+    );
+    if (!written.ok) return createFailure("generation", written.diagnostics);
+    analysis = written.analysis;
+    analysisDigest = written.analysisDigest;
+    const approvedById = new Map(analysis.targets.map((target) => [target.targetId, target]));
+    binding.targets = binding.targets.map((target) => ({
+      ...target,
+      claimIds: approvedById.get(target.targetId)!.claimIds,
+      sourceRefs: approvedById.get(target.targetId)!.sourceRefs,
+    }));
 
     const projection = projectGeneration(
       generationOutput,
@@ -3036,67 +2825,25 @@ export class KnowledgeCompiler {
   }
 
   /**
-   * Creates and freezes the provider-neutral first-stage request.
-   *
-   * @param input - Validated normalized compile input
-   * @param compileContextDigest - Identity of the exact model-visible context
-   * @returns Deeply frozen request
-   */
-  private createAnalysisRequest(
-    input: KnowledgeCompileInput,
-    compileContextDigest: string
-  ): CompilerAnalysisRequest {
-    return deepFreeze({
-      version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
-      compileContextDigest,
-      bundle: input.bundle,
-      operation: input.operation,
-      source: input.source,
-      schema: input.schema,
-      evidence: input.evidence,
-      contextPages: input.contextPages,
-      targetAuthorizations: input.targetAuthorizations.map((authorization) => ({
-        path: authorization.path,
-        allowedIntents: authorization.allowedIntents,
-        contentPolicy: authorization.contentPolicy,
-      })),
-    });
-  }
-
-  /**
-   * Creates and freezes the provider-neutral second-stage request.
+   * Creates and freezes the provider-neutral source-writing request.
    *
    * @param input - Validated normalized compile input
    * @param compileContextDigest - Identity of exact model-visible context
-   * @param analysisDigest - Identity of normalized first-stage analysis
    * @param targetSetDigest - Identity of runtime-bound target states
-   * @param analysis - Stable normalized analysis
    * @param targets - Runtime-bound writable targets only
    * @returns Deeply frozen generation request
    */
   private createGenerationRequest(
     input: KnowledgeCompileInput,
     compileContextDigest: string,
-    analysisDigest: string,
     targetSetDigest: string,
-    analysis: CompilerAnalysis,
     targets: CompilerWritableTarget[]
   ): CompilerGenerationRequest {
-    const generationAnalysis: CompilerGenerationAnalysis = {
-      version: analysis.version,
-      summary: analysis.summary,
-      concepts: analysis.concepts,
-      entities: analysis.entities,
-      claims: analysis.claims,
-      relations: analysis.relations,
-      citations: analysis.citations,
-    };
     const generationTargets: CompilerGenerationTarget[] = targets.map((target) => {
       const base = {
         targetId: target.targetId,
         path: target.path,
         reason: target.reason,
-        claimIds: target.claimIds,
         contentPolicy: target.contentPolicy,
       };
       if (target.operation === "create") {
@@ -3111,7 +2858,6 @@ export class KnowledgeCompiler {
     return deepFreeze({
       version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
       compileContextDigest,
-      analysisDigest,
       targetSetDigest,
       bundle: input.bundle,
       operation: input.operation,
@@ -3119,7 +2865,6 @@ export class KnowledgeCompiler {
       schema: input.schema,
       evidence: input.evidence,
       contextPages: input.contextPages,
-      analysis: generationAnalysis,
       targets: generationTargets,
     });
   }

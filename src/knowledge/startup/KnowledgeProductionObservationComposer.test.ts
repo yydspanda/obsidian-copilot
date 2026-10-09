@@ -19,6 +19,7 @@ import {
   type KnowledgeDeepSeekFetchPort,
   type KnowledgeDeepSeekHttpResponse,
 } from "@/knowledge/compiler/KnowledgeDeepSeekPrivateRoute";
+import type { CompilerGenerationRequest } from "@/knowledge/compiler/CompilerModelPort";
 import { KnowledgeProductionChatCaptureCoordinator } from "@/knowledge/capture/KnowledgeProductionChatCaptureCoordinator";
 import { KnowledgeSourceRegistrationCore } from "@/knowledge/capture/KnowledgeSourceRegistrationCore";
 import { KnowledgeProductionForwardRevisionProposalActionAdapter } from "@/knowledge/forwardRevision/KnowledgeForwardRevisionProposalActionPort";
@@ -27,14 +28,21 @@ import { KnowledgeProductionForwardRevisionApplyTransactionRunner } from "@/know
 import type { KnowledgeProductionPreflightSettingsInput } from "@/knowledge/compiler/KnowledgeProductionPreflightComposer";
 import { parseIngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { SourceManifestRepository } from "@/knowledge/manifest/SourceManifestRepository";
-import { KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY } from "@/knowledge/manifest/NoChangesManifestCommit";
-import { createSourceContentHash } from "@/knowledge/model/fingerprint";
-import type { KnowledgeBundleConfig } from "@/knowledge/model/types";
+import {
+  createKnowledgeNoChangesCommitMarker,
+  createNoChangesManifestCommitPlan,
+  KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
+} from "@/knowledge/manifest/NoChangesManifestCommit";
+import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
+import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
+import type { JsonValue, KnowledgeBundleConfig } from "@/knowledge/model/types";
 import type { KnowledgeByteParser } from "@/knowledge/parser/KnowledgeByteParser";
 import {
   KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeManifestStorage,
   KnowledgeRuntimeStore,
+  KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
+  parseKnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
 import { KnowledgeProductionSourceLifecycleCoordinator } from "@/knowledge/sourceLifecycle/KnowledgeProductionSourceLifecycleCoordinator";
 import type { KnowledgeSourceLifecyclePort } from "@/knowledge/sourceLifecycle/KnowledgeSourceLifecyclePort";
@@ -78,6 +86,8 @@ const MODEL_NAME = "deepseek-flash";
 const MODEL_KEY = `${MODEL_NAME}|deepseek`;
 const SOURCE_PATH = "Sources/personal/研究.md";
 const SCHEMA_PATH = "Schemas/personal.md";
+const WIKI_PATH = "Wiki/personal/Research.md";
+const WIKI_CONTENT = "---\ntype: concept\n---\n\n# Research\n\nThe source explanation.\n";
 const originalRandomUuidDescriptor = Object.getOwnPropertyDescriptor(window.crypto, "randomUUID");
 let captureSequence = 0;
 
@@ -170,20 +180,38 @@ function createFetchPort(): jest.MockedFunction<KnowledgeDeepSeekFetchPort> {
   );
 }
 
-/** Creates one strict DeepSeek response with optional test-controlled model content. */
-function createNoChangesResponse(contentOverride?: string): KnowledgeDeepSeekHttpResponse {
-  const content =
-    contentOverride ??
+/** Creates a supported draft or an existing-page no-change response for the exact request. */
+function createGenerationResponse(
+  init: RequestInit,
+  outcome: "write" | "unchanged" = "write"
+): KnowledgeDeepSeekHttpResponse {
+  const wire = JSON.parse(init.body as string) as { messages: { content: string }[] };
+  const payload = wire.messages[1].content;
+  const { request } = JSON.parse(payload.slice(payload.indexOf("\n") + 1)) as {
+    request: CompilerGenerationRequest;
+  };
+  return createModelResponse(
     JSON.stringify({
       version: 1,
-      summary: "No durable Wiki change is required.",
-      concepts: [],
-      entities: [],
-      claims: [],
-      relations: [],
-      citations: [],
-      targets: [],
-    });
+      targetSetDigest: request.targetSetDigest,
+      files: request.targets.map((target) =>
+        outcome === "unchanged"
+          ? { targetId: target.targetId, outcome }
+          : {
+              targetId: target.targetId,
+              outcome,
+              afterContent: WIKI_CONTENT,
+              claims: [
+                { text: "The source explanation.", evidenceIds: [request.evidence[0].evidenceId] },
+              ],
+            }
+      ),
+    })
+  );
+}
+
+/** Creates one strict DeepSeek response with test-controlled model content. */
+function createModelResponse(content: string): KnowledgeDeepSeekHttpResponse {
   const bytes = new TextEncoder().encode(
     JSON.stringify({
       id: "completion-observation-controller",
@@ -393,6 +421,158 @@ async function createRuntime(
   return runtime;
 }
 
+/** Seeds a complete historical Apply snapshot instead of bypassing protected Manifest writes. */
+async function seedOwnedPage(
+  file: KnowledgeExecutionMemoryRuntimeFile,
+  runtime: KnowledgeRuntimeStore,
+  vault: ProductionVaultHarness
+): Promise<void> {
+  const manifest = await new SourceManifestRepository(
+    new KnowledgeRuntimeManifestStorage(runtime)
+  ).load("personal");
+  manifest.revision += 1;
+  const success = {
+    sourceContentHash: createSourceContentHash("Earlier source"),
+    pipelineFingerprint: "b".repeat(64),
+    generatedPages: [
+      {
+        path: WIKI_PATH,
+        ownership: "generated" as const,
+        contentHash: createFileContentHash(WIKI_CONTENT),
+      },
+    ],
+    changeSetId: "earlier-compile",
+    completedAt: 50,
+  };
+  manifest.entries[0].lastSuccessful = success;
+  manifest.entries[0].extensions = {
+    [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: {
+      version: 1,
+      inputRevision: 1,
+      transactionId: "earlier-transaction",
+      manifestIntentDigest: "c".repeat(64),
+    },
+  };
+  const state = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await file.read()) as unknown);
+  state.revision += 4;
+  state.manifests = [{ bundleId: "personal", value: manifest }];
+  state.inputRevisions = [
+    {
+      bundleId: "personal",
+      sources: [
+        { sourceId: "source-1", inputRevision: 1, managedAfterRevision: 1, observations: [] },
+      ],
+    },
+  ];
+  state.applyCommits = [
+    {
+      transactionId: "earlier-transaction",
+      commitRevision: 4,
+      bundleId: "personal",
+      sourceId: "source-1",
+      sourceContentHash: success.sourceContentHash,
+      pipelineFingerprint: success.pipelineFingerprint,
+      inputRevision: 1,
+      changeSetId: success.changeSetId,
+      changeSetDigest: "c".repeat(64),
+      manifestIntentDigest: "c".repeat(64),
+      journalDigest: "c".repeat(64),
+      receiptDigest: "d".repeat(64),
+      manifestBeforeRevision: manifest.revision - 1,
+      manifestBeforeDigest: "a".repeat(64),
+      manifestAfterRevision: manifest.revision,
+      manifestAfterDigest: createSourceManifestDigest(manifest),
+      recordedAt: success.completedAt,
+    },
+  ];
+  file.replaceContent(JSON.stringify(parseKnowledgeRuntimeStoreSnapshot(state)));
+  vault.addFile(WIKI_PATH, encodeText(WIKI_CONTENT));
+}
+
+/** Loads a legacy zero-target success with its exact Queue and consumed-observation proof. */
+async function seedLegacyZeroPageHistory(
+  file: KnowledgeExecutionMemoryRuntimeFile,
+  runtime: KnowledgeRuntimeStore
+): Promise<void> {
+  const manifest = await new SourceManifestRepository(
+    new KnowledgeRuntimeManifestStorage(runtime)
+  ).load("personal");
+  const parsed = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+  if (!parsed.ok || parsed.value.jobs[0]?.status !== "pending") {
+    throw new Error("Expected one observed pending source before loading historical bytes");
+  }
+  const queue = parsed.value;
+  const job = queue.jobs[0];
+  const pipelineFingerprint = "b".repeat(64);
+  const plan = createNoChangesManifestCommitPlan({
+    bundleId: "personal",
+    sourceId: job.sourceId,
+    sourceContentHash: job.sourceContentHash,
+    pipelineFingerprint,
+    inputRevision: job.inputRevision,
+    compileContextDigest: "c".repeat(64),
+    analysisDigest: "d".repeat(64),
+    evidenceDigest: "e".repeat(64),
+    reason: "analysis_no_targets",
+    expectedManifestRevision: manifest.revision,
+    expectedManifestDigest: createSourceManifestDigest(manifest),
+    baseGeneratedPages: [],
+    sourceAuthority: { operation: "ingest" },
+  });
+  const completedAt = job.updatedAt + 1;
+  manifest.revision += 1;
+  const marker = createKnowledgeNoChangesCommitMarker({
+    plan,
+    jobClaim: {
+      ...job,
+      jobId: job.id,
+      pipelineFingerprint,
+      attempt: 1,
+      startedAt: job.updatedAt,
+    },
+    completedAt,
+    manifestAfterRevision: manifest.revision,
+  });
+  manifest.entries[0].extensions = {
+    [KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]: JSON.parse(JSON.stringify(marker)) as JsonValue,
+  };
+  queue.revision += 1;
+  queue.jobs = [
+    {
+      ...job,
+      pipelineFingerprint,
+      status: "completed",
+      stage: "completed",
+      attempt: 1,
+      changeSetId: plan.noChangesId,
+      completedAt,
+      updatedAt: completedAt,
+    },
+  ];
+  queue.sourceHighWatermarks[0].pipelineFingerprint = pipelineFingerprint;
+  const state = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await file.read()) as unknown);
+  state.revision += 1;
+  state.manifests = [{ bundleId: "personal", value: manifest }];
+  state.queues = [{ bundleId: "personal", value: queue }];
+  for (const observation of state.inputRevisions[0].sources[0].observations) {
+    if ("pipelineFingerprint" in observation) observation.pipelineFingerprint = pipelineFingerprint;
+  }
+  file.replaceContent(JSON.stringify(parseKnowledgeRuntimeStoreSnapshot(state)));
+}
+
+/** Waits for a durable worker result, with a bounded failure instead of a dangling refresh wait. */
+async function waitForReview(runtime: KnowledgeRuntimeStore): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const queue = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
+    if (queue.ok && queue.value.jobs[0]?.status === "awaiting_review") return;
+    if (queue.ok && queue.value.jobs[0]?.status === "failed") {
+      throw new Error(`Expected Review but received ${queue.value.jobs[0].failure.code}`);
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for the generated Review");
+}
+
 describe("KnowledgeProductionObservationComposer", () => {
   beforeAll(() => {
     Object.defineProperty(window.crypto, "randomUUID", {
@@ -414,11 +594,11 @@ describe("KnowledgeProductionObservationComposer", () => {
 
   describe("KnowledgeProductionObservationComposer", () => {
     describe("createKnowledgeStudioRuntimeReadAdapter()", () => {
-      it("runs only the selected material through the production pipeline and refreshes no-changes authority without draining a paused backlog — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
+      it("runs only the selected new material into Review without draining a paused backlog — https://github.com/yydspanda/obsidian-copilot/issues/18", async () => {
         const fetchPort = jest.fn<
           ReturnType<KnowledgeDeepSeekFetchPort>,
           Parameters<KnowledgeDeepSeekFetchPort>
-        >(async () => createNoChangesResponse());
+        >(async (_url, init) => createGenerationResponse(init));
         const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
         const runtime = await createRuntime(runtimeClaim);
         const manifests = new SourceManifestRepository(
@@ -477,23 +657,25 @@ describe("KnowledgeProductionObservationComposer", () => {
           worker.close();
           await worker.whenSettled();
           const after = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
-          if (!after.ok) throw new Error("Expected completed selected queue");
+          if (!after.ok) throw new Error("Expected selected Review queue");
           expect(after.value.control).toEqual(before.value.control);
           expect(after.value.jobs.find((job) => job.id === selected.id)).toMatchObject({
-            status: "completed",
+            status: "awaiting_review",
             attempt: 1,
           });
           expect(after.value.jobs.filter((job) => job.id !== selected.id)).toEqual(
             before.value.jobs.filter((job) => job.id !== selected.id)
           );
           expect(fetchPort).toHaveBeenCalledTimes(1);
-          expect(refresh).toHaveBeenCalledTimes(1);
+          expect(refresh).not.toHaveBeenCalled();
+          expect(after.value.pendingReviews).toHaveLength(1);
+          expect(after.value.pendingReviews[0].jobId).toBe(selected.id);
           const manifest = await manifests.load("personal");
           expect(
             manifest.entries.find((entry) => entry.sourceId === "selected-source")?.extensions?.[
               KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY
             ]
-          ).toBeDefined();
+          ).toBeUndefined();
           expect([...vault.files.keys()].filter((path) => path.startsWith("Wiki/"))).toEqual([]);
         } finally {
           stable.dispose();
@@ -1780,13 +1962,13 @@ describe("KnowledgeProductionObservationComposer", () => {
     const fetchPort = jest.fn<
       ReturnType<KnowledgeDeepSeekFetchPort>,
       Parameters<KnowledgeDeepSeekFetchPort>
-    >(async () => {
+    >(async (_url, init) => {
       if (fetchPort.mock.calls.length === 1) {
         firstFetch.resolve();
-        return createNoChangesResponse("{}");
+        return createModelResponse("{}");
       }
       secondFetch.resolve();
-      return createNoChangesResponse();
+      return createGenerationResponse(init);
     });
     const { lifecycle, admission } = await createAdmission(fetchPort);
     const runtime = await createRuntime();
@@ -1836,15 +2018,17 @@ describe("KnowledgeProductionObservationComposer", () => {
     const fetchPort = jest.fn<
       ReturnType<KnowledgeDeepSeekFetchPort>,
       Parameters<KnowledgeDeepSeekFetchPort>
-    >(async () => {
+    >(async (_url, init) => {
       if (fetchPort.mock.calls.length === 1) firstFetch.resolve();
-      return createNoChangesResponse();
+      return createGenerationResponse(init, "unchanged");
     });
     const { lifecycle, admission } = await createAdmission(fetchPort);
-    const runtime = await createRuntime();
+    const file = new KnowledgeExecutionMemoryRuntimeFile();
+    const runtime = await createRuntime(undefined, file);
     const vault = new ProductionVaultHarness();
     vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
     vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
+    await seedOwnedPage(file, runtime, vault);
     const composer = new KnowledgeProductionObservationComposer({
       app: vault.createApp(),
       runtime,
@@ -1872,15 +2056,15 @@ describe("KnowledgeProductionObservationComposer", () => {
     lifecycle.close();
   });
 
-  it("turns a reviewed Chat draft into completed no-change Activity after the requested production rebuild", async () => {
+  it("turns a reviewed Chat draft into a pending Wiki Review after the requested production rebuild — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
     const modelStarted = createDeferred<void>();
-    const workerRefreshRequired = createDeferred<void>();
+    const workerRefreshRequired = jest.fn();
     const fetchPort = jest.fn<
       ReturnType<KnowledgeDeepSeekFetchPort>,
       Parameters<KnowledgeDeepSeekFetchPort>
-    >(async () => {
+    >(async (_url, init) => {
       modelStarted.resolve();
-      return createNoChangesResponse();
+      return createGenerationResponse(init);
     });
     const firstAdmission = await createAdmission(fetchPort);
     const runtime = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile(), {
@@ -1961,7 +2145,7 @@ describe("KnowledgeProductionObservationComposer", () => {
       nextAdmission.admission.modelRouteLease,
       () => true,
       createWorkerScheduler(),
-      () => workerRefreshRequired.resolve()
+      workerRefreshRequired
     );
     const studio = composer.createKnowledgeStudioRuntimeReadAdapter(
       nextAdmission.admission.modelRouteLease,
@@ -1971,16 +2155,16 @@ describe("KnowledgeProductionObservationComposer", () => {
 
     worker.start();
     await modelStarted.promise;
-    await workerRefreshRequired.promise;
+    await waitForReview(runtime);
     const snapshot = await studio.load("personal", new AbortController().signal);
     expect(snapshot.activity.items).toEqual([
       expect.objectContaining({
         sourceId: registeredManifest.entries[0]?.sourceId,
-        status: "completed",
-        terminal: true,
+        status: "awaiting_review",
+        terminal: false,
       }),
     ]);
-    expect(snapshot.reviews).toEqual([]);
+    expect(snapshot.reviews).toHaveLength(1);
     expect(snapshot.sourceLifecycle?.sources).toEqual([
       expect.objectContaining({
         sourceId: registeredManifest.entries[0]?.sourceId,
@@ -1991,7 +2175,9 @@ describe("KnowledgeProductionObservationComposer", () => {
     const committedManifest = await manifests.load("personal");
     expect(
       committedManifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
-    ).toBeDefined();
+    ).toBeUndefined();
+    expect(workerRefreshRequired).not.toHaveBeenCalled();
+    expect([...vault.files.keys()].filter((path) => path.startsWith("Wiki/"))).toEqual([]);
     expect(fetchPort).toHaveBeenCalledTimes(1);
 
     composer.close();
@@ -1999,14 +2185,11 @@ describe("KnowledgeProductionObservationComposer", () => {
     nextAdmission.lifecycle.close();
   });
 
-  it("admits an unchanged cold observation from a real zero-page no-change authority", async () => {
-    const refreshRequired = createDeferred<void>();
-    const fetchPort = jest.fn<
-      ReturnType<KnowledgeDeepSeekFetchPort>,
-      Parameters<KnowledgeDeepSeekFetchPort>
-    >(async () => createNoChangesResponse());
+  it("preserves a legacy zero-page no-change result while cold observation queues the current pipeline — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
+    const fetchPort = createFetchPort();
     const firstAdmission = await createAdmission(fetchPort);
-    const runtime = await createRuntime();
+    const file = new KnowledgeExecutionMemoryRuntimeFile();
+    const runtime = await createRuntime(undefined, file);
     const vault = new ProductionVaultHarness();
     vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
     vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
@@ -2020,15 +2203,9 @@ describe("KnowledgeProductionObservationComposer", () => {
       kind: "observation_converged",
       scheduledCaptureCount: 1,
     });
-    const firstWorker = firstComposer.createCompileReviewWorkerController(
-      firstAdmission.admission.modelRouteLease,
-      () => true,
-      createWorkerScheduler(),
-      () => refreshRequired.resolve()
-    );
-
-    firstWorker.start();
-    await refreshRequired.promise;
+    firstComposer.close();
+    firstAdmission.lifecycle.close();
+    await seedLegacyZeroPageHistory(file, runtime);
 
     const queueBeforeRestart = parseIngestQueueSnapshot(await runtime.readQueue("personal"));
     expect(queueBeforeRestart.ok).toBe(true);
@@ -2051,11 +2228,7 @@ describe("KnowledgeProductionObservationComposer", () => {
     const markerBeforeRestart =
       manifestBeforeRestart.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY];
     expect(markerBeforeRestart).toBeDefined();
-    expect(fetchPort).toHaveBeenCalledTimes(1);
-
-    firstComposer.close();
-    await firstWorker.whenSettled();
-    firstAdmission.lifecycle.close();
+    expect(fetchPort).not.toHaveBeenCalled();
 
     const secondAdmission = await createAdmission(fetchPort);
     const secondComposer = new KnowledgeProductionObservationComposer({
@@ -2073,13 +2246,25 @@ describe("KnowledgeProductionObservationComposer", () => {
     expect(queueAfterRestart.ok).toBe(true);
     if (!queueAfterRestart.ok) throw new Error("Expected a strict admitted Queue snapshot");
     expect(queueAfterRestart.value.revision).toBeGreaterThan(queueBeforeRestart.value.revision);
-    expect(queueAfterRestart.value.jobs).toEqual([jobBeforeRestart]);
+    expect(queueAfterRestart.value.jobs).toHaveLength(2);
+    expect(queueAfterRestart.value.jobs[0]).toEqual(jobBeforeRestart);
+    expect(queueAfterRestart.value.jobs[1]).toMatchObject({
+      sourceId: "source-1",
+      inputRevision: 2,
+      attempt: 0,
+      status: "pending",
+      stage: "queued",
+    });
+    expect(queueAfterRestart.value.jobs[1].pipelineFingerprint).not.toBe(
+      jobBeforeRestart.pipelineFingerprint
+    );
     expect(queueAfterRestart.value.reruns).toEqual([]);
     const highWatermarkAfterRestart = queueAfterRestart.value.sourceHighWatermarks[0];
     expect(queueAfterRestart.value.sourceHighWatermarks).toEqual([
       {
         ...queueBeforeRestart.value.sourceHighWatermarks[0],
         inputRevision: 2,
+        pipelineFingerprint: queueAfterRestart.value.jobs[1].pipelineFingerprint,
         observedAt: highWatermarkAfterRestart.observedAt,
       },
     ]);
@@ -2093,7 +2278,7 @@ describe("KnowledgeProductionObservationComposer", () => {
     expect(
       manifestAfterRestart.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
     ).toEqual(markerBeforeRestart);
-    expect(fetchPort).toHaveBeenCalledTimes(1);
+    expect(fetchPort).not.toHaveBeenCalled();
 
     secondComposer.close();
     secondAdmission.lifecycle.close();
@@ -2105,9 +2290,9 @@ describe("KnowledgeProductionObservationComposer", () => {
     const fetchPort = jest.fn<
       ReturnType<KnowledgeDeepSeekFetchPort>,
       Parameters<KnowledgeDeepSeekFetchPort>
-    >(async () => {
+    >(async (_url, init) => {
       fetchStarted.resolve();
-      return createNoChangesResponse();
+      return createGenerationResponse(init, "unchanged");
     });
     const { lifecycle, admission, runtimeClaim } = await createAdmission(fetchPort);
     const file = new PostCommitThrowRuntimeFile();
@@ -2115,6 +2300,7 @@ describe("KnowledgeProductionObservationComposer", () => {
     const vault = new ProductionVaultHarness();
     vault.addFile(SCHEMA_PATH, encodeText("# Schema\n"));
     vault.addFile(SOURCE_PATH, encodeText("# Source one\n"));
+    await seedOwnedPage(file, runtime, vault);
     const composer = new KnowledgeProductionObservationComposer({
       app: vault.createApp(),
       runtime,

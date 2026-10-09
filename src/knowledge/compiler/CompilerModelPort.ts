@@ -13,7 +13,7 @@ import type {
   SourceManifest,
 } from "@/knowledge/model/types";
 
-/** Current protocol version shared by both knowledge compiler model stages. */
+/** Current protocol version for the Knowledge writing request and response. */
 export const KNOWLEDGE_COMPILER_PROTOCOL_VERSION = 1 as const;
 
 /** Exact queue-owned identity of the primary source being compiled. */
@@ -55,15 +55,8 @@ export interface CompilerTargetAuthorization {
   expectedContentHash?: string;
 }
 
-/** Minimal model-visible projection of caller-owned target authority. */
-export interface CompilerModelTargetAuthorization {
-  path: string;
-  allowedIntents: ("write" | "delete")[];
-  contentPolicy: "grounded" | "structural";
-}
-
 /**
- * Complete deterministic input to one two-stage compilation attempt.
+ * Complete deterministic input to one source-writing attempt.
  *
  * Artifact observations are parser-owned trusted inputs: their declared hash
  * identifies the parser artifact, while the core separately digests the exact
@@ -83,14 +76,14 @@ export interface KnowledgeCompileInput {
   createdAt: number;
 }
 
-/** Stable normalized concept discovered during analysis. */
+/** Historical normalized concept retained by the Review data contract. */
 export interface CompilerConcept {
   id: string;
   name: string;
   description?: string;
 }
 
-/** Stable normalized entity discovered during analysis. */
+/** Historical normalized entity retained by the Review data contract. */
 export interface CompilerEntity {
   id: string;
   name: string;
@@ -98,7 +91,7 @@ export interface CompilerEntity {
   description?: string;
 }
 
-/** Stable normalized, source-backed claim discovered during analysis. */
+/** Stable normalized, source-backed claim returned with the written content. */
 export interface CompilerClaim {
   id: string;
   text: string;
@@ -112,7 +105,7 @@ export interface CompilerRelation {
   type: string;
 }
 
-/** Runtime-approved target intent from the first model stage. */
+/** Program-selected destination checked against source write authority. */
 export interface CompilerApprovedTarget {
   targetId: string;
   path: string;
@@ -126,7 +119,7 @@ export interface CompilerApprovedTarget {
   expectedContentHash?: string;
 }
 
-/** Canonical first-stage result passed to generation and future review UI. */
+/** Canonical provenance used by validation and Review; historical graph fields remain readable. */
 export interface CompilerAnalysis {
   version: typeof KNOWLEDGE_COMPILER_PROTOCOL_VERSION;
   summary: string;
@@ -138,20 +131,7 @@ export interface CompilerAnalysis {
   targets: CompilerApprovedTarget[];
 }
 
-/** Provider-neutral request for the discovery and target-planning stage. */
-export interface CompilerAnalysisRequest {
-  version: typeof KNOWLEDGE_COMPILER_PROTOCOL_VERSION;
-  compileContextDigest: string;
-  bundle: KnowledgeBundleConfig;
-  operation: KnowledgeChangeSet["operation"];
-  source: CompilerSourceIdentity;
-  schema: CompilerSchemaSnapshot;
-  evidence: CompilerEvidence[];
-  contextPages: CompilerContextPage[];
-  targetAuthorizations: CompilerModelTargetAuthorization[];
-}
-
-/** First-stage target passed to the read-only Vault resolver. */
+/** Program-selected target passed to the read-only Vault resolver. */
 export interface CompilerTargetRequest {
   targetId: string;
   path: string;
@@ -180,31 +160,18 @@ export type CompilerWritableTarget = Extract<
   { operation: "create" | "update" }
 >;
 
-/** Model-visible analysis projection with target authority removed. */
-export interface CompilerGenerationAnalysis {
-  version: typeof KNOWLEDGE_COMPILER_PROTOCOL_VERSION;
-  summary: string;
-  concepts: CompilerConcept[];
-  entities: CompilerEntity[];
-  claims: CompilerClaim[];
-  relations: CompilerRelation[];
-  citations: ClaimCitation[];
-}
-
 /** Minimal model-visible create or update target. */
 export type CompilerGenerationTarget = {
   targetId: string;
   path: string;
   reason: string;
-  claimIds: string[];
   contentPolicy: "grounded" | "structural";
 } & ({ operation: "create" } | { operation: "update"; currentContent: string });
 
-/** Provider-neutral request for the content generation stage. */
+/** Full source evidence and program-owned destinations for one writing call. */
 export interface CompilerGenerationRequest {
   version: typeof KNOWLEDGE_COMPILER_PROTOCOL_VERSION;
   compileContextDigest: string;
-  analysisDigest: string;
   targetSetDigest: string;
   bundle: KnowledgeBundleConfig;
   operation: KnowledgeChangeSet["operation"];
@@ -212,7 +179,6 @@ export interface CompilerGenerationRequest {
   schema: CompilerSchemaSnapshot;
   evidence: CompilerEvidence[];
   contextPages: CompilerContextPage[];
-  analysis: CompilerGenerationAnalysis;
   targets: CompilerGenerationTarget[];
 }
 
@@ -246,7 +212,7 @@ export interface CompilerCandidateValidationResult {
   diagnostics: KnowledgeDiagnostic[];
 }
 
-/** Read-only adapter that resolves exact states for first-stage approved paths. */
+/** Read-only adapter that resolves exact states for program-approved paths. */
 export interface CompilerTargetResolver {
   /**
    * Resolves every approved target without mutating the Vault.
@@ -293,19 +259,7 @@ export interface CompilerModelPort {
   authorizeModelCall?(authorization: unknown): void;
 
   /**
-   * Discovers concepts, grounded claims, relations, and candidate target paths.
-   *
-   * Provider adapters must enforce response byte/token limits before decoding;
-   * core collection and character limits remain an independent second gate.
-   *
-   * @param request - Frozen first-stage request containing no provider settings
-   * @param signal - Cancellation signal owned by the ingest attempt
-   * @returns Unknown provider output for strict runtime parsing
-   */
-  analyze(request: CompilerAnalysisRequest, signal: AbortSignal): Promise<unknown>;
-
-  /**
-   * Generates content only for the opaque target ids approved by stage one.
+   * Writes source-grounded content and its citations for program-owned targets.
    *
    * Provider adapters must enforce response byte/token limits before decoding;
    * core collection and character limits remain an independent second gate.
@@ -423,7 +377,7 @@ export const DEFAULT_KNOWLEDGE_COMPILER_LIMITS: Readonly<KnowledgeCompilerLimits
   maxValidationDiagnostics: 1024,
 });
 
-/** Constructor dependencies for deterministic two-stage compilation. */
+/** Constructor dependencies for source-writing compilation. */
 export interface KnowledgeCompilerDependencies {
   model: CompilerModelPort;
   /** Optional trusted classifier paired with the exact injected model boundary. */

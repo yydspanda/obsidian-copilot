@@ -1,13 +1,10 @@
 import {
   KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
-  type CompilerAnalysis,
-  type CompilerAnalysisRequest,
   type CompilerBoundTarget,
   type CompilerGenerationRequest,
   type CompilerModelPort,
   type KnowledgeCompilerInfrastructureFailureCode,
 } from "@/knowledge/compiler/CompilerModelPort";
-import { parseCompilerAnalysisModelOutput } from "@/knowledge/compiler/analysisSchema";
 import { parseCompilerGenerationModelOutput } from "@/knowledge/compiler/generationSchema";
 import {
   KnowledgeCompilerModelCallAuthorization,
@@ -49,12 +46,12 @@ export interface KnowledgePrivateModelRouteDescriptor {
 }
 
 /** Model work stages exposed to a private provider route. */
-export type KnowledgePrivateModelStage = "analysis" | "generation";
+export type KnowledgePrivateModelStage = "generation";
 
 /** Private transport closure retained only in module-owned route state. */
 export type KnowledgePrivateModelInvoke = (
   stage: KnowledgePrivateModelStage,
-  request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>,
+  request: Readonly<CompilerGenerationRequest>,
   signal: AbortSignal
 ) => Promise<string>;
 
@@ -77,7 +74,7 @@ export type KnowledgePrivateModelFailureClassifier = (
 ) => KnowledgePrivateModelProviderFailureCode | undefined;
 
 /** Queue-owned monotonic stage reporter captured by one job-bound adapter. */
-export type KnowledgeModelStageReporter = (stage: "analyzing" | "generating") => Promise<void>;
+export type KnowledgeModelStageReporter = (stage: "generating") => Promise<void>;
 
 /** Independent decoded-object resource limits applied after provider decoding. */
 interface KnowledgeDecodedModelOutputLimits {
@@ -245,14 +242,6 @@ interface AuthorizedPreparationSnapshot {
   schema: JsonValue;
 }
 
-type AnalysisInvocationState =
-  | "unavailable"
-  | "available"
-  | "validating"
-  | "running"
-  | "completed"
-  | "failed";
-
 type GenerationInvocationState =
   | "unavailable"
   | "validating"
@@ -261,18 +250,9 @@ type GenerationInvocationState =
   | "completed"
   | "failed";
 
-interface AuthorizedAnalysisModelCall {
-  requestIdentity: object;
-  request: CompilerAnalysisRequest;
-  requestDigest: string;
-}
-
 interface AuthorizedGenerationModelCall {
   requestIdentity: object;
-  request: CompilerGenerationRequest;
   requestDigest: string;
-  analysisDigest: string;
-  targetSetDigest: string;
 }
 
 interface KnowledgeCompilerModelAdapterState {
@@ -283,13 +263,8 @@ interface KnowledgeCompilerModelAdapterState {
   foundation: AuthorizedPreparationSnapshot;
   route: KnowledgePrivateModelRouteState;
   reportStage: KnowledgeModelStageReporter;
-  analysisState: AnalysisInvocationState;
   generationState: GenerationInvocationState;
-  modelSession?: KnowledgeCompilerModelSession;
-  analysisAuthorization?: AuthorizedAnalysisModelCall;
   generationAuthorization?: AuthorizedGenerationModelCall;
-  analysisOutput?: JsonValue;
-  analysisOutputDigest?: string;
 }
 
 interface SnapshotBudget {
@@ -745,37 +720,7 @@ function assertRouteMatchesProfile(
 }
 
 /** Snapshots one exact compiler request without trusting its prototype or nested references. */
-function snapshotCompilerRequest(
-  value: unknown,
-  stage: KnowledgePrivateModelStage
-): Readonly<CompilerAnalysisRequest | CompilerGenerationRequest> {
-  const expectedKeys =
-    stage === "analysis"
-      ? [
-          "version",
-          "compileContextDigest",
-          "bundle",
-          "operation",
-          "source",
-          "schema",
-          "evidence",
-          "contextPages",
-          "targetAuthorizations",
-        ]
-      : [
-          "version",
-          "compileContextDigest",
-          "analysisDigest",
-          "targetSetDigest",
-          "bundle",
-          "operation",
-          "source",
-          "schema",
-          "evidence",
-          "contextPages",
-          "analysis",
-          "targets",
-        ];
+function snapshotCompilerRequest(value: unknown): Readonly<CompilerGenerationRequest> {
   try {
     const snapshot = snapshotJson(value, {
       maxDepth: 64,
@@ -784,26 +729,32 @@ function snapshotCompilerRequest(
       maxObjectProperties: 20_000,
       maxTotalCharacters: 16_000_000,
     });
-    if (!hasExactKeys(snapshot, expectedKeys)) {
+    if (
+      !hasExactKeys(snapshot, [
+        "version",
+        "compileContextDigest",
+        "targetSetDigest",
+        "bundle",
+        "operation",
+        "source",
+        "schema",
+        "evidence",
+        "contextPages",
+        "targets",
+      ])
+    ) {
       throw new TypeError("Unexpected request shape");
     }
     if (readOwnDataProperty(snapshot, "version") !== KNOWLEDGE_COMPILER_PROTOCOL_VERSION) {
       throw new TypeError("Invalid protocol version");
     }
-    const compileContextDigest = readOwnDataProperty(snapshot, "compileContextDigest");
-    if (typeof compileContextDigest !== "string" || !/^[a-f0-9]{64}$/.test(compileContextDigest)) {
-      throw new TypeError("Invalid compile-context digest");
+    for (const key of ["compileContextDigest", "targetSetDigest"]) {
+      const digest = readOwnDataProperty(snapshot, key);
+      if (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) {
+        throw new TypeError("Invalid request digest");
+      }
     }
-    if (
-      stage === "generation" &&
-      (["analysisDigest", "targetSetDigest"] as const).some((key) => {
-        const digest = readOwnDataProperty(snapshot, key);
-        return typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest);
-      })
-    ) {
-      throw new TypeError("Invalid generation digest");
-    }
-    return snapshot as unknown as Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>;
+    return snapshot as unknown as Readonly<CompilerGenerationRequest>;
   } catch {
     throw createKnowledgeCompilerModelAdapterError("request_invalid");
   }
@@ -811,7 +762,7 @@ function snapshotCompilerRequest(
 
 /** Requires one compiler request to retain the exact authorized source foundation. */
 function assertRequestFoundation(
-  request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>,
+  request: Readonly<CompilerGenerationRequest>,
   foundation: AuthorizedPreparationSnapshot
 ): void {
   if (
@@ -827,90 +778,32 @@ function assertRequestFoundation(
   }
 }
 
-/** Requires generation to retain the exact first-stage evidence and context authority. */
-function assertGenerationCrossStageAuthority(
-  generation: CompilerGenerationRequest,
-  analysisRequest: CompilerAnalysisRequest
-): void {
-  if (
-    generation.compileContextDigest !== analysisRequest.compileContextDigest ||
-    digestJson(
-      "knowledge-model-cross-stage-evidence-v1",
-      generation.evidence as unknown as JsonValue
-    ) !==
-      digestJson(
-        "knowledge-model-cross-stage-evidence-v1",
-        analysisRequest.evidence as unknown as JsonValue
-      ) ||
-    digestJson(
-      "knowledge-model-cross-stage-context-v1",
-      generation.contextPages as unknown as JsonValue
-    ) !==
-      digestJson(
-        "knowledge-model-cross-stage-context-v1",
-        analysisRequest.contextPages as unknown as JsonValue
-      )
-  ) {
-    throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
-  }
-}
-
-/** Snapshots and verifies one exact compiler request against retained call authority. */
+/** Requires the exact compiler-authorized object before inspecting caller-controlled data. */
 function captureAuthorizedRequest(
   value: unknown,
-  stage: KnowledgePrivateModelStage,
   state: KnowledgeCompilerModelAdapterState
-): Readonly<CompilerAnalysisRequest | CompilerGenerationRequest> {
-  const authorization =
-    stage === "analysis" ? state.analysisAuthorization : state.generationAuthorization;
+): Readonly<CompilerGenerationRequest> {
+  const authorization = state.generationAuthorization;
   if (
     !authorization ||
     typeof value !== "object" ||
     value === null ||
     value !== authorization.requestIdentity
   ) {
-    throw createKnowledgeCompilerModelAdapterError(
-      stage === "analysis" ? "request_not_authorized" : "generation_not_authorized"
-    );
+    throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
   }
-  const request = snapshotCompilerRequest(value, stage);
+  const request = snapshotCompilerRequest(value);
   assertRequestFoundation(request, state.foundation);
-  const domain =
-    stage === "analysis"
-      ? "knowledge-authorized-analysis-request-v1"
-      : "knowledge-authorized-generation-request-v1";
-  if (digestJson(domain, request as unknown as JsonValue) !== authorization.requestDigest) {
-    throw createKnowledgeCompilerModelAdapterError(
-      stage === "analysis" ? "request_not_authorized" : "generation_not_authorized"
-    );
-  }
-  if (stage === "generation") {
-    const analysisAuthorization = state.analysisAuthorization;
-    if (!analysisAuthorization) {
-      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
-    }
-    assertGenerationCrossStageAuthority(
-      request as CompilerGenerationRequest,
-      analysisAuthorization.request
-    );
+  if (
+    digestJson("knowledge-authorized-generation-request-v2", request as unknown as JsonValue) !==
+    authorization.requestDigest
+  ) {
+    throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
   }
   return request;
 }
 
-/** Projects normalized analysis into the exact model-visible generation shape. */
-function projectGenerationAnalysis(analysis: CompilerAnalysis): JsonValue {
-  return {
-    version: analysis.version,
-    summary: analysis.summary,
-    concepts: analysis.concepts as unknown as JsonValue,
-    entities: analysis.entities as unknown as JsonValue,
-    claims: analysis.claims as unknown as JsonValue,
-    relations: analysis.relations as unknown as JsonValue,
-    citations: analysis.citations as unknown as JsonValue,
-  };
-}
-
-/** Projects bound targets into the exact digest material used by the compiler core. */
+/** Projects the runtime-bound authority independently of model-authored claims. */
 function projectTargetSet(targets: readonly CompilerBoundTarget[]): JsonValue {
   return targets.map((target) => ({
     targetId: target.targetId,
@@ -918,7 +811,6 @@ function projectTargetSet(targets: readonly CompilerBoundTarget[]): JsonValue {
     intent: target.intent,
     operation: target.operation,
     reason: target.reason,
-    claimIds: target.claimIds,
     sourceRefs: target.sourceRefs,
     access: target.access,
     contentPolicy: target.contentPolicy,
@@ -930,64 +822,30 @@ function projectTargetSet(targets: readonly CompilerBoundTarget[]): JsonValue {
   }));
 }
 
-/** Projects writable bound targets into the exact second-stage request shape. */
+/** Projects only caller-authorized writable targets into the model-visible request. */
 function projectGenerationTargets(targets: readonly CompilerBoundTarget[]): JsonValue {
-  return targets
-    .filter((target) => target.operation !== "delete")
-    .map((target) => ({
-      targetId: target.targetId,
-      path: target.path,
-      reason: target.reason,
-      claimIds: target.claimIds,
-      contentPolicy: target.contentPolicy,
-      operation: target.operation,
-      ...(target.operation === "update" ? { currentContent: target.beforeContent } : {}),
-    }));
+  return targets.map((target) => ({
+    targetId: target.targetId,
+    path: target.path,
+    reason: target.reason,
+    contentPolicy: target.contentPolicy,
+    operation: target.operation,
+    ...(target.operation === "update" ? { currentContent: target.beforeContent } : {}),
+  }));
 }
 
-/** Consumes and captures one exact compiler-issued first-stage call. */
-function authorizeAnalysisModelCall(
+/**
+ * Consumes the compiler-bound destination so content selection cannot veto source ingestion.
+ * https://github.com/yydspanda/obsidian-copilot/issues/20
+ */
+function authorizeCompilerModelCall(
   state: KnowledgeCompilerModelAdapterState,
   authorization: unknown
 ): void {
-  state.analysisState = "validating";
-  try {
-    const call = KnowledgeCompilerModelCallAuthorization.consume(authorization, "analysis");
-    KnowledgeCompilerModelSession.assert(call.session);
-    if (call.signal !== state.signal) {
-      throw createKnowledgeCompilerModelAdapterError("signal_mismatch");
-    }
-    if (state.signal.aborted) throw createAbortError();
-    if (typeof call.request !== "object" || call.request === null) {
-      throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
-    }
-    const request = snapshotCompilerRequest(call.request, "analysis") as CompilerAnalysisRequest;
-    assertRequestFoundation(request, state.foundation);
-    state.analysisAuthorization = Object.freeze({
-      requestIdentity: call.request,
-      request,
-      requestDigest: digestJson(
-        "knowledge-authorized-analysis-request-v1",
-        request as unknown as JsonValue
-      ),
-    });
-    state.modelSession = call.session;
-    state.analysisState = "available";
-  } catch (error) {
-    state.analysisState = "failed";
-    if (state.signal.aborted) throw createAbortError();
-    if (KnowledgeCompilerModelAdapterError.inspect(error)?.code === "signal_mismatch") {
-      throw error;
-    }
-    throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
+  if (state.signal.aborted) throw createAbortError();
+  if (state.generationState !== "unavailable") {
+    throw createKnowledgeCompilerModelAdapterError("stage_invalid");
   }
-}
-
-/** Consumes and verifies the compiler's exact normalized second-stage call state. */
-function authorizeGenerationModelCall(
-  state: KnowledgeCompilerModelAdapterState,
-  authorization: unknown
-): void {
   state.generationState = "validating";
   try {
     const call = KnowledgeCompilerModelCallAuthorization.consume(authorization, "generation");
@@ -996,24 +854,6 @@ function authorizeGenerationModelCall(
       throw createKnowledgeCompilerModelAdapterError("signal_mismatch");
     }
     if (state.signal.aborted) throw createAbortError();
-    if (
-      state.analysisOutput === undefined ||
-      state.analysisOutputDigest === undefined ||
-      state.modelSession === undefined ||
-      call.session !== state.modelSession ||
-      call.rawAnalysis !== state.analysisOutput ||
-      typeof call.request !== "object" ||
-      call.request === null
-    ) {
-      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
-    }
-    const analysis = snapshotJson(call.analysis, {
-      maxDepth: 64,
-      maxNodes: 200_000,
-      maxArrayLength: 20_000,
-      maxObjectProperties: 20_000,
-      maxTotalCharacters: 16_000_000,
-    }) as unknown as CompilerAnalysis;
     const targets = snapshotJson(call.targets, {
       maxDepth: 32,
       maxNodes: 100_000,
@@ -1024,76 +864,39 @@ function authorizeGenerationModelCall(
     if (!Array.isArray(targets)) {
       throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
-    const request = snapshotCompilerRequest(
-      call.request,
-      "generation"
-    ) as CompilerGenerationRequest;
+    const request = snapshotCompilerRequest(call.request);
     assertRequestFoundation(request, state.foundation);
-    const analysisAuthorization = state.analysisAuthorization;
-    if (!analysisAuthorization) {
-      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
-    }
-    assertGenerationCrossStageAuthority(request, analysisAuthorization.request);
-    const analysisDigest = digestJson("knowledge-analysis-v1", analysis as unknown as JsonValue);
-    const targetSetDigest = digestJson("knowledge-target-set-v1", {
+    const targetSetDigest = digestJson("knowledge-target-set-v2", {
       compileContextDigest: request.compileContextDigest,
-      analysisDigest,
       targets: projectTargetSet(targets),
     });
     if (
-      request.analysisDigest !== analysisDigest ||
       request.targetSetDigest !== targetSetDigest ||
-      digestJson("knowledge-generation-analysis-v1", request.analysis as unknown as JsonValue) !==
-        digestJson("knowledge-generation-analysis-v1", projectGenerationAnalysis(analysis)) ||
-      digestJson("knowledge-generation-targets-v1", request.targets) !==
-        digestJson("knowledge-generation-targets-v1", projectGenerationTargets(targets)) ||
-      digestJson("knowledge-analysis-output-v1", state.analysisOutput) !==
-        state.analysisOutputDigest
+      digestJson("knowledge-generation-targets-v2", request.targets) !==
+        digestJson("knowledge-generation-targets-v2", projectGenerationTargets(targets))
     ) {
       throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
     }
     state.generationAuthorization = Object.freeze({
       requestIdentity: call.request,
-      request,
       requestDigest: digestJson(
-        "knowledge-authorized-generation-request-v1",
+        "knowledge-authorized-generation-request-v2",
         request as unknown as JsonValue
       ),
-      analysisDigest,
-      targetSetDigest,
     });
     state.generationState = "available";
   } catch (error) {
     state.generationState = "failed";
     if (state.signal.aborted) throw createAbortError();
-    if (KnowledgeCompilerModelAdapterError.inspect(error)?.code === "signal_mismatch") {
-      throw error;
-    }
+    if (KnowledgeCompilerModelAdapterError.inspect(error)?.code === "signal_mismatch") throw error;
     throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
   }
-}
-
-/** Accepts only the one-shot compiler authorization appropriate for the next stage. */
-function authorizeCompilerModelCall(
-  state: KnowledgeCompilerModelAdapterState,
-  authorization: unknown
-): void {
-  if (state.signal.aborted) throw createAbortError();
-  if (state.analysisState === "unavailable" && state.generationState === "unavailable") {
-    authorizeAnalysisModelCall(state, authorization);
-    return;
-  }
-  if (state.analysisState === "completed" && state.generationState === "unavailable") {
-    authorizeGenerationModelCall(state, authorization);
-    return;
-  }
-  throw createKnowledgeCompilerModelAdapterError("stage_invalid");
 }
 
 /** Revalidates the exact preparation, signal, profile, and Runtime proof. */
 async function reprove(
   state: KnowledgeCompilerModelAdapterState,
-  stage: "analyzing" | "generating"
+  stage: "generating"
 ): Promise<void> {
   try {
     AuthorizedSourcePreparation.assert(state.preparation);
@@ -1127,7 +930,7 @@ async function reprove(
 /** Reports one Queue stage without retaining infrastructure failures. */
 async function reportStage(
   state: KnowledgeCompilerModelAdapterState,
-  stage: "analyzing" | "generating"
+  stage: "generating"
 ): Promise<void> {
   try {
     await REFLECT_APPLY(state.reportStage, undefined, [stage]);
@@ -1137,60 +940,43 @@ async function reportStage(
   }
 }
 
-/** Executes one authorized, single-use private route invocation. */
+/** Executes the one authorized private route invocation without a model selection gate. */
 async function invokeModel(
   state: KnowledgeCompilerModelAdapterState,
-  modelStage: KnowledgePrivateModelStage,
   requestValue: unknown,
   signal: AbortSignal
 ): Promise<unknown> {
-  const queueStage = modelStage === "analysis" ? "analyzing" : "generating";
   if (signal !== state.signal) {
     throw createKnowledgeCompilerModelAdapterError("signal_mismatch");
   }
   if (state.signal.aborted) throw createAbortError();
-  if (modelStage === "analysis") {
-    if (state.analysisState === "unavailable") {
-      throw createKnowledgeCompilerModelAdapterError("request_not_authorized");
-    }
-    if (state.analysisState !== "available") {
-      throw createKnowledgeCompilerModelAdapterError("stage_invalid");
-    }
-    state.analysisState = "validating";
-  } else {
-    if (
-      state.analysisState !== "completed" ||
-      state.generationState !== "available" ||
-      !state.generationAuthorization
-    ) {
-      throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
-    }
-    state.generationState = "validating";
+  if (state.generationState === "unavailable") {
+    throw createKnowledgeCompilerModelAdapterError("generation_not_authorized");
   }
-  let request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>;
+  if (state.generationState !== "available" || !state.generationAuthorization) {
+    throw createKnowledgeCompilerModelAdapterError("stage_invalid");
+  }
+  state.generationState = "validating";
+  let request: Readonly<CompilerGenerationRequest>;
   try {
     assertRouteMatchesProfile(state.route, state.profile);
-    request = captureAuthorizedRequest(requestValue, modelStage, state);
+    request = captureAuthorizedRequest(requestValue, state);
   } catch (error) {
-    if (modelStage === "analysis") {
-      state.analysisState = "failed";
-    } else {
-      state.generationState = "failed";
-    }
+    state.generationState = "failed";
     if (KnowledgeCompilerModelAdapterError.inspect(error)) throw error;
     throw createKnowledgeCompilerModelAdapterError("request_invalid");
   }
-  if (modelStage === "analysis") {
-    state.analysisState = "running";
-  } else {
-    state.generationState = "running";
-  }
+  state.generationState = "running";
   try {
-    await reportStage(state, queueStage);
-    await reprove(state, queueStage);
+    await reportStage(state, "generating");
+    await reprove(state, "generating");
     let raw: string;
     try {
-      raw = await REFLECT_APPLY(state.route.invoke, undefined, [modelStage, request, state.signal]);
+      raw = await REFLECT_APPLY(state.route.invoke, undefined, [
+        "generation",
+        request,
+        state.signal,
+      ]);
     } catch (error) {
       if (state.signal.aborted) throw createAbortError();
       throw createKnowledgeCompilerModelAdapterError(
@@ -1200,31 +986,14 @@ async function invokeModel(
     }
     if (state.signal.aborted) throw createAbortError();
     const output = decodePrivateModelWireOutput(raw);
-    if (typeof output !== "object" || output === null || Array.isArray(output)) {
+    if (!parseCompilerGenerationModelOutput(output).ok) {
       throw createKnowledgeCompilerModelAdapterError("output_invalid");
     }
-    const structurallyValid =
-      modelStage === "analysis"
-        ? parseCompilerAnalysisModelOutput(output).ok
-        : parseCompilerGenerationModelOutput(output).ok;
-    if (!structurallyValid) {
-      throw createKnowledgeCompilerModelAdapterError("output_invalid");
-    }
-    await reprove(state, queueStage);
-    if (modelStage === "analysis") {
-      state.analysisOutput = output;
-      state.analysisOutputDigest = digestJson("knowledge-analysis-output-v1", output);
-      state.analysisState = "completed";
-    } else {
-      state.generationState = "completed";
-    }
+    await reprove(state, "generating");
+    state.generationState = "completed";
     return output;
   } catch (error) {
-    if (modelStage === "analysis") {
-      state.analysisState = "failed";
-    } else {
-      state.generationState = "failed";
-    }
+    state.generationState = "failed";
     if (state.signal.aborted) throw createAbortError();
     if (KnowledgeCompilerModelAdapterError.inspect(error)) throw error;
     throw createKnowledgeCompilerModelAdapterError("route_failed");
@@ -1371,7 +1140,6 @@ export class KnowledgeCompilerModelAdapter implements CompilerModelPort {
       foundation: authorized.foundation,
       route: routeState,
       reportStage: reportStageValue,
-      analysisState: "unavailable",
       generationState: "unavailable",
     });
     Object.freeze(this);
@@ -1387,14 +1155,9 @@ export class KnowledgeCompilerModelAdapter implements CompilerModelPort {
     authorizeCompilerModelCall(requireAdapterState(this), authorization);
   }
 
-  /** Executes the one permitted analysis call through the exact private route. */
-  async analyze(request: CompilerAnalysisRequest, signal: AbortSignal): Promise<unknown> {
-    return invokeModel(requireAdapterState(this), "analysis", request, signal);
-  }
-
-  /** Executes the one permitted generation call after successful analysis. */
+  /** Executes one compiler-authorized generation call through the exact private route. */
   async generate(request: CompilerGenerationRequest, signal: AbortSignal): Promise<unknown> {
-    return invokeModel(requireAdapterState(this), "generation", request, signal);
+    return invokeModel(requireAdapterState(this), request, signal);
   }
 }
 

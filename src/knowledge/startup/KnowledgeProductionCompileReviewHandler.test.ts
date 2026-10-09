@@ -1,12 +1,10 @@
 import type {
-  CompilerAnalysisRequest,
   CompilerCandidateValidator,
   CompilerGenerationRequest,
   CompilerTargetRequest,
   CompilerTargetResolver,
   KnowledgeCompilerStage,
 } from "@/knowledge/compiler/CompilerModelPort";
-import type { CompilerAnalysisModelOutput } from "@/knowledge/compiler/analysisSchema";
 import { KnowledgeCompiler } from "@/knowledge/compiler/KnowledgeCompiler";
 import { createKnowledgeSourceOriginExtensions } from "@/knowledge/capture/KnowledgeSourceOrigin";
 import {
@@ -47,6 +45,7 @@ import type { ExactSourceArtifact } from "@/knowledge/ingest/ObsidianVaultSource
 import type { RunNextResult } from "@/knowledge/ingest/queue/IngestQueue";
 import type { IngestQueueSnapshot } from "@/knowledge/ingest/queue/QueueStorage";
 import { createFileContentHash, createSourceContentHash } from "@/knowledge/model/fingerprint";
+import { createSourceManifestDigest } from "@/knowledge/manifest/ManifestCommitIntent";
 import {
   KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY,
   parseKnowledgeNoChangesCommitMarker,
@@ -61,6 +60,9 @@ import type {
 } from "@/knowledge/review/ReviewStorage";
 import {
   KnowledgeRuntimeReviewStorage,
+  KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY,
+  KnowledgeRuntimeInputObservationBinder,
+  KnowledgeRuntimeInputRevisionAllocator,
   KnowledgeRuntimeStore,
   type KnowledgeRuntimeStoreSnapshot,
 } from "@/knowledge/runtime/KnowledgeRuntimeStore";
@@ -83,6 +85,7 @@ const SOURCE_TEXT = "Project Atlas launch date is 2026-08-01.";
 const SOURCE_BYTES = new TextEncoder().encode(`# Source\n${SOURCE_TEXT}\n`);
 const SCHEMA_BYTES = new TextEncoder().encode("# Knowledge schema\n");
 const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_BYTES);
+const WIKI_CONTENT = `---\ntype: concept\n---\n\n# Atlas\n\n${SOURCE_TEXT}\n`;
 
 const VALIDATION_SUCCESS = Object.freeze({
   validation: Object.freeze({ okfValid: true, citationsValid: true, linksValid: true }),
@@ -265,33 +268,7 @@ function createCandidateValidator(): CompilerCandidateValidator {
   return Object.freeze({ validate: async () => VALIDATION_SUCCESS });
 }
 
-/** Creates a valid analysis wire result with or without one write target. */
-function createAnalysisWireOutput(includeTarget: boolean): string {
-  return JSON.stringify({
-    version: 1,
-    summary: "Grounded Atlas summary",
-    concepts: [],
-    entities: [],
-    claims: includeTarget ? [{ ref: "claim-atlas", text: SOURCE_TEXT }] : [],
-    relations: [],
-    citations: includeTarget
-      ? [{ claimRef: "claim-atlas", evidenceId: "evidence-0001", relation: "supports" }]
-      : [],
-    targets: includeTarget
-      ? [
-          {
-            ref: "target-atlas",
-            path: "Wiki/Atlas.md",
-            intent: "write",
-            reason: "Record the grounded Atlas fact",
-            claimRefs: ["claim-atlas"],
-          },
-        ]
-      : [],
-  });
-}
-
-/** Creates a valid generation wire result for all authorized write targets. */
+/** Creates a source-backed draft for every program-owned target. */
 function createGenerationWireOutput(request: CompilerGenerationRequest): string {
   return JSON.stringify({
     version: 1,
@@ -299,22 +276,70 @@ function createGenerationWireOutput(request: CompilerGenerationRequest): string 
     files: request.targets.map((target) => ({
       targetId: target.targetId,
       outcome: "write",
-      afterContent: `---\ntype: concept\n---\n\n# Atlas\n\n${SOURCE_TEXT}\n`,
+      afterContent: WIKI_CONTENT,
+      claims: [{ text: SOURCE_TEXT, evidenceIds: [request.evidence[0].evidenceId] }],
     })),
   });
 }
 
-/** Creates a semantically invalid analysis result that becomes a controlled failure. */
-function createUnsupportedAnalysisWireOutput(): string {
+/** Creates an authentic no-change attempt for an existing owned page. */
+function createUnchangedAttemptOptions(): AttemptOptions {
+  const manifest = createManifest();
+  manifest.entries[0].lastSuccessful = {
+    sourceContentHash: "a".repeat(64),
+    pipelineFingerprint: "b".repeat(64),
+    generatedPages: [
+      {
+        path: "Wiki/Atlas.md",
+        ownership: "generated",
+        contentHash: createFileContentHash(WIKI_CONTENT),
+      },
+    ],
+    changeSetId: "previous-successful-compile",
+    completedAt: 50,
+  };
+  manifest.entries[0].extensions = {
+    [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: {
+      version: 1,
+      inputRevision: 1,
+      transactionId: "previous-transaction",
+      manifestIntentDigest: "c".repeat(64),
+    },
+  };
+  return {
+    manifest,
+    targetResolver: {
+      resolve: async (targets) =>
+        targets.map((target) => ({
+          targetId: target.targetId,
+          kind: "file" as const,
+          path: target.path,
+          content: WIKI_CONTENT,
+        })),
+    },
+    invoke: async (_stage, request) =>
+      JSON.stringify({
+        version: 1,
+        targetSetDigest: request.targetSetDigest,
+        files: request.targets.map((target) => ({
+          targetId: target.targetId,
+          outcome: "unchanged",
+        })),
+      }),
+  };
+}
+
+/** Creates a draft with an unknown support id for controlled failure coverage. */
+function createUnsupportedGenerationWireOutput(request: CompilerGenerationRequest): string {
   return JSON.stringify({
     version: 1,
-    summary: "Unsupported ungrounded analysis",
-    concepts: [],
-    entities: [],
-    claims: [{ ref: "claim-atlas", text: SOURCE_TEXT }],
-    relations: [],
-    citations: [],
-    targets: [],
+    targetSetDigest: request.targetSetDigest,
+    files: request.targets.map((target) => ({
+      targetId: target.targetId,
+      outcome: "write",
+      afterContent: WIKI_CONTENT,
+      claims: [{ text: SOURCE_TEXT, evidenceIds: ["private-unknown-evidence"] }],
+    })),
   });
 }
 
@@ -353,11 +378,24 @@ async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
   if (!source) throw new Error("Expected one planned source");
 
   let preparationExecutor: KnowledgeProductionPreparationExecutor | undefined;
+  const previousSuccess = manifest.entries[0].lastSuccessful;
+  const initialManifest = {
+    ...manifest,
+    entries: manifest.entries.map((entry) => {
+      const initial = { ...entry };
+      delete initial.lastSuccessful;
+      if (initial.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]) {
+        initial.extensions = { ...initial.extensions };
+        delete initial.extensions[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY];
+      }
+      return initial;
+    }),
+  };
   const capabilities: KnowledgeExecutionTestHarness = await createKnowledgeExecutionTestHarness({
-    manifest,
+    manifest: initialManifest,
     sourceId: SOURCE_ID,
-    sourceContentHash: SOURCE_CONTENT_HASH,
-    pipelineFingerprint: source.pipelineFingerprint,
+    sourceContentHash: previousSuccess?.sourceContentHash ?? SOURCE_CONTENT_HASH,
+    pipelineFingerprint: previousSuccess?.pipelineFingerprint ?? source.pipelineFingerprint,
     jobId: "job-compile-review",
     clock: 100,
     executionOwner,
@@ -366,6 +404,48 @@ async function runAttempt(options: AttemptOptions): Promise<AttemptResult> {
       return await preparationExecutor.execute(context);
     },
   });
+  // Existing committed state is loaded from disk, never introduced by a generic Manifest write.
+  if (previousSuccess) {
+    const state = JSON.parse(await capabilities.file.read()) as KnowledgeRuntimeStoreSnapshot;
+    state.revision += 1;
+    state.manifests = [{ bundleId: BUNDLE_ID, value: manifest }];
+    state.applyCommits = [
+      {
+        transactionId: "previous-transaction",
+        commitRevision: 4,
+        bundleId: BUNDLE_ID,
+        sourceId: SOURCE_ID,
+        sourceContentHash: previousSuccess.sourceContentHash,
+        pipelineFingerprint: previousSuccess.pipelineFingerprint,
+        inputRevision: 1,
+        changeSetId: previousSuccess.changeSetId,
+        changeSetDigest: "c".repeat(64),
+        manifestIntentDigest: "c".repeat(64),
+        journalDigest: "c".repeat(64),
+        receiptDigest: "d".repeat(64),
+        manifestBeforeRevision: 0,
+        manifestBeforeDigest: "a".repeat(64),
+        manifestAfterRevision: manifest.revision,
+        manifestAfterDigest: createSourceManifestDigest(manifest),
+        recordedAt: previousSuccess.completedAt,
+      },
+    ];
+    capabilities.file.replaceContent(JSON.stringify(state));
+    const allocation = await new KnowledgeRuntimeInputRevisionAllocator(
+      capabilities.runtime
+    ).allocate({
+      bundleId: BUNDLE_ID,
+      sourceId: SOURCE_ID,
+      captureId: "capture-current-source",
+    });
+    const binding = await new KnowledgeRuntimeInputObservationBinder(capabilities.runtime).bind({
+      observationToken: allocation.observationToken,
+      sourceContentHash: SOURCE_CONTENT_HASH,
+      pipelineFingerprint: source.pipelineFingerprint,
+    });
+    if (binding.kind !== "ready") throw new Error("Expected a fresh owned-page observation");
+    await capabilities.queue.enqueue(binding.observation);
+  }
   const runtimeReviewStorage = new KnowledgeRuntimeReviewStorage(
     capabilities.runtime,
     options.reviewExecutionOwner ?? capabilities.executionOwner
@@ -468,203 +548,236 @@ function createPreparedJournal(record: AcceptedChangeSetReviewRecord): ChangeSet
 }
 
 describe("KnowledgeProductionCompileReviewHandler", () => {
-  it("propagates a strict managed query origin through preparation, Compiler, Review, and transaction binding", async () => {
-    const analysisOperations: string[] = [];
-    const attempt = await runAttempt({
-      manifest: createQueryWritebackManifest(),
-      acceptAfterCompile: true,
-      invoke: async (stage, request) => {
-        if (stage === "analysis") {
-          analysisOperations.push((request as CompilerAnalysisRequest).operation);
-          return createAnalysisWireOutput(true);
-        }
-        return createGenerationWireOutput(request as CompilerGenerationRequest);
-      },
-    });
-
-    expect(attempt.plannedOperation).toBe("query_writeback");
-    expect(analysisOperations).toEqual(["query_writeback"]);
-    expect(attempt.queueResult).toMatchObject({
-      kind: "executed",
-      status: "awaiting_review",
-    });
-
-    const record = attempt.reviewSnapshot.records[0];
-    if (!record || attempt.reviewSnapshot.records.length !== 1 || record.outcome !== "accepted") {
-      throw new Error("Expected one accepted query-writeback Review record");
-    }
-    expect(record.proposal.operation).toBe("query_writeback");
-    if (record.manifestCommitPlan.kind !== "query_writeback_source_compile") {
-      throw new Error("Expected a query-writeback Manifest commit plan");
-    }
-    expect(record.manifestCommitPlan.sourceOriginDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(record.acceptedChangeSet.operation).toBe("query_writeback");
-    expect(record.manifestCommitIntent).toMatchObject({
-      kind: "query_writeback_source_compile",
-      sourceOriginDigest: record.manifestCommitPlan.sourceOriginDigest,
-    });
-
-    const journal = createPreparedJournal(record);
-    expect(validateChangeSetTransactionJournal(journal)).toEqual({ valid: true, diagnostics: [] });
-
-    const mismatchedChangeSet = { ...journal.changeSet, operation: "ingest" as const };
-    const mismatched = validateChangeSetTransactionJournal({
-      ...journal,
-      changeSet: mismatchedChangeSet,
-      changeSetDigest: createChangeSetTransactionDigest(mismatchedChangeSet),
-    });
-    expect(mismatched.valid).toBe(false);
-    expect(mismatched.diagnostics.map(({ code }) => code)).toContain(
-      "transaction_manifest_intent_operation_mismatch"
-    );
-  });
-
-  it("rejects a Review owner from another workflow before invoking the model", async () => {
-    const invoke = jest.fn(async () => createAnalysisWireOutput(false));
-    const attempt = await runAttempt({
-      invoke,
-      reviewExecutionOwner: createKnowledgeExecutionOwner(),
-    });
-
-    expect(invoke).not.toHaveBeenCalled();
-    expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
-      status: "failed",
-      failure: { code: "unexpected_executor_failure", retryable: false },
-    });
-    expect(attempt.reviewSnapshot.records).toEqual([]);
-  });
-
-  it("does not let one execution owner bind Review storage to two Runtime instances", () => {
-    const owner = createKnowledgeExecutionOwner();
-    const runtimeA = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
-    const runtimeB = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
-
-    expect(() => new KnowledgeRuntimeReviewStorage(runtimeA, owner)).not.toThrow();
-    expect(() => new KnowledgeRuntimeReviewStorage(runtimeB, owner)).toThrow();
-  });
-
-  it("persists an exact proposal before returning its pending Review receipt", async () => {
-    const invokedStages: string[] = [];
-    const attempt = await runAttempt({
-      invoke: async (stage, request) => {
-        invokedStages.push(stage);
-        return stage === "analysis"
-          ? createAnalysisWireOutput(true)
-          : createGenerationWireOutput(request as CompilerGenerationRequest);
-      },
-    });
-
-    expect(attempt.queueResult).toMatchObject({
-      kind: "executed",
-      status: "awaiting_review",
-      jobId: "job-compile-review",
-    });
-    expect(invokedStages).toEqual(["analysis", "generation"]);
-    const job = requireOnlyJob(attempt.queueSnapshot);
-    const record = attempt.reviewSnapshot.records[0];
-    expect(job).toMatchObject({
-      status: "awaiting_review",
-      stage: "review",
-      changeSetId: record?.changeSetId,
-    });
-    expect(record).toMatchObject({
-      outcome: "pending",
-      recordRevision: 0,
-      proposal: { status: "proposed", bundleId: BUNDLE_ID },
-      jobClaim: {
-        jobId: job.id,
-        sourceId: job.sourceId,
-        sourceContentHash: job.sourceContentHash,
-        pipelineFingerprint: job.pipelineFingerprint,
-        inputRevision: job.inputRevision,
-        attempt: job.attempt,
-      },
-    });
-    expect(record?.proposalDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(record?.manifestCommitPlanDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(attempt.queueSnapshot.pendingReviews).toEqual([
-      expect.objectContaining({
-        kind: "durable",
-        jobId: job.id,
-        changeSetId: record?.changeSetId,
-        proposalDigest: record?.proposalDigest,
-        reviewRecordRevision: 0,
-      }),
-    ]);
-  });
-
-  it("finishes the Queue hand-off when lifecycle closure follows the durable Review write", async () => {
-    const attempt = await runAttempt({
-      invoke: async (stage, request) =>
-        stage === "analysis"
-          ? createAnalysisWireOutput(true)
-          : createGenerationWireOutput(request as CompilerGenerationRequest),
-      closeQueueAfterReviewWrite: true,
-    });
-
-    expect(attempt.queueResult).toMatchObject({
-      kind: "executed",
-      status: "awaiting_review",
-      jobId: "job-compile-review",
-    });
-    expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
-      status: "awaiting_review",
-      stage: "review",
-    });
-    expect(attempt.queueSnapshot.pendingReviews).toEqual([
-      expect.objectContaining({ kind: "durable", jobId: "job-compile-review" }),
-    ]);
-    expect(attempt.reviewSnapshot.records).toEqual([
-      expect.objectContaining({ outcome: "pending" }),
-    ]);
-  });
-
-  it("persists evidence selection with a stable no-change identity without creating Review or Apply state — https://github.com/yydspanda/obsidian-copilot/issues/17", async () => {
-    const first = await runAttempt({ invoke: async () => createAnalysisWireOutput(false) });
-    const second = await runAttempt({ invoke: async () => createAnalysisWireOutput(false) });
-    const firstJob = requireOnlyJob(first.queueSnapshot);
-    const secondJob = requireOnlyJob(second.queueSnapshot);
-    if (firstJob.status !== "completed" || secondJob.status !== "completed") {
-      throw new Error("Expected completed no-change Queue jobs");
-    }
-
-    expect(first.queueResult).toMatchObject({ kind: "executed", status: "completed" });
-    expect(firstJob).toMatchObject({ status: "completed", stage: "completed" });
-    expect(firstJob.changeSetId).toMatch(/^knowledge-no-changes-[a-f0-9]{64}$/);
-    expect(secondJob.changeSetId).toBe(firstJob.changeSetId);
-    expect(first.reviewSnapshot.records).toEqual([]);
-    expect(second.reviewSnapshot.records).toEqual([]);
-    const runtime = JSON.parse(first.runtimeContent) as KnowledgeRuntimeStoreSnapshot;
-    const manifest = runtime.manifests.find((slot) => slot.bundleId === BUNDLE_ID)
-      ?.value as SourceManifest;
-    const marker = parseKnowledgeNoChangesCommitMarker(
-      manifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
-    );
-    expect(manifest.revision).toBe(2);
-    expect(manifest.entries[0]?.lastSuccessful).toBeUndefined();
-    expect(marker).toMatchObject({
-      ok: true,
-      value: {
-        noChangesId: firstJob.changeSetId,
-        jobId: firstJob.id,
-        sourceContentHash: firstJob.sourceContentHash,
-        pipelineFingerprint: firstJob.pipelineFingerprint,
-        inputRevision: firstJob.inputRevision,
-        evidenceCoverage: [
-          {
-            quoteHash: createFileContentHash(SOURCE_TEXT),
-            supportingClaimCount: 0,
-            targetClaimCount: 0,
-          },
-        ],
-      },
-    });
-    expect(runtime.applyCommits).toEqual([]);
-    expect(runtime.activeTransaction).toBeNull();
-  });
-
   describe("KnowledgeProductionCompileReviewHandler", () => {
     describe("execute()", () => {
+      it("propagates a strict managed query origin through preparation, Compiler, Review, and transaction binding", async () => {
+        const generatedOperations: string[] = [];
+        const attempt = await runAttempt({
+          manifest: createQueryWritebackManifest(),
+          acceptAfterCompile: true,
+          invoke: async (_stage, request) => {
+            generatedOperations.push(request.operation);
+            return createGenerationWireOutput(request);
+          },
+        });
+
+        expect(attempt.plannedOperation).toBe("query_writeback");
+        expect(generatedOperations).toEqual(["query_writeback"]);
+        expect(attempt.queueResult).toMatchObject({
+          kind: "executed",
+          status: "awaiting_review",
+        });
+
+        const record = attempt.reviewSnapshot.records[0];
+        if (
+          !record ||
+          attempt.reviewSnapshot.records.length !== 1 ||
+          record.outcome !== "accepted"
+        ) {
+          throw new Error("Expected one accepted query-writeback Review record");
+        }
+        expect(record.proposal.operation).toBe("query_writeback");
+        if (record.manifestCommitPlan.kind !== "query_writeback_source_compile") {
+          throw new Error("Expected a query-writeback Manifest commit plan");
+        }
+        expect(record.manifestCommitPlan.sourceOriginDigest).toMatch(/^[a-f0-9]{64}$/);
+        expect(record.acceptedChangeSet.operation).toBe("query_writeback");
+        expect(record.manifestCommitIntent).toMatchObject({
+          kind: "query_writeback_source_compile",
+          sourceOriginDigest: record.manifestCommitPlan.sourceOriginDigest,
+        });
+
+        const journal = createPreparedJournal(record);
+        expect(validateChangeSetTransactionJournal(journal)).toEqual({
+          valid: true,
+          diagnostics: [],
+        });
+
+        const mismatchedChangeSet = { ...journal.changeSet, operation: "ingest" as const };
+        const mismatched = validateChangeSetTransactionJournal({
+          ...journal,
+          changeSet: mismatchedChangeSet,
+          changeSetDigest: createChangeSetTransactionDigest(mismatchedChangeSet),
+        });
+        expect(mismatched.valid).toBe(false);
+        expect(mismatched.diagnostics.map(({ code }) => code)).toContain(
+          "transaction_manifest_intent_operation_mismatch"
+        );
+      });
+
+      it("rejects a Review owner from another workflow before invoking the model", async () => {
+        const invoke = jest.fn<
+          ReturnType<KnowledgePrivateModelInvoke>,
+          Parameters<KnowledgePrivateModelInvoke>
+        >(async (_stage, request) => createGenerationWireOutput(request));
+        const attempt = await runAttempt({
+          invoke,
+          reviewExecutionOwner: createKnowledgeExecutionOwner(),
+        });
+
+        expect(invoke).not.toHaveBeenCalled();
+        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+          status: "failed",
+          failure: { code: "unexpected_executor_failure", retryable: false },
+        });
+        expect(attempt.reviewSnapshot.records).toEqual([]);
+      });
+
+      it("persists an exact proposal before returning its pending Review receipt", async () => {
+        const invokedStages: string[] = [];
+        const attempt = await runAttempt({
+          invoke: async (stage, request) => {
+            invokedStages.push(stage);
+            return createGenerationWireOutput(request);
+          },
+        });
+
+        expect(attempt.queueResult).toMatchObject({
+          kind: "executed",
+          status: "awaiting_review",
+          jobId: "job-compile-review",
+        });
+        expect(invokedStages).toEqual(["generation"]);
+        const job = requireOnlyJob(attempt.queueSnapshot);
+        const record = attempt.reviewSnapshot.records[0];
+        expect(job).toMatchObject({
+          status: "awaiting_review",
+          stage: "review",
+          changeSetId: record?.changeSetId,
+        });
+        expect(record).toMatchObject({
+          outcome: "pending",
+          recordRevision: 0,
+          proposal: { status: "proposed", bundleId: BUNDLE_ID },
+          jobClaim: {
+            jobId: job.id,
+            sourceId: job.sourceId,
+            sourceContentHash: job.sourceContentHash,
+            pipelineFingerprint: job.pipelineFingerprint,
+            inputRevision: job.inputRevision,
+            attempt: job.attempt,
+          },
+        });
+        expect(record?.proposalDigest).toMatch(/^[a-f0-9]{64}$/);
+        expect(record?.manifestCommitPlanDigest).toMatch(/^[a-f0-9]{64}$/);
+        expect(attempt.queueSnapshot.pendingReviews).toEqual([
+          expect.objectContaining({
+            kind: "durable",
+            jobId: job.id,
+            changeSetId: record?.changeSetId,
+            proposalDigest: record?.proposalDigest,
+            reviewRecordRevision: 0,
+          }),
+        ]);
+      });
+
+      it("finishes the Queue hand-off when lifecycle closure follows the durable Review write", async () => {
+        const attempt = await runAttempt({
+          invoke: async (_stage, request) => createGenerationWireOutput(request),
+          closeQueueAfterReviewWrite: true,
+        });
+
+        expect(attempt.queueResult).toMatchObject({
+          kind: "executed",
+          status: "awaiting_review",
+          jobId: "job-compile-review",
+        });
+        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+          status: "awaiting_review",
+          stage: "review",
+        });
+        expect(attempt.queueSnapshot.pendingReviews).toEqual([
+          expect.objectContaining({ kind: "durable", jobId: "job-compile-review" }),
+        ]);
+        expect(attempt.reviewSnapshot.records).toEqual([
+          expect.objectContaining({ outcome: "pending" }),
+        ]);
+      });
+
+      it("does not mark a new material completed when generation returns unchanged — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
+        const attempt = await runAttempt({
+          invoke: async (_stage, request) =>
+            JSON.stringify({
+              version: 1,
+              targetSetDigest: request.targetSetDigest,
+              files: request.targets.map((target) => ({
+                targetId: target.targetId,
+                outcome: "unchanged",
+              })),
+            }),
+        });
+        expect(attempt.queueResult).toMatchObject({ kind: "executed", status: "failed" });
+        expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_compiler_generation_rejected",
+            retryable: false,
+          },
+        });
+        expect(requireOnlyJob(attempt.queueSnapshot)).toHaveProperty(
+          "failure.message",
+          expect.stringContaining("compiler_generation_new_target_unchanged")
+        );
+        const runtime = JSON.parse(attempt.runtimeContent) as KnowledgeRuntimeStoreSnapshot;
+        const manifest = runtime.manifests.find((slot) => slot.bundleId === BUNDLE_ID)
+          ?.value as SourceManifest;
+        expect(manifest.entries[0]?.lastSuccessful).toBeUndefined();
+        expect(
+          manifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+        ).toBeUndefined();
+        expect(attempt.reviewSnapshot.records).toEqual([]);
+        expect(runtime.applyCommits).toEqual([]);
+        expect(runtime.activeTransaction).toBeNull();
+      });
+
+      it("persists an explicit unchanged result for an owned page with a stable no-change identity without creating Review or Apply state — https://github.com/yydspanda/obsidian-copilot/issues/17", async () => {
+        const first = await runAttempt(createUnchangedAttemptOptions());
+        const second = await runAttempt(createUnchangedAttemptOptions());
+        const firstJob = requireOnlyJob(first.queueSnapshot);
+        const secondJob = requireOnlyJob(second.queueSnapshot);
+        if (firstJob.status !== "completed" || secondJob.status !== "completed") {
+          throw new Error("Expected completed no-change Queue jobs");
+        }
+
+        expect(first.queueResult).toMatchObject({ kind: "executed", status: "completed" });
+        expect(firstJob).toMatchObject({ status: "completed", stage: "completed" });
+        expect(firstJob.changeSetId).toMatch(/^knowledge-no-changes-[a-f0-9]{64}$/);
+        expect(secondJob.changeSetId).toBe(firstJob.changeSetId);
+        expect(first.reviewSnapshot.records).toEqual([]);
+        expect(second.reviewSnapshot.records).toEqual([]);
+        const runtime = JSON.parse(first.runtimeContent) as KnowledgeRuntimeStoreSnapshot;
+        const manifest = runtime.manifests.find((slot) => slot.bundleId === BUNDLE_ID)
+          ?.value as SourceManifest;
+        const marker = parseKnowledgeNoChangesCommitMarker(
+          manifest.entries[0]?.extensions?.[KNOWLEDGE_NO_CHANGES_COMMIT_EXTENSION_KEY]
+        );
+        expect(manifest.revision).toBe(2);
+        expect(manifest.entries[0]?.lastSuccessful).toEqual(
+          createUnchangedAttemptOptions().manifest?.entries[0].lastSuccessful
+        );
+        expect(marker).toMatchObject({
+          ok: true,
+          value: {
+            noChangesId: firstJob.changeSetId,
+            jobId: firstJob.id,
+            sourceContentHash: firstJob.sourceContentHash,
+            pipelineFingerprint: firstJob.pipelineFingerprint,
+            inputRevision: firstJob.inputRevision,
+            evidenceCoverage: [
+              {
+                quoteHash: createFileContentHash(SOURCE_TEXT),
+                supportingClaimCount: 0,
+                targetClaimCount: 0,
+              },
+            ],
+          },
+        });
+        expect(runtime.applyCommits).toEqual([
+          expect.objectContaining({ transactionId: "previous-transaction" }),
+        ]);
+        expect(runtime.activeTransaction).toBeNull();
+      });
+
       const issue = "https://github.com/yydspanda/obsidian-copilot/issues/8";
       const analysisMessage = "The knowledge compiler rejected the analysis result";
 
@@ -691,21 +804,25 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         }
       }
 
-      it(`preserves an ungrounded analysis check in a safe nonretryable Queue failure (${issue})`, async () => {
+      it("rejects unknown support evidence while retaining its safe check code — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
         const attempt = await runAttempt({
-          invoke: async () => createUnsupportedAnalysisWireOutput(),
+          invoke: async (_stage, request) => createUnsupportedGenerationWireOutput(request),
         });
 
         expect(attempt.queueResult).toMatchObject({ kind: "executed", status: "failed" });
         expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
           status: "failed",
           failure: {
-            code: "knowledge_compiler_analysis_rejected",
-            message: `${analysisMessage}. Checks: compiler_claim_ungrounded.`,
+            code: "knowledge_compiler_generation_rejected",
             retryable: false,
           },
         });
+        expect(requireOnlyJob(attempt.queueSnapshot)).toHaveProperty(
+          "failure.message",
+          expect.stringContaining("compiler_citation_evidence_unknown")
+        );
         expect(attempt.queueSnapshot.control).toEqual({ status: "running" });
+        expect(attempt.runtimeContent).not.toContain("private-unknown-evidence");
         expect(attempt.reviewSnapshot.records).toEqual([]);
         expect(JSON.parse(attempt.runtimeContent)).toMatchObject({
           applyCommits: [],
@@ -713,13 +830,13 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         });
       });
 
-      it(`preserves adapter rejection of unknown analysis fields without retaining their keys or values (${issue})`, async () => {
-        const privateKey = "private-analysis-field-canary";
-        const privateValue = "private-analysis-value-canary";
+      it(`preserves adapter rejection of unknown generation fields without retaining their keys or values (${issue})`, async () => {
+        const privateKey = "private-generation-field-canary";
+        const privateValue = "private-generation-value-canary";
         const attempt = await runAttempt({
-          invoke: async () =>
+          invoke: async (_stage, request) =>
             JSON.stringify({
-              ...JSON.parse(createAnalysisWireOutput(false)),
+              ...(JSON.parse(createGenerationWireOutput(request)) as Record<string, unknown>),
               [privateKey]: privateValue,
             }),
         });
@@ -737,24 +854,33 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         expect(attempt.reviewSnapshot.records).toEqual([]);
       });
 
-      it(`reports conflicting Windows targets without persisting model-proposed paths or reasons (${issue})`, async () => {
-        const analysis = JSON.parse(createAnalysisWireOutput(true)) as CompilerAnalysisModelOutput;
-        const privatePath = "Wiki/Private-Analysis-Path-Canary.md";
-        const privateReason = "private-analysis-reason-canary";
-        analysis.targets = [
-          { ...analysis.targets[0], path: privatePath, reason: privateReason },
-          { ...analysis.targets[0], ref: "target-second", path: privatePath.toLowerCase() },
-        ];
-        const attempt = await runAttempt({ invoke: async () => JSON.stringify(analysis) });
-
+      it(`rejects a model attempt to redirect the program-owned target without retaining its private path (${issue})`, async () => {
+        const privatePath = "Outside/Private-Target-Canary.md";
+        const attempt = await runAttempt({
+          invoke: async (_stage, request) =>
+            JSON.stringify({
+              version: 1,
+              targetSetDigest: request.targetSetDigest,
+              files: [
+                {
+                  targetId: request.targets[0].targetId,
+                  outcome: "write",
+                  afterContent: WIKI_CONTENT,
+                  claims: [{ text: SOURCE_TEXT, evidenceIds: [request.evidence[0].evidenceId] }],
+                  path: privatePath,
+                },
+              ],
+            }),
+        });
         expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
           status: "failed",
           failure: {
-            message: `${analysisMessage}. Checks: compiler_target_semantic_duplicate, compiler_target_windows_collision.`,
+            code: "knowledge_model_response_invalid",
+            message: "The knowledge model returned an invalid structured response",
+            retryable: false,
           },
         });
-        expect(attempt.runtimeContent.toLowerCase()).not.toContain(privatePath.toLowerCase());
-        expect(attempt.runtimeContent).not.toContain(privateReason);
+        expect(attempt.runtimeContent).not.toContain(privatePath);
         expect(attempt.reviewSnapshot.records).toEqual([]);
       });
 
@@ -798,7 +924,7 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
         "path_windows_reserved_name",
         "path_windows_trailing_character",
       ])(
-        `retains the allowlisted analysis check %s without diagnostic text (${issue})`,
+        `retains the allowlisted historical analysis check %s without diagnostic text (${issue})`,
         async (code) => {
           const attempt = await runControlledFailure("analysis", [
             {
@@ -890,19 +1016,50 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
 
       it.each([
         [
-          "input",
-          "knowledge_compiler_input_rejected",
-          "The knowledge compiler rejected its derived input",
+          "generation",
+          "knowledge_compiler_generation_rejected",
+          "The knowledge compiler rejected the generated proposal",
         ],
         [
           "target_resolution",
           "knowledge_compiler_target_rejected",
           "The knowledge compiler rejected the resolved target state",
         ],
+      ] as const)(
+        "retains a safe static check in %s without leaking arbitrary diagnostics — https://github.com/yydspanda/obsidian-copilot/issues/20",
+        async (stage, code, message) => {
+          const attempt = await runControlledFailure(stage, [
+            {
+              code: "compiler_citation_evidence_unknown",
+              severity: "error",
+              field: "private-field",
+              message: "private-message",
+            },
+            {
+              code: "private-code",
+              severity: "error",
+              field: "private-field",
+              message: "private-message",
+            },
+          ]);
+          expect(requireOnlyJob(attempt.queueSnapshot)).toMatchObject({
+            failure: {
+              code,
+              message: `${message}. Checks: compiler_citation_evidence_unknown.`,
+              retryable: false,
+            },
+          });
+          expect(attempt.runtimeContent).not.toContain("private-field");
+          expect(attempt.runtimeContent).not.toContain("private-message");
+          expect(attempt.runtimeContent).not.toContain("private-code");
+        }
+      );
+
+      it.each([
         [
-          "generation",
-          "knowledge_compiler_generation_rejected",
-          "The knowledge compiler rejected the generated proposal",
+          "input",
+          "knowledge_compiler_input_rejected",
+          "The knowledge compiler rejected its derived input",
         ],
         [
           "candidate_validation",
@@ -930,322 +1087,328 @@ describe("KnowledgeProductionCompileReviewHandler", () => {
           expect(attempt.queueSnapshot.control).toEqual({ status: "running" });
         }
       );
-    });
-  });
-
-  it("preserves an authentic Compiler infrastructure classification and exact Queue policy", async () => {
-    const providerFailure = new Error("private provider canary");
-    const attempt = await runAttempt({
-      invoke: async () => {
-        throw providerFailure;
-      },
-      classifyFailure: (error) => (error === providerFailure ? "rate_limited" : undefined),
-    });
-    const job = requireOnlyJob(attempt.queueSnapshot);
-
-    expect(job).toMatchObject({
-      status: "failed",
-      failure: {
-        code: "knowledge_provider_rate_limited",
-        message: "The knowledge model provider rate limit was reached",
-        retryable: true,
-      },
-    });
-    expect(attempt.runtimeContent).not.toContain("private provider canary");
-  });
-
-  it("sanitizes an unrelated Review rejection as a retryable dependency failure", async () => {
-    const secretCanary = "private-review-storage-canary";
-    const attempt = await runAttempt({
-      invoke: async (stage, request) =>
-        stage === "analysis"
-          ? createAnalysisWireOutput(true)
-          : createGenerationWireOutput(request as CompilerGenerationRequest),
-      prepareReviewRuntime: (runtime) => {
-        jest.spyOn(runtime, "writeReview").mockRejectedValue(new Error(secretCanary));
-      },
-    });
-    const job = requireOnlyJob(attempt.queueSnapshot);
-
-    expect(job).toMatchObject({
-      status: "failed",
-      failure: {
-        code: "knowledge_compile_review_dependency_failed",
-        message: "A knowledge compile or review dependency is temporarily unavailable",
-        retryable: true,
-      },
-    });
-    expect(attempt.runtimeContent).not.toContain(secretCanary);
-  });
-
-  it("projects an authentic deterministic Review contract failure as nonretryable", async () => {
-    const secretCanary = "invalid-review-payload-canary";
-    const attempt = await runAttempt({
-      invoke: async (stage, request) =>
-        stage === "analysis"
-          ? createAnalysisWireOutput(true)
-          : createGenerationWireOutput(request as CompilerGenerationRequest),
-      prepareReviewRuntime: (runtime) => {
-        let readCount = 0;
-        const readReview = runtime.readReview;
-        jest.spyOn(runtime, "readReview").mockImplementation(async (bundleId) => {
-          readCount += 1;
-          return readCount === 1
-            ? {
-                version: 2,
-                bundleId: BUNDLE_ID,
-                revision: 0,
-                records: [],
-                unexpected: secretCanary,
-              }
-            : (readReview.call(runtime, bundleId) as Promise<unknown>);
+      it("preserves an authentic Compiler infrastructure classification and exact Queue policy", async () => {
+        const providerFailure = new Error("private provider canary");
+        const attempt = await runAttempt({
+          invoke: async () => {
+            throw providerFailure;
+          },
+          classifyFailure: (error) => (error === providerFailure ? "rate_limited" : undefined),
         });
-      },
-    });
-    const job = requireOnlyJob(attempt.queueSnapshot);
+        const job = requireOnlyJob(attempt.queueSnapshot);
 
-    expect(job).toMatchObject({
-      status: "failed",
-      failure: {
-        code: "knowledge_review_state_conflict",
-        message: "The compiled proposal cannot enter the current review state",
-        retryable: false,
-      },
-    });
-    expect(attempt.runtimeContent).not.toContain(secretCanary);
-  });
+        expect(job).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_provider_rate_limited",
+            message: "The knowledge model provider rate limit was reached",
+            retryable: true,
+          },
+        });
+        expect(attempt.runtimeContent).not.toContain("private provider canary");
+      });
 
-  it("does not let an error-name forgery impersonate Queue cancellation", async () => {
-    const secretCanary = "forged-abort-review-canary";
-    const forgedAbort = new Error(secretCanary);
-    forgedAbort.name = "AbortError";
-    const attempt = await runAttempt({
-      invoke: async (stage, request) =>
-        stage === "analysis"
-          ? createAnalysisWireOutput(true)
-          : createGenerationWireOutput(request as CompilerGenerationRequest),
-      prepareReviewRuntime: (runtime) => {
-        jest.spyOn(runtime, "writeReview").mockRejectedValue(forgedAbort);
-      },
-    });
-    const job = requireOnlyJob(attempt.queueSnapshot);
+      it("sanitizes an unrelated Review rejection as a retryable dependency failure", async () => {
+        const secretCanary = "private-review-storage-canary";
+        const attempt = await runAttempt({
+          invoke: async (_stage, request) => createGenerationWireOutput(request),
+          prepareReviewRuntime: (runtime) => {
+            jest.spyOn(runtime, "writeReview").mockRejectedValue(new Error(secretCanary));
+          },
+        });
+        const job = requireOnlyJob(attempt.queueSnapshot);
 
-    expect(job).toMatchObject({
-      status: "failed",
-      failure: {
-        code: "knowledge_compile_review_dependency_failed",
-        retryable: true,
-      },
-    });
-    expect(attempt.runtimeContent).not.toContain(secretCanary);
-  });
+        expect(job).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_compile_review_dependency_failed",
+            message: "A knowledge compile or review dependency is temporarily unavailable",
+            retryable: true,
+          },
+        });
+        expect(attempt.runtimeContent).not.toContain(secretCanary);
+      });
 
-  it("does not let a platform AbortError cancel an attempt whose Queue signal is live", async () => {
-    const attempt = await runAttempt({
-      invoke: async () => createAnalysisWireOutput(false),
-      closeRouteBeforeRun: true,
-    });
-    const job = requireOnlyJob(attempt.queueSnapshot);
+      it("projects an authentic deterministic Review contract failure as nonretryable", async () => {
+        const secretCanary = "invalid-review-payload-canary";
+        const attempt = await runAttempt({
+          invoke: async (_stage, request) => createGenerationWireOutput(request),
+          prepareReviewRuntime: (runtime) => {
+            let readCount = 0;
+            const readReview = runtime.readReview;
+            jest.spyOn(runtime, "readReview").mockImplementation(async (bundleId) => {
+              readCount += 1;
+              return readCount === 1
+                ? {
+                    version: 2,
+                    bundleId: BUNDLE_ID,
+                    revision: 0,
+                    records: [],
+                    unexpected: secretCanary,
+                  }
+                : (readReview.call(runtime, bundleId) as Promise<unknown>);
+            });
+          },
+        });
+        const job = requireOnlyJob(attempt.queueSnapshot);
 
-    expect(job).toMatchObject({
-      status: "failed",
-      failure: {
-        code: "knowledge_compile_review_dependency_failed",
-        message: "A knowledge compile or review dependency is temporarily unavailable",
-        retryable: true,
-      },
-    });
-    expect(attempt.reviewSnapshot.records).toEqual([]);
-  });
+        expect(job).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_review_state_conflict",
+            message: "The compiled proposal cannot enter the current review state",
+            retryable: false,
+          },
+        });
+        expect(attempt.runtimeContent).not.toContain(secretCanary);
+      });
 
-  it.each(["accepted", "rejected"] as const)(
-    "rejects an already-%s Review record instead of forging a pending receipt",
-    async (outcome) => {
-      const invoke: KnowledgePrivateModelInvoke = async (stage, request) =>
-        stage === "analysis"
-          ? createAnalysisWireOutput(true)
-          : createGenerationWireOutput(request as CompilerGenerationRequest);
-      const baseline = await runAttempt({ invoke });
-      const pending = baseline.reviewSnapshot.records[0];
-      if (!pending || pending.outcome !== "pending") {
-        throw new Error("Expected one baseline pending Review record");
-      }
-      const attempt = await runAttempt({
-        invoke,
-        prepareReviews: async (reviews) => {
-          const seeded = await reviews.saveProposal(BUNDLE_ID, {
-            proposal: pending.proposal,
-            proposalDigest: pending.proposalDigest,
-            manifestCommitPlan: pending.manifestCommitPlan,
-            manifestCommitPlanDigest: pending.manifestCommitPlanDigest,
-            jobClaim: pending.jobClaim,
+      it("does not let an error-name forgery impersonate Queue cancellation", async () => {
+        const secretCanary = "forged-abort-review-canary";
+        const forgedAbort = new Error(secretCanary);
+        forgedAbort.name = "AbortError";
+        const attempt = await runAttempt({
+          invoke: async (_stage, request) => createGenerationWireOutput(request),
+          prepareReviewRuntime: (runtime) => {
+            jest.spyOn(runtime, "writeReview").mockRejectedValue(forgedAbort);
+          },
+        });
+        const job = requireOnlyJob(attempt.queueSnapshot);
+
+        expect(job).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_compile_review_dependency_failed",
+            retryable: true,
+          },
+        });
+        expect(attempt.runtimeContent).not.toContain(secretCanary);
+      });
+
+      it("does not let a platform AbortError cancel an attempt whose Queue signal is live", async () => {
+        const attempt = await runAttempt({
+          invoke: async (_stage, request) => createGenerationWireOutput(request),
+          closeRouteBeforeRun: true,
+        });
+        const job = requireOnlyJob(attempt.queueSnapshot);
+
+        expect(job).toMatchObject({
+          status: "failed",
+          failure: {
+            code: "knowledge_compile_review_dependency_failed",
+            message: "A knowledge compile or review dependency is temporarily unavailable",
+            retryable: true,
+          },
+        });
+        expect(attempt.reviewSnapshot.records).toEqual([]);
+      });
+
+      it.each(["accepted", "rejected"] as const)(
+        "rejects an already-%s Review record instead of forging a pending receipt",
+        async (outcome) => {
+          const invoke: KnowledgePrivateModelInvoke = async (_stage, request) =>
+            createGenerationWireOutput(request);
+          const baseline = await runAttempt({ invoke });
+          const pending = baseline.reviewSnapshot.records[0];
+          if (!pending || pending.outcome !== "pending") {
+            throw new Error("Expected one baseline pending Review record");
+          }
+          const attempt = await runAttempt({
+            invoke,
+            prepareReviews: async (reviews) => {
+              const seeded = await reviews.saveProposal(BUNDLE_ID, {
+                proposal: pending.proposal,
+                proposalDigest: pending.proposalDigest,
+                manifestCommitPlan: pending.manifestCommitPlan,
+                manifestCommitPlanDigest: pending.manifestCommitPlanDigest,
+                jobClaim: pending.jobClaim,
+              });
+              if (seeded.outcome !== "pending") {
+                throw new Error("Expected one seeded pending Review record");
+              }
+              if (outcome === "rejected") {
+                await reviews.reject(
+                  BUNDLE_ID,
+                  seeded.changeSetId,
+                  seeded.recordRevision,
+                  seeded.proposalDigest
+                );
+                return;
+              }
+              await reviews.accept(
+                BUNDLE_ID,
+                seeded.changeSetId,
+                seeded.recordRevision,
+                seeded.proposalDigest,
+                { ...seeded.proposal, status: "accepted" }
+              );
+            },
           });
-          if (seeded.outcome !== "pending") {
-            throw new Error("Expected one seeded pending Review record");
-          }
-          if (outcome === "rejected") {
-            await reviews.reject(
-              BUNDLE_ID,
-              seeded.changeSetId,
-              seeded.recordRevision,
-              seeded.proposalDigest
-            );
-            return;
-          }
-          await reviews.accept(
-            BUNDLE_ID,
-            seeded.changeSetId,
-            seeded.recordRevision,
-            seeded.proposalDigest,
-            { ...seeded.proposal, status: "accepted" }
-          );
-        },
-      });
-      const job = requireOnlyJob(attempt.queueSnapshot);
+          const job = requireOnlyJob(attempt.queueSnapshot);
 
-      expect(job).toMatchObject({
-        status: "failed",
-        failure: { code: "knowledge_review_state_conflict", retryable: false },
-      });
-      expect(attempt.queueSnapshot.pendingReviews).toEqual([]);
-    }
-  );
-
-  it("rejects top-level and nested dependency accessors without invoking them", () => {
-    const profile = createPipelineProfile();
-    const route = createRouteLease(profile, async () => createAnalysisWireOutput(false));
-    const reviews = createStandaloneReviews();
-    let topLevelGetterCalls = 0;
-    const accessorInput = {
-      routeLease: route.lease,
-      targetResolver: createTargetResolver(),
-      candidateValidator: createCandidateValidator(),
-    } as Partial<ConstructorParameters<typeof KnowledgeProductionCompileReviewHandler>[0]>;
-    Object.defineProperty(accessorInput, "reviews", {
-      enumerable: true,
-      get: () => {
-        topLevelGetterCalls += 1;
-        return reviews;
-      },
+          expect(job).toMatchObject({
+            status: "failed",
+            failure: { code: "knowledge_review_state_conflict", retryable: false },
+          });
+          expect(attempt.queueSnapshot.pendingReviews).toEqual([]);
+        }
+      );
     });
-    expect(
-      () =>
-        new KnowledgeProductionCompileReviewHandler(
-          accessorInput as ConstructorParameters<typeof KnowledgeProductionCompileReviewHandler>[0]
-        )
-    ).toThrow(KnowledgeProductionCompileReviewHandlerError);
-    expect(topLevelGetterCalls).toBe(0);
+    describe("constructor()", () => {
+      it("does not let one execution owner bind Review storage to two Runtime instances", () => {
+        const owner = createKnowledgeExecutionOwner();
+        const runtimeA = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
+        const runtimeB = new KnowledgeRuntimeStore(new KnowledgeExecutionMemoryRuntimeFile());
 
-    let resolverGetterCalls = 0;
-    const accessorResolver = {} as CompilerTargetResolver;
-    Object.defineProperty(accessorResolver, "resolve", {
-      enumerable: true,
-      get: () => {
-        resolverGetterCalls += 1;
-        return createTargetResolver().resolve;
-      },
+        expect(() => new KnowledgeRuntimeReviewStorage(runtimeA, owner)).not.toThrow();
+        expect(() => new KnowledgeRuntimeReviewStorage(runtimeB, owner)).toThrow();
+      });
+
+      it("rejects top-level and nested dependency accessors without invoking them", () => {
+        const profile = createPipelineProfile();
+        const route = createRouteLease(profile, async (_stage, request) =>
+          createGenerationWireOutput(request)
+        );
+        const reviews = createStandaloneReviews();
+        let topLevelGetterCalls = 0;
+        const accessorInput = {
+          routeLease: route.lease,
+          targetResolver: createTargetResolver(),
+          candidateValidator: createCandidateValidator(),
+        } as Partial<ConstructorParameters<typeof KnowledgeProductionCompileReviewHandler>[0]>;
+        Object.defineProperty(accessorInput, "reviews", {
+          enumerable: true,
+          get: () => {
+            topLevelGetterCalls += 1;
+            return reviews;
+          },
+        });
+        expect(
+          () =>
+            new KnowledgeProductionCompileReviewHandler(
+              accessorInput as ConstructorParameters<
+                typeof KnowledgeProductionCompileReviewHandler
+              >[0]
+            )
+        ).toThrow(KnowledgeProductionCompileReviewHandlerError);
+        expect(topLevelGetterCalls).toBe(0);
+
+        let resolverGetterCalls = 0;
+        const accessorResolver = {} as CompilerTargetResolver;
+        Object.defineProperty(accessorResolver, "resolve", {
+          enumerable: true,
+          get: () => {
+            resolverGetterCalls += 1;
+            return createTargetResolver().resolve;
+          },
+        });
+        expect(
+          () =>
+            new KnowledgeProductionCompileReviewHandler({
+              routeLease: route.lease,
+              targetResolver: accessorResolver,
+              candidateValidator: createCandidateValidator(),
+              reviews,
+            })
+        ).toThrow(KnowledgeProductionCompileReviewHandlerError);
+        expect(resolverGetterCalls).toBe(0);
+
+        expect(
+          () =>
+            new KnowledgeProductionCompileReviewHandler({
+              routeLease: route.lease,
+              targetResolver: createTargetResolver(),
+              candidateValidator: createCandidateValidator(),
+              reviews,
+            })
+        ).not.toThrow();
+        route.owner.close();
+      });
+
+      it("rejects forged route, Review repository, and handler objects", async () => {
+        const profile = createPipelineProfile();
+        const route = createRouteLease(profile, async (_stage, request) =>
+          createGenerationWireOutput(request)
+        );
+        const reviews = createStandaloneReviews();
+        const forgedLease = Object.create(
+          KnowledgeProductionModelRouteLease.prototype
+        ) as KnowledgeProductionModelRouteLease;
+        const forgedReviews = Object.create(
+          ChangeSetReviewRepository.prototype
+        ) as ChangeSetReviewRepository;
+        const overriddenReviews = createStandaloneReviews();
+        let overriddenSaveCalls = 0;
+        expect(() =>
+          Object.defineProperty(overriddenReviews, "saveProposal", {
+            configurable: true,
+            value: async () => {
+              overriddenSaveCalls += 1;
+              throw new Error("overridden Review method must not run");
+            },
+          })
+        ).toThrow();
+
+        expect(
+          () =>
+            new KnowledgeProductionCompileReviewHandler({
+              routeLease: forgedLease,
+              targetResolver: createTargetResolver(),
+              candidateValidator: createCandidateValidator(),
+              reviews,
+            })
+        ).toThrow(KnowledgeProductionCompileReviewHandlerError);
+        expect(
+          () =>
+            new KnowledgeProductionCompileReviewHandler({
+              routeLease: route.lease,
+              targetResolver: createTargetResolver(),
+              candidateValidator: createCandidateValidator(),
+              reviews: forgedReviews,
+            })
+        ).toThrow(KnowledgeProductionCompileReviewHandlerError);
+        expect(overriddenSaveCalls).toBe(0);
+
+        const forgedHandler = Object.create(
+          KnowledgeProductionCompileReviewHandler.prototype
+        ) as KnowledgeProductionCompileReviewHandler;
+        await expect(
+          forgedHandler.execute(
+            {} as Parameters<KnowledgeProductionCompileReviewHandler["execute"]>[0],
+            {} as Parameters<KnowledgeProductionCompileReviewHandler["execute"]>[1]
+          )
+        ).rejects.toBeInstanceOf(KnowledgeProductionCompileReviewHandlerError);
+
+        expect(
+          () =>
+            new KnowledgeProductionCompileReviewHandler({
+              routeLease: route.lease,
+              targetResolver: createTargetResolver(),
+              candidateValidator: createCandidateValidator(),
+              reviews,
+            })
+        ).not.toThrow();
+        route.owner.close();
+      });
+
+      it("consumes the route generation's single builder slot during construction", () => {
+        const profile = createPipelineProfile();
+        const route = createRouteLease(profile, async (_stage, request) =>
+          createGenerationWireOutput(request)
+        );
+        const input = {
+          routeLease: route.lease,
+          targetResolver: createTargetResolver(),
+          candidateValidator: createCandidateValidator(),
+          reviews: createStandaloneReviews(),
+        };
+
+        expect(() => new KnowledgeProductionCompileReviewHandler(input)).not.toThrow();
+        expect(() => new KnowledgeProductionCompileReviewHandler(input)).toThrow(
+          KnowledgeProductionCompileReviewHandlerError
+        );
+        route.owner.close();
+      });
     });
-    expect(
-      () =>
-        new KnowledgeProductionCompileReviewHandler({
-          routeLease: route.lease,
-          targetResolver: accessorResolver,
-          candidateValidator: createCandidateValidator(),
-          reviews,
-        })
-    ).toThrow(KnowledgeProductionCompileReviewHandlerError);
-    expect(resolverGetterCalls).toBe(0);
-
-    expect(
-      () =>
-        new KnowledgeProductionCompileReviewHandler({
-          routeLease: route.lease,
-          targetResolver: createTargetResolver(),
-          candidateValidator: createCandidateValidator(),
-          reviews,
-        })
-    ).not.toThrow();
-    route.owner.close();
-  });
-
-  it("rejects forged route, Review repository, and handler objects", async () => {
-    const profile = createPipelineProfile();
-    const route = createRouteLease(profile, async () => createAnalysisWireOutput(false));
-    const reviews = createStandaloneReviews();
-    const forgedLease = Object.create(
-      KnowledgeProductionModelRouteLease.prototype
-    ) as KnowledgeProductionModelRouteLease;
-    const forgedReviews = Object.create(
-      ChangeSetReviewRepository.prototype
-    ) as ChangeSetReviewRepository;
-    const overriddenReviews = createStandaloneReviews();
-    let overriddenSaveCalls = 0;
-    expect(() =>
-      Object.defineProperty(overriddenReviews, "saveProposal", {
-        configurable: true,
-        value: async () => {
-          overriddenSaveCalls += 1;
-          throw new Error("overridden Review method must not run");
-        },
-      })
-    ).toThrow();
-
-    expect(
-      () =>
-        new KnowledgeProductionCompileReviewHandler({
-          routeLease: forgedLease,
-          targetResolver: createTargetResolver(),
-          candidateValidator: createCandidateValidator(),
-          reviews,
-        })
-    ).toThrow(KnowledgeProductionCompileReviewHandlerError);
-    expect(
-      () =>
-        new KnowledgeProductionCompileReviewHandler({
-          routeLease: route.lease,
-          targetResolver: createTargetResolver(),
-          candidateValidator: createCandidateValidator(),
-          reviews: forgedReviews,
-        })
-    ).toThrow(KnowledgeProductionCompileReviewHandlerError);
-    expect(overriddenSaveCalls).toBe(0);
-
-    const forgedHandler = Object.create(
-      KnowledgeProductionCompileReviewHandler.prototype
-    ) as KnowledgeProductionCompileReviewHandler;
-    await expect(
-      forgedHandler.execute(
-        {} as Parameters<KnowledgeProductionCompileReviewHandler["execute"]>[0],
-        {} as Parameters<KnowledgeProductionCompileReviewHandler["execute"]>[1]
-      )
-    ).rejects.toBeInstanceOf(KnowledgeProductionCompileReviewHandlerError);
-
-    expect(
-      () =>
-        new KnowledgeProductionCompileReviewHandler({
-          routeLease: route.lease,
-          targetResolver: createTargetResolver(),
-          candidateValidator: createCandidateValidator(),
-          reviews,
-        })
-    ).not.toThrow();
-    route.owner.close();
-  });
-
-  it("consumes the route generation's single builder slot during construction", () => {
-    const profile = createPipelineProfile();
-    const route = createRouteLease(profile, async () => createAnalysisWireOutput(false));
-    const input = {
-      routeLease: route.lease,
-      targetResolver: createTargetResolver(),
-      candidateValidator: createCandidateValidator(),
-      reviews: createStandaloneReviews(),
-    };
-
-    expect(() => new KnowledgeProductionCompileReviewHandler(input)).not.toThrow();
-    expect(() => new KnowledgeProductionCompileReviewHandler(input)).toThrow(
-      KnowledgeProductionCompileReviewHandlerError
-    );
-    route.owner.close();
   });
 });

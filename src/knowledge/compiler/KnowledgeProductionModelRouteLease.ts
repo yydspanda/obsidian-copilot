@@ -722,7 +722,17 @@ export class KnowledgeProductionModelRouteLease {
     const compiler = new KnowledgeCompiler(
       createGuardedCompilerDependencies(state, preparation, route, dependencies)
     );
-    const result = await compiler.compile(input, signal);
+    let result: KnowledgeCompileResult;
+    try {
+      result = await compiler.compile(input, signal);
+    } catch (error) {
+      // A closed owner cancels the attempt even when a later compiler boundary
+      // wraps its rejection before the normal post-result lifecycle check.
+      // https://github.com/yydspanda/obsidian-copilot/issues/20
+      assertLeaseCurrent(state);
+      if (signal.aborted) throw createAbortError();
+      throw error;
+    }
     assertLeaseCurrent(state);
     if (signal.aborted) throw createAbortError();
     await reportAttemptStage(state, preparation, dependencies, "validating");

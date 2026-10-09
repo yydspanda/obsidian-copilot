@@ -1,9 +1,6 @@
 import type { App } from "obsidian";
 import { randomUUID } from "crypto";
-import type {
-  CompilerAnalysisRequest,
-  CompilerGenerationRequest,
-} from "@/knowledge/compiler/CompilerModelPort";
+import type { CompilerGenerationRequest } from "@/knowledge/compiler/CompilerModelPort";
 import KnowledgeAnalysisRetestPlugin, {
   close,
   prepare,
@@ -324,16 +321,21 @@ function response(content: unknown, options: { contentType?: string; leaveOpen?:
   return { value, cancel, finish: () => controller?.close() };
 }
 
-function noTargets() {
+function writeResponse(init: RequestInit) {
+  const wire = JSON.parse(init.body as string) as { messages: { content: string }[] };
+  const text = wire.messages[1].content;
+  const { request } = JSON.parse(text.slice(text.indexOf("\n") + 1)) as {
+    request: CompilerGenerationRequest;
+  };
   return {
     version: 1,
-    summary: "No generated page is needed",
-    concepts: [],
-    entities: [],
-    claims: [],
-    relations: [],
-    citations: [],
-    targets: [],
+    targetSetDigest: request.targetSetDigest,
+    files: request.targets.map((target) => ({
+      targetId: target.targetId,
+      outcome: "write",
+      afterContent: `---\ntype: concept\n---\n\n# Review\n\n${SOURCE_TEXT}\n`,
+      claims: [{ text: SOURCE_TEXT, evidenceIds: [request.evidence[0].evidenceId] }],
+    })),
   };
 }
 
@@ -352,7 +354,9 @@ describe("knowledge-analysis-retest", () => {
     else Reflect.deleteProperty(window.crypto, "randomUUID");
   });
   beforeEach(() => {
-    fetchMock = jest.fn(async () => response(noTargets()).value);
+    fetchMock = jest.fn(
+      async (_url: string, init: RequestInit) => response(writeResponse(init)).value
+    );
     window.fetch = fetchMock;
   });
   afterEach(() => {
@@ -371,7 +375,7 @@ describe("knowledge-analysis-retest", () => {
         requestCount: 0,
         sourceId: SOURCE_ID,
         timeoutMs: 120_000,
-        maxRequests: 2,
+        maxRequests: 1,
       });
       expect(fetchMock).not.toHaveBeenCalled();
       expect(original.getApiKey).toHaveBeenCalledTimes(1);
@@ -482,48 +486,45 @@ describe("knowledge-analysis-retest", () => {
   });
 
   describe("run()", () => {
-    it(`${ISSUE} performs one analysis and one generation on the copied Runtime and cannot run twice`, async () => {
+    it.each([
+      ["unknown support", "compiler_citation_evidence_unknown"],
+      ["new page unchanged", "compiler_generation_new_target_unchanged"],
+    ])(
+      "returns bounded writing checks for %s without leaking response text — https://github.com/yydspanda/obsidian-copilot/issues/20",
+      async (scenario, code) => {
+        const original = await fixture();
+        fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+          const body = writeResponse(init);
+          if (scenario === "unknown support") {
+            body.files[0].claims[0].evidenceIds = ["private-evidence-canary"];
+            return response(body).value;
+          }
+          return response({
+            ...body,
+            files: body.files.map(({ targetId }) => ({ targetId, outcome: "unchanged" })),
+          }).value;
+        });
+        expect(await prepare(original.input)).toMatchObject({ kind: "prepared" });
+        const result = await run();
+        expect(result).toMatchObject({
+          status: "failed",
+          failureCode: "knowledge_compiler_generation_rejected",
+        });
+        expect(result.staticCodes).toContain(code);
+        expect(JSON.stringify(result)).not.toContain("private-evidence-canary");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(await original.file.read()).toBe(original.input.runtimeText);
+        expect(original.adapter.write).not.toHaveBeenCalled();
+        expect(original.adapter.process).not.toHaveBeenCalled();
+      }
+    );
+
+    it(`performs one writing request on the copied Runtime and cannot run twice — https://github.com/yydspanda/obsidian-copilot/issues/20`, async () => {
       const original = await fixture({
         pendingSources: PENDING_SOURCE_IDS,
         reviewSourceId: OTHER_REVIEW_SOURCE_ID,
       });
       const initialize = jest.spyOn(KnowledgeExecutionMemoryRuntimeFile.prototype, "initialize");
-      fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
-        const wire = JSON.parse(init.body as string) as { messages: { content: string }[] };
-        const text = wire.messages[1].content;
-        const { stage, request } = JSON.parse(text.slice(text.indexOf("\n") + 1)) as
-          | { stage: "analysis"; request: CompilerAnalysisRequest }
-          | { stage: "generation"; request: CompilerGenerationRequest };
-        if (stage === "analysis")
-          return response({
-            ...noTargets(),
-            claims: [{ ref: "primary-claim", text: SOURCE_TEXT }],
-            citations: [
-              {
-                claimRef: "primary-claim",
-                evidenceId: request.evidence[0].evidenceId,
-                relation: "supports",
-              },
-            ],
-            targets: [
-              {
-                ref: "new-page",
-                path: "Wiki/Review.md",
-                intent: "write",
-                reason: "Summarize the source",
-                claimRefs: ["primary-claim"],
-              },
-            ],
-          }).value;
-        return response({
-          version: 1,
-          targetSetDigest: request.targetSetDigest,
-          files: request.targets.map((target: { targetId: string }) => ({
-            targetId: target.targetId,
-            outcome: "unchanged",
-          })),
-        }).value;
-      });
       expect(await prepare(original.input)).toMatchObject({ kind: "prepared" });
       const result = await run();
       expect(result).toMatchObject({
@@ -531,38 +532,39 @@ describe("knowledge-analysis-retest", () => {
         phase: "queue_settled",
         failureCode: undefined,
         staticCodes: [],
-        status: "completed",
-        queueResult: { kind: "executed", status: "completed" },
+        status: "awaiting_review",
+        queueResult: { kind: "executed", status: "awaiting_review" },
         priorReviewsUnchanged: true,
       });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       const clone = initialize.mock.contexts[0] as KnowledgeExecutionMemoryRuntimeFile;
       const before = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(original.input.runtimeText));
       const after = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await clone.read()));
       const beforeQueue = before.queues[0].value as IngestQueueSnapshot;
       const afterQueue = after.queues[0].value as IngestQueueSnapshot;
-      expect(after.reviews).toEqual(before.reviews);
+      expect(result.priorReviewsUnchanged).toBe(true);
       expect(after.applyCommits).toEqual(before.applyCommits);
       expect(afterQueue.reruns).toEqual(beforeQueue.reruns);
-      expect(afterQueue.pendingReviews).toEqual(beforeQueue.pendingReviews);
+      expect(afterQueue.pendingReviews).toEqual(expect.arrayContaining(beforeQueue.pendingReviews));
+      expect(afterQueue.pendingReviews).toHaveLength(beforeQueue.pendingReviews.length + 1);
       expect(afterQueue.jobs).toHaveLength(beforeQueue.jobs.length);
       expect(afterQueue.jobs.filter((job) => job.status === "pending")).toHaveLength(0);
-      expect(afterQueue.jobs.filter((job) => job.status === "completed")).toEqual([
+      expect(afterQueue.jobs.filter((job) => job.sourceId === SOURCE_ID)).toEqual([
         expect.objectContaining({
           id: beforeQueue.jobs.find((job) => job.sourceId === SOURCE_ID)?.id,
           sourceId: SOURCE_ID,
           attempt: 1,
+          status: "awaiting_review",
         }),
       ]);
       expect(afterQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)).toEqual(
         beforeQueue.jobs.find((job) => job.sourceId === OTHER_REVIEW_SOURCE_ID)
       );
       expect(result.requests).toEqual([
-        expect.objectContaining({ stage: "analysis", responseStatus: 200 }),
         expect.objectContaining({ stage: "generation", responseStatus: 200 }),
       ]);
       expect(await run()).toEqual({ kind: "diagnostic", code: "run_not_available" });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(await original.file.read()).toBe(original.input.runtimeText);
       expect(original.adapter.write).not.toHaveBeenCalled();
       expect(original.adapter.process).not.toHaveBeenCalled();
@@ -593,8 +595,8 @@ describe("knowledge-analysis-retest", () => {
       expect(await prepare(original.input)).toMatchObject({ kind: "prepared" });
       expect(await run()).toMatchObject({
         kind: "settled",
-        status: "completed",
-        queueResult: { kind: "executed", jobId: target?.id, status: "completed" },
+        status: "awaiting_review",
+        queueResult: { kind: "executed", jobId: target?.id, status: "awaiting_review" },
         priorReviewsUnchanged: true,
       });
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -602,8 +604,13 @@ describe("knowledge-analysis-retest", () => {
       const copied = parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await clone.read()));
       const after = copied.queues[0].value as IngestQueueSnapshot;
       expect(after.jobs).toHaveLength(before.jobs.length);
-      expect(after.jobs.filter((job) => job.status === "completed")).toEqual([
-        expect.objectContaining({ id: target?.id, sourceId: SOURCE_ID, attempt: 1 }),
+      expect(after.jobs.filter((job) => job.sourceId === SOURCE_ID)).toEqual([
+        expect.objectContaining({
+          id: target?.id,
+          sourceId: SOURCE_ID,
+          attempt: 1,
+          status: "awaiting_review",
+        }),
       ]);
       const completed = after.jobs.find((job) => job.id === target?.id);
       expect(completed?.inputRevision).toBeGreaterThan(target?.inputRevision ?? 0);
@@ -611,7 +618,8 @@ describe("knowledge-analysis-retest", () => {
         after.sourceHighWatermarks.find((entry) => entry.sourceId === SOURCE_ID)?.inputRevision
       );
       expect(after.reruns).toEqual(before.reruns);
-      expect(after.pendingReviews).toEqual(before.pendingReviews);
+      expect(after.pendingReviews).toEqual(expect.arrayContaining(before.pendingReviews));
+      expect(after.pendingReviews).toHaveLength(before.pendingReviews.length + 1);
       expect(await original.file.read()).toBe(original.input.runtimeText);
       expect(original.adapter.write).not.toHaveBeenCalled();
     });
@@ -640,7 +648,7 @@ describe("knowledge-analysis-retest", () => {
 
     it(`${ISSUE} returns the production header failure immediately even when the HTTP 200 body never ends`, async () => {
       const original = await fixture();
-      const reply = response(noTargets(), { contentType: "text/plain", leaveOpen: true });
+      const reply = response({}, { contentType: "text/plain", leaveOpen: true });
       fetchMock.mockResolvedValue(reply.value);
       expect(await prepare(original.input)).toMatchObject({ kind: "prepared" });
       jest.useFakeTimers();
@@ -652,6 +660,7 @@ describe("knowledge-analysis-retest", () => {
         phase: "queue_settled",
         status: "failed",
         failureCode: "knowledge_provider_response_invalid",
+        staticCodes: [],
         queueResult: { kind: "executed", status: "failed" },
         manifestUnchanged: true,
       });
@@ -663,7 +672,7 @@ describe("knowledge-analysis-retest", () => {
 
     it(`${ISSUE} times out unfinished production body reads after 120 seconds and fences concurrent run`, async () => {
       const original = await fixture();
-      const reply = response(noTargets(), { leaveOpen: true });
+      const reply = response({}, { leaveOpen: true });
       let fetched: () => void = () => undefined;
       const started = new Promise<void>((resolve) => {
         fetched = resolve;
@@ -682,7 +691,7 @@ describe("knowledge-analysis-retest", () => {
         kind: "timeout",
         code: "retest_deadline",
         phase: "queue_execution",
-        requests: [expect.objectContaining({ stage: "analysis", responseStatus: 200 })],
+        requests: [expect.objectContaining({ stage: "generation", responseStatus: 200 })],
       });
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect((fetchMock.mock.calls[0][1] as RequestInit).signal?.aborted).toBe(true);
@@ -706,7 +715,7 @@ describe("knowledge-analysis-retest", () => {
     it(`${ISSUE} aborts the independent HTTP signal after the Queue has already settled`, async () => {
       const original = await fixture();
       fetchMock.mockResolvedValue(
-        response(noTargets(), { contentType: "text/plain", leaveOpen: true }).value
+        response({}, { contentType: "text/plain", leaveOpen: true }).value
       );
       expect(await prepare(original.input)).toMatchObject({ kind: "prepared" });
       expect(await run()).toMatchObject({ status: "failed" });

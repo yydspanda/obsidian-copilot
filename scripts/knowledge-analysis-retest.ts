@@ -38,7 +38,7 @@ import { KnowledgeProductionPreparationExecutor } from "@/knowledge/startup/Know
 import { KnowledgeExecutionMemoryRuntimeFile } from "@/knowledge/testing/KnowledgeExecutionTestHarness";
 import { sha256 } from "@/utils/hash";
 
-const MAX_REQUESTS = 2;
+const MAX_REQUESTS = 1;
 const TIMEOUT_MS = 120_000;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
@@ -53,7 +53,7 @@ export interface KnowledgeAnalysisRetestInput {
 }
 
 interface SafeRequest {
-  stage: "analysis" | "generation";
+  stage: "generation";
   requestedModel: typeof DEEPSEEK_FLASH_WIRE_IDENTITY;
   bodyHash: string;
   modelParametersHash: string;
@@ -233,7 +233,7 @@ export async function prepare(
         if (Object.hasOwn(body, key)) parameters[key] = body[key];
       }
       const record: SafeRequest = {
-        stage: requests.length === 0 ? "analysis" : "generation",
+        stage: "generation",
         requestedModel: DEEPSEEK_FLASH_WIRE_IDENTITY,
         bodyHash: sha256(init.body),
         modelParametersHash: sha256(JSON.stringify(parameters)),
@@ -390,8 +390,15 @@ export async function prepare(
           status: job?.status,
           stage: job?.stage,
           failureCode: job?.status === "failed" ? job.failure.code : undefined,
+          // Only the compiler's bounded static-check summaries are diagnostic data.
+          // https://github.com/yydspanda/obsidian-copilot/issues/20
           staticCodes:
-            job?.status === "failed" && job.failure.code === "knowledge_compiler_analysis_rejected"
+            job?.status === "failed" &&
+            [
+              "knowledge_compiler_analysis_rejected",
+              "knowledge_compiler_generation_rejected",
+              "knowledge_compiler_target_rejected",
+            ].includes(job.failure.code)
               ? (job.failure.message
                   .match(/\. Checks: ([a-z_]+(?:, [a-z_]+){0,4})\.$/)?.[1]
                   .split(", ") ?? [])

@@ -22,10 +22,6 @@ export * from "@/knowledge/compiler/KnowledgeCompilerModelAdapter";
 export * from "@/knowledge/config/ProjectKnowledgeBundleConfigSource";
 export * from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 export {
-  parseCompilerAnalysisModelOutput,
-  type CompilerAnalysisModelOutput,
-} from "@/knowledge/compiler/analysisSchema";
-export {
   parseCompilerGenerationModelOutput,
   type CompilerGenerationModelOutput,
 } from "@/knowledge/compiler/generationSchema";

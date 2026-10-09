@@ -5,9 +5,15 @@ import type { KnowledgeDiagnostic, KnowledgeParseResult } from "@/knowledge/mode
 
 const MAX_MODEL_SCHEMA_DIAGNOSTICS = 256;
 
-/** Explicit generation result for one writable approved target. */
+/** A statement in the finished draft and the source excerpts that support it. */
+export interface CompilerGeneratedClaim {
+  text: string;
+  evidenceIds: string[];
+}
+
+/** Explicit generation result for one program-owned writable target. */
 export type CompilerGeneratedFile =
-  | { targetId: string; outcome: "write"; afterContent: string }
+  | { targetId: string; outcome: "write"; afterContent: string; claims: CompilerGeneratedClaim[] }
   | { targetId: string; outcome: "unchanged" };
 
 /** Strict structured output expected from the content generation stage. */
@@ -25,12 +31,24 @@ function hasNonWhitespaceText(value: string): boolean {
 const nonEmptyStringSchema = z.string().refine(hasNonWhitespaceText, "Expected a non-empty string");
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 
+// A draft must carry its actual evidence-backed statements so Review does not depend on a prior topic filter.
+// https://github.com/yydspanda/obsidian-copilot/issues/20
 const generatedFileSchema: z.ZodType<CompilerGeneratedFile> = z.discriminatedUnion("outcome", [
   z
     .object({
       targetId: nonEmptyStringSchema,
       outcome: z.literal("write"),
-      afterContent: z.string(),
+      afterContent: nonEmptyStringSchema,
+      claims: z
+        .array(
+          z
+            .object({
+              text: nonEmptyStringSchema,
+              evidenceIds: z.array(nonEmptyStringSchema).min(1),
+            })
+            .strict()
+        )
+        .min(1),
     })
     .strict(),
   z
@@ -41,7 +59,7 @@ const generatedFileSchema: z.ZodType<CompilerGeneratedFile> = z.discriminatedUni
     .strict(),
 ]);
 
-/** Strict runtime schema for untrusted second-stage model output. */
+/** Strict runtime schema for untrusted source-writing output. */
 export const compilerGenerationModelOutputSchema: z.ZodType<CompilerGenerationModelOutput> = z
   .object({
     version: z.literal(KNOWLEDGE_COMPILER_PROTOCOL_VERSION),
@@ -67,7 +85,7 @@ function formatIssuePath(path: PropertyKey[]): string {
 }
 
 /**
- * Strictly parses unknown second-stage output without exposing Zod to callers.
+ * Strictly parses unknown source-writing output without exposing Zod to callers.
  *
  * Paths, operations, hashes, source references, validation flags, and status
  * are intentionally absent from this schema and therefore rejected as extras.

@@ -11,11 +11,11 @@ import {
 
 describe("KnowledgeProductionPipelineResources", () => {
   describe("createKnowledgeProductionPipelineResources()", () => {
-    it("versions paragraph evidence and selection diagnostics independently of unchanged prompts — https://github.com/yydspanda/obsidian-copilot/issues/17", () => {
+    it("invalidates old analysis-gated outcomes when full-source writing is selected — https://github.com/yydspanda/obsidian-copilot/issues/20", () => {
       const resources = createKnowledgeProductionPipelineResources();
 
-      expect(KNOWLEDGE_PRODUCTION_COMPILER_VERSION).toBe("knowledge-compiler-v3");
-      expect(resources.profileOptions.compilerVersion).toBe("knowledge-compiler-v3");
+      expect(KNOWLEDGE_PRODUCTION_COMPILER_VERSION).toBe("knowledge-compiler-v4");
+      expect(resources.profileOptions.compilerVersion).toBe("knowledge-compiler-v4");
     });
 
     it("creates owned text/PDF parsers and a matching immutable production profile", () => {

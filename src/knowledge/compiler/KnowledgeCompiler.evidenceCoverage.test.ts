@@ -92,11 +92,8 @@ function createInput(): KnowledgeCompileInput {
 async function compileNoChanges(
   options: {
     input?: KnowledgeCompileInput;
-    analyzeExtension?: boolean;
-    targetExtension?: boolean;
-    noTargets?: boolean;
+    includeExtension?: boolean;
     explicitUnchanged?: boolean;
-    relatedExtension?: boolean;
     maxEvidenceItems?: number;
   } = {}
 ) {
@@ -107,43 +104,22 @@ async function compileNoChanges(
     files: request.targets.map((target: { targetId: string }) =>
       options.explicitUnchanged
         ? { targetId: target.targetId, outcome: "unchanged" }
-        : { targetId: target.targetId, outcome: "write", afterContent: EXISTING }
+        : {
+            targetId: target.targetId,
+            outcome: "write",
+            afterContent: EXISTING,
+            claims: [
+              { text: ORIGINAL, evidenceIds: [input.evidence[0].evidenceId] },
+              ...(options.includeExtension
+                ? [{ text: EXTENSION, evidenceIds: [input.evidence[1].evidenceId] }]
+                : []),
+            ],
+          }
     ),
   }));
   const compiler = new KnowledgeCompiler({
     limits: { maxEvidenceItems: options.maxEvidenceItems ?? 2048 },
     model: {
-      analyze: async () => ({
-        version: 1,
-        summary: "Source review",
-        concepts: [],
-        entities: [],
-        relations: [],
-        claims: [
-          { ref: "old", text: ORIGINAL },
-          ...(options.analyzeExtension ? [{ ref: "new", text: EXTENSION }] : []),
-        ],
-        citations: [
-          { claimRef: "old", evidenceId: input.evidence[0].evidenceId, relation: "supports" },
-          ...(options.analyzeExtension
-            ? [{ claimRef: "new", evidenceId: input.evidence[1].evidenceId, relation: "supports" }]
-            : []),
-          ...(options.relatedExtension
-            ? [{ claimRef: "old", evidenceId: input.evidence[1].evidenceId, relation: "context" }]
-            : []),
-        ],
-        targets: options.noTargets
-          ? []
-          : [
-              {
-                ref: "page",
-                path: "Wiki/Reading.md",
-                intent: "write",
-                reason: "Refresh the reading note",
-                claimRefs: ["old", ...(options.targetExtension ? ["new"] : [])],
-              },
-            ],
-      }),
       generate,
     },
     targetResolver: {
@@ -172,8 +148,7 @@ describe("KnowledgeCompiler evidence selection diagnostics", () => {
     describe("compile()", () => {
       it("retains selected evidence after generation repeats old bytes without claiming semantic coverage — https://github.com/yydspanda/obsidian-copilot/issues/17", async () => {
         const { result } = await compileNoChanges({
-          analyzeExtension: true,
-          targetExtension: true,
+          includeExtension: true,
         });
         expect(result.manifestCommitPlan).toMatchObject({
           evidenceCoverage: [
@@ -186,45 +161,32 @@ describe("KnowledgeCompiler evidence selection diagnostics", () => {
         expect(JSON.stringify(result.manifestCommitPlan)).not.toContain(ORIGINAL);
       });
 
-      it("distinguishes an unselected addition from one selected by analysis but not a write target — https://github.com/yydspanda/obsidian-copilot/issues/17", async () => {
+      it("reports which complete-source evidence the finished draft cites without a preliminary selector — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
         const ignored = await compileNoChanges();
-        const analyzed = await compileNoChanges({ analyzeExtension: true });
+        const included = await compileNoChanges({ includeExtension: true });
         expect(ignored.result.manifestCommitPlan).toHaveProperty("evidenceCoverage.1", {
           quoteHash: createQuoteHash(EXTENSION),
           supportingClaimCount: 0,
           targetClaimCount: 0,
         });
-        expect(analyzed.result.manifestCommitPlan).toHaveProperty("evidenceCoverage.1", {
+        expect(included.result.manifestCommitPlan).toHaveProperty("evidenceCoverage.1", {
           quoteHash: createQuoteHash(EXTENSION),
           supportingClaimCount: 1,
-          targetClaimCount: 0,
+          targetClaimCount: 1,
         });
+        expect(
+          ignored.generate.mock.calls[0][0].evidence.map((item) => item.locator.excerpt)
+        ).toEqual([ORIGINAL, EXTENSION]);
+        expect(included.generate).toHaveBeenCalledTimes(1);
       });
 
-      it("retains analysis-only selection when no targets are approved without calling generation — https://github.com/yydspanda/obsidian-copilot/issues/17", async () => {
-        const { result, generate } = await compileNoChanges({
-          analyzeExtension: true,
-          noTargets: true,
-        });
-        expect(result.manifestCommitPlan).toMatchObject({
-          reason: "analysis_no_targets",
-          evidenceCoverage: [
-            { quoteHash: createQuoteHash(ORIGINAL), supportingClaimCount: 1, targetClaimCount: 0 },
-            { quoteHash: createQuoteHash(EXTENSION), supportingClaimCount: 1, targetClaimCount: 0 },
-          ],
-        });
-        expect(result.manifestCommitPlan).not.toHaveProperty("generationOutcomes");
-        expect(generate).not.toHaveBeenCalled();
-      });
-
-      it("counts only supporting citations and preserves explicit unchanged outcomes — https://github.com/yydspanda/obsidian-copilot/issues/17", async () => {
+      it("does not manufacture selected claims when the writer explicitly keeps an existing page unchanged — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
         const { result } = await compileNoChanges({
-          relatedExtension: true,
           explicitUnchanged: true,
         });
         expect(result.manifestCommitPlan).toMatchObject({
           evidenceCoverage: [
-            { quoteHash: createQuoteHash(ORIGINAL), supportingClaimCount: 1, targetClaimCount: 1 },
+            { quoteHash: createQuoteHash(ORIGINAL), supportingClaimCount: 0, targetClaimCount: 0 },
             { quoteHash: createQuoteHash(EXTENSION), supportingClaimCount: 0, targetClaimCount: 0 },
           ],
           generationOutcomes: { explicitUnchanged: 1, identicalWrites: 0 },
@@ -254,11 +216,11 @@ describe("KnowledgeCompiler evidence selection diagnostics", () => {
         }));
         const { result, generate } = await compileNoChanges({
           input,
-          noTargets: true,
           maxEvidenceItems: 2049,
         });
         expect(result.manifestCommitPlan).not.toHaveProperty("evidenceCoverage");
-        expect(generate).not.toHaveBeenCalled();
+        expect(generate).toHaveBeenCalledTimes(1);
+        expect(generate.mock.calls[0][0].evidence).toHaveLength(2049);
       });
     });
   });

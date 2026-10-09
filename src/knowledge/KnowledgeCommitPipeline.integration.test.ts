@@ -20,7 +20,6 @@ import {
   type TransactionJobClaim,
 } from "@/knowledge/changeset/TransactionStorage";
 import type {
-  CompilerAnalysisRequest,
   CompilerCandidateValidationInput,
   CompilerCandidateValidator,
   CompilerGenerationRequest,
@@ -80,6 +79,7 @@ const SOURCE_TEXT = "A durable knowledge compiler should preserve reviewed prove
 const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_TEXT);
 const ARTIFACT_CONTENT_HASH = createFileContentHash(SOURCE_TEXT);
 const PIPELINE_FINGERPRINT = "b".repeat(64);
+const CURRENT_INPUT_REVISION = 2;
 const REWRITTEN_CONTENT =
   "---\ntype: concept\n---\n\n# Reviewed knowledge\n\nThe reviewer retained this claim.\n";
 
@@ -168,43 +168,8 @@ class MemoryKnowledgeFileStore implements KnowledgeFileStore {
   }
 }
 
-/** Deterministic two-stage model that proposes two new Wiki pages. */
+/** Writes both program-owned pages from the supplied source in one call. */
 class DeterministicCompilerModel implements CompilerModelPort {
-  /** Returns one grounded claim and two caller-resolvable write targets. */
-  async analyze(_request: CompilerAnalysisRequest, _signal: AbortSignal): Promise<unknown> {
-    return {
-      version: 1,
-      summary: "Compile one durable knowledge claim",
-      concepts: [{ ref: "concept-durability", name: "Durable knowledge" }],
-      entities: [],
-      claims: [{ ref: "claim-durability", text: SOURCE_TEXT }],
-      relations: [],
-      citations: [
-        {
-          claimRef: "claim-durability",
-          evidenceId: "evidence-source",
-          relation: "supports",
-        },
-      ],
-      targets: [
-        {
-          ref: "target-primary",
-          path: "Wiki/Primary.md",
-          intent: "write",
-          reason: "Compile the reviewed claim",
-          claimRefs: ["claim-durability"],
-        },
-        {
-          ref: "target-filtered",
-          path: "Wiki/Filtered.md",
-          intent: "write",
-          reason: "Compile an optional view of the claim",
-          claimRefs: ["claim-durability"],
-        },
-      ],
-    };
-  }
-
   /** Generates deterministic content for every compiler-approved writable target. */
   async generate(request: CompilerGenerationRequest, _signal: AbortSignal): Promise<unknown> {
     return {
@@ -213,7 +178,8 @@ class DeterministicCompilerModel implements CompilerModelPort {
       files: request.targets.map((target) => ({
         targetId: target.targetId,
         outcome: "write",
-        afterContent: `---\ntype: concept\n---\n\n# ${target.path}\n`,
+        afterContent: `---\ntype: concept\n---\n\n# ${target.path}\n\n${SOURCE_TEXT}\n`,
+        claims: [{ text: SOURCE_TEXT, evidenceIds: [request.evidence[0].evidenceId] }],
       })),
     };
   }
@@ -281,6 +247,25 @@ function createInitialManifest(bundleId: string): SourceManifest {
         sourceKey: "sources/source-1.md",
         sourcePath: "Sources/source-1.md",
         custody: "user_managed",
+        lastSuccessful: {
+          sourceContentHash: createSourceContentHash("Earlier source version"),
+          pipelineFingerprint: PIPELINE_FINGERPRINT,
+          generatedPages: ["Wiki/Filtered.md", "Wiki/Primary.md"].map((path) => ({
+            path,
+            ownership: "generated" as const,
+            contentHash: createFileContentHash("Earlier page"),
+          })),
+          changeSetId: "earlier-pages",
+          completedAt: 1,
+        },
+        extensions: {
+          [KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]: {
+            version: 1,
+            inputRevision: 1,
+            transactionId: "earlier-transaction",
+            manifestIntentDigest: "c".repeat(64),
+          },
+        },
       },
     ],
   };
@@ -298,7 +283,7 @@ function createCompileInput(
       sourceId: "source-1",
       sourceContentHash: SOURCE_CONTENT_HASH,
       pipelineFingerprint: PIPELINE_FINGERPRINT,
-      inputRevision: 1,
+      inputRevision: CURRENT_INPUT_REVISION,
     },
     manifest,
     schema: {
@@ -329,7 +314,14 @@ function createCompileInput(
       },
     ],
     contextPages: [],
-    targetAuthorizations: [],
+    targetAuthorizations: manifest.entries[0].lastSuccessful!.generatedPages.map((page) => ({
+      path: page.path,
+      allowedIntents: ["write"],
+      contentPolicy: "grounded",
+      ownership: page.ownership,
+      sourceRefs: ["source-1"],
+      expectedContentHash: page.contentHash,
+    })),
     createdAt: 1_000,
   };
 }
@@ -403,6 +395,48 @@ async function readRuntimeSnapshot(
   return parseKnowledgeRuntimeStoreSnapshot(JSON.parse(await file.read()) as unknown);
 }
 
+/** Loads a strict historical snapshot, including the committed authority for both missing pages. */
+async function seedHistoricalRuntime(
+  file: MemoryAtomicRuntimeFile,
+  manifest: SourceManifest
+): Promise<void> {
+  const state = await readRuntimeSnapshot(file);
+  const success = manifest.entries[0].lastSuccessful!;
+  state.revision += 1;
+  state.manifests = [{ bundleId: manifest.bundleId, value: manifest }];
+  state.inputRevisions = [
+    {
+      bundleId: manifest.bundleId,
+      sources: [
+        { sourceId: "source-1", inputRevision: 1, managedAfterRevision: 1, observations: [] },
+      ],
+    },
+  ];
+  state.applyCommits = [
+    {
+      transactionId: "earlier-transaction",
+      commitRevision: 4,
+      bundleId: manifest.bundleId,
+      sourceId: "source-1",
+      sourceContentHash: success.sourceContentHash,
+      pipelineFingerprint: success.pipelineFingerprint,
+      inputRevision: 1,
+      changeSetId: success.changeSetId,
+      changeSetDigest: "c".repeat(64),
+      manifestIntentDigest: "c".repeat(64),
+      journalDigest: "c".repeat(64),
+      receiptDigest: "d".repeat(64),
+      manifestBeforeRevision: 0,
+      manifestBeforeDigest: "a".repeat(64),
+      manifestAfterRevision: manifest.revision,
+      manifestAfterDigest: createSourceManifestDigest(manifest),
+      recordedAt: success.completedAt,
+    },
+  ];
+  const validated = parseKnowledgeRuntimeStoreSnapshot(state);
+  await file.process(() => JSON.stringify(validated));
+}
+
 describe("durable knowledge commit pipeline", () => {
   it("carries reviewed compiler intent into one atomic Manifest and ledger commit", async () => {
     const atomicFile = new MemoryAtomicRuntimeFile();
@@ -417,13 +451,13 @@ describe("durable knowledge commit pipeline", () => {
     const inputObservations = new KnowledgeRuntimeInputObservationBinder(runtime);
     const bundle = createBundle();
     const initialManifest = createInitialManifest(bundle.id);
-    await manifestStorage.write(bundle.id, initialManifest, null);
+    await seedHistoricalRuntime(atomicFile, initialManifest);
     const allocation = await inputRevisions.allocate({
       bundleId: bundle.id,
       sourceId: "source-1",
       captureId: "pipeline-source-1-capture-1",
     });
-    expect(allocation).toMatchObject({ inputRevision: 1 });
+    expect(allocation).toMatchObject({ inputRevision: CURRENT_INPUT_REVISION });
     await expect(
       inputObservations.bind({
         observationToken: allocation.observationToken,
@@ -465,7 +499,7 @@ describe("durable knowledge commit pipeline", () => {
         sourceId: "source-1",
         sourceContentHash: SOURCE_CONTENT_HASH,
         pipelineFingerprint: PIPELINE_FINGERPRINT,
-        inputRevision: 1,
+        inputRevision: CURRENT_INPUT_REVISION,
         attempt: 1,
       },
     });
@@ -486,6 +520,11 @@ describe("durable knowledge commit pipeline", () => {
           path: acceptedChangeSet.changes[0]?.path,
           ownership: "generated",
           contentHash: createFileContentHash(REWRITTEN_CONTENT),
+        },
+        {
+          path: filteredPath,
+          ownership: "generated",
+          contentHash: createFileContentHash("Earlier page"),
         },
       ],
     });
@@ -528,7 +567,7 @@ describe("durable knowledge commit pipeline", () => {
       sourceId: "source-1",
       sourceContentHash: SOURCE_CONTENT_HASH,
       pipelineFingerprint: PIPELINE_FINGERPRINT,
-      inputRevision: 1,
+      inputRevision: CURRENT_INPUT_REVISION,
       observationToken: allocation.observationToken,
     });
     await expect(queue.runNext(bundle.id)).resolves.toMatchObject({
@@ -665,13 +704,15 @@ describe("durable knowledge commit pipeline", () => {
     });
     expect(committedSource?.extensions?.[KNOWLEDGE_RUNTIME_SOURCE_COMMIT_EXTENSION_KEY]).toEqual({
       version: 1,
-      inputRevision: 1,
+      inputRevision: CURRENT_INPUT_REVISION,
       transactionId: receipt.transactionId,
       manifestIntentDigest: accepted.manifestCommitIntentDigest,
     });
     const committedRuntime = await readRuntimeSnapshot(atomicFile);
-    expect(committedRuntime.applyCommits).toHaveLength(1);
-    expect(committedRuntime.applyCommits[0]).toMatchObject({
+    expect(committedRuntime.applyCommits).toHaveLength(2);
+    expect(
+      committedRuntime.applyCommits.find((record) => record.transactionId === receipt.transactionId)
+    ).toMatchObject({
       transactionId: receipt.transactionId,
       commitRevision: receipt.commitRevision,
       bundleId: bundle.id,
@@ -699,7 +740,7 @@ describe("durable knowledge commit pipeline", () => {
       status: "completed",
     });
     const pendingAcknowledgement = await readRuntimeSnapshot(atomicFile);
-    expect(pendingAcknowledgement.applyCommits).toHaveLength(1);
+    expect(pendingAcknowledgement.applyCommits).toHaveLength(2);
     expect(pendingAcknowledgement.queues[0].value).toMatchObject({
       control: { status: "paused", reason: "commit_pending_ack" },
       applyCommit: {
@@ -776,6 +817,6 @@ describe("durable knowledge commit pipeline", () => {
     const finalManifest = requireManifest(await manifestStorage.read(bundle.id));
     expect(finalManifest.revision).toBe(committedManifest.revision + 1);
     expect(finalManifest.entries.map((entry) => entry.sourceId)).toEqual(["source-1", "source-2"]);
-    expect((await readRuntimeSnapshot(atomicFile)).applyCommits).toHaveLength(1);
+    expect((await readRuntimeSnapshot(atomicFile)).applyCommits).toHaveLength(2);
   });
 });

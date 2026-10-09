@@ -1,5 +1,4 @@
 import type {
-  CompilerAnalysisRequest,
   CompilerCandidateValidationInput,
   CompilerGenerationRequest,
   CompilerTargetRequest,
@@ -291,34 +290,9 @@ async function compileAuthorizedAttempt(
   return lease.compile(attempt);
 }
 
-/** Creates one first-stage model output with optional new-page work. */
-function createAnalysisWireOutput(includeTarget: boolean): string {
-  return JSON.stringify({
-    version: 1,
-    summary: "Grounded source summary",
-    concepts: [],
-    entities: [],
-    claims: [{ ref: "claim-primary", text: SOURCE_TEXT }],
-    relations: [],
-    citations: [
-      {
-        claimRef: "claim-primary",
-        evidenceId: "evidence-0001",
-        relation: "supports",
-      },
-    ],
-    targets: includeTarget
-      ? [
-          {
-            ref: "target-new-page",
-            path: "Wiki/New Page.md",
-            intent: "write",
-            reason: "Create the grounded page",
-            claimRefs: ["claim-primary"],
-          },
-        ]
-      : [],
-  });
+/** Supplies inert output where invocation is prohibited by the test. */
+function createUnusedWireOutput(): string {
+  return "{}";
 }
 
 /** Creates one valid second-stage write result for every approved target. */
@@ -329,7 +303,8 @@ function createGenerationWireOutput(request: CompilerGenerationRequest): string 
     files: request.targets.map((target) => ({
       targetId: target.targetId,
       outcome: "write",
-      afterContent: "---\ntype: concept\n---\n\n# New Page\n",
+      afterContent: `---\ntype: concept\n---\n\n# New Page\n\n${SOURCE_TEXT}\n`,
+      claims: [{ text: SOURCE_TEXT, evidenceIds: ["evidence-0001"] }],
     })),
   });
 }
@@ -367,7 +342,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
   it("fences the independent grounded-answer route behind the same lifecycle owner", async () => {
     const profile = createPipelineProfile();
     const compilerRoute = bindKnowledgePrivateModelRouteToProfile(profile, async () =>
-      createAnalysisWireOutput(false)
+      createUnusedWireOutput()
     );
     const pendingEntered = createDeferred<void>();
     const pendingResponse = createDeferred<string>();
@@ -430,21 +405,21 @@ describe("KnowledgeProductionModelRouteLease", () => {
     expect(answerInvoke).toHaveBeenCalledTimes(2);
   });
 
-  it("returns no_changes through an authentic Queue claim without exposing a captured secret", async () => {
+  it("returns a proposal through one authentic Queue-bound generation without exposing a captured secret — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
     const profile = createPipelineProfile();
     const secretCanary = "sk-production-route-result-canary";
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation, readCurrentStage }) => {
       const invokedStages: string[] = [];
       const invokedSignals: AbortSignal[] = [];
-      const analysisRequests: CompilerAnalysisRequest[] = [];
+      const generationRequests: CompilerGenerationRequest[] = [];
       const { owner, lease } = createLease(profile, async (stage, request, signal) => {
         if (secretCanary.length === 0) throw new Error("Expected retained test credential");
         invokedStages.push(stage);
         invokedSignals.push(signal);
         expect(signal.aborted).toBe(false);
-        analysisRequests.push(request as CompilerAnalysisRequest);
-        return createAnalysisWireOutput(false);
+        generationRequests.push(request);
+        return createGenerationWireOutput(request);
       });
       const dependencyHarness = createCompileDependencies();
 
@@ -455,16 +430,15 @@ describe("KnowledgeProductionModelRouteLease", () => {
         dependencyHarness.dependencies
       );
 
-      expect(result).toMatchObject({ kind: "no_changes" });
-      expect(invokedStages).toEqual(["analysis"]);
+      expect(result).toMatchObject({ kind: "proposed" });
+      expect(invokedStages).toEqual(["generation"]);
       expect(invokedSignals).toHaveLength(1);
       expect(invokedSignals[0]).toBe(context.signal);
-      expect(analysisRequests).toHaveLength(1);
-      expect(analysisRequests[0]).toMatchObject({
+      expect(generationRequests).toHaveLength(1);
+      expect(generationRequests[0]).toMatchObject({
         bundle: { id: BUNDLE_ID },
         source: { sourceId: SOURCE_ID },
         contextPages: [],
-        targetAuthorizations: [],
         evidence: [
           {
             evidenceId: "evidence-0001",
@@ -472,15 +446,15 @@ describe("KnowledgeProductionModelRouteLease", () => {
           },
         ],
       });
-      expect(dependencyHarness.resolvedSignals).toHaveLength(0);
-      expect(dependencyHarness.validatedSignals).toHaveLength(0);
+      expect(dependencyHarness.resolvedSignals).toHaveLength(1);
+      expect(dependencyHarness.validatedSignals).toHaveLength(1);
       expect(JSON.stringify({ owner, lease, result })).not.toContain(secretCanary);
       expect(await readCurrentStage()).toBe("validating");
       owner.close();
     });
   });
 
-  it("runs an authentic two-stage compile and returns a validated proposal", async () => {
+  it("runs an authentic single-call compile and returns a validated proposal", async () => {
     const profile = createPipelineProfile();
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation, readCurrentStage }) => {
@@ -490,8 +464,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
         invokedStages.push(stage);
         invokedSignals.push(signal);
         expect(signal.aborted).toBe(false);
-        if (stage === "analysis") return createAnalysisWireOutput(true);
-        return createGenerationWireOutput(request as CompilerGenerationRequest);
+        return createGenerationWireOutput(request);
       });
       const dependencyHarness = createCompileDependencies();
 
@@ -506,12 +479,11 @@ describe("KnowledgeProductionModelRouteLease", () => {
         kind: "proposed",
         changeSet: {
           status: "proposed",
-          changes: [{ operation: "create", path: "Wiki/New Page.md" }],
+          changes: [{ operation: "create" }],
         },
       });
-      expect(invokedStages).toEqual(["analysis", "generation"]);
-      expect(invokedSignals).toHaveLength(2);
-      expect(invokedSignals[0]).toBe(invokedSignals[1]);
+      expect(invokedStages).toEqual(["generation"]);
+      expect(invokedSignals).toHaveLength(1);
       expect(invokedSignals[0]).toBe(context.signal);
       expect(dependencyHarness.resolvedSignals).toEqual([context.signal]);
       expect(dependencyHarness.validatedSignals).toEqual([context.signal]);
@@ -526,9 +498,9 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
-      const invoke: KnowledgePrivateModelInvoke = async () => {
+      const invoke: KnowledgePrivateModelInvoke = async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       };
       const missingBundle = createLease(profile, invoke, "different-bundle");
       const dependencies = createCompileDependencies().dependencies;
@@ -551,7 +523,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
       const matchingProfile = createLease(profile, invoke);
       await expect(
         compileAuthorizedAttempt(matchingProfile.lease, preparation, context, dependencies)
-      ).resolves.toMatchObject({ kind: "no_changes" });
+      ).resolves.toMatchObject({ kind: "proposed" });
       expect(invokeCalls).toBe(1);
       matchingProfile.owner.close();
     });
@@ -562,16 +534,16 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
-      const { owner, lease } = createLease(profile, async () => {
+      const { owner, lease } = createLease(profile, async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       const dependencies = createCompileDependencies().dependencies;
       const builder = lease.createAttemptBuilder(dependencies);
       const attempt = await builder.build(preparation, context);
 
       await expect(lease.compile(attempt)).resolves.toMatchObject({
-        kind: "no_changes",
+        kind: "proposed",
       });
       const reuseFailure = await captureFailure(() => builder.build(preparation, context));
       const attemptReuseFailure = await captureFailure(() => lease.compile(attempt));
@@ -588,9 +560,9 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
-      const { owner, lease } = createLease(profile, async () => {
+      const { owner, lease } = createLease(profile, async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       const dependencies = createCompileDependencies().dependencies;
       const builder = lease.createAttemptBuilder(dependencies);
@@ -611,7 +583,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
       expect(rejected).toHaveLength(1);
       expect(rejected[0].reason).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
       await expect(lease.compile(fulfilled[0].value)).resolves.toMatchObject({
-        kind: "no_changes",
+        kind: "proposed",
       });
       expect(invokeCalls).toBe(1);
       owner.close();
@@ -623,9 +595,9 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
-      const { owner, lease } = createLease(profile, async () => {
+      const { owner, lease } = createLease(profile, async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       const attempt = await lease
         .createAttemptBuilder(createCompileDependencies().dependencies)
@@ -641,7 +613,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
       );
 
       expect(fulfilled).toHaveLength(1);
-      expect(fulfilled[0].value).toMatchObject({ kind: "no_changes" });
+      expect(fulfilled[0].value).toMatchObject({ kind: "proposed" });
       expect(rejected).toHaveLength(1);
       expect(rejected[0].reason).toBeInstanceOf(KnowledgeProductionModelRouteLeaseError);
       expect(invokeCalls).toBe(1);
@@ -654,9 +626,9 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
-      const { owner, lease } = createLease(profile, async () => {
+      const { owner, lease } = createLease(profile, async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       let dependencyGetterCalls = 0;
       const accessorDependencies = {
@@ -702,7 +674,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
       const attempt = await builder.build(preparation, context);
       expect(JSON.stringify({ builder, attempt })).toBe('{"builder":{},"attempt":{}}');
-      await expect(lease.compile(attempt)).resolves.toMatchObject({ kind: "no_changes" });
+      await expect(lease.compile(attempt)).resolves.toMatchObject({ kind: "proposed" });
       expect(invokeCalls).toBe(1);
       owner.close();
     });
@@ -713,9 +685,9 @@ describe("KnowledgeProductionModelRouteLease", () => {
     let invokeCalls = 0;
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
-      const { owner, lease } = createLease(profile, async () => {
+      const { owner, lease } = createLease(profile, async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       const builder = lease.createAttemptBuilder(createCompileDependencies().dependencies);
       owner.close();
@@ -725,9 +697,9 @@ describe("KnowledgeProductionModelRouteLease", () => {
     });
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
-      const { owner, lease } = createLease(profile, async () => {
+      const { owner, lease } = createLease(profile, async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       const attempt = await lease
         .createAttemptBuilder(createCompileDependencies().dependencies)
@@ -746,9 +718,9 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let invokeCalls = 0;
-      const { owner, lease } = createLease(profile, async () => {
+      const { owner, lease } = createLease(profile, async (_stage, request) => {
         invokeCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       const attempt = await lease
         .createAttemptBuilder(createCompileDependencies().dependencies)
@@ -767,13 +739,13 @@ describe("KnowledgeProductionModelRouteLease", () => {
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       let primaryCalls = 0;
       let foreignCalls = 0;
-      const primary = createLease(profile, async () => {
+      const primary = createLease(profile, async (_stage, request) => {
         primaryCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
-      const foreign = createLease(profile, async () => {
+      const foreign = createLease(profile, async (_stage, request) => {
         foreignCalls += 1;
-        return createAnalysisWireOutput(false);
+        return createGenerationWireOutput(request);
       });
       const attempt = await primary.lease
         .createAttemptBuilder(createCompileDependencies().dependencies)
@@ -784,7 +756,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
       expect(primaryCalls).toBe(0);
       expect(foreignCalls).toBe(0);
       await expect(primary.lease.compile(attempt)).resolves.toMatchObject({
-        kind: "no_changes",
+        kind: "proposed",
       });
       expect(primaryCalls).toBe(1);
       expect(foreignCalls).toBe(0);
@@ -793,13 +765,15 @@ describe("KnowledgeProductionModelRouteLease", () => {
     });
   });
 
-  it("rejects a completed in-flight result after its owner closes instead of publishing it", async () => {
+  it("rejects an in-flight write as cancelled after its owner closes instead of exposing a retryable validation failure — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
     const profile = createPipelineProfile();
 
     await runAuthorizedLeaseAttempt(profile, async ({ context, preparation }) => {
       const entered = createDeferred<void>();
       const response = createDeferred<string>();
-      const { owner, lease } = createLease(profile, async (_stage, _request, signal) => {
+      let capturedRequest: CompilerGenerationRequest | undefined;
+      const { owner, lease } = createLease(profile, async (_stage, request, signal) => {
+        capturedRequest = request;
         expect(signal).toBe(context.signal);
         entered.resolve();
         return response.promise;
@@ -817,7 +791,8 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
       owner.close();
       expect(context.signal.aborted).toBe(false);
-      response.resolve(createAnalysisWireOutput(false));
+      if (!capturedRequest) throw new Error("Expected the in-flight request");
+      response.resolve(createGenerationWireOutput(capturedRequest));
       const failure = await captureFailure(() => compiling);
 
       expect(failure).toMatchObject({ name: "AbortError" });
@@ -846,7 +821,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
 
       expect(failure).toBeInstanceOf(KnowledgeCompilerInfrastructureError);
       expect(KnowledgeCompilerInfrastructureError.inspect(failure)).toMatchObject({
-        stage: "analysis",
+        stage: "generation",
         code: "model_authority_failed",
       });
       expect(String(failure)).not.toContain(secretCanary);
@@ -861,7 +836,7 @@ describe("KnowledgeProductionModelRouteLease", () => {
     const profile = createPipelineProfile();
     const route = bindKnowledgePrivateModelRouteToProfile(profile, async () => {
       invokeCalls += 1;
-      return createAnalysisWireOutput(false);
+      return createUnusedWireOutput();
     });
     const answerRoute = bindKnowledgeGroundedAnswerModelRoute(BUNDLE_ID, async () => {
       throw new Error("Grounded answer is not used by Compiler tests");

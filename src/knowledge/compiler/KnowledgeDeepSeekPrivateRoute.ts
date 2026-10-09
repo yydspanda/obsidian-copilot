@@ -14,10 +14,7 @@ import {
   KNOWLEDGE_COMPILER_PROMPT_CONTRACT_VERSION,
   type KnowledgeCompilerPromptBehavior,
 } from "@/knowledge/compiler/KnowledgeCompilerPromptEncoder";
-import type {
-  CompilerAnalysisRequest,
-  CompilerGenerationRequest,
-} from "@/knowledge/compiler/CompilerModelPort";
+import type { CompilerGenerationRequest } from "@/knowledge/compiler/CompilerModelPort";
 import { createKnowledgeModelEndpointIdentity } from "@/knowledge/config/ProjectKnowledgePipelineProfileSource";
 import type { KnowledgeBundlePipelineProfile } from "@/knowledge/ingest/KnowledgeSourceWatchPlan";
 import {
@@ -769,7 +766,7 @@ function parseProviderResponse(
 /** Creates the exact DeepSeek request body for one compiler stage. */
 function createRequestBody(
   stage: KnowledgePrivateModelStage,
-  request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>,
+  request: Readonly<CompilerGenerationRequest>,
   captured: CapturedDeepSeekProfile
 ): string {
   const prompt = encodeKnowledgeCompilerPrompt(stage, request, captured.behavior);
@@ -874,7 +871,7 @@ async function executeDeepSeekRequest(
 /** Executes one exact Compiler POST with no transport-level retry, fallback, or repair. */
 async function invokeDeepSeek(
   stage: KnowledgePrivateModelStage,
-  request: Readonly<CompilerAnalysisRequest | CompilerGenerationRequest>,
+  request: Readonly<CompilerGenerationRequest>,
   signal: AbortSignal,
   captured: CapturedDeepSeekProfile,
   apiKey: string,

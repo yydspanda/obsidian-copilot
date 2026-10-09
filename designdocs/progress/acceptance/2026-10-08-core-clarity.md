@@ -180,3 +180,96 @@ No-changes identity:
 HTTP token counts, response model name and stage latencies were not instrumented;
 no such measurements are inferred from the successful UI state. See experiment
 `EXP-20261009-001` for stored-config/source hashes and the durable native metrics.
+
+## October 9 approved single-call simplification (local only)
+
+Task: `PK-H3-INCREMENTAL-OMISSION`. The user approves simplifying the diagnosed
+analysis gate. This checkpoint is local implementation and deterministic verification,
+not a new experiment or an extension of any closed model allowance.
+
+The program now selects safe destinations: an existing source retains all its
+grounded writable Manifest-authorized pages; a new source gets one deterministic
+basename-and-source-identity page. An occupied unowned path fails before the model
+call. No source-specific filename, chapter, folder or content heuristic is introduced.
+The writer receives complete admitted evidence plus current destination content in
+one call and returns the prose together with actual claims and evidence IDs. The
+old analysis call, schema/parser, topic gate, cross-stage state and unreachable
+compiler deletion flow are removed. Historical Review and no-changes data shapes
+remain readable; the pipeline fingerprint changes so older outcomes cannot be reused
+as current processing results. No automatic merge, retry or page deletion is added.
+
+Review/Apply, exact path/hash authority, source provenance, runtime ownership,
+cancellation and output budgets remain in place. A new target cannot return
+`unchanged` and silently complete; an existing target can genuinely remain unchanged.
+Raw repeated claim/citation counts are checked before deduplication, preventing
+configured output limits from being bypassed. Closing the route owner during a
+request preserves cancellation instead of manufacturing a retryable validation error.
+
+Behavioral red/green evidence includes the old missing-analyze failure for the new
+single-write contract; the authentic Queue wrongly completing a new unchanged
+target; duplicate claim/citation budget bypasses; the adapter copied-request mutation;
+and route-owner close cancellation. Final tests run with normal TypeScript diagnostics;
+temporary diagnostic overrides used only to expose transitional red behavior were
+not saved in configuration. The copied-request mutation was restored before gates.
+
+All model transport tests in this checkpoint use fakes. Full-suite execution explicitly
+unsets the DeepSeek live-test opt-in and credential; the opt-in credential-guard tests
+use fake values, and the two live DeepSeek cases remain skipped. No Obsidian instance,
+Vault, credentials or persisted queue is accessed or changed. No commit, push or
+deployment is performed here. Useful retention of the reader's method is still a
+live semantic acceptance requirement, not established by these local tests.
+
+The same static diagnostic allowlist now covers generation and target-resolution
+failures, so an unknown evidence reference or a new-page `unchanged` refusal does
+not lose its actionable identifier when the old analysis stage disappears. No
+source text, arbitrary diagnostic field or new retry authority is persisted. The
+two affected complete suites pass 84 tests; the final targeted diagnostic run
+passes six cases after an observed six-case behavioral red.
+
+Local production build/typecheck, bundle syntax and mobile-load smoke pass with
+the existing personal 10 MB cap (6,475,705-byte bundle). Full formatting and lint
+pass; nine existing lint warnings remain. Progress governance and its 20 tests
+pass. Obsidian package/source/styles and separate review fixtures pass with their
+existing warnings. The full review command is **not an exit-zero result**: the
+configured npm mirror lacks the audit endpoint; the official-registry attempt
+and then a direct attempt stall and are explicitly terminated. Dependency audit
+is unverified, no advisories are inferred from older runs, and no dependency or
+registry configuration is changed.
+
+The first single-worker full sweep exposed five observation-composer fixtures
+that still returned the deleted analysis response. It also ran across the small
+diagnostic follow-up and was terminated without a full-pass claim. The migrated
+observation suite passes 23 tests: new selected materials and Chat captures reach
+Review, existing pages exercise real no-change commits and lost-ack recovery,
+and legacy zero-page history remains readable while the new pipeline queues fresh
+work. Final verification uses a new frozen-source, two-worker full run with no live
+model opt-in, plus a fresh full TypeScript check. The latter passes.
+
+The frozen full sweep finishes in 820.531 seconds: **744 suites pass, one fails;
+11,002 tests pass, four are skipped, and one times out**. All changed Knowledge
+and helper suites pass, including the migrated observation and diagnostic tests.
+The sole failure is the untouched OpenArtifacts wrapper's first localhost publish
+test (`openArtifactsPublishWrappers.test.ts`), at its existing 250-second timeout.
+This full command exits 1 and is not described as an all-green run. No upstream
+code or test timeout is changed in response.
+
+Reproducible full command (no paid provider opt-in):
+
+```sh
+env -u COPILOT_RUN_LIVE_DEEPSEEK_TESTS -u DEEPSEEK_API_KEY \
+  node --max-old-space-size=8192 node_modules/jest/bin/jest.js \
+  --maxWorkers=2 --json \
+  --outputFile=.git/acceptance/overnight-20261009/single-pass-full-final.json
+```
+
+The unchanged wrapper suite is retried alone, still using its localhost test
+server and fake license, under an outer 90-second process bound. That process
+reaches the outer bound (exit 124) before producing a Jest summary; the rerun is
+**unverified**, not a pass and not proof of a specific root cause. No test timeout,
+proxy configuration, upstream wrapper or dependency is modified. All test/audit
+processes launched for this verification are finished or explicitly terminated.
+
+Delivery state: local edits only on `knowledge-h3-personal-flow`, based on
+`542f3a71`. No commit/push, deployment, native application action or model request.
+The implementation removes the diagnosed analysis-selection gate, but a real
+source-writing semantic acceptance remains pending.

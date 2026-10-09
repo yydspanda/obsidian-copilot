@@ -1,13 +1,10 @@
 import { KNOWLEDGE_COMPILER_PROTOCOL_VERSION } from "@/knowledge/compiler/CompilerModelPort";
-import {
-  parseCompilerGenerationModelOutput,
-  type CompilerGenerationModelOutput,
-} from "@/knowledge/compiler/generationSchema";
+import { parseCompilerGenerationModelOutput } from "@/knowledge/compiler/generationSchema";
 
 const VALID_TARGET_SET_DIGEST = "a".repeat(64);
 
 /** Creates one valid generation output containing both supported outcomes. */
-function createValidGenerationOutput(): CompilerGenerationModelOutput {
+function createValidGenerationOutput() {
   return {
     version: KNOWLEDGE_COMPILER_PROTOCOL_VERSION,
     targetSetDigest: VALID_TARGET_SET_DIGEST,
@@ -16,6 +13,7 @@ function createValidGenerationOutput(): CompilerGenerationModelOutput {
         targetId: "target-write",
         outcome: "write",
         afterContent: "# Compiler\n\nGenerated knowledge.",
+        claims: [{ text: "Generated knowledge.", evidenceIds: ["evidence-primary"] }],
       },
       {
         targetId: "target-unchanged",
@@ -38,7 +36,7 @@ function expectRejected(value: unknown): void {
 
 describe("generationSchema", () => {
   describe("parseCompilerGenerationModelOutput()", () => {
-    it("accepts a simple generation result without claim-coverage metadata — https://github.com/yydspanda/obsidian-copilot/issues/20", () => {
+    it("accepts the draft and its supported statements together without a preselected topic plan — https://github.com/yydspanda/obsidian-copilot/issues/20", () => {
       const fixture = {
         version: 1,
         targetSetDigest: VALID_TARGET_SET_DIGEST,
@@ -47,11 +45,47 @@ describe("generationSchema", () => {
             targetId: "target-write",
             outcome: "write",
             afterContent: "# Core points\n\nKeep observations and interpretations distinct.",
+            claims: [
+              {
+                text: "Keep observations and interpretations distinct.",
+                evidenceIds: ["evidence-primary"],
+              },
+            ],
           },
         ],
       };
 
       expect(parseCompilerGenerationModelOutput(fixture)).toEqual({ ok: true, value: fixture });
+    });
+
+    it.each([
+      { afterContent: "  " },
+      { claims: [] },
+      { claims: [{ text: "  ", evidenceIds: ["evidence-primary"] }] },
+      { claims: [{ text: "Supported statement", evidenceIds: [] }] },
+      { claims: [{ text: "Supported statement", evidenceIds: ["  "] }] },
+      {
+        claims: [
+          { text: "Supported statement", evidenceIds: ["evidence-primary"], path: "Outside.md" },
+        ],
+      },
+    ])(
+      "rejects an empty draft or unsupported statement shape %j — https://github.com/yydspanda/obsidian-copilot/issues/20",
+      (invalidFields) => {
+        const fixture = createValidGenerationOutput();
+        expectRejected({
+          ...fixture,
+          files: [{ ...fixture.files[0], ...invalidFields }],
+        });
+      }
+    );
+
+    it("rejects a write without evidence-backed statements — https://github.com/yydspanda/obsidian-copilot/issues/20", () => {
+      expectRejected({
+        version: 1,
+        targetSetDigest: VALID_TARGET_SET_DIGEST,
+        files: [{ targetId: "target-write", outcome: "write", afterContent: "Unsupported text" }],
+      });
     });
 
     it("rejects unsupported generation versions without repairing their output — https://github.com/yydspanda/obsidian-copilot/issues/20", () => {

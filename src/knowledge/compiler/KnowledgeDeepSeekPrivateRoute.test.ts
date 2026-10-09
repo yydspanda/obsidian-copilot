@@ -324,7 +324,7 @@ function createCompiler(
 
 /** Reads the deterministic stage and request from a DeepSeek request body. */
 function parseWirePrompt(body: string): {
-  stage: "analysis" | "generation";
+  stage: "generation";
   request: Record<string, unknown>;
   wire: Record<string, unknown>;
 } {
@@ -332,48 +332,24 @@ function parseWirePrompt(body: string): {
   const messages = wire.messages as { role: string; content: string }[];
   const userContent = messages[1].content;
   const input = JSON.parse(userContent.slice(userContent.indexOf("\n") + 1)) as {
-    stage: "analysis" | "generation";
+    stage: "generation";
     request: Record<string, unknown>;
   };
   return { ...input, wire };
 }
 
 /** Creates strict model content for either compiler stage. */
-function createModelContent(
-  stage: "analysis" | "generation",
-  request: Record<string, unknown>
-): string {
-  if (stage === "analysis") {
-    return JSON.stringify({
-      version: 1,
-      summary: "Grounded source summary",
-      concepts: [],
-      entities: [],
-      claims: [{ ref: "claim-primary", text: "Exact source text" }],
-      relations: [],
-      citations: [
-        {
-          claimRef: "claim-primary",
-          evidenceId: "evidence-primary",
-          relation: "supports",
-        },
-      ],
-      targets: [
-        {
-          ref: "target-new-page",
-          path: "Wiki/New Page.md",
-          intent: "write",
-          reason: "Create the grounded page",
-          claimRefs: ["claim-primary"],
-        },
-      ],
-    });
-  }
+function createModelContent(_stage: "generation", request: Record<string, unknown>): string {
   const targets = request.targets as { targetId: string }[];
   return JSON.stringify({
     version: 1,
     targetSetDigest: request.targetSetDigest,
-    files: targets.map((target) => ({ targetId: target.targetId, outcome: "unchanged" })),
+    files: targets.map((target) => ({
+      targetId: target.targetId,
+      outcome: "write",
+      afterContent: "Exact source text",
+      claims: [{ text: "Exact source text", evidenceIds: ["evidence-primary"] }],
+    })),
   });
 }
 
@@ -462,7 +438,7 @@ function expectTransportError(
 }
 
 describe("KnowledgeDeepSeekPrivateRoute", () => {
-  it("executes exact analysis and generation POSTs with no retry, fallback, or streaming", async () => {
+  it("executes one exact generation POST with no selection gate, retry, fallback, or streaming — https://github.com/yydspanda/obsidian-copilot/issues/20", async () => {
     const secret = "sk-deepseek-private-test-canary";
     const calls: { url: string; init: RequestInit }[] = [];
     let queueSignal: AbortSignal | undefined;
@@ -482,18 +458,13 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
         createCompileInput(preparation),
         context.signal
       );
-      expect(result.kind).toBe("no_changes");
+      expect(result.kind).toBe("proposed");
     });
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     expect(calls.every((call) => call.init.signal === queueSignal)).toBe(true);
-    expect(calls.map((call) => call.url)).toEqual([
-      KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
-      KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT,
-    ]);
-    expect(calls[0].init.signal).toBe(calls[1].init.signal);
+    expect(calls.map((call) => call.url)).toEqual([KNOWLEDGE_DEEPSEEK_CHAT_ENDPOINT]);
     expect(calls.map((call) => parseWirePrompt(call.init.body as string).stage)).toEqual([
-      "analysis",
       "generation",
     ]);
     for (const call of calls) {
@@ -555,15 +526,12 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
         const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
         await expect(
           createCompiler(adapter).compile(createCompileInput(preparation), context.signal)
-        ).resolves.toMatchObject({ kind: "no_changes" });
+        ).resolves.toMatchObject({ kind: "proposed" });
       }
     );
 
-    expect(calls).toHaveLength(2);
-    expect(calls.map((call) => parseWirePrompt(call.body as string).wire.model)).toEqual([
-      MODEL,
-      MODEL,
-    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls.map((call) => parseWirePrompt(call.body as string).wire.model)).toEqual([MODEL]);
   });
 
   it("https://github.com/yydspanda/obsidian-copilot/issues/3 binds legacy and canonical Flash routes to one canonical descriptor and profile", () => {
@@ -602,7 +570,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
     expect(() => createKnowledgeDeepSeekPrivateRoute(profile, "sk-valid", jest.fn())).not.toThrow();
   });
 
-  it("https://github.com/yydspanda/obsidian-copilot/issues/3 sends V4 Pro unchanged for analysis and generation without falling back to Flash", async () => {
+  it("https://github.com/yydspanda/obsidian-copilot/issues/3 sends V4 Pro unchanged for one generation without falling back to Flash", async () => {
     const flashProfile = createPipelineProfile();
     const proProfile: KnowledgeBundlePipelineProfile = {
       ...flashProfile,
@@ -622,13 +590,13 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
       const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
       await expect(
         createCompiler(adapter).compile(createCompileInput(preparation), context.signal)
-      ).resolves.toMatchObject({ kind: "no_changes" });
+      ).resolves.toMatchObject({ kind: "proposed" });
     });
 
-    expect(fetchPort).toHaveBeenCalledTimes(2);
+    expect(fetchPort).toHaveBeenCalledTimes(1);
     expect(
       fetchPort.mock.calls.map(([, init]) => parseWirePrompt(init.body as string).wire.model)
-    ).toEqual([PRO_MODEL, PRO_MODEL]);
+    ).toEqual([PRO_MODEL]);
   });
 
   it("https://github.com/yydspanda/obsidian-copilot/issues/3 refuses a Flash response to a V4 Pro request without retrying", async () => {
@@ -696,10 +664,10 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
       const adapter = bindKnowledgeCompilerModelAdapter(preparation, route, reportStage);
       await expect(
         createCompiler(adapter).compile(createCompileInput(preparation), context.signal)
-      ).resolves.toMatchObject({ kind: "no_changes" });
+      ).resolves.toMatchObject({ kind: "proposed" });
     });
 
-    expect(fetchPort).toHaveBeenCalledTimes(2);
+    expect(fetchPort).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed before HTTP for obsolete models, custom endpoints, unsupported fields, and bad credentials", () => {
@@ -821,7 +789,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
       await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
     });
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     for (const call of calls) {
       const wire = parseWirePrompt(call.body as string).wire;
       expect(wire).toMatchObject({
@@ -1033,7 +1001,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ kind: "executed", status: "paused" });
     expect(compilerFailure).toMatchObject({
-      stage: "analysis",
+      stage: "generation",
       code: "provider_rate_limited",
       retryable: true,
       rateLimited: true,
@@ -1187,7 +1155,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
 
     expect(fetchPort).toHaveBeenCalledTimes(1);
     expect(caught).toMatchObject({
-      stage: "analysis",
+      stage: "generation",
       code: "provider_network_failed",
       retryable: true,
       rateLimited: false,
@@ -1277,7 +1245,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
 
     expect(fetchPort).toHaveBeenCalledTimes(1);
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(caught).toMatchObject({ stage: "analysis" });
+    expect(caught).toMatchObject({ stage: "generation" });
     expect(JSON.stringify(caught)).not.toContain(canary);
   });
 
@@ -1329,7 +1297,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
           await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
         }
       )
-    ).rejects.toMatchObject({ stage: "analysis" });
+    ).rejects.toMatchObject({ stage: "generation" });
     expect(fetchPort).toHaveBeenCalledTimes(1);
   });
 
@@ -1370,7 +1338,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
           await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
         }
       )
-    ).rejects.toMatchObject({ stage: "analysis" });
+    ).rejects.toMatchObject({ stage: "generation" });
     expect(fetchPort).toHaveBeenCalledTimes(1);
     expect(cancelled).toBe(true);
   });
@@ -1411,7 +1379,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
           await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
         }
       )
-    ).rejects.toMatchObject({ stage: "analysis" });
+    ).rejects.toMatchObject({ stage: "generation" });
     expect(fetchPort).toHaveBeenCalledTimes(1);
     expect(getReader).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledTimes(1);
@@ -1457,7 +1425,7 @@ describe("KnowledgeDeepSeekPrivateRoute", () => {
           await createCompiler(adapter).compile(createCompileInput(preparation), context.signal);
         }
       )
-    ).rejects.toMatchObject({ stage: "analysis" });
+    ).rejects.toMatchObject({ stage: "generation" });
     expect(fetchPort).toHaveBeenCalledTimes(1);
   });
 });
