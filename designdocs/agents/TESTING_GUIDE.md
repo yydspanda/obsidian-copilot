@@ -20,6 +20,19 @@ need unit tests; use end-to-end tests when unit tests can't answer the question.
 - For how to structure code so it's unit-testable — dependency injection, pure
   leaf modules, the litmus test — see [`STYLE_GUIDE.md`](./STYLE_GUIDE.md).
 
+The live DeepSeek production integration cases are skipped unless
+`COPILOT_RUN_LIVE_DEEPSEEK_TESTS=1` is explicitly set. Without that opt-in, their
+credential loader does not read the host process or `.env.test`, even when a key
+is available. Only after authorizing paid requests, run:
+
+```bash
+COPILOT_RUN_LIVE_DEEPSEEK_TESTS=1 npm test -- --runInBand --runTestsByPath src/integration_tests/KnowledgeCompilerDeepSeek.production.test.ts
+```
+
+The opted-in cases require `DEEPSEEK_API_KEY` in the environment or ignored
+`.env.test`; without a key they remain skipped. The loader's mocked safety tests
+run normally and never call the provider.
+
 ### Test design workflow
 
 Unit tests are executable specifications. A developer or agent should be able to

@@ -9,33 +9,32 @@
 
 - Stage ID: `PK-H3`
 - Outcome: clearly explain core facts, principles and usable methods with correct attribution and source/Review safety.
-- Exit gate: useful source-grounded Wiki/Query content remains unverified. The user's final automated attempt is closed; no further retry is authorized. Exhaustive detail retention is no longer the product goal.
+- Exit gate: overnight regression/report is complete; useful incremental Wiki inclusion remains unproven. Preserve the simpler product scope, source/Review safety and the failed evidence; no blind retries or exhaustive-retention machinery.
 
 ## In Progress
 
-- [ ] `PK-H3-INCREMENTAL-OMISSION` — Simplification `3d2666dc` is pushed/deployed. Final attempt closes at 1/3: normal analysis, but the agent's temporary review checkpoint expires before generation. No Apply/Query; final content is unverified, not declared fixed. Stop automated experiments and await user direction; do not add complexity or reuse the allowance. [Evidence and fixed criteria](./designdocs/progress/acceptance/2026-10-08-core-clarity.md).
+- [ ] `PK-H3-INCREMENTAL-OMISSION` — Content-selection limitation remains open after the completed overnight regression. No unapproved prompt changes or further automatic model retries; review the product scope before another repair. [Report](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
 
 ## Upstream Status
 
 - Canonical: `logancyang/obsidian-copilot@master`
 - Last fetched: `2026-09-18` — canonical `996a088c`; merged into the current branch, 0 behind.
 - Incorporated baseline: `996a088c59a2ae123852d8e542f354b1eba72cee`; previous baseline was `61619fe4`.
-- Last remote comparison: `2026-10-03` — current development branch 106 ahead / 102 behind; no fetch or merge.
+- Last remote comparison: `2026-10-09` — current development branch 120 ahead / 125 behind remote canonical `25635116`; no fetch or merge. Drift policy fails; a merge is not included in this regression.
 - Scope: current development branch only; remote `master` intentionally unchanged by user choice
 - Policy: warn on any behind count; fail at 10 commits or when the oldest missing commit is more
   than 7 days old.
 
 ## Recent Activity
 
-- 2026-10-08 — `PK-H3-INCREMENTAL-OMISSION` — Simpler `3d2666dc` pushed/deployed after 383 related tests and gates. Final live attempt ends at the temporary acceptance checkpoint's timeout, 1/3 calls, no generation/Apply/Query; no retry. [Latest outcome](./designdocs/progress/acceptance/2026-10-08-core-clarity.md). Earlier `0945f5fd` semantic failure remains recorded.
+- 2026-10-09 — `PK-H3-OVERNIGHT-REGRESSION` — 744 suites / 10,981 tests pass, 4 explicit skips; native Query/citation/Save and preservation pass. New fixture yields no targets, so fresh Review/Apply remains unverified. Native receipt closed 2/8; initial interrupted Jest lacks request counts. Two fixes/doc clarification local, no commit/push. [Report](./designdocs/progress/acceptance/2026-10-09-overnight-report.md).
+- 2026-10-09 — `PK-H3-INCREMENTAL-OMISSION` — User delegates one normal chapter-13 run; native processing completes in 23,289 ms, identical write count 1, no new Review. New personal-method evidence has 0 supporting/selected claims. No retry/Apply/Query; prior October 8 timeout remains separately recorded. [Evidence](./designdocs/progress/acceptance/2026-10-08-core-clarity.md#october-9-user-delegated-native-use).
 - 2026-10-05 — `PK-H3-SELECTED-RUN` — Selected-only entry deployed and natively verified; other three jobs unstarted, queue paused. Local gates, 224 final integration tests and 104 gallery cases pass. Two model requests still yield unchanged Wiki; no commit/push. [Evidence](./designdocs/progress/acceptance/2026-10-05-selected-run.md).
 - 2026-10-04 — `PK-H3-SOURCE-REANALYSIS` — `644c5e0a` pushed/deployed; 736 affected tests and 72 gallery checks pass. Native entry works, but generation repeats old Wiki and Query lacks evidence; 3/3 requests, no writes. [Evidence](./designdocs/progress/acceptance/2026-10-04-source-reanalysis.md).
 - 2026-10-04 — `PK-H3-NOCHANGES-DELIVERY` — Repair `6e04e480` pushed/deployed; native labels and all 226 files/92 settings preserved. Incremental replay blocked by absent reprocess action, 0/3 requests used. [Evidence](./designdocs/progress/acceptance/2026-10-04-nochanges-feedback.md#authorized-delivery-follow-up).
 - 2026-10-03 — `PK-H3-MANAGEMENT-REALUSE` — Full bounded reading flow passes: 3 completed jobs, 0 failures, 5/8 requests; two fork-owned fixes deployed. [Completion](./designdocs/progress/archive/2026-10.md).
 - 2026-09-21 — `PK-STUDIO-ONBOARDING` — [Issue #13](https://github.com/yydspanda/obsidian-copilot/issues/13):
   repair pushed as `5777c92d`; 376 tests, 64 gallery and 17 Windows preview/status checks pass. [Evidence](./designdocs/progress/acceptance/2026-09-21-studio-onboarding.md).
-- 2026-09-20 — `PK-DEEPSEEK-PRO-RESTORE` — User paused reading practice to fix stale Pro rejection; exact Pro routing is restored locally.
-  19 suites / 715 tests and personal build pass; practice deployment verified without live requests. [Repair and delivery evidence](./designdocs/progress/acceptance/2026-09-20-pro-restore.md).
 - 2026-09-18 — `OPS-UPSTREAM-SYNC` — Synced 12 upstream commits with 1 conflict file; 56 suites / 1,623 tests pass.
   Build/lint/review pass; `b1328a7d` subsequently deployed to the Windows test Vault. All 38 Failed tags remain historical.
   [Merge reconciliation and retest scope](./designdocs/progress/acceptance/2026-09-18-upstream-sync.md).
@@ -59,6 +58,7 @@
 
 ## Current Verification
 
+- October 9 overnight: default full Jest 744 suites / 10,981 passed / 4 skipped; format/lint/build/typecheck/smoke/review and 20 governance tests pass with warnings retained. Native source analysis, Query/citation/Save/reload checked, native receipt closed 2/8; initial interrupted Jest has no request count. No fresh Review/Apply. Old notes/settings/history retained, queue paused; test-cost/build fixes local. Semantic limitation and upstream 125-behind remain.
 - October 8 final simplification: 17 suites / 383 related tests, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; existing warnings/advisories remain. One normal Pro analysis passes scope/provenance inspection, but review handoff misses the temporary 120-second deadline. Native cancellation, no generation/Apply/Query; not a full-suite or final-content pass. No further automatic experiment.
 - October 8 claim handoff: 18 suites / 416 related tests, final 36 cases, 20 governance tests, build/typecheck/smoke/format/lint/full review pass; warnings and audit 0 critical / 1 high / 3 moderate retained. `0945f5fd` deployed; one real analysis fails semantic completeness, closed 1/3 before generation/Apply/Query. Not a full-suite or end-to-end semantic pass.
 - October 8 supporting-qualification replay: 354 affected tests, final 17 encoder cases, build/typecheck/smoke, format/lint/full review pass; d5a51bef pushed/deployed. Two official Pro calls retain counterexample qualification but omit research/expression; no Apply/Query, closed 2/3, full semantic acceptance still fails. Earlier detail replay stays closed 1/3.

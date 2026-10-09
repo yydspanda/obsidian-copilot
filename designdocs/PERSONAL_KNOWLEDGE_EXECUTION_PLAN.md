@@ -28,6 +28,12 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
 
 ### Windows acceptance
 
+- Task ID: `PK-H3-OVERNIGHT-REGRESSION` — continue careful current-build regression in the
+  management test copy and publish a complete morning report. Separate current deterministic
+  checks, native Windows operations, historical evidence and unverified scenarios. Preserve
+  existing notes/history, other Vaults and remote master; repair demonstrated low-risk defects
+  without speculative architecture or unapproved prompt edits. Bound new paid requests at
+  eight, use only reviewed source-owned test writes, and leave the queue paused.
 - Task ID: `PK-STUDIO-ONBOARDING` — finish local Studio setup and explicit single-Vault-material
   addition inside Knowledge UI, preserving Project content, existing rules and source permissions;
   verify without paid requests before returning to user-operated reading practice.
@@ -181,6 +187,12 @@ Task ID 不因归档或重排而复用。完成项保留 ID，当前状态写入
   generation, Apply or Query calls occur. Close 1/3, remove the guard and stop experiments
   as requested; no retry or new mechanism. Final content usefulness remains unverified.
   The simpler product scope remains delivered, without claiming full semantic retention.
+  On October 9 the user separately delegates the proposed normal UI operation to the
+  assistant. Run only chapter 13 once on the delivered build, without another temporary
+  checkpoint, code change or retry. Native processing completes with one identical write
+  and no new Review; the new personal-method paragraph has zero supporting/target claims.
+  Existing chapter notes remain useful, but incremental inclusion is not demonstrated.
+  Preserve notes/settings/history and the queue pause; no Apply or Query follows.
 - Task ID: `PK-H3-SELECTED-RUN` — authorized minimal selected-material execution under user pause;
   keep other jobs untouched and preserve recovery, backoff, freshness and Review/Apply controls.
   Completed exact-revision admission, no drain/retry, lifecycle and rendered Activity confirmation;

@@ -91,8 +91,13 @@ const context = await esbuild.context({
 });
 
 if (prod) {
-  await context.rebuild();
-  process.exit(0);
+  try {
+    await context.rebuild();
+  } finally {
+    // Abrupt exit can strand a service ping even after valid output is written.
+    // https://github.com/yydspanda/obsidian-copilot/issues/22
+    await context.dispose();
+  }
 } else {
   await context.watch();
 }

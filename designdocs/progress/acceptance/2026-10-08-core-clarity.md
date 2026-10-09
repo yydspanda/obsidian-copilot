@@ -139,3 +139,44 @@ and `cleanup-complete`; late scope-review metadata explicitly records that relea
 did not succeed and final content was not reviewed. The last attempt is finished,
 not silently converted into another debugging/replay loop. Further product/content
 evaluation is left for user direction; no new complexity is proposed.
+
+## October 9 user-delegated native use
+
+After being offered the normal selected-material UI flow, the user explicitly asks
+the assistant to operate the software. This is one new native run, not a reopening
+of the old receipt. No goal is created, no code/prompt/config is changed, and no
+temporary network interception, intermediate review checkpoint or reload is added.
+The deployed `3d2666dc` artifact and Management-Test path are verified first.
+
+Click the selected source's **Run only this material**, then **Run this material**
+once. Job `85ef0ddf-c84f-4c7a-95db-3492aff35818`, input revision 48, completes at
+attempt 1 in 23,289 ms. Activity reports **No Wiki changes**: explicit unchanged
+count 0, proposed writes identical to existing files count 1. No new Review exists.
+The persisted no-changes receipt records the new personal-method evidence hash
+`4c133f7f2cb223fe697e4a4da8a71e207493151249465f4d775efc3ee2859bd9`
+with zero supporting claims and zero target claims. Thus the new paragraph was
+not selected by analysis; this is not a new timeout or an HTTP-error diagnosis.
+
+Root and independent reading agree: the old Wiki already explains the chapter's
+historical events, investigation principles and original-versus-added interpretation
+boundaries. But it still does not incorporate the added usable reader method for
+recording cases, separating observations from explanations, retaining unknowns and
+then choosing representative material to express a conclusion. The issue is an
+absent practical addition, not a missing keyword in an exhaustive checklist. The
+new run proves native completion, not useful incremental generation.
+
+Before/after snapshots contain 227 file/link entries: 226 are identical and only
+the existing `debug.log` changes. Source, Rules, Wiki and project file remain exact;
+all 92 settings fields, all 4 old Reviews and the Apply ledger remain exact. Other
+three jobs stay queued at attempt zero; only their observation metadata refreshes.
+The original user pause is unchanged. Runtime moves from 758 to 776, with 10
+completed / 3 pending / 6 cancelled jobs, no pending Review or active transaction.
+No Apply, Query, retry, build, deployment, commit or push is performed in this turn.
+
+Final runtime SHA-256:
+`40f743b1a188283c29b29927dc8bcbf14a401564f1eed7ae5354047325d5ce3d`.
+No-changes identity:
+`knowledge-no-changes-e507aa6166eb1a6bac2d7912e1486852640bd3f91bf939fd6a2c0ce0c2f930d1`.
+HTTP token counts, response model name and stage latencies were not instrumented;
+no such measurements are inferred from the successful UI state. See experiment
+`EXP-20261009-001` for stored-config/source hashes and the durable native metrics.

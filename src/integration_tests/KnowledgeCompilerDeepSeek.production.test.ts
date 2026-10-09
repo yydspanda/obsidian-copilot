@@ -86,6 +86,10 @@ function isMissingEnvFileError(error: unknown): boolean {
 
 /** Loads only the live-test credential from external env or ignored `.env.test`. */
 function loadDeepSeekApiKey(): string | undefined {
+  // Local credentials must not turn ordinary unit tests into paid provider calls.
+  // https://github.com/yydspanda/obsidian-copilot/issues/21
+  if (process.env.COPILOT_RUN_LIVE_DEEPSEEK_TESTS !== "1") return undefined;
+
   let nativeProcess: NativeNodeProcess | undefined;
   try {
     nativeProcess = getNativeNodeProcess();
@@ -120,7 +124,6 @@ Write the complete Markdown page instead of returning unchanged.
 const SOURCE_BYTES = new TextEncoder().encode(SOURCE_CONTENT);
 const SCHEMA_BYTES = new TextEncoder().encode(SCHEMA_CONTENT);
 const SOURCE_CONTENT_HASH = createSourceContentHash(SOURCE_BYTES);
-const describeWithDeepSeek = DEEPSEEK_API_KEY ? describe : describe.skip;
 
 interface SafeFetchMetadata {
   url: string;
@@ -342,7 +345,59 @@ class ExactArtifactReader implements KnowledgeExactArtifactReaderPort {
   }
 }
 
-describeWithDeepSeek("Knowledge Compiler DeepSeek production chain", () => {
+describe("Knowledge Compiler DeepSeek production chain", () => {
+  describe("loadDeepSeekApiKey()", () => {
+    let nativeProcess: NativeNodeProcess;
+
+    beforeEach(() => {
+      jest.replaceProperty(process, "env", {
+        ...process.env,
+        COPILOT_RUN_LIVE_DEEPSEEK_TESTS: undefined,
+        DEEPSEEK_API_KEY: undefined,
+      });
+      nativeProcess = {
+        env: {},
+        getBuiltinModule: jest.fn(),
+        loadEnvFile: jest.fn(),
+      };
+      jest
+        .spyOn(process as unknown as NativeNodeProcess, "getBuiltinModule")
+        .mockReturnValue(nativeProcess);
+    });
+
+    afterEach(() => jest.restoreAllMocks());
+
+    test.each([undefined, "", "0", "true"])(
+      "does not access local credentials when the live opt-in is %p (https://github.com/yydspanda/obsidian-copilot/issues/21)",
+      (flag) => {
+        process.env.COPILOT_RUN_LIVE_DEEPSEEK_TESTS = flag;
+        process.env.DEEPSEEK_API_KEY = "fake-key-never-sent";
+        nativeProcess.env.DEEPSEEK_API_KEY = "fake-file-key-never-sent";
+
+        expect(loadDeepSeekApiKey()).toBeUndefined();
+        expect((process as unknown as NativeNodeProcess).getBuiltinModule).not.toHaveBeenCalled();
+        expect(nativeProcess.loadEnvFile).not.toHaveBeenCalled();
+      }
+    );
+
+    test("loads the fixture credential only after explicit opt-in (https://github.com/yydspanda/obsidian-copilot/issues/21)", () => {
+      process.env.COPILOT_RUN_LIVE_DEEPSEEK_TESTS = "1";
+      nativeProcess.env.DEEPSEEK_API_KEY = "fake-file-key-never-sent";
+
+      expect(loadDeepSeekApiKey()).toBe("fake-file-key-never-sent");
+      expect(nativeProcess.loadEnvFile).toHaveBeenCalledWith(".env.test");
+    });
+
+    test("remains ineligible for live requests when opted in without a credential (https://github.com/yydspanda/obsidian-copilot/issues/21)", () => {
+      process.env.COPILOT_RUN_LIVE_DEEPSEEK_TESTS = "1";
+
+      expect(loadDeepSeekApiKey()).toBeUndefined();
+      expect(nativeProcess.loadEnvFile).toHaveBeenCalledWith(".env.test");
+    });
+  });
+
+  const it = DEEPSEEK_API_KEY ? test : test.skip;
+
   it("https://github.com/yydspanda/obsidian-copilot/issues/3 runs one canonical-Flash grounded-answer request through the exact preflight lease", async () => {
     const apiKey = DEEPSEEK_API_KEY;
     if (!apiKey) throw new Error("DEEPSEEK_API_KEY is required for this live integration test");
